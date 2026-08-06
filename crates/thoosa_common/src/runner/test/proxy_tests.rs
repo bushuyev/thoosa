@@ -140,16 +140,6 @@ where
     }
 }
 
-impl <P, C>  OutId for TestStage<P, C>
-where
-    P:Debug,
-    C:RunCtx
-
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        ()
-    }
-}
 
 impl <P, C> Stage for TestStage<P, C>
 where
@@ -234,11 +224,6 @@ impl thoosa_shared::traits::SyncStage for ProxyTestStage {
     }
 }
 
-impl OutId for ProxyTestStage {
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        todo!()
-    }
-}
 
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 

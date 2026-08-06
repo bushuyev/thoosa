@@ -1720,7 +1720,7 @@ mod tests {
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_shared::traits::MaxParallelCtx;
+    use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
@@ -2091,7 +2091,7 @@ mod tests {
                 (TrainStepDynSyncStage<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>, TestNetParams)
                 = (
                 TrainStepDynSyncStage::Proxy {
-                    stage: Arc::new(DynSyncStageBox::new(proxy as Arc<dyn DynSyncStage<TrainStepInput<InDims, OutDims>, TrainStepOutput,RunCtxImpl>>)),
+                    stage: Arc::new(DynSyncStageBox::new(proxy as Arc<dyn DynSyncStageOutId<TrainStepInput<InDims, OutDims>, TrainStepOutput,RunCtxImpl>>)),
                     weights_sync: Arc::new(TestWeightSync{}) as Arc<dyn TrainStepWeightsSync>
                 },
                 TestNetParams { in_features: 100, layers: 2 }
