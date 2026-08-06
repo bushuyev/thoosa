@@ -25,7 +25,7 @@ use crate::tho_tensor::ThoTensor;
 
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestStageInit {
+struct TestStageInit {
     k:i64
 }
 
