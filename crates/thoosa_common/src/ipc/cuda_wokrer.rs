@@ -662,11 +662,6 @@ pub struct WokerRunCtx;
 
 impl Named for WokerRunCtx {}
 
-impl MaxParallelCtx for WokerRunCtx{
-    fn set_max_other_parallel(&mut self, permit: u8) {}
-
-    fn max_other_parallel(&self) -> u8 { 0 }
-}
 
 impl WithId for WokerRunCtx{
     type ID = ();

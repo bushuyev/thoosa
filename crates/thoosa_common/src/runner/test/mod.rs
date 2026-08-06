@@ -9,7 +9,7 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tokio::task::JoinSet;
 
@@ -107,7 +107,7 @@ where
         for<'i> <R as Stage>::In<'i>: Debug + Adjustable + Data,
         for<'a> <R as Stage>::In<'a>: WithId,
         R::Out: Send + Sync + 'static,
-        R::Ctx: Adjustable + Send + Sync + 'static,
+        R::Ctx: MaxParallelCtx + Adjustable + Send + Sync + 'static,
         R: OutId,
         S: From<Range<<<R as Stage>::In<'z> as Data>::Metrics>>,
         for <'i> <R::In<'i> as Data>::Metrics:  AddAssign<<R::In<'i> as Data>::Metrics>,

@@ -687,7 +687,7 @@ async fn run_stage_borrowed<R, W>(
 ) -> Result<R::Out, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
-    R::Ctx: Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
@@ -717,7 +717,7 @@ async fn consume_stage_owned<'z, R, W>(
 ) -> Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
-    R::Ctx: Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     W: ConsumeData<O = R::In<'z>> + Debug + Send + Sync + 'static,
@@ -747,7 +747,7 @@ async fn run_stage_selected<R, W, S>(
 ) -> Result<R::Out, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
-    R::Ctx: Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
@@ -788,7 +788,7 @@ where
 impl<R, W, S> InputRun<R, W, S> for NoInputAdjuster
 where
     R: SyncStage + Send + Sync + 'static,
-    R::Ctx: Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
@@ -810,7 +810,7 @@ where
 impl<'adjuster, R, W, S, IC> InputRun<R, W, S> for Box<dyn Adjuster<IC, A = S> + 'adjuster>
 where
     R: SyncStage + Send + Sync + 'static,
-    R::Ctx: Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
@@ -856,7 +856,7 @@ where
     ) -> Result<R::Out, ThoError>
     where
         R: SyncStage + Send + Sync + 'static + 'a,
-        R::Ctx: Send + Sync + 'static,
+        R::Ctx: MaxParallelCtx + Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
         IA: InputRun<R, W, S>,
         TA: TaskAdjustment<'a, R, C>,
@@ -910,7 +910,7 @@ where
     ) -> Result<R::Out, ThoError>
     where
         R: SyncStage + Send + Sync + 'static + 'a,
-        R::Ctx: Send + Sync + 'static,
+        R::Ctx: MaxParallelCtx + Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
@@ -1086,6 +1086,7 @@ where
     CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx,
     A: RunnerRetryAdapter<'z, R, S>,
 {
     let (device_idx, ctx_id) = (run_context.tho_device_idx(), run_context.id().clone());
@@ -1246,6 +1247,7 @@ where
     CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
     Fut: Future<Output = Result<R::Out, ThoError>>,
@@ -1281,6 +1283,7 @@ where
     CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
+    R::Ctx: MaxParallelCtx,
     W: ConsumeData<O = <R as Stage>::In<'z>> + WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
     Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
