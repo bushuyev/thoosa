@@ -748,7 +748,7 @@ pub trait MaxParallelCtx: Named + Debug + Send + Sync {
     fn max_other_parallel(&self) -> u8;
 }
 
-pub trait RunCtx: MaxParallelCtx + WithId {
+pub trait RunCtx: WithId + Debug + Send + Sync {
     fn tho_device_idx(&self) -> usize;
 
     fn branch(&mut self, with_new_cache_area: bool) -> Self

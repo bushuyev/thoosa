@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use thoosa_shared::traits::RunCtx;
+use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
@@ -108,7 +108,7 @@ impl RunCtxContext for MaxParallelAdjustContextImpl {}
 #[async_trait]
 impl<A, C> Adjuster<C> for MaxParallelAdjuster<A>
 where
-    A: Adjustable + RunCtx,
+    A: Adjustable + MaxParallelCtx + RunCtx,
     C: MaxParallelAdjustContext,
 {
     type A = A;

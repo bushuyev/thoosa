@@ -19,7 +19,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::RunCtx;
+use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 use thoosa_shared::traits::{AsyncStage, OutId, Stage, SyncStage};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
@@ -68,7 +68,7 @@ pub(crate) struct SyncFreqFilterIpcInit {
 
 impl<C> From<&FreqFilter<C>> for SyncFreqFilterIpcInit
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn from(freq_filter: &FreqFilter<C>) -> Self {
         Self {
@@ -388,13 +388,13 @@ impl SyncFreqFilter<RunCtxImpl> {
 
 impl<C> Adjustable for FreqFilterDynSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
 }
 
 impl<C> OutId for FreqFilterDynSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         match self {
@@ -406,7 +406,7 @@ where
 
 impl<C> Stage for FreqFilterDynSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData, SynKey>;
@@ -415,7 +415,7 @@ where
 
 impl<C> SyncStage for FreqFilterDynSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
@@ -457,7 +457,7 @@ enum PreparedFilter {
 #[derive(Debug, Cached, Named)]
 pub struct FreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
     filter_configs: Vec<InputFilter>,
@@ -471,7 +471,7 @@ where
 
 impl<C> FreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
 
 
@@ -708,7 +708,7 @@ where
 
 impl<C> Adjustable for SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
 }
 
@@ -741,7 +741,7 @@ where
 
 impl<C> OutId for FreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -750,7 +750,7 @@ where
 
 impl<C> Stage for FreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
@@ -760,7 +760,7 @@ where
 // #[async_trait]
 impl<C> AsyncStage for FreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: MaxParallelCtx + RunCtx + Adjustable + 'static,
 {
 
 
