@@ -13,11 +13,12 @@ use tracing::field::debug;
 use thoosa_proxy_derive::Proxy;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{DynSyncStage, DynSyncStageBox, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -25,8 +26,13 @@ use crate::tho_tensor::ThoTensor;
 
 #[derive(Debug)]
 pub struct TestStageInit {
-    value: ThoTensor,
-    some_field:u32
+    k:f32
+}
+
+impl TestStageInit {
+    pub fn new(k: f32) -> Self {
+        Self { k }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +40,14 @@ pub struct TestInput{
     value: ThoTensor
 }
 impl Input for TestInput{}
+
+impl WithId for TestInput {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
 
 impl WorkerStageInput for TestInput {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
@@ -52,6 +66,15 @@ pub struct TestOutput{
     value: ThoTensor
 }
 impl Output for TestOutput{}
+
+impl WithId for TestOutput {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
 
 impl WorkerStageOutput for TestOutput {
     fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
@@ -117,6 +140,17 @@ where
     }
 }
 
+impl <P, C>  OutId for TestStage<P, C>
+where
+    P:Debug,
+    C:RunCtx
+
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        ()
+    }
+}
+
 impl <P, C> Stage for TestStage<P, C>
 where
     P:Debug,
@@ -140,8 +174,6 @@ where
 }
 
 
-
-
 const TEST_ENDPOINT: &str = "TestStage";
 
 // #[derive(Debug, Proxy)]
@@ -155,14 +187,22 @@ const TEST_ENDPOINT: &str = "TestStage";
 #[derive(Debug)]
 pub struct ProxyTestStage {}
 impl ProxyTestStage {
-    pub async fn new(tho_device_idx: usize) -> Result<Self, thoosa_shared::ThoError> {
-        crate::ipc::codec::install_empty_ipc_endpoint(
-            crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
-            TEST_ENDPOINT,
-        ).await?;
-        Ok(Self {})
+
+    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<Arc<dyn DynSyncStage<TestInput, TestOutput, TestRunCtx>>, thoosa_shared::ThoError> //no need to wrap in DynSyncStageBox
+
+    {
+        if GlobalCtx::global().is_ipc() {
+            crate::ipc::codec::install_empty_ipc_endpoint(
+                crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
+                TEST_ENDPOINT,
+            ).await?;
+            Ok(Arc::new(Self {}))
+        } else {
+            Ok(Arc::new(TestStage::<u32, TestRunCtx>::new()))
+        }
     }
 }
+
 impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
 impl thoosa_shared::traits::Stage for ProxyTestStage {
     type Ctx = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::Ctx;
@@ -191,6 +231,12 @@ impl thoosa_shared::traits::SyncStage for ProxyTestStage {
 
             })
         })
+    }
+}
+
+impl OutId for ProxyTestStage {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        todo!()
     }
 }
 
@@ -270,13 +316,24 @@ mod tests {
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::test::proxy_tests::{ProxyTestStage, TestStageSimpTarget, TEST_ENDPOINT, test_simp_init, TestOutput};
+    use crate::runner::test::proxy_tests::{ProxyTestStage, TestStageSimpTarget, TEST_ENDPOINT, test_simp_init, TestOutput, TestStageInit};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::ws::{mock_ws_simp, FsWorkspace, WsConfigs};
 
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_simp_local() -> Result<(), ThoError>{
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
+        do_test_simp().await?;
+
+        Ok(())
+    }
+
     #[test]
-    fn test_simp_target() -> Result<(), ThoError>{
+    fn test_simp_ipc() -> Result<(), ThoError>{
 
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
@@ -284,31 +341,11 @@ mod tests {
         run_ipc_test(
             async {
                 let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_simp_target");
+                let test_name = format!("{module}::test_simp_ipc");
                 GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
                 let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
-                let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-                let test_stage = Arc::new(ProxyTestStage::new(1).await?);
-
-                let worker_tensor  = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
-
-                debug!("test_simp_target: worker_tensor={worker_tensor:?}");
-
-                let input = TestInput{
-                    value: worker_tensor,
-                };
-                let ctx = TestRunCtx;
-                let result = test_stage.do_run(&input, &ctx)?;
-
-                debug!("result={result:?}");
-
-                let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
-
-                let cpu_t = cpu_tensor.t();
-                debug!("cpu_tensor={}", cpu_t);
-
-                assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
+                do_test_simp().await?;
 
 
                 Ok(())
@@ -329,5 +366,31 @@ mod tests {
                 ).await
             }
         )
+    }
+
+    async fn do_test_simp() -> Result<(), ThoError> {
+        let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+        let test_stage = ProxyTestStage::new(1, TestStageInit::new(2.0)).await?;
+
+        let worker_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
+
+        debug!("test_simp_target: worker_tensor={worker_tensor:?}");
+
+        let input = TestInput {
+            value: worker_tensor,
+        };
+        let ctx = TestRunCtx;
+        let result = test_stage.do_run_dyn(&input, &ctx)?;
+
+        debug!("result={result:?}");
+
+        let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
+
+        let cpu_t = cpu_tensor.t();
+        debug!("cpu_tensor={}", cpu_t);
+
+        assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
+        Ok(())
     }
 }
