@@ -2349,7 +2349,7 @@ mod tests {
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
-    use crate::ws::mock_ws_simp;
+    use crate::ws::{mock_ws_simp, Workspace};
     use log::{debug, info};
     use parking_lot::RwLock;
     use rand::random_range;
@@ -2564,7 +2564,7 @@ mod tests {
                HashMap::from([
                             (
                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                                Box::new(|_s, _ws|{
+                                Box::new(|_s: Vec<u8>, _ws: std::sync::Arc<parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Box<dyn Workspace>>>, _all_tensors: &std::sync::Arc<parking_lot::lock_api::Mutex<parking_lot::RawMutex, std::collections::HashMap<u64, tch::Tensor>>>|{
                                     debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
                                     Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper>)
                                 }) as crate::ipc::cuda_wokrer::InitFn,
