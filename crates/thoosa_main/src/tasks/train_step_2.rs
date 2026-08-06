@@ -761,7 +761,7 @@ mod tests {
     use thoosa_shared::run_configs::{RUN_ID, RunConfig, RunConfigId};
     use thoosa_shared::tmp_file::TmpFile;
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::traits::ErasedStageWithState;
+    use thoosa_shared::traits::{DynSyncStageOutId, ErasedStageWithState};
     use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStage, DynSyncStageBox, FromJsonFile, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, ToJsonFile, WithId};
     use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, cdt_for_dir, mono_key, now_ms, panic_to_err, simple_id};
     use thoosa_store::{MockStoreBuilder, SqlStore, Store};
@@ -873,7 +873,7 @@ mod tests {
                                     vs_path
                                 },
                                 ctx.tho_device_idx()
-                            ).await?) as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
+                            ).await?) as Arc<dyn DynSyncStageOutId<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
                         },
                         TestNetXParams { in_features: run_config.in_features, layers: run_config.layers }
                     ))
@@ -1824,7 +1824,7 @@ mod tests {
                     stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
                         TrainTestStep2Init{ tho_device_idx, run_config, vs_path: PathBuf::new() },
                         tho_device_idx
-                    ).await?) as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
+                    ).await?) as Arc<dyn DynSyncStageOutId<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
                 },
                 x_params
             );

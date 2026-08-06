@@ -25,7 +25,7 @@ use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStage, DynSyncStageBox, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::Mutex;
 
@@ -270,7 +270,7 @@ impl SyncTestTensorLoader {
     pub async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> LoaderDynSyncStage {
         if GlobalCtx::global().is_ipc() {
 
-            LoaderDynSyncStage::new(Arc::new(ProxySyncTestTensorLoader::new(size, kind, tho_device_idx).await.expect("ProxySyncTestTensorLoader::new")) as Arc<dyn DynSyncStage<LoaderInput, ThoTensor<LoadedTensor, SynKey>,RunCtxImpl>>)
+            LoaderDynSyncStage::new(Arc::new(ProxySyncTestTensorLoader::new(size, kind, tho_device_idx).await.expect("ProxySyncTestTensorLoader::new")) as Arc<dyn DynSyncStageOutId<LoaderInput, ThoTensor<LoadedTensor, SynKey>,RunCtxImpl>>)
         } else {
             LoaderDynSyncStage::new(Arc::new(Self::new_local(size, kind)))
         }

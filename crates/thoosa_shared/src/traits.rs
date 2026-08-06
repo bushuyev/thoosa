@@ -856,12 +856,38 @@ where
 {
     fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError>;
 
+}
+
+pub trait DynOutId<I, O>: Debug + Send + Sync + 'static
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static
+{
     fn out_id_dyn(&self, input_id: &I::ID) -> O::ID;
+}
+
+pub trait DynSyncStageOutId<I, O, C>:DynSyncStage<I, O, C> + DynOutId<I, O>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static
+{
+
+}
+
+impl <I, O, C, T> DynSyncStageOutId<I,O,C> for T
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+    T: DynSyncStage<I,O,C> + DynOutId<I, O>
+{
+
 }
 
 impl<T, I, O, C> DynSyncStage<I, O, C> for T
 where
-    T: SyncStage + OutId + Send + Sync + 'static,
+    T: SyncStage + Send + Sync + 'static,
     for<'a> T: Stage<In<'a> = I, Out = O, Ctx = C>,
     I: Input + WithId + 'static,
     O: Output + WithId + 'static,
@@ -871,10 +897,22 @@ where
         self.do_run(input, ctx)
     }
 
+
+}
+
+impl<T, I, O> DynOutId<I, O> for T
+where
+    for<'a> T: Stage<In<'a> = I, Out = O>,
+    T: OutId + Send + Sync + 'static,
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+{
+
     fn out_id_dyn(&self, input_id: &I::ID) -> O::ID {
         self.out_id(input_id)
     }
 }
+
 
 #[derive(Debug)]
 pub struct DynSyncStageBox<I, O, C>
@@ -883,7 +921,7 @@ where
     O: Output + WithId + 'static,
     C: RunCtx + 'static,
 {
-    inner: Arc<dyn DynSyncStage<I, O, C>>,
+    inner: Arc<dyn DynSyncStageOutId<I, O, C>>,
 }
 
 impl<I, O, C> DynSyncStageBox<I, O, C>
@@ -892,7 +930,7 @@ where
     O: Output + WithId + 'static,
     C: RunCtx + 'static,
 {
-    pub fn new(inner: Arc<dyn DynSyncStage<I, O, C>>) -> Self {
+    pub fn new(inner: Arc<dyn DynSyncStageOutId<I, O, C>>) -> Self {
         Self { inner }
     }
 }
