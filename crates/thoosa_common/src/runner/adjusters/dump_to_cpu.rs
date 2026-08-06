@@ -5,7 +5,7 @@ use mockall_double::double;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use thoosa_shared::traits::RunCtx;
+use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
 
 use crate as thoosa_common;
@@ -70,7 +70,7 @@ impl<'a> RunCtxContext for DumpToCpuContextImpl<'a> {}
 #[async_trait]
 impl<'a, A, C> Adjuster<C> for DumpToCpu<A>
 where
-    A: Adjustable + RunCtx + Send,
+    A: Adjustable + RunCtx + MaxParallelCtx + Send,
     C: DumpToCpuContext<'a> + Send,
 {
     type A = A;

@@ -22,6 +22,13 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 
+
+#[derive(Debug)]
+pub struct TestStageInit {
+    value: ThoTensor,
+    some_field:u32
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestInput{
     value: ThoTensor
@@ -89,6 +96,7 @@ impl RunCtx for TestRunCtx {
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }
+
 
 #[derive(Debug)]
 pub struct TestStage<P, C>
@@ -189,7 +197,7 @@ impl thoosa_shared::traits::SyncStage for ProxyTestStage {
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
     Ok(Box::new(SimpWrapper {
-        base: std::sync::Arc::new(TestStage::<(), WokerRunCtx>::new()),
+        base: Arc::new(TestStage::<(), WokerRunCtx>::new()),
         pd: PhantomData::<JsonIpcCodec>
     }))
 }
