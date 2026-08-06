@@ -87,8 +87,8 @@ pub async fn new_train_final_net<L, C, R>(
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C, ApplyMotifNets<C>>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
-    R: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    R: RunCtx + MaxParallelCtx + Adjustable + 'static,
 
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
@@ -199,7 +199,7 @@ impl<L, LL, C> AsyncStage for TrainFinalNet<L, LL, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainFinalNet::run"))]
     fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send {
@@ -453,7 +453,7 @@ where
 impl<L, C> LogitsResourcesBatch<L, C>
 where
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     pub fn new(loader: Arc<L>, batch_size: u32, train_resources: Arc<Vec<(Resource, Vec<f32>)>>, valid_resources: Arc<Vec<(Resource, Vec<f32>)>>, labels_len: usize) -> Result<Self, ThoError> {
         if train_resources.is_empty() || valid_resources.is_empty() {
@@ -529,7 +529,7 @@ where
 impl<L, C> AsyncDataBatch<LabelProbability, LabelsProbabilities, C> for LogitsResourcesBatch<L, C>
 where
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(Arc::clone(&self.loader), Arc::clone(&self.train_resources), self.batch_size, self.labels_len, ctx)
@@ -691,7 +691,7 @@ where
 
 impl<C> SyncStage for TrainFinalStepProxyCtx<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), TRAIN_FINAL_STEP_ENDPOINT);
@@ -742,7 +742,7 @@ impl TrainFinalNetProxyFactory {
 #[async_trait]
 impl<C> TrainStepProxyFactory<LabelProbability, LabelsProbabilities, C, FinalNetParams, TrainFinalNetRunConfig> for TrainFinalNetProxyFactory
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     async fn new_proxy(&self, run_config: &TrainFinalNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<LabelProbability, LabelsProbabilities, C, FinalNetParams>, ThoError> {
         let node_params = FinalNetParams::new(self.num_label_nets, self.labels_len, run_config.net.num_layers);

@@ -20,7 +20,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::traits::{Adjustable, AsyncStage, MonoMetrics, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use thoosa_store::Store;
 
@@ -297,7 +297,7 @@ impl<RC, L, C> AsyncStage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPSD::run"))]
     async fn run(
