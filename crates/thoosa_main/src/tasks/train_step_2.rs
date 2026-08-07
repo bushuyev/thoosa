@@ -733,7 +733,7 @@ mod tests {
     use thoosa_common::copy_ctx::CudaActorHandle;
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerStageOutput};
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx, WorkerStageOutput};
     use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::my_tch::{LossFp, ThoModule};
@@ -1231,7 +1231,7 @@ mod tests {
             StageWithState::pre_run(self.stage.base.as_ref())
         }
 
-        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
                     debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
@@ -1623,7 +1623,7 @@ mod tests {
             StageWithState::pre_run(self.stage.base.as_ref())
         }
 
-        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
 
@@ -1641,7 +1641,7 @@ mod tests {
                     };
                     let stage = Arc::clone(&self.stage.base);
 
-                    let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, APPLY_NET2_X_ENDPOINT))?;
+                    let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, APPLY_NET2_X_ENDPOINT)/*TODO use run_ctx*/)?;
                     debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
 
                     output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)

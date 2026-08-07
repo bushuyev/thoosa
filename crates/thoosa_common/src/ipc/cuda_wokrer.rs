@@ -380,13 +380,18 @@ impl CudaWorker {
                     let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
                     match installed_endpoints.read().get(endpoint_name) {
                         Some(endpoint) => {
+                            let run_ctx = WokerRunCtx;
+
                             let r = if let Some(with_state) = endpoint.as_with_state() {
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} as_with_state");
                                 // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
-                                panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream)).map(|response| (response, Vec::new()))
+                                panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx)).map(|response| (response, Vec::new()))
                             } else {
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} no state");
+
                                 panic_to_err!({
                                     let _guard = ThoStreamGuard::new(&stream)?;
-                                    let run_ctx = WokerRunCtx;
+
                                     let response = if consume {
                                         endpoint.consume_response(&input, &all_cuda_tensors, &tho_device, &run_ctx).map(|response| (response.response, response.consumed_tensor_keys))
                                     } else {

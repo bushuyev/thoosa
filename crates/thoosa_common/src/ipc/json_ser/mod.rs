@@ -91,23 +91,23 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>>;
 
-    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError>;
+    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError>;
 }
 
 pub trait ErasedWithState: Sync + Debug {
-    fn do_run_with_state<'a>(&'a self, input: &'a [u8], all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream) -> BoxFuture<'a, Result<SyncStageIpcResponse, ThoError>>;
+    fn do_run_with_state<'a>(&'a self, input: &'a [u8], all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<SyncStageIpcResponse, ThoError>>;
 }
 
 impl<T> ErasedWithState for T
 where
     T: SyncStageIpcWrapperWithState + 'static,
 {
-    fn do_run_with_state<'a>(&'a self, input: &'a [u8], all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream) -> BoxFuture<'a, Result<SyncStageIpcResponse, ThoError>> {
+    fn do_run_with_state<'a>(&'a self, input: &'a [u8], all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<SyncStageIpcResponse, ThoError>> {
         async move {
             let state = SyncStageIpcWrapperWithState::pre_run(self, tho_device).await?;
             // Create the thread-affine stream guard after pre_run so it is never held across an await.
             let _guard = ThoStreamGuard::new(stream)?;
-            SyncStageIpcWrapperWithState::do_run_with_state(self, input, all_cuda_tensors, state, tho_device)
+            SyncStageIpcWrapperWithState::do_run_with_state(self, input, all_cuda_tensors, state, tho_device, run_ctx)
         }.boxed()
     }
 }
