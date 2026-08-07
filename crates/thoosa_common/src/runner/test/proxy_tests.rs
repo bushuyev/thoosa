@@ -11,13 +11,15 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tch::Tensor;
 use tracing::field::debug;
 use thoosa_proxy_derive::Proxy;
-use thoosa_shared::ThoError;
+use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{DynSyncStage, DynSyncStageBox, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -56,6 +58,26 @@ impl WithId for TestInput {
         &()
     }
 }
+
+impl BorrowRef for TestInput {
+    type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o
+    {
+        async move {
+            if self.value.device() == to_tho_device_idx {
+                Ok(ThoDataRef::Borrowed(self))
+            } else {
+                Ok(ThoDataRef::Owned(TestInput {
+                    value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
+                }))
+            }
+        }
+    }
+}
+
 
 impl WorkerStageInput for TestInput {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
@@ -173,21 +195,54 @@ where
 }
 
 
-const TEST_ENDPOINT: &str = "TestStage";
-
-// #[derive(Debug, Proxy)]
-// #[proxy(
-//     name = "ProxyTestStage",
-//     endpoint = "TEST_ENDPOINT",
-//     new_args = "tho_device_idx: usize",
-//     endpoint_init = "test_simp_init",
-//     wrapper = "SimpWrapper"
-// )]
 #[derive(Debug)]
 pub struct ProxyTestStage;
+
+const TEST_ENDPOINT: &str = "TestStage";
+
+
+impl Stage for ProxyTestStage {
+    type Ctx = <TestStage<u32, TestRunCtx> as Stage>::Ctx;
+    type In<'a> = <TestStage<u32, TestRunCtx> as Stage>::In<'a>;
+    type Out = <TestStage<u32, TestRunCtx> as Stage>::Out;
+}
+
+impl thoosa_shared::traits::SyncStage for ProxyTestStage {
+    fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
+    where
+        Self: Sized,
+    {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+
+                let endpoint_name = TEST_ENDPOINT;
+                let actor = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref();
+                let input = thoosa_common::ipc::codec::JsonIpcCodec::encode(input)?;
+                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 1. input={input:?}");
+
+
+                let response = actor.invoke_endpoint_bytes(
+                    encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
+                ).await?;
+
+                let r = thoosa_common::ipc::codec::JsonIpcCodec::decode(&response);
+                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} response={r:?}");
+
+                r
+            })
+        })
+    }
+}
+
+impl OutId for ProxyTestStage {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        ()
+    }
+}
+
 impl ProxyTestStage {
 
-    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<Arc<dyn DynSyncStage<TestInput, TestOutput, TestRunCtx>>, ThoError> //no need to wrap in DynSyncStageBox
+    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<TestDynSyncStage<u32, TestRunCtx>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
@@ -196,42 +251,55 @@ impl ProxyTestStage {
                 TEST_ENDPOINT,
                 &init
             ).await?;
-            Ok(Arc::new(Self {}))
+            Ok(TestDynSyncStage::Proxy {
+                stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTestStage::proxy()))),
+            })
         } else {
-            Ok(Arc::new(TestStage::<u32, TestRunCtx>::new(init)))
+            Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(TestStageInit::new(2)))))
         }
+
+    }
+
+    pub fn proxy() -> Self {
+        Self {}
     }
 }
 
-impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
-impl Stage for ProxyTestStage {
-    type Ctx = <Arc<TestStage<(), TestRunCtx>> as Stage>::Ctx;
-    type In<'a> = <Arc<TestStage<(), TestRunCtx>> as Stage>::In<'a>;
-    type Out = <Arc<TestStage<(), TestRunCtx>> as Stage>::Out;
+#[derive(Debug)]
+pub enum TestDynSyncStage<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx + 'static
+{
+    Local(Arc<TestStage<P, C>>),
+    Proxy {
+        stage: Arc<DynSyncStageBox<TestInput, TestOutput, C>>,
+    }
 }
 
-impl SyncStage for ProxyTestStage {
+impl <P, C> Stage for TestDynSyncStage<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx + 'static
+{
+    type Ctx = C;
+    type In<'a> = TestInput;
+    type Out = TestOutput;
+}
+
+impl <P, C> SyncStage for TestDynSyncStage<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx + 'static
+{
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
         Self: Sized,
     {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-
-                let actor = GlobalCtx::global().cuda_actor(
-                    ctx.tho_device_idx()
-                );
-
-                let input = JsonIpcCodec::encode(input)?;
-
-                let response = actor.invoke_endpoint_bytes(
-                    encode_endpoint_payload_bytes(TEST_ENDPOINT, &input).into_bytes()
-                ).await?;
-
-                JsonIpcCodec::decode(&response)
-
-            })
-        })
+        match self.as_ref() {
+            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+        }
     }
 }
 
@@ -355,7 +423,7 @@ mod tests {
     async fn do_test_simp() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-        let test_stage = ProxyTestStage::new(1, TestStageInit::new(2)).await?;
+        let test_stage = Arc::new(ProxyTestStage::new(1, TestStageInit::new(2)).await?);
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
@@ -365,9 +433,8 @@ mod tests {
             value: cuda_tensor,
         };
         let ctx = TestRunCtx;
-        let result = test_stage.do_run_dyn(&input, &ctx)?;
 
-        // let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
 
         debug!("result={result:?}");
 

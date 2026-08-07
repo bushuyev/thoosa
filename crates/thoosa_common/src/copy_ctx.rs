@@ -158,7 +158,7 @@ impl dyn CudaActorHandle + '_ {
 
         let state = if let Some(with_state) = stage.as_with_state() {
             // Select stateful execution before preparation so only stateful stages run pre_run.
-            Some(with_state.pre_run().await?)
+            Some(with_state.pre_run(to_device_idx).await?)
         } else {
             None
         };
@@ -205,7 +205,7 @@ impl dyn CudaActorHandle + '_ {
 
         let state = if let Some(with_state) = stage.as_with_state() {
             // Keep selector-based execution consistent with the primary stateful runner path.
-            Some(with_state.pre_run().await?)
+            Some(with_state.pre_run(to_device_idx).await?)
         } else {
             None
         };

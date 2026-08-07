@@ -65,12 +65,6 @@ impl WithId for TestInput {
     }
 }
 
-
-// #[derive(Debug)]
-// struct TestInputWrap {
-//     inner:TestInput
-// }
-
 impl BorrowRef for TestInput {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
@@ -219,22 +213,20 @@ where
     P:Debug,
     C:RunCtx
 {
-    type S = ThoTensor;
+    type S = ThoTensor;//can be a struct containing a tensor, module etc
 
-    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
-        async {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
+        async move {
             let mut guard = self.k.lock().await;
-            if guard.device() != 1 { //TODO pass device to pre_run
-                *guard = guard.copy_to_device(1).await?;
+            if guard.device() != to_device_idx {
+                *guard = guard.copy_to_device(to_device_idx).await?;
             }
             Ok(guard)
         }.boxed()
     }
 
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ApplyNetStep2::do_run_with_state"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
 
         Ok(TestOutput{
             value: (input.value.as_ref() * k.as_ref()).into(),
@@ -269,38 +261,26 @@ where
 }
 
 
+#[derive(Debug)]
+pub struct ProxyTestStage;
 
 const TEST_ENDPOINT: &str = "TestStage";
 
-#[derive(Debug)]
-struct ProxyTestSage {
 
-}
-
-impl ProxyTestSage {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Stage for ProxyTestSage {
+impl Stage for ProxyTestStage {
     type Ctx = <TestStage<u32, TestRunCtx> as Stage>::Ctx;
     type In<'a> = <TestStage<u32, TestRunCtx> as Stage>::In<'a>;
     type Out = <TestStage<u32, TestRunCtx> as Stage>::Out;
 }
 
-impl thoosa_shared::traits::SyncStage for ProxyTestSage {
+impl thoosa_shared::traits::SyncStage for ProxyTestStage {
     fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
     where
         Self: Sized,
     {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                // thoosa_common::ipc::codec::invoke_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec, _, <Self as thoosa_shared::traits::Stage>::Out>(
-                //     thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref(),
-                //     TEST_ENDPOINT,
-                //     input,
-                // ).await
+
                 let endpoint_name = TEST_ENDPOINT;
                 let actor = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref();
                 let input = thoosa_common::ipc::codec::JsonIpcCodec::encode(input)?;
@@ -320,22 +300,12 @@ impl thoosa_shared::traits::SyncStage for ProxyTestSage {
     }
 }
 
-impl OutId for ProxyTestSage {
+impl OutId for ProxyTestStage {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         ()
     }
 }
 
-// #[derive(Debug, Proxy)]
-// #[proxy(
-//     name = "ProxyTestStage",
-//     endpoint = "TEST_ENDPOINT",
-//     new_args = "tho_device_idx: usize",
-//     endpoint_init = "test_with_state_init",
-//     wrapper = "SimpWrapper"
-// )]
-#[derive(Debug)]
-pub struct ProxyTestStage;
 impl ProxyTestStage {
 
     pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<TestDynSyncStage<u32, TestRunCtx>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
@@ -348,7 +318,7 @@ impl ProxyTestStage {
                 &init
             ).await?;
             Ok(TestDynSyncStage::Proxy {
-                stage: Arc::new(DynSyncStageBox::new(Arc::new(crate::runner::test::proxy_tests_with_state::ProxyTestSage::new()))),
+                stage: Arc::new(DynSyncStageBox::new(Arc::new(crate::runner::test::proxy_tests_with_state::ProxyTestStage::proxy()))),
             })
         } else {
             Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(TestStageInit::new(2), 1.into()))))
@@ -356,6 +326,9 @@ impl ProxyTestStage {
 
     }
 
+    pub fn proxy() -> Self {
+        Self {}
+    }
 }
 
 #[derive(Debug)]
@@ -407,9 +380,9 @@ where
 {
     type S = <TestStage<P, C> as StageWithState>::S;
 
-    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         match self {
-            Self::Local(stage) => StageWithState::pre_run(stage.as_ref()),
+            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
             Self::Proxy { .. } => async {
                 Err(ThoError::new("proxy ApplyStage2 does not have local state"))
             }.boxed(),
@@ -420,6 +393,65 @@ where
         match self.as_ref() {
             Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
             Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+        }
+    }
+}
+
+#[async_trait]
+impl <P, C> FuturesRunnerMapPurger for TestDynSyncStage<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx + 'static
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        match self {
+            TestDynSyncStage::Local(stage) => {
+                stage.has_gpu_data(device_idx).await
+            }
+            TestDynSyncStage::Proxy { .. } => {
+                true
+            }
+        }
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self {
+            TestDynSyncStage::Local(local) => {
+                local.purge_gpu(ids_to_keep, device_idx, name).await
+            }
+            TestDynSyncStage::Proxy { stage,  .. } => {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
+                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
+                            TEST_ENDPOINT,
+                        ).await
+                    })
+                })?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self {
+            TestDynSyncStage::Local(local) => {
+                local.drop_gpu(device_idx, name).await
+            }
+            TestDynSyncStage::Proxy { .. } => {
+                Ok(())
+            }
+        }
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        match self {
+            TestDynSyncStage::Local(local) => {
+                local.purge_cpu(purge_until).await
+            }
+            TestDynSyncStage::Proxy { .. } => {
+                0
+            }
         }
     }
 }
@@ -459,8 +491,6 @@ where
 impl <Co, S, I, O>SyncStageIpcWrapper for SimpWrapper<Co, S, I, O>
 where
     Co: IpcCodec,
-// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
-// must be both Send and Sync at this IPC boundary.
     S: SyncStage + StageWithState<S=ThoTensor>+ Debug + Send + Sync + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
     I: WorkerStageInput + 'static,
@@ -494,8 +524,8 @@ where
 {
     type S = ThoTensor;
 
-    fn pre_run<'a>(&'a self, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-        StageWithState::pre_run(self.base.as_ref())
+    fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
+        StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
     }
 
     fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
@@ -590,7 +620,7 @@ mod tests {
 
         let test_stage = Arc::new(ProxyTestStage::new(1, TestStageInit::new(2)).await?);
 
-        // GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
+        GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
@@ -600,17 +630,37 @@ mod tests {
             value: cuda_tensor,
         };
         let ctx = TestRunCtx;
-        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
-        // let result = test_stage.do_run_dyn(&input, &ctx)?;
+        let result = cuda_actor.run_stage(Arc::clone(&test_stage), input, 1, &ctx).await?;
 
         debug!("result={result:?}");
-
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
 
         let cpu_t = cpu_tensor.t();
         debug!("cpu_tensor={}", cpu_t);
-
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
+
+        assert!(!GlobalCtx::global().is_all_on_cpu(1, true));
+        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
+        // assert!(GlobalCtx::global().is_all_on_cpu(1, true)); //TODO it fails because proxies always return true from has_gpu_data
+
+        let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU)*2)?, 1.into()).await?;
+
+        debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
+
+        let input = TestInput {
+            value: cuda_tensor,
+        };
+
+        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+
+        debug!("result={result:?}");
+        let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
+
+        let cpu_t = cpu_tensor.t();
+        debug!("cpu_tensor={}", cpu_t);
+        assert!(Tensor::from_slice(&[4., 4., 4.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
+
+
         Ok(())
     }
 }

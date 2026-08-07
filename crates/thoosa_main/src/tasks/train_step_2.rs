@@ -178,7 +178,7 @@ where
 {
     type S = ThoTrainModule<DI, DO>;
 
-    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         async {
             let mut guard = self.train_module.lock().await;
             guard.move_to_device(1).await?;//TODO config
@@ -578,9 +578,9 @@ where
 {
     type S = <TrainStep2<F, DI, DO, C> as StageWithState>::S;
 
-    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         match self {
-            Self::Local(stage) => StageWithState::pre_run(stage.as_ref()),
+            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
             Self::Proxy { .. } => async {
                 Err(ThoError::new("proxy TrainStep2 does not have local state"))
             }.boxed(),
@@ -1227,8 +1227,8 @@ mod tests {
     impl SyncStageIpcWrapperWithState for TrainTestStep2IpcWrapper {
         type S = ThoTrainModule<InDimsX, OutDimsX>;
 
-        fn pre_run<'a>(&'a self, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-            StageWithState::pre_run(self.stage.base.as_ref())
+        fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
+            StageWithState::pre_run(self.stage.base.as_ref(), tho_device.tho_device_idx())
         }
 
         fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
@@ -1355,7 +1355,7 @@ mod tests {
         Self:Send + Sync
     {
         async fn has_gpu_data(&self, device_idx: usize) -> bool {
-            true
+            self.train_module.lock().await.device() == device_idx
         }
 
         async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
@@ -1573,7 +1573,7 @@ mod tests {
     {
         type S = ThoModuleWithStore<Batch<DI>, Batch<DO>>;
 
-        fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
             async {
                 let mut guard = self.train_module.lock().await;
                 if guard.device() != 1 { //TODO pass device to pre_run
@@ -1619,8 +1619,8 @@ mod tests {
     impl SyncStageIpcWrapperWithState for ApplyNetStageIpcWrapper {
         type S = ThoModuleWithStore<Batch<InDimsX>, Batch<OutDimsX>>;
 
-        fn pre_run<'a>(&'a self, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-            StageWithState::pre_run(self.stage.base.as_ref())
+        fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
+            StageWithState::pre_run(self.stage.base.as_ref(), tho_device.tho_device_idx())
         }
 
         fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
@@ -1781,9 +1781,9 @@ mod tests {
     {
         type S = <ApplyNetStage2<DI, DO, C> as StageWithState>::S;
 
-        fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
             match self {
-                Self::Local(stage) => StageWithState::pre_run(stage.as_ref()),
+                Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
                 Self::Proxy { .. } => async {
                     Err(ThoError::new("proxy ApplyStage2 does not have local state"))
                 }.boxed(),
