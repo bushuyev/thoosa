@@ -7,3 +7,4 @@ pub mod cuda_wokrer;
 pub mod codec;
 pub mod tests;
 pub mod json_ser;
+pub mod wraps;
