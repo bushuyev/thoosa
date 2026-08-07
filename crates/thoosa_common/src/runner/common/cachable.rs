@@ -153,7 +153,7 @@ where
     }
 
     fn mem_size(&self) -> u64 {
-        0
+        self.as_ref().mem_size()
     }
 }
 
