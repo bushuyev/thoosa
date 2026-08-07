@@ -39,7 +39,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ErasedStageWithState;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DynSyncStageBox, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, now_ms, os_thread_id, panic_to_err, perf_log, sync_mutex_lock};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 
@@ -452,169 +452,6 @@ impl WithId for TrainStep2Output {
 
 impl Output for TrainStep2Output {}
 
-pub(crate) enum TrainStep2DynSyncStage<F, DI: Dims + 'static, DO: Dims + 'static, C: RunCtx + 'static> {
-    Local(Arc<TrainStep2<F, DI, DO, C>>),
-    Proxy {
-        stage: Arc<DynSyncStageBox<TrainStep2Input<DI, DO>, TrainStep2Output, C>>,
-    },
-}
-
-#[async_trait]
-impl <F, DI, DO, C> FuturesRunnerMapPurger for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI:Dims,
-    DO:Dims,
-    C:RunCtx,
-    Self:Send + Sync //TODO
-{
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        match self {
-            TrainStep2DynSyncStage::Local(local) => {
-                local.has_gpu_data(device_idx).await
-            }
-            TrainStep2DynSyncStage::Proxy { .. } => {
-                true
-            }
-        }
-    }
-
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            TrainStep2DynSyncStage::Local(local) => {
-                local.purge_gpu(ids_to_keep, device_idx, name).await
-            }
-            TrainStep2DynSyncStage::Proxy { stage,  .. } => {
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async move {
-                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
-                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
-                            TRAIN_TEST_STEP2_ENDPOINT,
-                        ).await
-                    })
-                })?;
-                Ok(())
-            }
-        }
-    }
-
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            TrainStep2DynSyncStage::Local(local) => {
-                local.drop_gpu(device_idx, name).await
-            }
-            TrainStep2DynSyncStage::Proxy { .. } => {
-                Ok(())
-            }
-        }
-
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        match self {
-            TrainStep2DynSyncStage::Local(local) => {
-                local.purge_cpu(purge_until).await
-            }
-            TrainStep2DynSyncStage::Proxy { .. } => {
-                0
-            }
-        }
-
-    }
-}
-
-impl<F, DI, DO, C> Debug for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrainStep2DynSyncStage").finish()
-    }
-}
-
-impl<F, DI, DO, C> Stage for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    type Ctx = C;
-    type In<'a> = TrainStep2Input<DI, DO>;
-    type Out = TrainStep2Output;
-}
-
-impl<F, DI, DO, C> SyncStage for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        // Proxy execution is stateless locally; only the local variant owns a training-module guard.
-        match self {
-            Self::Local(_) => Some(self),
-            Self::Proxy { .. } => None,
-        }
-    }
-
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-        }
-    }
-
-}
-
-impl<F, DI, DO, C> StageWithState for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    type S = <TrainStep2<F, DI, DO, C> as StageWithState>::S;
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
-        match self {
-            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
-            Self::Proxy { .. } => async {
-                Err(ThoError::new("proxy TrainStep2 does not have local state"))
-            }.boxed(),
-        }
-    }
-
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-        }
-    }
-}
-
-impl<F, DI, DO, C> OutId for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    fn out_id<'a>(&self, _input_id: &SynKey) -> () {
-        ()
-    }
-}
-
-impl<F, DI, DO, C> Adjustable for TrainStep2DynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{}
-
 // Train-step proxies pass worker tensor references instead of serializing batch tensors through JSON.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct TrainStep2TensorRef {
@@ -698,10 +535,9 @@ impl TrainStep2IpcRequest {
 #[cfg(test)]
 mod tests {
     use crate::tasks::load_motif_net::{LoadMotifNet, MotifNetMeta};
-    use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
     use crate::tasks::train_step_2::APPLY_NET2_X_ENDPOINT;
-    use crate::tasks::train_step_2::{TRAIN_TEST_STEP2_ENDPOINT, TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2XFn};
+    use crate::tasks::train_step_2::{TRAIN_TEST_STEP2_ENDPOINT, TrainStep2, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2XFn};
     use async_trait::async_trait;
     use futures_util::FutureExt;
     use futures_util::future::BoxFuture;
@@ -733,9 +569,10 @@ mod tests {
     use thoosa_common::copy_ctx::CudaActorHandle;
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx, WorkerStageOutput};
-    use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+    use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::tests::run_ipc_test;
+    use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
     use thoosa_common::my_tch::{LossFp, ThoModule};
     use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
@@ -752,7 +589,6 @@ mod tests {
     use thoosa_common::ws::{FsWorkspace, MockWorkspace, Workspace, WsConfigs, mock_ws_simp, net_files_from_base};
     use thoosa_properties_map::ToHashmap;
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
-    use thoosa_proxy_derive::Proxy;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::comp_id::SynKey;
@@ -761,8 +597,8 @@ mod tests {
     use thoosa_shared::run_configs::{RUN_ID, RunConfig, RunConfigId};
     use thoosa_shared::tmp_file::TmpFile;
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::traits::{DynSyncStageOutId, ErasedStageWithState};
-    use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStage, DynSyncStageBox, FromJsonFile, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, ToJsonFile, WithId};
+    use thoosa_shared::traits::ErasedStageWithState;
+    use thoosa_shared::traits::{AsyncStage, CachableIdTr, Data, FromJsonFile, MaxParallelCtx, MonoMetrics, RunCtx, SimpleId, Stage, StageWithState, SyncStage, ToJsonFile, WithId};
     use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, cdt_for_dir, mono_key, now_ms, panic_to_err, simple_id};
     use thoosa_store::{MockStoreBuilder, SqlStore, Store};
     use tokio::sync::MutexGuard;
@@ -843,14 +679,14 @@ mod tests {
     trait TrainStepFactory {
         type NP:FromJsonFile+ToJsonFile + Debug +Sync  + Send;
         type R:RunConfig + Debug + Sync + Send + Clone;
-        type InDims:Dims + 'static;
-        type OutDims:Dims + 'static;
+        type InDims:Dims + Serialize + serde::de::DeserializeOwned + 'static;
+        type OutDims:Dims + Serialize + serde::de::DeserializeOwned + 'static;
 
         type C:RunCtx + 'static;
 
 
 
-        fn new(run_config:Self::R, ctx:Self::C, vs_path: PathBuf) -> impl Future<Output = Result<(TrainStep2DynSyncStage<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>, Self::NP), ThoError>> + Send;
+        fn new(run_config:Self::R, ctx:Self::C, vs_path: PathBuf) -> impl Future<Output = Result<(DynSyncStageWithStateEnum<TrainStep2<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>>, Self::NP), ThoError>> + Send;
     }
 
     impl TrainStepFactory for TrainStepXFactory {
@@ -860,20 +696,20 @@ mod tests {
         type OutDims = OutDimsX;
         type C = RunCtxImpl;
 
-        fn new(run_config: Self::R, ctx:Self::C, vs_path: PathBuf) -> impl Future<Output = Result<(TrainStep2DynSyncStage<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>, Self::NP), ThoError>> + Send{
+        fn new(run_config: Self::R, ctx:Self::C, vs_path: PathBuf) -> impl Future<Output = Result<(DynSyncStageWithStateEnum<TrainStep2<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>>, Self::NP), ThoError>> + Send{
 
             async move {
                 if GlobalCtx::global().is_ipc() {
+                    let init = TrainTestStep2Init {
+                        tho_device_idx: ctx.tho_device_idx(),
+                        run_config: run_config.clone(),
+                        vs_path,
+                    };
+                    // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
+                    thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_TEST_STEP2_ENDPOINT, &init).await?;
                     Ok((
-                        TrainStep2DynSyncStage::Proxy {
-                            stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
-                                TrainTestStep2Init {
-                                    tho_device_idx: ctx.tho_device_idx(),
-                                    run_config: run_config.clone(),
-                                    vs_path
-                                },
-                                ctx.tho_device_idx()
-                            ).await?) as Arc<dyn DynSyncStageOutId<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
+                        DynSyncStageWithStateEnum::Proxy {
+                            stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT)),
                         },
                         TestNetXParams { in_features: run_config.in_features, layers: run_config.layers }
                     ))
@@ -906,7 +742,7 @@ mod tests {
                         &run_config,
                         vs_path,
                     ).await?;
-                    Ok((TrainStep2DynSyncStage::Local(Arc::new(stage)), params))
+                    Ok((DynSyncStageWithStateEnum::Local(Arc::new(stage)), params))
 
                 }
             }
@@ -1204,87 +1040,42 @@ mod tests {
         vs_path:PathBuf
     }
 
-    #[derive(Debug)]
-    struct TrainTestStep2IpcWrapper {
-        stage: Arc<TrainTestStep2ProxyTarget>,
-    }
-
-    impl SyncStageIpcWrapper for TrainTestStep2IpcWrapper {
-        fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
-            // Keep this endpoint's concrete training-module state behind the erased worker capability.
-            Some(self)
-        }
-
-        fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
-        where
-            Self: Sync
-        {
-            // Purge uses the application's CPU-first device index, not tch::Device.
-            self.stage.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz")
+    impl WorkerStageInput for TrainTestStep2Init {
+        fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+            C::decode(input)
         }
     }
 
-    impl SyncStageIpcWrapperWithState for TrainTestStep2IpcWrapper {
-        type S = ThoTrainModule<InDimsX, OutDimsX>;
-
-        fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-            StageWithState::pre_run(self.stage.base.as_ref(), tho_device.tho_device_idx())
-        }
-
-        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
-                    let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
-                    let input_dec = JsonIpcCodec::decode::<TrainStep2Input<InDimsX, OutDimsX>>(&input.input())?;
-
-                    let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
-                    let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.expected_y)?;
-
-                    let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true, input_dec.best_valid_loss);
-                    let stage = Arc::clone(&self.stage.base);
-
-                    Ok(JsonIpcCodec::encode(&StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
-                })
-            }).map(SyncStageIpcResponse::Encoded)
+    impl<DI, DO> WorkerStageInput for TrainStep2Input<DI, DO>
+    where
+        DI: Dims,
+        DO: Dims,
+        Self: serde::de::DeserializeOwned,
+    {
+        fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+            let input = C::decode::<Self>(input)?;
+            // Worker wrappers resolve tensor references before the sync stage receives its borrowed input.
+            Ok(TrainStep2Input::new(
+                ThoTensor::ref_to_tensor(all_cuda_tensors, input.x)?,
+                input.lengths,
+                ThoTensor::ref_to_tensor(all_cuda_tensors, input.expected_y)?,
+                input.train,
+                input.best_valid_loss,
+            ))
         }
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct  TrainTestStep2IpcRequest {
-
-    }
-
-    impl TrainTestStep2IpcRequest {
-        fn new ()->TrainTestStep2IpcRequest {
-            TrainTestStep2IpcRequest{
-
-            }
+    impl WorkerStageOutput for TrainStep2Output {
+        fn encode_from_worker<C: IpcCodec>(self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+            C::encode(&self)
         }
     }
 
-    #[derive(Debug, Proxy)]
-    #[proxy(
-        common = "thoosa_common",
-        name = "ProxyTrainTestStep2",
-        endpoint = "TRAIN_TEST_STEP2_ENDPOINT",
-        new_args = "init: TrainTestStep2Init, tho_device_idx: usize",
-        init = "init",
-        out_id = "()",
-        endpoint_init = "train_test_step_2_endpoint_init",
-        init_type = "TrainTestStep2Init",
-        init_stage = "TrainTestStep2ProxyTarget::new(init)",
-        wrapper = "TrainTestStep2IpcWrapper"
-    )]
-    struct TrainTestStep2ProxyTarget {
-        base: Arc<TrainStep2<Box<dyn Fn(ThoBatch<InDimsX>) -> ThoBatch<InDimsX> + Send + Sync + 'static>, InDimsX, OutDimsX, RunCtxImpl>>,
-    }
+    fn train_test_step_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
+        let init = TrainTestStep2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        debug!("train_test_step_2_endpoint_init: init={init:?}");
 
-    impl TrainTestStep2ProxyTarget {
-        pub fn new(init: TrainTestStep2Init)->Self {
-            debug!("TrainTestStep2ProxyTarget::init: init={init:?}");
-
-            let (train_step, params) : (TrainStep2<Box<dyn Fn<_, Output = _> + std::marker::Send + Sync>, _, _, _>, TestNetXParams)=  futures::executor::block_on(TrainStep2::new_local(
+        let (train_step, _params): (TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, WokerRunCtx>, TestNetXParams) = futures::executor::block_on(TrainStep2::new_local(
                 init.tho_device_idx.into(), //TODO assert it matches actual worker's device or pass the latter into init function
                 |rc, device|  {
                     let lr = rc.lr;
@@ -1311,12 +1102,10 @@ mod tests {
                 },
                 &init.run_config,
                 init.vs_path,
-            )).unwrap();//TODO unwrap
+            ))?;
 
-            Self {
-                base: Arc::new(train_step),
-            }
-        }
+        // The common wrapper owns state preparation and encoded worker dispatch for this existing stage.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(train_step), PhantomData::<JsonIpcCodec>)))
     }
     ///////////////////////
     pub struct ApplyNetStage2<DI, DO, C>
@@ -1463,6 +1252,18 @@ mod tests {
         }
     }
 
+    impl WorkerStageInput for ApplyNetStage2Input<InDimsX> {
+        fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+            let input = C::decode::<Self>(input)?;
+            // Resolve the existing tensor reference at the shared worker-wrapper boundary.
+            Ok(Self {
+                id: input.id,
+                x: ThoTensor::ref_to_tensor(all_cuda_tensors, input.x)?,
+                lengths: input.lengths,
+            })
+        }
+    }
+
     #[async_trait]
     impl<DI: Dims> CopyToDevice for ApplyNetStage2Input<DI> {
         async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError>
@@ -1596,60 +1397,6 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct ApplyNetStageIpcWrapper {
-        stage: Arc<ApplyNetXStageTarget>
-    }
-
-    impl SyncStageIpcWrapper for ApplyNetStageIpcWrapper {
-        fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
-            // Keep this endpoint's concrete training-module state behind the erased worker capability.
-            Some(self)
-        }
-
-        fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
-        where
-            Self: Sync
-        {
-            // Purge uses the application's CPU-first device index, not tch::Device.
-            self.stage.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz")
-        }
-    }
-
-    impl SyncStageIpcWrapperWithState for ApplyNetStageIpcWrapper {
-        type S = ThoModuleWithStore<Batch<InDimsX>, Batch<OutDimsX>>;
-
-        fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-            StageWithState::pre_run(self.stage.base.as_ref(), tho_device.tho_device_idx())
-        }
-
-        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-
-                    let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
-                    debug!("TrainTestStep2IpcWrapper::do_run_with_state: input={:?}", input);
-
-                    let input_dec = JsonIpcCodec::decode::<ApplyNetStage2Input<InDimsX>>(&input.input())?;
-
-                    let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
-
-                    let input = ApplyNetStage2Input {
-                        id: input_dec.id,
-                        x,
-                        lengths: input_dec.lengths,
-                    };
-                    let stage = Arc::clone(&self.stage.base);
-
-                    let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, APPLY_NET2_X_ENDPOINT)/*TODO use run_ctx*/)?;
-                    debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
-
-                    output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
-                })
-            }).map(SyncStageIpcResponse::Encoded)
-        }
-    }
-
     #[derive(Debug, Serialize, Deserialize)]
     struct ApplyNetStage2Init {
         id: SynKey,
@@ -1657,145 +1404,37 @@ mod tests {
         base_path:PathBuf
     }
 
-    #[derive(Debug, Proxy)]
-    #[proxy(
-        common = "thoosa_common",
-        name = "ProxApplyNetXStage",
-        endpoint = "APPLY_NET2_X_ENDPOINT",
-        new_args = "id:SynKey, init: ApplyNetStage2Init, tho_device_idx: usize",
-        init = "init",
-        fields = "id: SynKey = id",
-        out_id = "self.id.clone()",
-        endpoint_init = "apply_net_stage_2_endpoint_init",
-        init_type = "ApplyNetStage2Init",
-        init_stage = "ApplyNetXStageTarget::new_in_worker(init)",
-        wrapper = "ApplyNetStageIpcWrapper"
-    )]
-    struct ApplyNetXStageTarget {
-        id:SynKey,
-        base: Arc<ApplyNetStage2<InDimsX, OutDimsX, RunCtxImpl>>
-    }
-
-    impl ApplyNetXStageTarget {
-
-        pub async fn new(id:SynKey, device: ThoDevice, base_path:PathBuf, init_data:()) -> Result<ApplyStage2DynSyncStage<InDimsX, OutDimsX, RunCtxImpl>, ThoError>{
-            if GlobalCtx::global().is_ipc() {
-                let init = ApplyNetStage2Init {
-                    id: id.clone(),
-                    tho_device_idx: device.tho_device_idx(),
-                    base_path,
-                };
-                debug!("ApplyNetXStageTarget::new: init={init:?}");
-                Ok(ApplyStage2DynSyncStage::Proxy {
-                    stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxApplyNetXStage::new(
-                        id,
-                        init,
-                        device.tho_device_idx()
-                    ).await?)))
-                })
-
-
-            } else {
-
-                Ok(ApplyStage2DynSyncStage::Local(Arc::new(ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await?)))
-            }
-
-        }
-        pub fn new_in_worker(init: ApplyNetStage2Init) -> Self {
-            debug!("ApplyNetXStageTarget::new_in_worker: init={init:?}");
-
-            let stage = futures::executor::block_on(ApplyNetStage2::new_local::<TestNetXParams, ()>(
-                init.tho_device_idx.into(),
-                init.base_path,
-                ()
-            )).unwrap();//TODO unwrap
-
-            Self {
-                id: init.id.clone(),
-                base: Arc::new(stage)
-            }
+    impl WorkerStageInput for ApplyNetStage2Init {
+        fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+            C::decode(input)
         }
     }
 
-    #[derive(Debug)]
-    pub enum ApplyStage2DynSyncStage< DI, DO, C>
-    where
-        DI:Dims + 'static,
-        DO:Dims + 'static,
-        C: RunCtx + 'static
-
-    {
-        Local(Arc<ApplyNetStage2<DI, DO, C>>),
-        Proxy {
-            stage: Arc<DynSyncStageBox<ApplyNetStage2Input<DI>, ApplyNetStage2Output<DO>, C>>,
+    async fn new_apply_net_x_stage(id: SynKey, device: ThoDevice, base_path: PathBuf, init_data: ()) -> Result<DynSyncStageWithStateEnum<ApplyNetStage2<InDimsX, OutDimsX, RunCtxImpl>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            let init = ApplyNetStage2Init {
+                id,
+                tho_device_idx: device.tho_device_idx(),
+                base_path,
+            };
+            debug!("new_apply_net_x_stage: init={init:?}");
+            // Install the endpoint before returning the shared proxy stage used by the common dispatch enum.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyNetStage2Init>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, &init).await?;
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT)),
+            })
+        } else {
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await?)))
         }
     }
 
-    impl <DI, DO, C> ApplyStage2DynSyncStage<DI, DO, C>
-    where
-        DI:Dims + 'static,
-        DO:Dims + 'static,
-        C: RunCtx + 'static
-    {
+    fn apply_net_stage_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
+        let init = ApplyNetStage2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        debug!("apply_net_stage_2_endpoint_init: init={init:?}");
+        let stage: ApplyNetStage2<InDimsX, OutDimsX, WokerRunCtx> = futures::executor::block_on(ApplyNetStage2::new_local::<TestNetXParams, ()>(init.tho_device_idx.into(), init.base_path, ()))?;
 
-    }
-
-    impl <DI, DO, C> Stage for ApplyStage2DynSyncStage< DI, DO, C>
-    where
-        DI:Dims + 'static,
-        DO:Dims + 'static,
-        C: RunCtx + 'static
-
-    {
-        type Ctx = C;
-        type In<'a> = ApplyNetStage2Input<DI>;
-        type Out = ApplyNetStage2Output<DO>;
-    }
-
-    impl <DI, DO, C> SyncStage for ApplyStage2DynSyncStage< DI, DO, C>
-    where
-        DI:Dims + 'static,
-        DO:Dims + 'static,
-        C: RunCtx + 'static
-    {
-        fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-            // Advertise typed state execution without exposing ThoTrainModule to the common runner.
-            match self {
-                Self::Local(_) => Some(self),
-                Self::Proxy { .. } => None,
-            }
-        }
-        fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-            match self.as_ref() {
-                Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-                Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-            }
-        }
-    }
-
-    impl <DI, DO, C> StageWithState for ApplyStage2DynSyncStage< DI, DO, C>
-    where
-        DI:Dims + 'static,
-        DO:Dims + 'static,
-        C: RunCtx + 'static
-    {
-        type S = <ApplyNetStage2<DI, DO, C> as StageWithState>::S;
-
-        fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
-            match self {
-                Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
-                Self::Proxy { .. } => async {
-                    Err(ThoError::new("proxy ApplyStage2 does not have local state"))
-                }.boxed(),
-            }
-        }
-
-        fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-            match self.as_ref() {
-                Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-                Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-            }
-        }
+        // The common stateful wrapper performs state preparation and converts worker outputs back to references.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)))
     }
 
     /////////////////
@@ -1819,12 +1458,11 @@ mod tests {
 
             let run_config = TestXRunConfig::new(0, 0.01, 100, 3);
             let x_params = TestNetXParams { in_features: run_config.in_features, layers: run_config.layers };
-            let (train_step, params): (TrainStep2DynSyncStage<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>, TestNetXParams) = (
-                TrainStep2DynSyncStage::Proxy {
-                    stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
-                        TrainTestStep2Init{ tho_device_idx, run_config, vs_path: PathBuf::new() },
-                        tho_device_idx
-                    ).await?) as Arc<dyn DynSyncStageOutId<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
+            let init = TrainTestStep2Init { tho_device_idx, run_config, vs_path: PathBuf::new() };
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(cuda_actor.as_ref(), TRAIN_TEST_STEP2_ENDPOINT, &init).await?;
+            let (train_step, params): (DynSyncStageWithStateEnum<TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>>, TestNetXParams) = (
+                DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT)),
                 },
                 x_params
             );
@@ -1873,7 +1511,7 @@ mod tests {
         Ok(())
     }
 
-    async fn do_test_train_step_2<FI>(train_step: TrainStep2DynSyncStage<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>, input: FI) -> Result<(), ThoError>
+    async fn do_test_train_step_2<FI>(train_step: DynSyncStageWithStateEnum<TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>>, input: FI) -> Result<(), ThoError>
     where
         FI:AsyncFn()->Result<TrainStep2Input<InDimsX, OutDimsX>, ThoError>
     {
@@ -1953,7 +1591,7 @@ mod tests {
         debug!("do_test_train_net_2: x_nets={x_nets:?}");
         for x_net in x_nets {
 
-            let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), x_net.net_path, ()).await?);
+            let apply_net = Arc::new(new_apply_net_x_stage(mono_key!(0, "").into(), 1.into(), x_net.net_path, ()).await?);
             debug!("do_test_train_net_2: apply_net={apply_net:?}");
             let input = make_input_batch(make_refs).await?;
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
