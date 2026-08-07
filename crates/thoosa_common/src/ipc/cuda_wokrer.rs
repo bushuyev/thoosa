@@ -377,7 +377,7 @@ impl CudaWorker {
                 debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} consume={consume} input_len={}", input.len());
 
                 let response = {
-                    let stream = exec_stream_pool.acquire().await;
+                    let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
                     match installed_endpoints.read().get(endpoint_name) {
                         Some(endpoint) => {
                             let r = if let Some(with_state) = endpoint.as_with_state() {

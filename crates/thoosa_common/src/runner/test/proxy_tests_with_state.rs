@@ -1,25 +1,32 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use futures_util::future::{BoxFuture, FutureExt, ready};
 use futures_util::{StreamExt, ready};
 use std::sync::Arc;
+use async_trait::async_trait;
 use log::debug;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
+use tch::Device::Cpu;
 use tch::Kind::Int;
 use tch::Tensor;
+use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
 use thoosa_proxy_derive::Proxy;
-use thoosa_shared::ThoError;
+use thoosa_shared::{mono_key, CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{DynSyncStage, DynSyncStageBox, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use crate::dims::Dims;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -55,6 +62,31 @@ impl WithId for TestInput {
 
     fn id(&self) -> &Self::ID {
         &()
+    }
+}
+
+
+// #[derive(Debug)]
+// struct TestInputWrap {
+//     inner:TestInput
+// }
+
+impl BorrowRef for TestInput {
+    type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o
+    {
+        async move {
+            if self.value.device() == to_tho_device_idx {
+                Ok(ThoDataRef::Borrowed(self))
+            } else {
+                Ok(ThoDataRef::Owned(TestInput {
+                    value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
+                }))
+            }
+        }
     }
 }
 
@@ -137,7 +169,7 @@ where
     C:RunCtx
 {
     pd:PhantomData<(P, C)>,
-    k:ThoTensor //state - needs to be dumped to CPU when handling OOM in other stages
+    k:tokio::sync::Mutex<ThoTensor> //state - needs to be dumped to CPU when handling OOM in other stages
 }
 
 impl <P, C> TestStage<P, C>
@@ -147,12 +179,17 @@ where
 {
     pub fn new(init:TestStageInit, tho_device:ThoDevice) -> Self {
         Self {
-            k: Tensor::scalar_tensor(init.k, (Int, tho_device.into())).into(),
+            k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, tho_device.into())).into()),
             pd: PhantomData,
         }
     }
 }
 
+unsafe impl <P, C> Sync for TestStage<P, C>
+where
+    P:Debug,
+    C:RunCtx
+{}
 
 impl <P, C> Stage for TestStage<P, C>
 where
@@ -169,13 +206,175 @@ where
     P:Debug,
     C:RunCtx
 {
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
+    where
+        Self: Sized
+    {
+        Some(self)
+    }
+
+}
+impl <P, C> StageWithState for TestStage<P, C>
+where
+    P:Debug,
+    C:RunCtx
+{
+    type S = ThoTensor;
+
+    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        async {
+            let mut guard = self.k.lock().await;
+            if guard.device() != 1 { //TODO pass device to pre_run
+                *guard = guard.copy_to_device(1).await?;
+            }
+            Ok(guard)
+        }.boxed()
+    }
+
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ApplyNetStep2::do_run_with_state"))]
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+
+
         Ok(TestOutput{
-            value: (input.value.as_ref() * self.k.as_ref()).into(),
+            value: (input.value.as_ref() * k.as_ref()).into(),
         })
     }
 }
 
+#[async_trait]
+impl <P, C> FuturesRunnerMapPurger for TestStage<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.k.lock().await.tho_device().ne(&Cpu.into())
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        let mut guard = self.k.lock().await;
+        *guard = guard.copy_to_device(0).await?;
+
+        Ok(())
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        Ok(())
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+       0
+    }
+}
+
+/**/
+
+trait DynSyncStage_ErasedStageState<I, O, C, S>: DynSyncStage<I, O, C> + ErasedStageState<S> +  Debug + Send + Sync + 'static
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+    S: SyncStage
+{
+
+}
+
+impl <T, I, O, C, S> DynSyncStage_ErasedStageState<I, O, C, S> for T
+where
+    T:DynSyncStage<I, O, C> + ErasedStageState<S>,
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+    S: SyncStage
+
+{
+
+}
+#[derive(Debug)]
+pub struct DynSyncStageBox2<I, O, C>
+where
+    I: Input  + 'static,
+    O: Output + 'static,
+    C: RunCtx + 'static,
+// S: SyncStage
+{
+    // inner: Arc<dyn DynSyncStage_ErasedStageState<I, O, C, S>>,
+    inner: Arc<dyn DynSyncStage<I, O, C>>,
+}
+
+impl <I, O, C> DynSyncStageBox2<I, O, C>
+where
+    I: Input  + 'static,
+    O: Output + 'static,
+    C: RunCtx + 'static,
+    // S: SyncStage
+{
+    // pub fn new(inner: Arc<dyn DynSyncStage_ErasedStageState<I, O, C, S>>) -> Self {
+    pub fn new(inner: Arc<dyn DynSyncStage<I, O, C>>) -> Self {
+        Self { inner }
+    }
+}
+
+// impl <I, O, C, S> Stage for DynSyncStageBox2<I, O, C, S>
+impl <I, O, C> Stage for DynSyncStageBox2<I, O, C>
+where
+    I: Input  + 'static,
+    O: Output + 'static,
+    C: RunCtx + 'static,
+    // S: SyncStage
+
+{
+    type Ctx = C;
+    type In<'a> = I;
+    type Out = O;
+}
+
+impl <I, O, C> SyncStage for DynSyncStageBox2<I, O, C>
+where
+    I: Input  + 'static,
+    O: Output + 'static,
+    C: RunCtx + 'static,
+    // S: SyncStage
+{
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        Arc::clone(&self.inner).do_run_dyn(input, ctx)
+    }
+    // fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
+    // where
+    //     Self: Sized
+    // {
+    //    // Some(&self.inner)
+    //     todo!()
+    // }
+
+}
+
+// impl <I, O, C, S> StageWithState for DynSyncStageBox2<I, O, C, S>
+impl <I, O, C> StageWithState for DynSyncStageBox2<I, O, C>
+where
+    I: Input  + 'static,
+    O: Output + 'static,
+    C: RunCtx + 'static,
+    // S: StageWithState
+{
+    type S = ThoTensor;
+
+    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+       panic!("proxy ApplyStage2 does not have local state")
+    }
+
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        // match self.as_ref() {
+        //     Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
+        //     Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+        // }
+        // Arc::clone(&self.inner).do_run(input, ctx)
+        todo!()
+    }
+
+}
+/**/
 
 const TEST_ENDPOINT: &str = "TestStage";
 
@@ -191,61 +390,105 @@ const TEST_ENDPOINT: &str = "TestStage";
 pub struct ProxyTestStage;
 impl ProxyTestStage {
 
-    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<Arc<dyn DynSyncStage<TestInput, TestOutput, TestRunCtx>>, ThoError> //no need to wrap in DynSyncStageBox
+    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<Arc<DynSyncStageBox2<TestInput, TestOutput, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
-        if GlobalCtx::global().is_ipc() {
-            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
-                GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
-                TEST_ENDPOINT,
-                &init
-            ).await?;
-            Ok(Arc::new(Self {}))
-        } else {
-            Ok(Arc::new(TestStage::<u32, TestRunCtx>::new(init, tho_device_idx.into())))
-        }
+        // if GlobalCtx::global().is_ipc() {
+        //     crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
+        //         GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
+        //         TEST_ENDPOINT,
+        //         &init
+        //     ).await?;
+        //     Ok(Arc::new(DynSyncStageBox2::new(Arc::new(Self {}) as Arc<dyn DynSyncStage_ErasedStageState<TestInput, TestOutput, TestRunCtx, TestStage<u32, TestRunCtx>>>)))
+        // } else {
+        //     Ok(Arc::new(DynSyncStageBox2::new(Arc::new(TestStage::<u32, TestRunCtx>::new(init, tho_device_idx.into())) as Arc<dyn DynSyncStage_ErasedStageState<TestInput, TestOutput, TestRunCtx, TestStage<u32, TestRunCtx>>>)))
+        // }
+        todo!()
     }
+
 }
 
-impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
-impl Stage for ProxyTestStage {
-    type Ctx = <Arc<TestStage<(), TestRunCtx>> as Stage>::Ctx;
-    type In<'a> = <Arc<TestStage<(), TestRunCtx>> as Stage>::In<'a>;
-    type Out = <Arc<TestStage<(), TestRunCtx>> as Stage>::Out;
-}
-
-impl SyncStage for ProxyTestStage {
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-
-                let actor = GlobalCtx::global().cuda_actor(
-                    ctx.tho_device_idx()
-                );
-
-                let input = JsonIpcCodec::encode(input)?;
-
-                let response = actor.invoke_endpoint_bytes(
-                    encode_endpoint_payload_bytes(TEST_ENDPOINT, &input).into_bytes()
-                ).await?;
-
-                JsonIpcCodec::decode(&response)
-
-            })
-        })
-    }
-}
+//
+// impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
+// impl Stage for ProxyTestStage {
+//     type Ctx = <Arc<TestStage<(), TestRunCtx>> as Stage>::Ctx;
+//     type In<'a> = <Arc<TestStage<(), TestRunCtx>> as Stage>::In<'a>;
+//     type Out = <Arc<TestStage<(), TestRunCtx>> as Stage>::Out;
+// }
+//
+// impl SyncStage for ProxyTestStage {
+//     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
+//     where
+//         Self: Sized,
+//     {
+//         tokio::task::block_in_place(|| {
+//             tokio::runtime::Handle::current().block_on(async move {
+//
+//                 let actor = GlobalCtx::global().cuda_actor(
+//                     ctx.tho_device_idx()
+//                 );
+//
+//                 let input = JsonIpcCodec::encode(input)?;
+//
+//                 let response = actor.invoke_endpoint_bytes(
+//                     encode_endpoint_payload_bytes(TEST_ENDPOINT, &input).into_bytes()
+//                 ).await?;
+//
+//                 JsonIpcCodec::decode(&response)
+//
+//             })
+//         })
+//     }
+// }
+//
+// impl StageWithState for DynSyncStageBox2 {
+//     type S = ThoTensor;
+//
+//     fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+//         todo!()
+//     }
+// }
+//
+// #[async_trait]
+// impl  FuturesRunnerMapPurger for DynSyncStageBox2
+// where
+//     Self:Send + Sync //TODO
+// {
+//     async fn has_gpu_data(&self, device_idx: usize) -> bool {
+//         true
+//     }
+//
+//     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+//         tokio::task::block_in_place(|| {
+//             tokio::runtime::Handle::current().block_on(async move {
+//                 thoosa_common::ipc::codec::purge_ipc_sync_stage::<JsonIpcCodec>(
+//                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
+//                     TEST_ENDPOINT,
+//                 ).await
+//             })
+//         })?;
+//         Ok(())
+//     }
+//
+//     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+//         Ok(())
+//     }
+//
+//     async fn purge_cpu(&self, purge_until: u64) -> usize {
+//         0
+//     }
+// }
 
 
 pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
+    let init = TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+    debug!("test_with_state_init: init={init:?}");
+
     Ok(Box::new(SimpWrapper {
         base: Arc::new(TestStage::<(), WokerRunCtx>::new(
-            TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?,
-            1.into()//TODO
+            init,
+            1.into() //TODO
         )),
         pd: PhantomData::<JsonIpcCodec>
     }))
@@ -374,7 +617,8 @@ mod tests {
             value: cuda_tensor,
         };
         let ctx = TestRunCtx;
-        let result = test_stage.do_run_dyn(&input, &ctx)?;
+        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+        // let result = test_stage.do_run_dyn(&input, &ctx)?;
 
         debug!("result={result:?}");
 
