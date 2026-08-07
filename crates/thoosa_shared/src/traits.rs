@@ -833,7 +833,7 @@ pub trait SyncStage: Stage + Debug {
 pub trait StageWithState: SyncStage + Sync {
     type S: Debug + Send + Sync;
 
-    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
 
     fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         unimplemented!()
@@ -989,16 +989,16 @@ where
     S: SyncStage,
 {
     //TODO add device param
-    fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
 }
 
 impl<S> ErasedStageWithState<S> for S
 where
     S: StageWithState,
 {
-    fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>> {
         async move {
-            let state = StageWithState::pre_run(self).await?;
+            let state = StageWithState::pre_run(self, to_device_idx).await?;
             // Keep the concrete guard type inside the erased value while it spans later async preparation.
             Ok(Box::new(StageStateGuard::<S> { state }) as Box<dyn ErasedStageState<S>>)
         }.boxed()
