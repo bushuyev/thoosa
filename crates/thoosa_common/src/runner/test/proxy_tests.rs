@@ -367,6 +367,8 @@ mod tests {
         let ctx = TestRunCtx;
         let result = test_stage.do_run_dyn(&input, &ctx)?;
 
+        // let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+
         debug!("result={result:?}");
 
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
