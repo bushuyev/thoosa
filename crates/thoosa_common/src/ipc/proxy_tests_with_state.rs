@@ -1,30 +1,9 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use futures_util::future::{BoxFuture, FutureExt, ready};
-use futures_util::{StreamExt, ready};
-use std::sync::Arc;
-use async_trait::async_trait;
-use log::debug;
-use parking_lot::{Mutex, RwLock};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
-use tch::Device::Cpu;
-use tch::Kind::Int;
-use tch::Tensor;
-use tokio::sync::{MutexGuard, RwLockReadGuard};
-use tracing::field::debug;
-use thoosa_proxy_derive::Proxy;
-use thoosa_shared::{mono_key, CopyToDevice, ThoError};
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
 use crate::dims::{Batch, Dims};
-use crate::ipc::codec::{encode_sync_stage_run_input, IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
+use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec, encode_sync_stage_run_input};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
-use crate::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use crate::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
@@ -32,6 +11,27 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::train_nets::ThoModuleWithStore;
+use async_trait::async_trait;
+use futures_util::future::{BoxFuture, FutureExt, ready};
+use futures_util::{StreamExt, ready};
+use log::debug;
+use parking_lot::{Mutex, RwLock};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
+use std::sync::Arc;
+use tch::Device::Cpu;
+use tch::Kind::Int;
+use tch::Tensor;
+use thoosa_proxy_derive::Proxy;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::{CopyToDevice, ThoError, mono_key};
+use tokio::sync::{MutexGuard, RwLockReadGuard};
+use tracing::field::debug;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInit {
@@ -297,109 +297,36 @@ pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<d
     let init = TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
     debug!("test_with_state_init: init={init:?}");
 
-    Ok(Box::new(SimpWrapper {
-        base: Arc::new(TestStage::<(), WokerRunCtx>::new(init)),
-        pd: PhantomData::<JsonIpcCodec>
-    }))
+    Ok(Box::new(WorkerWrapperWithState::new(
+        Arc::new(TestStage::<(), WokerRunCtx>::new(init)),
+        PhantomData::<JsonIpcCodec>
+    )))
 }
 
-
-#[derive(Debug)]
-struct SimpWrapper<Co, S, I, O>
-where
-    Co: IpcCodec,
-// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
-// must be both Send and Sync at this IPC boundary.
-    S: SyncStage + StageWithState<S=ThoTensor> + Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    base:Arc<S>,
-    pd:PhantomData<(Co)>
-}
-
-impl <Co, S, I, O>SyncStageIpcWrapper for SimpWrapper<Co, S, I, O>
-where
-    Co: IpcCodec,
-    S: SyncStage + StageWithState<S=ThoTensor>+ Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
-        // Keep this endpoint's concrete training-module state behind the erased worker capability.
-        Some(self as &dyn ErasedWithState)
-    }
-
-    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
-    where
-        Self: Sync
-    {
-        // Purge uses the application's CPU-first device index, not tch::Device.
-        // self.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz") TODO
-
-        async {Ok(())}.boxed()
-    }
-}
-
-impl <Co, S, I, O> SyncStageIpcWrapperWithState for SimpWrapper<Co, S, I, O>
-where
-    Co: IpcCodec,
-// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
-// must be both Send and Sync at this IPC boundary.
-    S: SyncStage + StageWithState<S=ThoTensor> + Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    type S = ThoTensor;
-
-    fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-        StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
-    }
-
-    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-
-                let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(input, all_cuda_tensors)?;
-
-                debug!("TrainTestStep2IpcWrapper::do_run_with_state: input={:?}", input);
-                let stage = Arc::clone(&self.base);
-
-                let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, run_ctx)?;
-                debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
-
-                output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
-            })
-        }).map(SyncStageIpcResponse::Encoded)
-    }
-}
 
 
 mod tests {
-    use std::collections::HashMap;
-    use log::debug;
-    use std::sync::Arc;
-    use parking_lot::RwLock;
-    use tch::Device::Cuda;
-    use tch::Kind::Float;
-    use tch::kind::FLOAT_CPU;
-    use tch::Tensor;
-    use tracing::field::debug;
-    use thoosa_common::runner::test::proxy_tests_with_state::{TestInput, TestRunCtx, TestStage};
-    use thoosa_shared::ThoError;
-    use thoosa_shared::traits::SyncStage;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::proxy_tests_with_state::{TestInput, TestRunCtx, TestStage};
+    use crate::ipc::proxy_tests_with_state::{ProxyTestStage, TEST_ENDPOINT, TestStageInit, test_with_state_init};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::purge::FuturesRunnerMapPurger;
-    use crate::runner::test::proxy_tests_with_state::{test_with_state_init, TEST_ENDPOINT, TestStageInit, ProxyTestStage};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ws::{mock_ws_simp, FsWorkspace, WsConfigs};
+    use crate::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
+    use log::debug;
+    use parking_lot::RwLock;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tch::Device::Cuda;
+    use tch::Kind::Float;
+    use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
+    use thoosa_shared::ThoError;
+    use thoosa_shared::traits::SyncStage;
+    use tracing::field::debug;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

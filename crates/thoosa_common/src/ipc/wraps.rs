@@ -1,21 +1,26 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
+use log::debug;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tch::Tensor;
 use tokio::sync::MutexGuard;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::tho_device::ThoDevice;
+use crate::tho_tensor::ThoTensor;
 
 #[derive(Debug)]
 pub struct ProxyStage<St>
@@ -269,7 +274,149 @@ where
         }
     }
 }
+///
 
+
+
+#[derive(Debug)]
+pub struct WorkerWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    base:Arc<S>,
+    pd:PhantomData<(Co)>
+}
+
+impl <Co, S, I, O> WorkerWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    pub fn new(base: Arc<S>, pd: PhantomData<Co>) -> Self {
+        Self { base, pd }
+    }
+}
+impl <Co, S, I, O>SyncStageIpcWrapper for WorkerWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        debug!("SimpWrapper::do_run: 0. input={_input:?}");
+        let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(_input, all_cuda_tensors)?;
+
+        debug!("SimpWrapper::do_run: 2. input={input:?}");
+        let out = Arc::clone(&self.base).do_run(&input, run_ctx)?;
+
+
+        out.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, _tho_device)
+
+    }
+}
+///
+#[derive(Debug)]
+pub struct WorkerWrapperWithState<Co, St, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    St: SyncStage + StageWithState + Debug + Send + Sync + 'static,
+    for<'a> St: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    base:Arc<St>,
+    pd:PhantomData<(Co)>
+}
+
+impl <Co, St, I, O> WorkerWrapperWithState<Co, St, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    St: SyncStage + StageWithState + Debug + Send + Sync + 'static,
+    for<'a> St: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    pub fn new(base: Arc<St>, pd: PhantomData<Co>) -> Self {
+        Self { base, pd }
+    }
+}
+
+impl <Co, St, I, O>SyncStageIpcWrapper for WorkerWrapperWithState<Co, St, I, O>
+where
+    Co: IpcCodec,
+    St: SyncStage + StageWithState+ Debug + Send + Sync + 'static,
+    for<'a> St: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
+        // Keep this endpoint's concrete training-module state behind the erased worker capability.
+        Some(self as &dyn ErasedWithState)
+    }
+
+    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+    where
+        Self: Sync
+    {
+        // Purge uses the application's CPU-first device index, not tch::Device.
+        // self.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz") TODO
+
+        async {Ok(())}.boxed()
+    }
+}
+
+impl <Co, St, I, O> SyncStageIpcWrapperWithState for WorkerWrapperWithState<Co, St, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    St: SyncStage + StageWithState + Debug + Send + Sync + 'static,
+    for<'a> St: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+{
+    type S = <St as StageWithState>::S;
+
+    fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
+        StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
+    }
+
+    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+
+                let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(input, all_cuda_tensors)?;
+
+                debug!("TrainTestStep2IpcWrapper::do_run_with_state: input={:?}", input);
+                let stage = Arc::clone(&self.base);
+
+                let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, run_ctx)?;
+                debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
+
+                output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+            })
+        }).map(SyncStageIpcResponse::Encoded)
+    }
+}
 #[test]
 fn test_0()
 {

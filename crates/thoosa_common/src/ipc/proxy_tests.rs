@@ -1,30 +1,30 @@
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use futures_util::future::{BoxFuture, FutureExt, ready};
-use futures_util::{StreamExt, ready};
-use std::sync::Arc;
-use log::debug;
-use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
-use tch::Tensor;
-use tracing::field::debug;
-use thoosa_proxy_derive::Proxy;
-use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage};
+use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use futures_util::future::{BoxFuture, FutureExt, ready};
+use futures_util::{StreamExt, ready};
+use log::debug;
+use parking_lot::Mutex;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
+use std::sync::Arc;
+use tch::Tensor;
+use thoosa_proxy_derive::Proxy;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::{CopyToDevice, ThoError};
+use tracing::field::debug;
 
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -225,72 +225,34 @@ impl ProxyTestStage {
 
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
-    Ok(Box::new(SimpWrapper {
-        base: Arc::new(TestStage::<(), WokerRunCtx>::new(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
-        pd: PhantomData::<JsonIpcCodec>
-    }))
+    Ok(Box::new(WorkerWrapper::new(
+        Arc::new(TestStage::<(), WokerRunCtx>::new(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
+        PhantomData::<JsonIpcCodec>
+    )))
 }
 
-
-#[derive(Debug)]
-struct SimpWrapper<Co, S, I, O>
-where
-    Co: IpcCodec,
-// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
-// must be both Send and Sync at this IPC boundary.
-    S: SyncStage + Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    base:Arc<S>,
-    pd:PhantomData<(Co)>
-}
-
-impl <Co, S, I, O>SyncStageIpcWrapper for SimpWrapper<Co, S, I, O>
-where
-    Co: IpcCodec,
-// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
-// must be both Send and Sync at this IPC boundary.
-    S: SyncStage + Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-        debug!("SimpWrapper::do_run: 0. input={_input:?}");
-        let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(_input, all_cuda_tensors)?;
-
-        debug!("SimpWrapper::do_run: 2. input={input:?}");
-        let out = Arc::clone(&self.base).do_run(&input, run_ctx)?;
-
-
-        out.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, _tho_device)
-
-    }
-}
 
 mod tests {
-    use std::collections::HashMap;
-    use log::debug;
-    use std::sync::Arc;
-    use parking_lot::RwLock;
-    use tch::Device::Cuda;
-    use tch::Kind::Float;
-    use tch::kind::FLOAT_CPU;
-    use tch::Tensor;
-    use tracing::field::debug;
-    use thoosa_common::runner::test::proxy_tests::{TestInput, TestRunCtx, TestStage};
-    use thoosa_shared::ThoError;
-    use thoosa_shared::traits::SyncStage;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::proxy_tests::{ProxyTestStage, TEST_ENDPOINT, TestOutput, TestStageInit, test_simp_init};
+    use crate::ipc::proxy_tests::{TestInput, TestRunCtx, TestStage};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::test::proxy_tests::{ProxyTestStage, TEST_ENDPOINT, test_simp_init, TestOutput, TestStageInit};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ws::{mock_ws_simp, FsWorkspace, WsConfigs};
+    use crate::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
+    use log::debug;
+    use parking_lot::RwLock;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tch::Device::Cuda;
+    use tch::Kind::Float;
+    use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
+    use thoosa_shared::ThoError;
+    use thoosa_shared::traits::SyncStage;
+    use tracing::field::debug;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
