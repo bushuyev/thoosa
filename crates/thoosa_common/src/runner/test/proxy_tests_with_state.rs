@@ -24,7 +24,7 @@ use crate::ipc::codec::{encode_sync_stage_run_input, IpcCodec, IpcSyncStageRunIn
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
-use crate::ipc::wraps::ProxyStage;
+use crate::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
@@ -271,7 +271,7 @@ const TEST_ENDPOINT: &str = "TestStage";
 
 impl ProxyTestStage {
 
-    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<TestDynSyncStage<u32, TestRunCtx>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<DynSyncStageWithStateEnum<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
@@ -280,143 +280,16 @@ impl ProxyTestStage {
                 TEST_ENDPOINT,
                 &init
             ).await?;
-            Ok(TestDynSyncStage::Proxy {
+            Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT)),
             })
         } else {
-            Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
         }
 
     }
 
 }
-
-#[derive(Debug)]
-pub enum TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    Local(Arc<TestStage<P, C>>),
-    Proxy {
-        stage: Arc<ProxyStage<TestStage<P, C>>>,
-    }
-}
-
-impl <P, C> Stage for TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    type Ctx = C;
-    type In<'a> = TestInput;
-    type Out = TestOutput;
-}
-
-impl <P, C> SyncStage for TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        // Advertise typed state execution without exposing ThoTrainModule to the common runner.
-        match self {
-            Self::Local(_) => Some(self),
-            Self::Proxy { .. } => None,
-        }
-    }
-
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-        }
-    }
-}
-
-impl <P, C> StageWithState for TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    type S = <TestStage<P, C> as StageWithState>::S;
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
-        match self {
-            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
-            Self::Proxy { .. } => async {
-                Err(ThoError::new("proxy ApplyStage2 does not have local state"))
-            }.boxed(),
-        }
-    }
-
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-        }
-    }
-}
-
-#[async_trait]
-impl <P, C> FuturesRunnerMapPurger for TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        match self {
-            TestDynSyncStage::Local(stage) => {
-                stage.has_gpu_data(device_idx).await
-            }
-            TestDynSyncStage::Proxy { .. } => {
-                true
-            }
-        }
-    }
-
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            TestDynSyncStage::Local(local) => {
-                local.purge_gpu(ids_to_keep, device_idx, name).await
-            }
-            TestDynSyncStage::Proxy { stage,  .. } => {
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async move {
-                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
-                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
-                            TEST_ENDPOINT,
-                        ).await
-                    })
-                })?;
-                Ok(())
-            }
-        }
-    }
-
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            TestDynSyncStage::Local(local) => {
-                local.drop_gpu(device_idx, name).await
-            }
-            TestDynSyncStage::Proxy { .. } => {
-                Ok(())
-            }
-        }
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        match self {
-            TestDynSyncStage::Local(local) => {
-                local.purge_cpu(purge_until).await
-            }
-            TestDynSyncStage::Proxy { .. } => {
-                0
-            }
-        }
-    }
-}
-
 
 
 pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
