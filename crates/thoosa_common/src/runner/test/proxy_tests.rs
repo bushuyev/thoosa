@@ -19,6 +19,7 @@ use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::ProxyStage;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -201,40 +202,6 @@ pub struct ProxyTestStage;
 const TEST_ENDPOINT: &str = "TestStage";
 
 
-impl Stage for ProxyTestStage {
-    type Ctx = <TestStage<u32, TestRunCtx> as Stage>::Ctx;
-    type In<'a> = <TestStage<u32, TestRunCtx> as Stage>::In<'a>;
-    type Out = <TestStage<u32, TestRunCtx> as Stage>::Out;
-}
-
-impl thoosa_shared::traits::SyncStage for ProxyTestStage {
-    fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
-    where
-        Self: Sized,
-    {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-
-                let endpoint_name = TEST_ENDPOINT;
-                let actor = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref();
-                let input = thoosa_common::ipc::codec::JsonIpcCodec::encode(input)?;
-                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 1. input={input:?}");
-
-
-                let response = actor.invoke_endpoint_bytes(
-                    encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
-                ).await?;
-
-                let r = thoosa_common::ipc::codec::JsonIpcCodec::decode(&response);
-                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} response={r:?}");
-
-                r
-            })
-        })
-    }
-}
-
-
 impl ProxyTestStage {
 
     pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<TestDynSyncStage<u32, TestRunCtx>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
@@ -247,17 +214,14 @@ impl ProxyTestStage {
                 &init
             ).await?;
             Ok(TestDynSyncStage::Proxy {
-                stage: Arc::new(ProxyTestStage::proxy()),
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT)),
             })
         } else {
-            Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(TestStageInit::new(2)))))
+            Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
         }
 
     }
 
-    pub fn proxy() -> Self {
-        Self {}
-    }
 }
 
 #[derive(Debug)]
@@ -268,7 +232,7 @@ where
 {
     Local(Arc<TestStage<P, C>>),
     Proxy {
-        stage: Arc<ProxyTestStage>,
+        stage: Arc<ProxyStage<TestStage<P, C>>>,
     }
 }
 
@@ -293,7 +257,7 @@ where
     {
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &TestRunCtx),//TODO TestRunCtx
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),//TODO TestRunCtx
         }
     }
 }
