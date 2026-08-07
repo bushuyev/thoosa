@@ -850,11 +850,12 @@ where
 //for switching between ipc proxy and local
 pub trait DynSyncStage<I, O, C>: Debug + Send + Sync + 'static
 where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
+    I: Input /* + WithId*/ + 'static,
+    O: Output/* + WithId*/ + 'static,
     C: RunCtx + 'static,
 {
     fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError>;
+
 
 }
 
