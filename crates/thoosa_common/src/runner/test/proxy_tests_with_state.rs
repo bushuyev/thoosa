@@ -300,11 +300,6 @@ impl thoosa_shared::traits::SyncStage for ProxyTestStage {
     }
 }
 
-impl OutId for ProxyTestStage {
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        ()
-    }
-}
 
 impl ProxyTestStage {
 
@@ -318,7 +313,7 @@ impl ProxyTestStage {
                 &init
             ).await?;
             Ok(TestDynSyncStage::Proxy {
-                stage: Arc::new(DynSyncStageBox::new(Arc::new(crate::runner::test::proxy_tests_with_state::ProxyTestStage::proxy()))),
+                stage: Arc::new(ProxyTestStage::proxy()),
             })
         } else {
             Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(TestStageInit::new(2), 1.into()))))
@@ -339,7 +334,7 @@ where
 {
     Local(Arc<TestStage<P, C>>),
     Proxy {
-        stage: Arc<DynSyncStageBox<TestInput, TestOutput, C>>,
+        stage: Arc<ProxyTestStage>,
     }
 }
 
@@ -365,10 +360,11 @@ where
             Self::Proxy { .. } => None,
         }
     }
+
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &TestRunCtx),//TODO ctx
         }
     }
 }
@@ -392,7 +388,7 @@ where
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &TestRunCtx),//TODO ctx
         }
     }
 }
