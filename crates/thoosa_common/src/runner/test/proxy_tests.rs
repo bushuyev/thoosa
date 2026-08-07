@@ -19,7 +19,7 @@ use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::ProxyStage;
+use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage};
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -204,7 +204,7 @@ const TEST_ENDPOINT: &str = "TestStage";
 
 impl ProxyTestStage {
 
-    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<TestDynSyncStage<u32, TestRunCtx>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<DynSyncStageEnum<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
@@ -213,55 +213,15 @@ impl ProxyTestStage {
                 TEST_ENDPOINT,
                 &init
             ).await?;
-            Ok(TestDynSyncStage::Proxy {
+            Ok(DynSyncStageEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT)),
             })
         } else {
-            Ok(TestDynSyncStage::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
+            Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
         }
 
     }
-
 }
-
-#[derive(Debug)]
-pub enum TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    Local(Arc<TestStage<P, C>>),
-    Proxy {
-        stage: Arc<ProxyStage<TestStage<P, C>>>,
-    }
-}
-
-impl <P, C> Stage for TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    type Ctx = C;
-    type In<'a> = TestInput;
-    type Out = TestOutput;
-}
-
-impl <P, C> SyncStage for TestDynSyncStage<P, C>
-where
-    P:Debug + Send + Sync,
-    C:RunCtx + 'static
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),//TODO TestRunCtx
-        }
-    }
-}
-
 
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
