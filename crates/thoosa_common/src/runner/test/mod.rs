@@ -21,9 +21,6 @@ use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoRunCtxAdjuster, N
 use crate::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 
-mod proxy_tests;
-mod proxy_tests_with_state;
-
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 // type StageInStatic<S> = StageIn<'static, S>;
