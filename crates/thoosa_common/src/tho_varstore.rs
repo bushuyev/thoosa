@@ -29,6 +29,7 @@ where
 {
     optimizer_builder: Box<dyn Fn(&VarStore) -> Result<Pin<Box<Optimizer>>, ThoError> + Send + Sync>,
     net: Box<dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync>,
+    opt_config: ThoOptimizers
 }
 
 impl <DI, DO> Debug for ModConfig<DI, DO>
@@ -50,17 +51,49 @@ where
      * Erase the concrete optimizer configuration so owners such as TrainStep2
      * do not need to add the optimizer type to their public generic contract.
      */
-    pub fn new<OC, NB>(opt_config: OC, net: NB, lr: f64) -> Self
+    pub fn new<NB>(opt_config: ThoOptimizers, net: NB, lr: f64) -> Self
     where
-        OC: OptimizerConfig + Clone + Send + Sync + 'static,
         NB: Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync + 'static,
     {
+        let opt_config_for_builder = opt_config.clone();
         Self {
-            optimizer_builder: Box::new(move |var_store| Ok(Box::pin(opt_config.clone().build(var_store, lr)?))),
+            optimizer_builder: Box::new( move |var_store| Ok(Box::pin(opt_config_for_builder.build(var_store, lr)?))),
             net: Box::new(net),
+            opt_config
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum ThoOptimizers {
+    Adam {config:nn::Adam},
+    AdamW{config: nn::AdamW},
+    //TODO other optimizers
+}
+
+impl ThoOptimizers {
+    fn build(&self, vs:&VarStore, lr: f64) -> Result<Optimizer,ThoError>
+    {
+        Ok(match self {
+            ThoOptimizers::Adam { config } => config.build(vs, lr)?,
+            ThoOptimizers::AdamW { config } => config.build(vs, lr)?
+        })
+    }
+}
+
+impl From<nn::Adam> for ThoOptimizers {
+    fn from(config: nn::Adam) -> Self {
+        ThoOptimizers::Adam { config }
+    }
+}
+
+impl From<nn::AdamW> for ThoOptimizers {
+    fn from(config: nn::AdamW) -> Self {
+        ThoOptimizers::AdamW { config }
+    }
+}
+
+
 
 #[derive(Debug)]
 pub struct ThoTrainModule<DI, DO>
@@ -606,7 +639,9 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
                 beta1: 0.99,
                 beta2: 0.9999,
                 ..Default::default()
-            }.amsgrad(true),
+            }
+                .amsgrad(true)
+                .into(),
             /*
              * build_tch_module already returns the boxed ThoModule expected
              * by ModConfig, so wrapping it again would create Box<Box<_>>.
@@ -836,7 +871,6 @@ mod tests {
     async fn test_reset_adam_local() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-
 
         do_test_reset_adam().await
     }
