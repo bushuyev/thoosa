@@ -87,6 +87,21 @@ pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> Str
     format!("{endpoint_name}\t{payload}")
 }
 
+// Keep the stage id separate from the endpoint payload so the worker can still select the initializer by its static endpoint name.
+fn encode_stage_payload(stage_id: u32, payload: &str) -> String {
+    format!("{stage_id}\t{payload}")
+}
+
+pub(crate) fn split_stage_payload(payload: &str) -> Result<(u32, &str), ThoError> {
+    let (stage_id, payload) = payload.split_once('\t').ok_or_else(|| ThoError::new(format!("can't parse stage payload: {payload}")))?;
+    Ok((stage_id.parse::<u32>()?, payload))
+}
+
+// Installed stages share an initializer name but must have distinct invocation keys.
+pub(crate) fn endpoint_stage_key(endpoint_name: &str, stage_id: u32) -> String {
+    format!("{endpoint_name}{stage_id}")
+}
+
 pub(crate) fn encode_endpoint_payload_bytes(endpoint_name: &str, payload: &[u8]) -> String {
     format!("{endpoint_name}\t{ENDPOINT_BYTES_PAYLOAD_PREFIX}{}", bytes_to_hex(payload))
 }
@@ -2161,33 +2176,36 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    async fn install_endpoint(&self, init_msg: String) -> Result<(), ThoError> {
-        self.install_endpoint_raw(init_msg).await
+    async fn install_endpoint(&self, stage_id: u32, init_msg: String) -> Result<(), ThoError> {
+        self.install_endpoint_raw(encode_stage_payload(stage_id, &init_msg)).await
     }
 
-    async fn invoke_endpoint(&self, input: String) -> Result<String, ThoError> {
-        let response = self.invoke_endpoint_raw(input).await?;
+    async fn invoke_endpoint(&self, stage_id: u32, input: String) -> Result<String, ThoError> {
+        let response = self.invoke_endpoint_raw(encode_stage_payload(stage_id, &input)).await?;
         String::from_utf8(decode_endpoint_response_bytes(&response)?).map_err(|e| ThoError::new(format!("endpoint response is not utf8: {e}")))
     }
 
 
 
-    async fn install_endpoint_bytes(&self, init_msg: Vec<u8>) -> Result<(), ThoError> {
-        self.install_endpoint_raw(String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
+    async fn install_endpoint_bytes(&self, stage_id: u32, init_msg: Vec<u8>) -> Result<(), ThoError> {
+        self.install_endpoint_raw(encode_stage_payload(stage_id, &String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?)).await
     }
 
-    async fn invoke_endpoint_bytes(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
-        let response = self.invoke_endpoint_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?;
+    async fn invoke_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
+        let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?;
+        let response = self.invoke_endpoint_raw(encode_stage_payload(stage_id, &input)).await?;
         decode_endpoint_response_bytes(&response)
     }
 
-    async fn consume_endpoint_bytes(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
-        let response = self.consume_endpoint_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint consume payload is not utf8: {e}")))?).await?;
+    async fn consume_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
+        let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint consume payload is not utf8: {e}")))?;
+        let response = self.consume_endpoint_raw(encode_stage_payload(stage_id, &input)).await?;
         decode_endpoint_response_bytes(&response)
     }
 
-    async fn invoke_endpoint_to_file(&self, input: Vec<u8>, output: std::fs::File) -> Result<std::fs::File, ThoError> {
-        self.invoke_endpoint_to_file_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?, output).await
+    async fn invoke_endpoint_to_file(&self, stage_id: u32, input: Vec<u8>, output: std::fs::File) -> Result<std::fs::File, ThoError> {
+        let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?;
+        self.invoke_endpoint_to_file_raw(encode_stage_payload(stage_id, &input), output).await
     }
 
     async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
@@ -2207,11 +2225,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_endpoint_bytes(&self, input: String) -> Result<(), ThoError> {
+    async fn purge_endpoint_bytes(&self, stage_id: u32, input: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::PurgeEndpoint {
-                input,
+                input: encode_stage_payload(stage_id, &input),
                 respond_to,
             }
         ).instrument(tracing::debug_span!(
@@ -2539,8 +2557,8 @@ mod tests {
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
 
             let result = async {
-                GlobalCtx::global().cuda_actor(tho_device_idx).install_endpoint(encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "xxx")).await?;
-                let r = GlobalCtx::global().cuda_actor(tho_device_idx).invoke_endpoint(encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "fail")).await;
+                GlobalCtx::global().cuda_actor(tho_device_idx).install_endpoint(0, encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "xxx")).await?;
+                let r = GlobalCtx::global().cuda_actor(tho_device_idx).invoke_endpoint(0, encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "fail")).await;
 
                 debug!("test_copy_ipc_cuda_worker_propagates_oom: r={r:?}");
 

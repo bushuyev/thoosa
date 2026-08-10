@@ -30,7 +30,9 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     pd:PhantomData<St>,
-    endpoint_name:&'static str
+    endpoint_name:&'static str,
+    // Each proxy keeps the id used at installation so invocations reach its own worker-side state.
+    stage_id: u32,
 }
 
 impl <St> Stage for ProxyStage<St>
@@ -60,15 +62,16 @@ where
                 // let endpoint_name = crate::runner::test::proxy_tests::TEST_ENDPOINT;
                 let actor = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref();
                 let input = thoosa_common::ipc::codec::JsonIpcCodec::encode(input)?;
-                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={} 1. input={input:?}", self.endpoint_name);
+                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={} stage_id={} 1. input={input:?}", self.endpoint_name, self.stage_id);
 
 
                 let response = actor.invoke_endpoint_bytes(
+                    self.stage_id,
                     encode_endpoint_payload_bytes(self.endpoint_name, &input).into_bytes()
                 ).await?;
 
                 let r = thoosa_common::ipc::codec::JsonIpcCodec::decode(&response);
-                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={} response={r:?}", self.endpoint_name);
+                tracing::debug!("invoke_ipc_sync_stage: endpoint_name={} stage_id={} response={r:?}", self.endpoint_name, self.stage_id);
 
                 r
             })
@@ -82,9 +85,10 @@ where
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
-    pub fn proxy(endpoint_name:&'static str) -> Self {
+    pub fn proxy(endpoint_name:&'static str, stage_id: u32) -> Self {
         Self {
             endpoint_name,
+            stage_id,
             pd:PhantomData
         }
     }
@@ -244,6 +248,7 @@ where
                         thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
                             GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                             stage.endpoint_name,
+                            stage.stage_id,
                         ).await
                     })
                 })?;

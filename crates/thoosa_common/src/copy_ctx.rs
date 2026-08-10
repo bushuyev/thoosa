@@ -79,34 +79,34 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
-    async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
+    async fn install_endpoint(&self, _stage_id: u32, init_msg:String)-> Result<(), ThoError> {
         Ok(())
     }
 
     //don't use it, going to be removed
-    async fn install_endpoint_bytes(&self, init_msg: Vec<u8>)-> Result<(), ThoError> {
-        self.install_endpoint(String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
+    async fn install_endpoint_bytes(&self, stage_id: u32, init_msg: Vec<u8>)-> Result<(), ThoError> {
+        self.install_endpoint(stage_id, String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
     }
 
-    async fn invoke_endpoint(&self, _input:String)-> Result<String, ThoError> {
+    async fn invoke_endpoint(&self, _stage_id: u32, _input:String)-> Result<String, ThoError> {
        todo!()
     }
 
-    async fn invoke_endpoint_bytes(&self, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
-        Ok(self.invoke_endpoint(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?.into_bytes())
+    async fn invoke_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
+        Ok(self.invoke_endpoint(stage_id, String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?.into_bytes())
     }
 
-    async fn purge_endpoint_bytes(&self, input: String)-> Result<(), ThoError> {
+    async fn purge_endpoint_bytes(&self, _stage_id: u32, input: String)-> Result<(), ThoError> {
         todo!()//TODO it should be in IPC endpoint only
     }
 
 
-    async fn consume_endpoint_bytes(&self, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
-        self.invoke_endpoint_bytes(input).await
+    async fn consume_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
+        self.invoke_endpoint_bytes(stage_id, input).await
     }
 
-    async fn invoke_endpoint_to_file(&self, input: Vec<u8>, mut output: std::fs::File)-> Result<std::fs::File, ThoError> {
-        output.write_all(&self.invoke_endpoint_bytes(input).await?)?;
+    async fn invoke_endpoint_to_file(&self, stage_id: u32, input: Vec<u8>, mut output: std::fs::File)-> Result<std::fs::File, ThoError> {
+        output.write_all(&self.invoke_endpoint_bytes(stage_id, input).await?)?;
         output.seek(SeekFrom::Start(0))?;
         Ok(output)
     }

@@ -211,10 +211,11 @@ impl ProxyTestStage {
             crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
                 GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
                 TEST_ENDPOINT,
+                0,
                 &init
             ).await?;
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT)),
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0)),
             })
         } else {
             Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))

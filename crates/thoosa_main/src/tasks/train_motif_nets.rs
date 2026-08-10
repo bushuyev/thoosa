@@ -300,6 +300,7 @@ impl ProxyTrainMotifStep {
         thoosa_common::ipc::codec::invoke_ipc_endpoint_to_file::<JsonIpcCodec, _>(
             thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(self.tho_device_idx).as_ref(),
             TRAIN_MOTIF_STEP_ENDPOINT,
+            0,
             &TrainMotifStepIpcRequest::ExportWeights,
         ).await
     }
