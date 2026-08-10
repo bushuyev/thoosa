@@ -293,15 +293,16 @@ impl ProxyTestStage {
 }
 
 
-pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
+    async move {
+        let init = TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        debug!("test_with_state_init: init={init:?}");
 
-    let init = TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
-    debug!("test_with_state_init: init={init:?}");
-
-    Ok(Box::new(WorkerWrapperWithState::new(
-        Arc::new(TestStage::<(), WokerRunCtx>::new(init)),
-        PhantomData::<JsonIpcCodec>
-    )))
+        Ok(Box::new(WorkerWrapperWithState::new(
+            Arc::new(TestStage::<(), WokerRunCtx>::new(init)),
+            PhantomData::<JsonIpcCodec>
+        )) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 

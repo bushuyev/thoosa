@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use mockall::PredicateBoxExt;
 use tch::Tensor;
 use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -224,12 +225,14 @@ impl ProxyTestStage {
     }
 }
 
-pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
 
-    Ok(Box::new(WorkerWrapper::new(
-        Arc::new(TestStage::<(), WokerRunCtx>::new(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
-        PhantomData::<JsonIpcCodec>
-    )))
+    async move {
+        Ok(Box::new(WorkerWrapper::new(
+            Arc::new(TestStage::<(), WokerRunCtx>::new(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
+            PhantomData::<JsonIpcCodec>
+        )) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 
