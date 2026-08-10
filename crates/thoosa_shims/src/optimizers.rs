@@ -34,6 +34,30 @@ pub struct C_AdamParamState {
     pub max_exp_avg_sq: *mut C_tensor,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct C_SgdOptions {
+    pub lr: f64,
+    pub momentum: f64,
+    pub dampening: f64,
+    pub weight_decay: f64,
+    pub nesterov: c_int,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct C_SgdGroup {
+    pub options: C_SgdOptions,
+    pub parameter_count: c_ulong,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct C_SgdParamState {
+    pub has_state: c_int,
+    pub momentum_buffer: *mut C_tensor,
+}
+
 unsafe extern "C" {
     pub fn tho_adam_group_count(
         opt: *const C_optimizer,
@@ -122,6 +146,47 @@ unsafe extern "C" {
         exp_avg_sq: *mut C_tensor,
         max_exp_avg_sq: *mut C_tensor,
     );
+
+    pub fn tho_sgd_group_count(
+        opt: *const C_optimizer,
+    ) -> c_ulong;
+
+    pub fn tho_sgd_get_defaults(
+        opt: *const C_optimizer,
+        out: *const C_SgdOptions,
+    );
+
+    pub fn tho_sgd_get_group(
+        opt: *const C_optimizer,
+        group_index: c_ulong,
+        out: *const C_SgdGroup,
+    );
+
+    pub fn tho_sgd_get_param_state(
+        opt: *const C_optimizer,
+        group_index: c_ulong,
+        parameter_index: c_ulong,
+        out: *const C_SgdParamState,
+    );
+
+    pub fn tho_sgd_set_defaults(
+        opt: *const C_optimizer,
+        options: *const C_SgdOptions,
+    );
+
+    pub fn tho_sgd_set_group_options(
+        opt: *const C_optimizer,
+        group_index: c_ulong,
+        options: *const C_SgdOptions,
+    );
+
+    pub fn tho_sgd_set_param_state(
+        opt: *const C_optimizer,
+        group_index: c_ulong,
+        parameter_index: c_ulong,
+        has_state: c_int,
+        momentum_buffer: *mut C_tensor,
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -181,6 +246,41 @@ pub type AdamWParamStateSnapshot = AdamParamStateSnapshot;
 pub type AdamWGroupSnapshot = AdamGroupSnapshot;
 pub type AdamWOptimizerSnapshot = AdamOptimizerSnapshot;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SgdOptionsSnapshot {
+    pub lr: f64,
+    pub momentum: f64,
+    pub dampening: f64,
+    pub weight_decay: f64,
+    pub nesterov: bool,
+}
+
+#[derive(Debug)]
+pub struct SgdParamStateSnapshot {
+    pub momentum_buffer: Tensor,
+}
+
+impl PartialEq for SgdParamStateSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.momentum_buffer.allclose(&other.momentum_buffer, 0.01, 0.01, true)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct SgdGroupSnapshot {
+    pub options: SgdOptionsSnapshot,
+
+    // None represents parameters for which SGD has not created a momentum buffer.
+    pub states: Vec<Option<SgdParamStateSnapshot>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct SgdOptimizerSnapshot {
+    pub defaults: SgdOptionsSnapshot,
+    pub groups: Vec<SgdGroupSnapshot>,
+    pub tho_device_idx: usize,
+}
+
 impl AdamOptionsSnapshot {
     fn from_ffi(value: C_AdamOptions) -> Self {
         Self {
@@ -201,6 +301,28 @@ impl AdamOptionsSnapshot {
             eps: self.eps,
             weight_decay: self.weight_decay,
             amsgrad: i32::from(self.amsgrad),
+        }
+    }
+}
+
+impl SgdOptionsSnapshot {
+    fn from_ffi(value: C_SgdOptions) -> Self {
+        Self {
+            lr: value.lr,
+            momentum: value.momentum,
+            dampening: value.dampening,
+            weight_decay: value.weight_decay,
+            nesterov: value.nesterov != 0,
+        }
+    }
+
+    fn to_ffi(self) -> C_SgdOptions {
+        C_SgdOptions {
+            lr: self.lr,
+            momentum: self.momentum,
+            dampening: self.dampening,
+            weight_decay: self.weight_decay,
+            nesterov: i32::from(self.nesterov),
         }
     }
 }
@@ -493,6 +615,80 @@ unsafe fn restore_adam_like_snapshot(snapshot: &AdamOptimizerSnapshot, c_optimiz
     Ok(())
 }
 
+pub unsafe fn sgd_snapshot(c_optimizer: *const C_optimizer, tho_device_idx: usize) -> Result<SgdOptimizerSnapshot, ThoError> {
+    let group_count = unsafe { tho_sgd_group_count(c_optimizer) };
+    let mut raw_defaults = MaybeUninit::<C_SgdOptions>::zeroed();
+    unsafe { tho_sgd_get_defaults(c_optimizer, raw_defaults.as_mut_ptr()) };
+    let defaults = SgdOptionsSnapshot::from_ffi(unsafe { raw_defaults.assume_init() });
+
+    let mut groups = Vec::with_capacity(group_count as usize);
+    for group_index in 0..group_count {
+        let mut raw_group = MaybeUninit::<C_SgdGroup>::zeroed();
+        unsafe { tho_sgd_get_group(c_optimizer, group_index, raw_group.as_mut_ptr()) };
+        let raw_group = unsafe { raw_group.assume_init() };
+
+        let mut states = Vec::with_capacity(raw_group.parameter_count as usize);
+        for parameter_index in 0..raw_group.parameter_count {
+            let mut raw_state = MaybeUninit::<C_SgdParamState>::zeroed();
+            unsafe { tho_sgd_get_param_state(c_optimizer, group_index, parameter_index, raw_state.as_mut_ptr()) };
+            let raw_state = unsafe { raw_state.assume_init() };
+
+            if raw_state.has_state == 0 {
+                debug_assert!(raw_state.momentum_buffer.is_null());
+                states.push(None);
+            } else {
+                // The C++ shim transfers ownership of the returned momentum-buffer handle to Rust.
+                states.push(Some(SgdParamStateSnapshot {
+                    momentum_buffer: owned_tensor_from_ptr(raw_state.momentum_buffer, "SGD", "momentum_buffer")?,
+                }));
+            }
+        }
+
+        groups.push(SgdGroupSnapshot {
+            options: SgdOptionsSnapshot::from_ffi(raw_group.options),
+            states,
+        });
+    }
+
+    Ok(SgdOptimizerSnapshot {
+        defaults,
+        groups,
+        tho_device_idx,
+    })
+}
+
+pub unsafe fn restore_sgd_snapshot(snapshot: &SgdOptimizerSnapshot, c_optimizer: *mut C_optimizer) -> Result<(), ThoError> {
+    let destination_group_count = unsafe { tho_sgd_group_count(c_optimizer) };
+    if destination_group_count != snapshot.groups.len() as c_ulong {
+        return Err(ThoError::new(format!("SGD group-count mismatch: destination has {}, snapshot has {}", destination_group_count, snapshot.groups.len())));
+    }
+
+    let raw_defaults = snapshot.defaults.to_ffi();
+    unsafe { tho_sgd_set_defaults(c_optimizer, &raw_defaults) };
+
+    for (group_index, snapshot_group) in snapshot.groups.iter().enumerate() {
+        let mut destination_group = MaybeUninit::<C_SgdGroup>::zeroed();
+        unsafe { tho_sgd_get_group(c_optimizer, group_index as c_ulong, destination_group.as_mut_ptr()) };
+        let destination_group = unsafe { destination_group.assume_init() };
+
+        if destination_group.parameter_count != snapshot_group.states.len() as c_ulong {
+            return Err(ThoError::new(format!("SGD parameter-count mismatch in group {group_index}: destination has {}, snapshot has {}", destination_group.parameter_count, snapshot_group.states.len())));
+        }
+
+        let raw_options = snapshot_group.options.to_ffi();
+        unsafe { tho_sgd_set_group_options(c_optimizer, group_index as c_ulong, &raw_options) };
+
+        for (parameter_index, state) in snapshot_group.states.iter().enumerate() {
+            match state {
+                None => unsafe { tho_sgd_set_param_state(c_optimizer, group_index as c_ulong, parameter_index as c_ulong, 0, ptr::null_mut()) },
+                Some(state) => unsafe { tho_sgd_set_param_state(c_optimizer, group_index as c_ulong, parameter_index as c_ulong, 1, state.momentum_buffer.as_ptr() as *mut C_tensor) },
+            }
+        }
+    }
+
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -501,104 +697,133 @@ mod tests {
     use tch::Device::Cuda;
     use torch_sys::{C_optimizer, C_tensor};
     use thoosa_shared::ThoError;
-    use crate::optimizers::{AdamOptimizerSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot};
+    use crate::optimizers::{AdamOptimizerSnapshot, SgdOptimizerSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot};
 
     #[derive(Clone, Copy)]
-    enum AdamFamily {
+    enum TestOptimizer {
         Adam,
         AdamW,
+        Sgd,
     }
 
-    impl AdamFamily {
+    #[derive(Debug, PartialEq)]
+    enum TestOptimizerSnapshot {
+        Adam(AdamOptimizerSnapshot),
+        Sgd(SgdOptimizerSnapshot),
+    }
+
+    impl TestOptimizer {
         fn name(self) -> &'static str {
             match self {
                 Self::Adam => "Adam",
                 Self::AdamW => "AdamW",
+                Self::Sgd => "SGD",
             }
         }
 
-        fn create(self, lr: f64, beta1: f64, beta2: f64, wd: f64, eps: f64, amsgrad: bool) -> Result<RawOptimizer, ThoError> {
+        fn initialized_optimizer(self) -> Result<RawOptimizer, ThoError> {
+            // Non-default options verify that both defaults and parameter-group options survive restoration.
             let optimizer = unsafe {
                 match self {
-                    Self::Adam => torch_sys::ato_adam(lr, beta1, beta2, wd, eps, amsgrad),
-                    Self::AdamW => torch_sys::ato_adamw(lr, beta1, beta2, wd, eps, amsgrad),
+                    Self::Adam => torch_sys::ato_adam(0.1, 0.8, 0.95, 0.01, 1e-7, true),
+                    Self::AdamW => torch_sys::ato_adamw(0.1, 0.8, 0.95, 0.01, 1e-7, true),
+                    Self::Sgd => torch_sys::ato_sgd(0.1, 0.8, 0.0, 0.01, 1),
                 }
             };
-            if optimizer.is_null() {
-                Err(ThoError::new(format!("failed to construct {} optimizer", self.name())))
-            } else {
-                Ok(RawOptimizer(optimizer))
+            RawOptimizer::new(optimizer, self.name())
+        }
+
+        unsafe fn snapshot(self, optimizer: *const C_optimizer) -> Result<TestOptimizerSnapshot, ThoError> {
+            match self {
+                Self::Adam => Ok(TestOptimizerSnapshot::Adam(unsafe { adam_snapshot(optimizer, 1)? })),
+                Self::AdamW => Ok(TestOptimizerSnapshot::Adam(unsafe { adam_w_snapshot(optimizer, 1)? })),
+                Self::Sgd => Ok(TestOptimizerSnapshot::Sgd(unsafe { sgd_snapshot(optimizer, 1)? })),
             }
         }
 
-        unsafe fn snapshot(self, optimizer: *const C_optimizer) -> Result<AdamOptimizerSnapshot, ThoError> {
-            match self {
-                Self::Adam => unsafe { adam_snapshot(optimizer, 1) },
-                Self::AdamW => unsafe { adam_w_snapshot(optimizer, 1) },
-            }
-        }
-
-        unsafe fn restore(self, snapshot: &AdamOptimizerSnapshot, optimizer: *mut C_optimizer) -> Result<(), ThoError> {
-            match self {
-                Self::Adam => unsafe { restore_adam_snapshot(snapshot, optimizer) },
-                Self::AdamW => unsafe { restore_adam_w_snapshot(snapshot, optimizer) },
+        unsafe fn restore(self, snapshot: &TestOptimizerSnapshot, optimizer: *mut C_optimizer) -> Result<(), ThoError> {
+            match (self, snapshot) {
+                (Self::Adam, TestOptimizerSnapshot::Adam(snapshot)) => unsafe { restore_adam_snapshot(snapshot, optimizer) },
+                (Self::AdamW, TestOptimizerSnapshot::Adam(snapshot)) => unsafe { restore_adam_w_snapshot(snapshot, optimizer) },
+                (Self::Sgd, TestOptimizerSnapshot::Sgd(snapshot)) => unsafe { restore_sgd_snapshot(snapshot, optimizer) },
+                _ => Err(ThoError::new(format!("{} test snapshot type mismatch", self.name()))),
             }
         }
 
         fn default_optimizer(self) -> Result<RawOptimizer, ThoError> {
-            match self {
+            let optimizer = unsafe { match self {
                 Self::Adam => {
                     let config = nn::Adam::default();
-                    self.create(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
+                    torch_sys::ato_adam(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
                 }
                 Self::AdamW => {
                     let config = nn::AdamW::default();
-                    self.create(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
+                    torch_sys::ato_adamw(0.1, config.beta1, config.beta2, config.wd, config.eps, config.amsgrad)
                 }
-            }
+                Self::Sgd => {
+                    let config = nn::Sgd::default();
+                    torch_sys::ato_sgd(0.1, config.momentum, config.dampening, config.wd, i32::from(config.nesterov))
+                }
+            } };
+            RawOptimizer::new(optimizer, self.name())
         }
     }
 
     struct RawOptimizer(*mut C_optimizer);
 
+    impl RawOptimizer {
+        fn new(optimizer: *mut C_optimizer, optimizer_name: &str) -> Result<Self, ThoError> {
+            if optimizer.is_null() {
+                Err(ThoError::new(format!("failed to construct {optimizer_name} optimizer")))
+            } else {
+                Ok(Self(optimizer))
+            }
+        }
+    }
+
     impl Drop for RawOptimizer {
         fn drop(&mut self) {
-            // Raw torch-sys constructors transfer ownership to the caller, so release both test optimizers on every exit path.
+            // Raw torch-sys constructors transfer ownership to the caller, so release every test optimizer on all exit paths.
             unsafe { torch_sys::ato_free(self.0) };
         }
     }
 
     #[test]
     fn test_tho_snapshot_adam_states()-> Result<(), ThoError>{
-        do_test_tho_snapshot_adam_states(AdamFamily::Adam)
+        do_test_tho_snapshot_optimizer_states(TestOptimizer::Adam)
     }
 
     #[test]
     fn test_tho_snapshot_adam_w_states()-> Result<(), ThoError>{
-        do_test_tho_snapshot_adam_states(AdamFamily::AdamW)
+        do_test_tho_snapshot_optimizer_states(TestOptimizer::AdamW)
     }
 
-    fn do_test_tho_snapshot_adam_states(family: AdamFamily) -> Result<(), ThoError> {
-        let (vs_0, optimizer_0) = initialized_adam_family(Cuda(0), family)?;
-        let snapshot_0 = unsafe { family.snapshot(optimizer_0.0)? };
-        debug!("do_test_tho_snapshot_adam_states: optimizer={} snapshot_0={snapshot_0:?}", family.name());
+    #[test]
+    fn test_tho_snapshot_sgd_states()-> Result<(), ThoError>{
+        do_test_tho_snapshot_optimizer_states(TestOptimizer::Sgd)
+    }
 
-        let optimizer_1 = family.default_optimizer()?;
+    fn do_test_tho_snapshot_optimizer_states(optimizer_kind: TestOptimizer) -> Result<(), ThoError> {
+        let (vs_0, optimizer_0) = initialized_optimizer(Cuda(0), optimizer_kind)?;
+        let snapshot_0 = unsafe { optimizer_kind.snapshot(optimizer_0.0)? };
+        debug!("do_test_tho_snapshot_optimizer_states: optimizer={} snapshot_0={snapshot_0:?}", optimizer_kind.name());
+
+        let optimizer_1 = optimizer_kind.default_optimizer()?;
         let variables = vs_0.variables_.lock().unwrap();
         for variable in &variables.trainable_variables {
             unsafe { torch_sys::ato_add_parameters(optimizer_1.0, variable.tensor.as_ptr() as *mut C_tensor, variable.group) };
         }
         drop(variables);
 
-        unsafe { family.restore(&snapshot_0, optimizer_1.0) }?;
-        let snapshot_1 = unsafe { family.snapshot(optimizer_1.0)? };
-        debug!("do_test_tho_snapshot_adam_states: optimizer={} snapshot_1={snapshot_1:?}", family.name());
+        unsafe { optimizer_kind.restore(&snapshot_0, optimizer_1.0) }?;
+        let snapshot_1 = unsafe { optimizer_kind.snapshot(optimizer_1.0)? };
+        debug!("do_test_tho_snapshot_optimizer_states: optimizer={} snapshot_1={snapshot_1:?}", optimizer_kind.name());
         assert_eq!(snapshot_0, snapshot_1);
 
         Ok(())
     }
 
-    fn initialized_adam_family(device: Device, family: AdamFamily) -> Result<(nn::VarStore, RawOptimizer), ThoError> {
+    fn initialized_optimizer(device: Device, optimizer_kind: TestOptimizer) -> Result<(nn::VarStore, RawOptimizer), ThoError> {
         let vs = nn::VarStore::new(device);
         let root = vs.root();
 
@@ -606,13 +831,12 @@ mod tests {
         //
         //     y = x * weight + bias
         //
-        // Non-zero initial values ensure weight decay also participates
-        // in the first Adam update.
+        // Non-zero initial values ensure weight decay participates in the first update.
         let weight = root.var("weight", &[1], nn::Init::Const(0.25));
         let bias = root.var("bias", &[1], nn::Init::Const(-0.5));
 
-        // AMSGrad ensures the optional max_exp_avg_sq tensor is included in both optimizer variants' snapshots.
-        let optimizer = family.create(0.1, 0.8, 0.95, 0.01, 1e-7, true)?;
+        // Adam variants use AMSGrad, while SGD uses momentum, so every optional tensor-state path is exercised.
+        let optimizer = optimizer_kind.initialized_optimizer()?;
         let variables = vs.variables_.lock().unwrap();
         for variable in &variables.trainable_variables {
             unsafe { torch_sys::ato_add_parameters(optimizer.0, variable.tensor.as_ptr() as *mut C_tensor, variable.group) };
@@ -627,7 +851,7 @@ mod tests {
             .pow_tensor_scalar(2)
             .mean(Kind::Float);
 
-        // One step lazily initializes all Adam-family state tensors and advances their counters.
+        // One step lazily initializes every optimizer's per-parameter tensor state.
         loss.backward();
         unsafe { torch_sys::ato_step(optimizer.0) };
         unsafe { torch_sys::ato_zero_grad(optimizer.0) };
