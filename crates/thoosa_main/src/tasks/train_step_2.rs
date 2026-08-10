@@ -1074,13 +1074,14 @@ mod tests {
         }
     }
 
-    fn train_test_step_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
-        let init = TrainTestStep2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
-        debug!("train_test_step_2_endpoint_init: init={init:?}");
+    fn train_test_step_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        async move {
+            let init = TrainTestStep2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+            debug!("train_test_step_2_endpoint_init: init={init:?}");
 
-        let (train_step, _params): (TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, WokerRunCtx>, TestNetXParams) = futures::executor::block_on(TrainStep2::new_local(
+            let (train_step, _params): (TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, WokerRunCtx>, TestNetXParams) = TrainStep2::new_local(
                 init.tho_device_idx.into(), //TODO assert it matches actual worker's device or pass the latter into init function
-                |rc, device|  {
+                |rc, device| {
                     let lr = rc.lr;
                     async move {
                         let params = TestNetXParams { in_features: rc.in_features, layers: rc.layers };
@@ -1097,18 +1098,19 @@ mod tests {
                         Ok((ThoTrainModule::new_on_device(config, device)?, params))
                     }
                 },
-                Arc::new(Box::new(|t|{
+                Arc::new(Box::new(|t| {
                     t
                 }) as Box<dyn Fn(ThoBatch<InDimsX>) -> ThoBatch<InDimsX> + Send + Sync + 'static>),
-                |pred_y: &Tensor, target: &Tensor|{
+                |pred_y: &Tensor, target: &Tensor| {
                     Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?)
                 },
                 &init.run_config,
                 init.vs_path,
-            ))?;
+            ).await?;
 
-        // The common wrapper owns state preparation and encoded worker dispatch for this existing stage.
-        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(train_step), PhantomData::<JsonIpcCodec>)))
+            // The common wrapper owns state preparation and encoded worker dispatch for this existing stage.
+            Ok(Box::new(WorkerWrapperWithState::new(Arc::new(train_step), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        }.boxed()
     }
     ///////////////////////
     pub struct ApplyNetStage2<DI, DO, C>
@@ -1118,7 +1120,7 @@ mod tests {
         C:RunCtx
     {
         device: ThoDevice,
-        train_module: tokio::sync::Mutex<ThoModuleWithStore<Batch<DI>, Batch<DO>>>,
+        tho_module: tokio::sync::Mutex<ThoModuleWithStore<Batch<DI>, Batch<DO>>>,
 
         pd: PhantomData<C>,
     }
@@ -1147,12 +1149,12 @@ mod tests {
         Self:Send + Sync
     {
         async fn has_gpu_data(&self, device_idx: usize) -> bool {
-            self.train_module.lock().await.device() == device_idx
+            self.tho_module.lock().await.device() == device_idx
         }
 
         async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
             debug!("ApplyNetStep2::purge_gpu");
-            let mut mutex_guard = self.train_module.lock().await;
+            let mut mutex_guard = self.tho_module.lock().await;
             *mutex_guard = mutex_guard.copy_to_device(0).await?;
 
             Ok(())
@@ -1203,7 +1205,7 @@ mod tests {
 
             Ok(Self {
                 device,
-                train_module: tokio::sync::Mutex::new(train_module),
+                tho_module: tokio::sync::Mutex::new(train_module),
 
                 pd: PhantomData,
             })
@@ -1378,10 +1380,10 @@ mod tests {
         type S = ThoModuleWithStore<Batch<DI>, Batch<DO>>;
 
         fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
-            async {
-                let mut guard = self.train_module.lock().await;
+            async move {
+                let mut guard = self.tho_module.lock().await;
                 if guard.device() != 1 { //TODO pass device to pre_run
-                    *guard = guard.copy_to_device(1).await?;
+                    *guard = guard.copy_to_device(to_device_idx).await?;
                 }
                 Ok(guard)
             }.boxed()
@@ -1435,13 +1437,15 @@ mod tests {
         }
     }
 
-    fn apply_net_stage_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
-        let init = ApplyNetStage2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
-        debug!("apply_net_stage_2_endpoint_init: init={init:?}");
-        let stage: ApplyNetStage2<InDimsX, OutDimsX, WokerRunCtx> = futures::executor::block_on(ApplyNetStage2::new_local::<TestNetXParams, ()>(init.tho_device_idx.into(), init.base_path, ()))?;
+    fn apply_net_stage_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        async move {
+            let init = ApplyNetStage2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+            debug!("apply_net_stage_2_endpoint_init: init={init:?}");
+            let stage: ApplyNetStage2<InDimsX, OutDimsX, WokerRunCtx> = ApplyNetStage2::new_local::<TestNetXParams, ()>(init.tho_device_idx.into(), init.base_path, ()).await?;
 
-        // The common stateful wrapper performs state preparation and converts worker outputs back to references.
-        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)))
+            // The common stateful wrapper performs state preparation and converts worker outputs back to references.
+            Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        }.boxed()
     }
 
     /////////////////
@@ -1480,7 +1484,7 @@ mod tests {
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
                 None,
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
-                false,
+                true,
                 0.1
             ))).await?;
 
@@ -1513,7 +1517,7 @@ mod tests {
             tch::Tensor::rand(&[3, 100], FLOAT_CPU).into(),
             None,
             tch::Tensor::rand(&[3, 1], FLOAT_CPU).into(),
-            false,
+            true,
             0.1
         )))).await?;
 
@@ -1539,6 +1543,7 @@ mod tests {
         let r = GlobalCtx::global().cuda_actor(1).run_stage(Arc::clone(&train_step), input().await?, 1, &ctx).await?;
 
         debug!("do_test_train_step_2: r={r:?}");
+        assert!(r.loss.is_normal());
         Ok(())
     }
 
