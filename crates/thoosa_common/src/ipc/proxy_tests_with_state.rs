@@ -282,7 +282,7 @@ impl ProxyTestStage {
                 &init
             ).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id)),
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx)),
             })
         } else {
             Ok(DynSyncStageWithStateEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
@@ -307,6 +307,7 @@ pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<d
 
 
 mod tests {
+    use std::time::Duration;
     use crate::ipc::codec::{JsonIpcCodec, install_ipc_endpoint};
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::proxy_tests_with_state::{TestInput, TestRunCtx, TestStage};
@@ -383,12 +384,12 @@ mod tests {
         let second_stage = Arc::new(ProxyTestStage::new(1, 2, TestStageInit::new(3, 1)).await?);
 
         let first_input = TestInput { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
-        let first_result = cuda_actor.run_stage(first_stage, first_input, 1, &TestRunCtx).await?;
+        let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
         let first_cpu = cuda_actor.copy(first_result.value, 0.into()).await?;
         assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(first_cpu.t_ref(), 0.01, 0.01, false)?);
 
         let second_input = TestInput { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
-        let second_result = cuda_actor.run_stage(second_stage, second_input, 1, &TestRunCtx).await?;
+        let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
         assert!(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0])?.f_view([1, 3])?.f_allclose(second_cpu.t_ref(), 0.01, 0.01, false)?);
 
@@ -399,6 +400,19 @@ mod tests {
             Err(error) => error,
         };
         assert!(duplicate_error.to_string().contains("endpoint \"TestStage1\" is already installed"), "unexpected duplicate endpoint error: {duplicate_error}");
+
+        // Dropping the last proxy reference must asynchronously release its worker key so that the same id can be installed again.
+        drop(first_stage);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInit::new(4, 1)).await {
+                    Ok(()) => return Ok(()),
+                    Err(error) if error.to_string().contains("is already installed") => tokio::task::yield_now().await,
+                    Err(error) => return Err(error),
+                }
+            }
+        }).await.map_err(|_| ThoError::new("timed out waiting for dropped endpoint key to become reusable"))??;
+        cuda_actor.drop_endpoint(1, TEST_ENDPOINT).await?;
 
         Ok(())
     }
