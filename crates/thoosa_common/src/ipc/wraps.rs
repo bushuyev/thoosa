@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use log::debug;
+use log::{debug, error};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tch::Tensor;
@@ -33,6 +33,8 @@ where
     endpoint_name:&'static str,
     // Each proxy keeps the id used at installation so invocations reach its own worker-side state.
     stage_id: u32,
+    // Drop has no run context, so retain the worker index that owns the installed endpoint.
+    tho_device_idx: usize,
 }
 
 impl <St> Stage for ProxyStage<St>
@@ -85,14 +87,34 @@ where
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
-    pub fn proxy(endpoint_name:&'static str, stage_id: u32) -> Self {
+    pub fn proxy(endpoint_name:&'static str, stage_id: u32, tho_device_idx: usize) -> Self {
         Self {
             endpoint_name,
             stage_id,
+            tho_device_idx,
             pd:PhantomData
         }
     }
 
+}
+
+impl <St> Drop for ProxyStage<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    fn drop(&mut self) {
+        let endpoint_name = self.endpoint_name;
+        let stage_id = self.stage_id;
+        let tho_device_idx = self.tho_device_idx;
+
+        tokio::spawn(async move {
+            if let Err(error) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_endpoint(stage_id, endpoint_name).await {
+                error!("ProxyStage::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
+            }
+        });
+    }
 }
 
 

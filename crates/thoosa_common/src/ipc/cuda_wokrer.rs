@@ -29,7 +29,7 @@ use crate::cuda_utils::cuda_mem_for_device;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
+use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::global_ctx::GlobalCtx;
@@ -484,6 +484,21 @@ impl CudaWorker {
                 };
                 reply_tx
                     .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg("ok".to_string()) })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                continue;
+            }
+
+            if let Some(input) = payload.strip_prefix(DROP_ENDPOINT_PREFIX) {
+                let (stage_id, input) = cuda_process::split_stage_payload(input)?;
+                let (endpoint_name, _) = cuda_process::split_endpoint_payload(input)?;
+                let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+                // Removing the wrapper drops its worker-side stage state and makes the composite key available for reuse.
+                let removed = installed_endpoints.write().remove(&endpoint_key).is_some();
+                debug!("run_worker: drop endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} removed={removed}");
+                reply_tx
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(ENDPOINT_OK_PAYLOAD.to_string()) })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
