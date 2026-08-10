@@ -99,6 +99,8 @@ fn main() {
     rerun_if_changed("src-cpp/device_stats.cpp");
     rerun_if_changed("src-cpp/errors.cpp");
     rerun_if_changed("src-cpp/errors.h");
+    rerun_if_changed("src-cpp/optimizers.cpp");
+    rerun_if_changed("src-cpp/optimizers.h");
 }
 
 fn copy_file(src: impl AsRef<Path>, dst: impl AsRef<Path>) {
