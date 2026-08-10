@@ -340,8 +340,8 @@ impl CudaWorker {
                 continue;
             }
 
-            if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {//TODO UNINSTALL_ENDPOINT on drop
-                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload_bytes(init_msg)?;
+            if let Some(msg_data) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {//TODO UNINSTALL_ENDPOINT on drop
+                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload_bytes(msg_data)?;
                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg_len={} endpoint_inits.contains_key={}", init_msg.len(), endpoint_inits.contains_key(endpoint_name));
 
 
@@ -432,45 +432,6 @@ impl CudaWorker {
                         }
                         OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response))
                     }
-                    // Ok((SyncStageIpcResponse::Stream(response), consumed_tensor_keys)) => {
-                    //     let (chunks_tx, chunks_rx) = mpsc::channel(2);
-                    //     let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
-                    //     reply_tx.send(WorkerReply { id, payload: OutgoingRequestPayload::BinaryStream { chunks: chunks_rx, completed: completed_tx } }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    //
-                    //     let stream = exec_stream_pool.acquire().await;
-                    //     let producer_tx = chunks_tx.clone();
-                    //     let serialization_result = tokio::task::spawn_blocking(move || {
-                    //         let mut output = IpcChunkWriter::new(producer_tx);
-                    //         panic_to_err!({
-                    //
-                    //             let _guard = ThoStreamGuard::new(&stream)?;
-                    //             let response_result = response.write_to(&mut output);
-                    //             let sync_result = stream.synchronize();
-                    //
-                    //             match (response_result, sync_result) {
-                    //                 (Ok(()), Ok(())) => Ok(()),
-                    //                 (Err(error), Ok(())) => Err(error),
-                    //                 (Ok(()), Err(error)) => Err(error),
-                    //                 (Err(error), Err(sync_error)) if sync_error.is_oom() || sync_error.needs_cuda_ctx_reset() => Err(sync_error),
-                    //                 (Err(error), Err(_)) => Err(error),
-                    //             }
-                    //         })
-                    //     }).await.unwrap_or_else(|error| Err(ThoError::new(format!("worker binary response serializer task failed: {error}"))));
-                    //
-                    //     let serialization_succeeded = serialization_result.is_ok();
-                    //     if let Err(error) = serialization_result {
-                    //         let _ = chunks_tx.send(Err(error)).await;
-                    //     }
-                    //     drop(chunks_tx);
-                    //     completed_rx.await.map_err(|_| ThoError::new("worker binary response completion channel was dropped"))??;
-                    //     if serialization_succeeded {
-                    //         let mut tensors = all_cuda_tensors.lock();
-                    //         for key in consumed_tensor_keys {
-                    //             tensors.remove(&key);
-                    //         }
-                    //     }
-                    //     continue;
-                    // }
                     Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
                 };
                 reply_tx
@@ -504,7 +465,7 @@ impl CudaWorker {
                 debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} input={input:?}");
                 match installed_endpoints.read().get(endpoint_name) {
                     Some(endpoint) => {
-                        endpoint.purge(1.into()).await?;//TODO device
+                        endpoint.purge(tho_device.clone()).await?;
                     }
                     None => {
                         error!("no endpoint found"); //TODO handle

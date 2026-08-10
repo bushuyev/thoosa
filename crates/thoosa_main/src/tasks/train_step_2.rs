@@ -558,7 +558,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::Ordering::Relaxed;
-    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -705,7 +705,9 @@ mod tests {
                         run_config: run_config.clone(),
                         vs_path,
                     };
+                    static TRAIN_STEP_GEN:AtomicU32 = AtomicU32::new(0);//here AtomicU32 is for simplicity, can be based on RunConfig or any stage-specific logic
                     // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
+                    let train_step_id = TRAIN_STEP_GEN.fetch_add(1, Ordering::Acquire);//pass it to install_ipc_endpoint to build key=TRAIN_TEST_STEP2_ENDPOINT + train_step_id under which endpoint will be available for invocation.
                     thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_TEST_STEP2_ENDPOINT, &init).await?;
                     Ok((
                         DynSyncStageWithStateEnum::Proxy {
@@ -1419,6 +1421,9 @@ mod tests {
             };
             debug!("new_apply_net_x_stage: init={init:?}");
             // Install the endpoint before returning the shared proxy stage used by the common dispatch enum.
+            static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
+            // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
+            let apply_id = APPLY_STEP_GEN.fetch_add(1, Ordering::Acquire);
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyNetStage2Init>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT)),
