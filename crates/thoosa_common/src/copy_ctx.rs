@@ -83,7 +83,7 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
-    //TODO remove from train
+    //don't use it, going to be removed
     async fn install_endpoint_bytes(&self, init_msg: Vec<u8>)-> Result<(), ThoError> {
         self.install_endpoint(String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
     }
