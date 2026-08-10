@@ -76,10 +76,10 @@ where
 {
     let init_msg = C::encode(init_msg)?;
     actor
-        .install_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &init_msg).into_bytes())
+        .install_endpoint(encode_endpoint_payload_bytes(endpoint_name, &init_msg))
         .await
 }
-//invoked form Proxy macro
+//invoked form Proxy macro, don't use it, Proxy macro is going to be removed
 pub async fn install_empty_ipc_endpoint(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
