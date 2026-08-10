@@ -729,7 +729,7 @@ mod tests {
                                  * ThoTrainModule device restoration.
                                  */
                                 let config = ModConfig::new(
-                                    Adam::default(),
+                                    Adam::default().into(),
                                     move |var_store| test_net(&params_for_mod_config)?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
                                     lr,
                                 );
@@ -1091,7 +1091,7 @@ mod tests {
                          * ThoTrainModule device restoration.
                          */
                         let config = ModConfig::new(
-                            Adam::default(),
+                            Adam::default().into(),
                             move |var_store| test_net(&params_for_mod_config)?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
                             lr,
                         );
