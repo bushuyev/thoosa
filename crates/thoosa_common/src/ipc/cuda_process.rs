@@ -69,6 +69,7 @@ pub(crate) const D2H_START_PAYLOAD_PREFIX: &str = "d2h-start:";
 pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
 pub(crate) const INVOKE_ENDPOINT_PREFIX: &str = "invoke_endpoint:";
 pub(crate) const PURGE_ENDPOINT_PREFIX: &str = "purge_endpoint:";
+pub(crate) const DROP_ENDPOINT_PREFIX: &str = "drop_endpoint:";
 pub(crate) const CONSUME_ENDPOINT_PREFIX: &str = "consume_endpoint:";
 const WORKER_COPY_STREAMS: usize = 32;
 // Keep IPC staging bounded independently of GPU VRAM. Sixteen 512 MiB sparse memfd mappings retain enough capacity for the existing oversized-copy OOM test while avoiding a pool sized as a fraction of total VRAM.
@@ -858,6 +859,10 @@ pub enum CudaIPCActorMessage {
         input: String,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
+    DropEndpoint {
+        input: String,
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
 }
 
 struct OutgoingRequest {
@@ -1312,6 +1317,34 @@ impl CudaIPCActor {
                     debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: response={response:?}");
 
                     let _ = respond_to.send(Ok(()));
+                    Ok::<_, ThoError>(())
+                });
+            }
+            CudaIPCActorMessage::DropEndpoint { input, respond_to } => {
+                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::DropEndpoint: input={input}");
+                let self_tx = self.spawned_state.tx.clone();
+                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.spawned_state.pending);
+
+                // Endpoint destruction is acknowledged so callers know the worker processed the removal before reusing the key.
+                tokio::spawn(async move {
+                    let response = send_request_and_wait(
+                        self_tx,
+                        pending,
+                        OutgoingRequest {
+                            id: next_id,
+                            payload: OutgoingRequestPayload::Msg(format!("{DROP_ENDPOINT_PREFIX}{input}")),
+                        },
+                    ).await.and_then(|response| {
+                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                            Err(parse_worker_copy_error_payload(error))
+                        } else if response == ENDPOINT_OK_PAYLOAD {
+                            Ok(())
+                        } else {
+                            Err(ThoError::new(format!("unexpected endpoint drop response: {response:?}")))
+                        }
+                    });
+                    let _ = respond_to.send(response);
                     Ok::<_, ThoError>(())
                 });
             }
@@ -2235,6 +2268,21 @@ impl CudaActorHandle for CudaIPCActorHandle {
         ).instrument(tracing::debug_span!(
             "CudaIPCActorHandle::purge_endpoint_bytes",
             agg_perf="CudaIPCActorHandle::purge_endpoint_bytes",
+        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
+    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: &str) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::DropEndpoint {
+                input: encode_stage_payload(stage_id, &encode_endpoint_payload(endpoint_name, "drop")),
+                respond_to,
+            }
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::drop_endpoint",
+            agg_perf="CudaIPCActorHandle::drop_endpoint",
         )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?

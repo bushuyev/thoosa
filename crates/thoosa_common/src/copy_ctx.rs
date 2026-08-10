@@ -100,6 +100,10 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         todo!()//TODO it should be in IPC endpoint only
     }
 
+    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: &str) -> Result<(), ThoError> {
+        Ok(())
+    }
+
 
     async fn consume_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
         self.invoke_endpoint_bytes(stage_id, input).await
