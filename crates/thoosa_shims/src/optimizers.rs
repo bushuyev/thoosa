@@ -128,6 +128,7 @@ pub struct AdamGroupSnapshot {
 pub struct AdamOptimizerSnapshot {
     pub defaults: AdamOptionsSnapshot,
     pub groups: Vec<AdamGroupSnapshot>,
+    pub tho_device_idx:usize
 }
 
 impl AdamOptionsSnapshot {
@@ -169,7 +170,7 @@ fn owned_tensor_from_ptr(
     Ok(unsafe { Tensor::from_ptr(ptr) })
 }
 
-pub unsafe fn adam_snapshot(c_optimizer: *const C_optimizer) -> Result<AdamOptimizerSnapshot, ThoError> {
+pub unsafe fn adam_snapshot(c_optimizer: *const C_optimizer, tho_device_idx:usize) -> Result<AdamOptimizerSnapshot, ThoError> {
     let group_count = tho_adam_group_count(c_optimizer);
 
     let mut raw_defaults = MaybeUninit::<C_AdamOptions>::zeroed();
@@ -264,6 +265,7 @@ pub unsafe fn adam_snapshot(c_optimizer: *const C_optimizer) -> Result<AdamOptim
     Ok(AdamOptimizerSnapshot {
         defaults,
         groups,
+        tho_device_idx
     })
 }
 
@@ -399,7 +401,7 @@ mod tests {
 
 
         let (vs_0, c_optimizer_0) = initialized_adam(Cuda(0))?;
-        let snapshot_0 = unsafe {adam_snapshot(c_optimizer_0)?};
+        let snapshot_0 = unsafe {adam_snapshot(c_optimizer_0, 1)?};
 
         debug!("snapshot_0={snapshot_0:?}");
 
@@ -413,7 +415,7 @@ mod tests {
         drop(v);
         unsafe {restore_adam_snapshot(&snapshot_0, c_optimizer_1)}?;
 
-        let snapshot_1 = unsafe {adam_snapshot(c_optimizer_1)?};
+        let snapshot_1 = unsafe {adam_snapshot(c_optimizer_1, 1)?};
         debug!("snapshot_1={snapshot_1:?}");
 
         assert_eq!(snapshot_0, snapshot_1);
