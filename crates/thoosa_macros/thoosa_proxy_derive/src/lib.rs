@@ -48,11 +48,13 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
         quote! { #name: #init }
     });
 
+    // Legacy derived proxies still create one stage per initializer, so they consistently use stage id zero.
     let install = match init {
         Some(init) => quote! {
             #common::ipc::codec::install_ipc_endpoint::<#codec, _>(
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#device_param).as_ref(),
                 #endpoint,
+                0,
                 &#init,
             ).await?;
         },
@@ -60,6 +62,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
             #common::ipc::codec::install_empty_ipc_endpoint(
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#device_param).as_ref(),
                 #endpoint,
+                0,
             ).await?;
         },
     };
@@ -72,6 +75,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
                 #endpoint,
 
+                0,
+
                 &#run_input,
 
             ).await
@@ -82,6 +87,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref(),
 
                 #endpoint,
+
+                0,
 
                 input,
 
@@ -96,6 +103,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
                 #endpoint,
 
+                0,
+
                 &#run_input,
             ).await
         },
@@ -104,6 +113,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(&ctx)).as_ref(),
 
                 #endpoint,
+
+                0,
 
                 &input,
 

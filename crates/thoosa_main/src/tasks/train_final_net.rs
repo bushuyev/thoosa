@@ -665,6 +665,7 @@ impl ProxyTrainFinalStep {
         thoosa_common::ipc::codec::invoke_ipc_endpoint_to_file::<JsonIpcCodec, _>(
             GlobalCtx::global().cuda_actor(self.tho_device_idx).as_ref(),
             TRAIN_FINAL_STEP_ENDPOINT,
+            0,
             &TrainStepIpcRequest::ExportWeights,
         ).await
     }

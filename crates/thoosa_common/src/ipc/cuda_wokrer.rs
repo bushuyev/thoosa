@@ -341,24 +341,31 @@ impl CudaWorker {
             }
 
             if let Some(msg_data) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {//TODO UNINSTALL_ENDPOINT on drop
+                let (stage_id, msg_data) = cuda_process::split_stage_payload(msg_data)?;
                 let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload_bytes(msg_data)?;
-                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg_len={} endpoint_inits.contains_key={}", init_msg.len(), endpoint_inits.contains_key(endpoint_name));
+                let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} init_msg_len={} endpoint_inits.contains_key={}", init_msg.len(), endpoint_inits.contains_key(endpoint_name));
 
 
-                let payload = match endpoint_inits.get(endpoint_name) {
+                // Reject the duplicate before running endpoint_init so a failed install cannot create and discard new GPU state.
+                let payload = if installed_endpoints.read().contains_key(&endpoint_key) {
+                    cuda_process::encode_worker_copy_error(&ThoError::new(format!("endpoint {endpoint_key:?} is already installed")))
+                } else {
+                    match endpoint_inits.get(endpoint_name) {
 
-                    Some(init_endpoint) => {
+                        Some(init_endpoint) => {
 
-                        match init_endpoint(init_msg, Arc::clone(&ws), &all_cuda_tensors) {
-                            Ok(endpoint_wrapper) => {
-                                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
-                                installed_endpoints.write().insert(endpoint_name.to_string(), endpoint_wrapper);
-                                ENDPOINT_OK_PAYLOAD.to_string()
+                            match init_endpoint(init_msg, Arc::clone(&ws), &all_cuda_tensors) {
+                                Ok(endpoint_wrapper) => {
+                                    debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
+                                    installed_endpoints.write().insert(endpoint_key, endpoint_wrapper);
+                                    ENDPOINT_OK_PAYLOAD.to_string()
+                                }
+                                Err(error) => cuda_process::encode_worker_copy_error(&error),
                             }
-                            Err(error) => cuda_process::encode_worker_copy_error(&error),
                         }
+                        None => cuda_process::encode_worker_copy_error(&ThoError::new(format!("no endpoint init for {endpoint_name:?}"))),
                     }
-                    None => cuda_process::encode_worker_copy_error(&ThoError::new(format!("no endpoint init for {endpoint_name:?}"))),
                 };
                 reply_tx
                     .send(WorkerReply {
@@ -373,21 +380,23 @@ impl CudaWorker {
 
             let endpoint_request = payload.strip_prefix(CONSUME_ENDPOINT_PREFIX).map(|input| (true, input)).or_else(|| payload.strip_prefix(INVOKE_ENDPOINT_PREFIX).map(|input| (false, input)));
             if let Some((consume, input)) = endpoint_request {
+                let (stage_id, input) = cuda_process::split_stage_payload(input)?;
                 let (endpoint_name, input) = cuda_process::split_endpoint_payload_bytes(input)?;
-                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} consume={consume} input_len={}", input.len());
+                let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} consume={consume} input_len={}", input.len());
 
                 let response = {
                     let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
-                    match installed_endpoints.read().get(endpoint_name) {
+                    match installed_endpoints.read().get(&endpoint_key) {
                         Some(endpoint) => {
                             let run_ctx = WokerRunCtx;
 
                             let r = if let Some(with_state) = endpoint.as_with_state() {
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} as_with_state");
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
                                 // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
                                 panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx)).map(|response| (response, Vec::new()))
                             } else {
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} no state");
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
 
                                 panic_to_err!({
                                     let _guard = ThoStreamGuard::new(&stream)?;
@@ -410,17 +419,17 @@ impl CudaWorker {
 
                             if let  Err(e) = &r {
 
-                                error!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
+                                error!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
                             } else if let Ok(response) = &r {
                                 let (response_is_binary, response_len) = match &response.0 {
                                     SyncStageIpcResponse::Encoded(response) => (false, response.len()),
                                     // SyncStageIpcResponse::Stream(_) => (true, 0),
                                 };
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} consume={consume} response_is_binary={response_is_binary} response_len={response_len}");
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} consume={consume} response_is_binary={response_is_binary} response_len={response_len}");
                             }
                             r
                         },
-                        None => Err(ThoError::new(format!("endpoint {endpoint_name:?} is not installed"))),
+                        None => Err(ThoError::new(format!("endpoint {endpoint_key:?} is not installed"))),
                     }
                 };
 
@@ -461,9 +470,11 @@ impl CudaWorker {
             }
 
             if let Some(input) = payload.strip_prefix(PURGE_ENDPOINT_PREFIX) {
+                let (stage_id, input) = cuda_process::split_stage_payload(input)?;
                 let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
-                debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} input={input:?}");
-                match installed_endpoints.read().get(endpoint_name) {
+                let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+                debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} input={input:?}");
+                match installed_endpoints.read().get(&endpoint_key) {
                     Some(endpoint) => {
                         endpoint.purge(tho_device.clone()).await?;
                     }

@@ -707,11 +707,12 @@ mod tests {
                     };
                     static TRAIN_STEP_GEN:AtomicU32 = AtomicU32::new(0);//here AtomicU32 is for simplicity, can be based on RunConfig or any stage-specific logic
                     // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
-                    let train_step_id = TRAIN_STEP_GEN.fetch_add(1, Ordering::Acquire);//pass it to install_ipc_endpoint to build key=TRAIN_TEST_STEP2_ENDPOINT + train_step_id under which endpoint will be available for invocation.
-                    thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_TEST_STEP2_ENDPOINT, &init).await?;
+                    let train_step_id = TRAIN_STEP_GEN.fetch_add(1, Ordering::Acquire);
+                    // Use the same generated id for installation and proxy dispatch so each train step retains independent worker state.
+                    thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_TEST_STEP2_ENDPOINT, train_step_id, &init).await?;
                     Ok((
                         DynSyncStageWithStateEnum::Proxy {
-                            stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT)),
+                            stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT, train_step_id)),
                         },
                         TestNetXParams { in_features: run_config.in_features, layers: run_config.layers }
                     ))
@@ -1424,9 +1425,10 @@ mod tests {
             static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
             // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
             let apply_id = APPLY_STEP_GEN.fetch_add(1, Ordering::Acquire);
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyNetStage2Init>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, &init).await?;
+            // The proxy must dispatch with the id used to install this particular apply stage.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyNetStage2Init>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, apply_id, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT)),
+                stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT, apply_id)),
             })
         } else {
             Ok(DynSyncStageWithStateEnum::Local(Arc::new(ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await?)))
@@ -1464,10 +1466,12 @@ mod tests {
             let run_config = TestXRunConfig::new(0, 0.01, 100, 3);
             let x_params = TestNetXParams { in_features: run_config.in_features, layers: run_config.layers };
             let init = TrainTestStep2Init { tho_device_idx, run_config, vs_path: PathBuf::new() };
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(cuda_actor.as_ref(), TRAIN_TEST_STEP2_ENDPOINT, &init).await?;
+            // A stable test id ties the installed worker stage to the proxy used below.
+            let train_step_id = 0;
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStep2Init>(cuda_actor.as_ref(), TRAIN_TEST_STEP2_ENDPOINT, train_step_id, &init).await?;
             let (train_step, params): (DynSyncStageWithStateEnum<TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>>, TestNetXParams) = (
                 DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT)),
+                    stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT, train_step_id)),
                 },
                 x_params
             );
