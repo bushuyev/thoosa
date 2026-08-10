@@ -68,6 +68,7 @@ where
 pub async fn install_ipc_endpoint<C, T>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
     init_msg: &T,
 ) -> Result<(), ThoError>
 where
@@ -76,16 +77,18 @@ where
 {
     let init_msg = C::encode(init_msg)?;
     actor
-        .install_endpoint(encode_endpoint_payload_bytes(endpoint_name, &init_msg))
+        .install_endpoint(stage_id, encode_endpoint_payload_bytes(endpoint_name, &init_msg))
         .await
 }
 //invoked form Proxy macro, don't use it, Proxy macro is going to be removed
 pub async fn install_empty_ipc_endpoint(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
 ) -> Result<(), ThoError> {
     actor
         .install_endpoint_bytes(
+            stage_id,
             encode_endpoint_payload_bytes(endpoint_name, &[]).into_bytes()
         ).await
 }
@@ -93,6 +96,7 @@ pub async fn install_empty_ipc_endpoint(
 pub async fn invoke_ipc_endpoint<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
     input: &I,
 ) -> Result<O, ThoError>
 where
@@ -100,17 +104,18 @@ where
     I: Debug + Serialize + ?Sized,
     O: Debug + DeserializeOwned,
 {
-    debug!("invoke_ipc_endpoint: endpoint_name={endpoint_name} input={input:?}");
+    debug!("invoke_ipc_endpoint: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
 
     let input = C::encode(input)?;
 
     let response = actor.invoke_endpoint_bytes(
+        stage_id,
         encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
     ).await?;
 
     let r = C::decode(&response);
 
-    debug!("invoke_ipc_endpoint: endpoint_name={endpoint_name} response={r:?}");
+    debug!("invoke_ipc_endpoint: endpoint_name={endpoint_name} stage_id={stage_id} response={r:?}");
 
     r
 }
@@ -118,6 +123,7 @@ where
 pub async fn consume_ipc_endpoint<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
     input: &I,
 ) -> Result<O, ThoError>
 where
@@ -125,13 +131,13 @@ where
     I: Debug + Serialize + ?Sized,
     O: Debug + DeserializeOwned,
 {
-    debug!("consume_ipc_endpoint: endpoint_name={endpoint_name} input={input:?}");
+    debug!("consume_ipc_endpoint: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
 
     let input = C::encode(input)?;
-    let response = actor.consume_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
+    let response = actor.consume_endpoint_bytes(stage_id, encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
     let result = C::decode(&response);
 
-    debug!("consume_ipc_endpoint: endpoint_name={endpoint_name} response={result:?}");
+    debug!("consume_ipc_endpoint: endpoint_name={endpoint_name} stage_id={stage_id} response={result:?}");
 
     result
 }
@@ -139,19 +145,20 @@ where
 pub async fn invoke_ipc_endpoint_to_file<C, I>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
     input: &I,
 ) -> Result<std::fs::File, ThoError>
 where
     C: IpcCodec,
     I: Debug + Serialize + ?Sized,
 {
-    debug!("invoke_ipc_endpoint_to_file: endpoint_name={endpoint_name} input={input:?}");
+    debug!("invoke_ipc_endpoint_to_file: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
 
     let input = C::encode(input)?;
     let output = tempfile::tempfile()?;
-    let response = actor.invoke_endpoint_to_file(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes(), output).await?;
+    let response = actor.invoke_endpoint_to_file(stage_id, encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes(), output).await?;
 
-    debug!("invoke_ipc_endpoint_to_file: endpoint_name={endpoint_name} done");
+    debug!("invoke_ipc_endpoint_to_file: endpoint_name={endpoint_name} stage_id={stage_id} done");
 
     Ok(response)
 }
@@ -159,6 +166,7 @@ where
 pub async fn invoke_ipc_sync_stage<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
     input: &I,
 ) -> Result<O, ThoError>
 where
@@ -166,21 +174,22 @@ where
     I: Debug + Serialize + ?Sized,
     O: Debug + DeserializeOwned,
 {
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 0. input={input:?}");
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} 0. input={input:?}");
 
     let input = C::encode(input)?;
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 1. input={input:?}");
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} 1. input={input:?}");
 
     let input = encode_sync_stage_run_input::<C>(&input)?;
 
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 2. input={input:?}");
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} 2. input={input:?}");
 
     let response = actor.invoke_endpoint_bytes(
+        stage_id,
         encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
     ).await?;
 
     let r = C::decode(&response);
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} response={r:?}");
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} response={r:?}");
 
     r
 }
@@ -188,18 +197,20 @@ where
 pub async fn purge_ipc_sync_stage<C>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
 ) -> Result<(), ThoError>
 where
     C: IpcCodec,
 {
-    debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name}");
+    debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
 
 
     let response = actor.purge_endpoint_bytes(
+        stage_id,
         encode_endpoint_payload_bytes(endpoint_name, b"purge")
     ).await?;
 
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}");
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
 
     Ok(())
 }
@@ -207,6 +218,7 @@ where
 pub async fn consume_ipc_sync_stage<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
+    stage_id: u32,
     input: &I,
     ctx: &RunCtxImpl,
 ) -> Result<O, ThoError>
@@ -215,14 +227,14 @@ where
     I: Debug + Serialize + ?Sized,
     O: Debug + DeserializeOwned,
 {
-    debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} input={input:?}");
+    debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
 
     let input = C::encode(input)?;
     let input = encode_sync_stage_run_input::<C>(&input)?;
-    let response = actor.consume_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
+    let response = actor.consume_endpoint_bytes(stage_id, encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
     let result = C::decode(&response);
 
-    debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} response={result:?}");
+    debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} response={result:?}");
 
     result
 }
