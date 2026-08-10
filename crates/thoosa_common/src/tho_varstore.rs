@@ -19,7 +19,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage, SyncStage};
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, panic_to_err};
-use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot, restore_adam_snapshot};
+use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamParamStateSnapshot, AdamWOptimizerSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot};
 use tokio::task::JoinSet;
 
 
@@ -79,6 +79,22 @@ impl ThoOptimizers {
             ThoOptimizers::AdamW { config } => config.build(vs, lr)?
         })
     }
+
+    unsafe fn snapshot(&self, optimizer: *const torch_sys::C_optimizer, tho_device_idx: usize) -> Result<OptimizerSnapshot, ThoError> {
+        // The configuration is the authoritative optimizer type because tch erases it behind Optimizer.
+        Ok(match self {
+            ThoOptimizers::Adam { .. } => OptimizerSnapshot::Adam(unsafe { adam_snapshot(optimizer, tho_device_idx)? }),
+            ThoOptimizers::AdamW { .. } => OptimizerSnapshot::AdamW(unsafe { adam_w_snapshot(optimizer, tho_device_idx)? }),
+        })
+    }
+
+    unsafe fn restore_snapshot(&self, snapshot: &OptimizerSnapshot, optimizer: *mut torch_sys::C_optimizer) -> Result<(), ThoError> {
+        match (self, snapshot) {
+            (ThoOptimizers::Adam { .. }, OptimizerSnapshot::Adam(snapshot)) => unsafe { restore_adam_snapshot(snapshot, optimizer) },
+            (ThoOptimizers::AdamW { .. }, OptimizerSnapshot::AdamW(snapshot)) => unsafe { restore_adam_w_snapshot(snapshot, optimizer) },
+            (config, snapshot) => Err(ThoError::new(format!("optimizer configuration {config:?} does not match snapshot {snapshot:?}"))),
+        }
+    }
 }
 
 impl From<nn::Adam> for ThoOptimizers {
@@ -110,7 +126,13 @@ where
     DI: Dims, DO: Dims
 {
     Opt{opt:Pin<Box<Optimizer>>, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
-    Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
+    Snapshot{ cpu_snap: OptimizerSnapshot, vs:VarStore}
+}
+
+#[derive(Debug)]
+enum OptimizerSnapshot {
+    Adam(AdamOptimizerSnapshot),
+    AdamW(AdamWOptimizerSnapshot),
 }
 
 impl <DI, DO> ThoTrainModule<DI, DO>
@@ -225,7 +247,7 @@ where
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
                 OptSnapshot::Opt { opt, vs, module } => {
-                    (unsafe { adam_snapshot(opt.as_raw_c_optimizer(), ThoDevice::from(vs.device()).tho_device_idx())? }, vs)
+                    (unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::from(vs.device()).tho_device_idx())? }, vs)
                 }
                 _ => {
                     // var store should be already on cpu
@@ -234,7 +256,7 @@ where
             };
 
             self.opt_state = OptSnapshot::Snapshot {
-                cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
+                cpu_snap:clone_owned_optimizer_snapshot_to(cuda_snapshot, Cpu.into()).await?,
                 vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
             };
 
@@ -245,7 +267,7 @@ where
                  * Detach owned tensor handles while this is still synchronous;
                  * only those Send handles are carried into the async copies.
                  */
-                OptSnapshot::Snapshot { cpu_snap, vs } => (detach_adam_snapshot(cpu_snap), vs),
+                OptSnapshot::Snapshot { cpu_snap, vs } => (detach_optimizer_snapshot(cpu_snap), vs),
                 _ => {
                     // var store should be already on device
                     return Ok(())
@@ -255,7 +277,7 @@ where
             let (module, mut cuda_vs ) = Self::init_opt(&self.config.net, tho_dst_device.into())?;
 
 
-            let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, tho_dst_device.into()).await?;
+            let cuda_snapshot = clone_owned_optimizer_snapshot_to(cpu_snap, tho_dst_device.into()).await?;
             let restored_vs = clone_var_store_to(&cpu_var_store, tho_dst_device.into()).await?;
             replace_data(&mut cuda_vs, restored_vs)?;
 
@@ -264,7 +286,7 @@ where
              * restored data, so both the optimizer and returned state must use it.
              */
             let opt = (self.config.optimizer_builder)(&cuda_vs)?;
-            unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
+            unsafe {self.config.opt_config.restore_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
             self.opt_state = OptSnapshot::Opt{opt, vs: cuda_vs, module };
 
@@ -317,7 +339,23 @@ pub async fn clone_adam_snapshot_to(
     clone_owned_adam_snapshot_to(detach_adam_snapshot(src), tho_device).await
 }
 
+pub async fn clone_adam_w_snapshot_to(
+    src: &AdamWOptimizerSnapshot,
+    tho_device: ThoDevice,
+) -> Result<AdamWOptimizerSnapshot, ThoError> {
+    // AdamW shares the tensor-state representation but keeps a named copy entry point for optimizer-specific routing.
+    clone_owned_adam_w_snapshot_to(detach_adam_w_snapshot(src), tho_device).await
+}
+
 fn detach_adam_snapshot(src: &AdamOptimizerSnapshot) -> AdamOptimizerSnapshot {
+    detach_adam_like_snapshot(src)
+}
+
+fn detach_adam_w_snapshot(src: &AdamWOptimizerSnapshot) -> AdamWOptimizerSnapshot {
+    detach_adam_like_snapshot(src)
+}
+
+fn detach_adam_like_snapshot(src: &AdamOptimizerSnapshot) -> AdamOptimizerSnapshot {
     AdamOptimizerSnapshot {
         defaults: src.defaults,
         groups: src.groups.iter().map(|src_group| {
@@ -343,8 +381,20 @@ async fn clone_owned_adam_snapshot_to(
     src: AdamOptimizerSnapshot,
     tho_device: ThoDevice,
 ) -> Result<AdamOptimizerSnapshot, ThoError> {
-    debug!("clone_owned_adam_snapshot_to: src={src:?} tho_device={tho_device:?}");
-    let actor_device_idx = src.tho_device_idx; //TODO check that it's not same as dst
+    clone_owned_adam_like_snapshot_to(src, tho_device, "Adam").await
+}
+
+async fn clone_owned_adam_w_snapshot_to(
+    src: AdamWOptimizerSnapshot,
+    tho_device: ThoDevice,
+) -> Result<AdamWOptimizerSnapshot, ThoError> {
+    clone_owned_adam_like_snapshot_to(src, tho_device, "AdamW").await
+}
+
+async fn clone_owned_adam_like_snapshot_to(src: AdamOptimizerSnapshot, tho_device: ThoDevice, optimizer_name: &str) -> Result<AdamOptimizerSnapshot, ThoError> {
+    debug!("clone_owned_adam_like_snapshot_to: optimizer_name={optimizer_name} src={src:?} tho_device={tho_device:?}");
+    // A CUDA copy actor is required even when the snapshot source is CPU, so CPU-to-GPU copies use the destination actor.
+    let actor_device_idx = if tho_device.is_cuda() { tho_device.tho_device_idx() } else { src.tho_device_idx };
 
     let mut dst_groups = vec![];
     for src_group in src.groups {
@@ -382,6 +432,20 @@ async fn clone_owned_adam_snapshot_to(
         defaults: src.defaults,
         groups: dst_groups,
         tho_device_idx: tho_device.tho_device_idx(),
+    })
+}
+
+fn detach_optimizer_snapshot(src: &OptimizerSnapshot) -> OptimizerSnapshot {
+    match src {
+        OptimizerSnapshot::Adam(snapshot) => OptimizerSnapshot::Adam(detach_adam_snapshot(snapshot)),
+        OptimizerSnapshot::AdamW(snapshot) => OptimizerSnapshot::AdamW(detach_adam_w_snapshot(snapshot)),
+    }
+}
+
+async fn clone_owned_optimizer_snapshot_to(src: OptimizerSnapshot, tho_device: ThoDevice) -> Result<OptimizerSnapshot, ThoError> {
+    Ok(match src {
+        OptimizerSnapshot::Adam(snapshot) => OptimizerSnapshot::Adam(clone_owned_adam_snapshot_to(snapshot, tho_device).await?),
+        OptimizerSnapshot::AdamW(snapshot) => OptimizerSnapshot::AdamW(clone_owned_adam_w_snapshot_to(snapshot, tho_device).await?),
     })
 }
 
@@ -561,6 +625,17 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> 
 
 //TODO change it to run with TrainStep
 pub async fn do_test_reset_adam() -> Result<(), ThoError>{
+    let config = nn::Adam { beta1: 0.99, beta2: 0.9999, ..Default::default() }.amsgrad(true).into();
+    do_test_reset_adam_family(config, "Adam").await
+}
+
+pub async fn do_test_reset_adam_w() -> Result<(), ThoError>{
+    let config = nn::AdamW { beta1: 0.99, beta2: 0.9999, ..Default::default() }.amsgrad(true).into();
+    do_test_reset_adam_family(config, "AdamW").await
+}
+
+async fn do_test_reset_adam_family(opt_config: ThoOptimizers, optimizer_name: &'static str) -> Result<(), ThoError>{
+    // Adam and AdamW use the same deterministic training trajectory harness so snapshot restoration is compared under identical pressure.
     const IMAGE_DIM: i64 = 128;
     const TEACHER_HIDDEN: i64 = 64;
     const HIDDEN_NODES: i64 = 128;
@@ -622,6 +697,7 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
 
     async fn train_once(
         reset_optimizer: bool,
+        opt_config: ThoOptimizers,
         train_images: &Tensor,
         train_labels: &Tensor,
         test_images: &Tensor,
@@ -635,13 +711,7 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
         let mut losses = Vec::with_capacity(EPOCHS as usize);
 
         let mut tho_train_mod = ThoTrainModule::new_on_device(ModConfig::new(
-            nn::Adam {
-                beta1: 0.99,
-                beta2: 0.9999,
-                ..Default::default()
-            }
-                .amsgrad(true)
-                .into(),
+            opt_config,
             /*
              * build_tch_module already returns the boxed ThoModule expected
              * by ModConfig, so wrapping it again would create Box<Box<_>>.
@@ -751,6 +821,7 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
 
     let preserved_losses = train_once(
         false,
+        opt_config.clone(),
         &train_images,
         &train_labels,
         &test_images,
@@ -759,6 +830,7 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
 
     let reset_losses = train_once(
         true,
+        opt_config,
         &train_images,
         &train_labels,
         &test_images,
@@ -779,13 +851,7 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
             - preserved_losses[first_affected_index]
     ).abs();
 
-    assert!(
-        immediate_difference < 1e-3,
-        "Adam produced the diverging trajectory after reset : \
-            preserved={}, reset={}",
-        preserved_losses[first_affected_index],
-        reset_losses[first_affected_index],
-    );
+    assert!(immediate_difference < 1e-3, "{optimizer_name} produced a diverging trajectory after reset: preserved={}, reset={}", preserved_losses[first_affected_index], reset_losses[first_affected_index]);
 
     Ok(())
 }
@@ -802,7 +868,7 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::tho_varstore::{ModConfig, OptSnapshot, ThoTrainModule, clone_adam_snapshot_to, clone_var_store_to, do_test_reset_adam, replace_data};
+    use crate::tho_varstore::{ModConfig, OptSnapshot, ThoTrainModule, clone_adam_snapshot_to, clone_var_store_to, do_test_reset_adam, do_test_reset_adam_w, replace_data};
     use log::debug;
     use std::collections::HashMap;
     use std::io::Cursor;
@@ -873,6 +939,14 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         do_test_reset_adam().await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_reset_adam_w_local() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
+        do_test_reset_adam_w().await
     }
 
 

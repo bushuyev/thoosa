@@ -3,6 +3,7 @@
 #include <torch/torch.h>
 #include <torch/optim/optimizer.h>
 #include <torch/optim/adam.h>
+#include <torch/optim/adamw.h>
 
 #include "logging.h"
 
@@ -60,6 +61,43 @@ extern "C"   void tho_adam_set_group_options(
     const tho_adam_options* options);
 
 extern "C"  void tho_adam_set_param_state(
+    torch::optim::Optimizer* opt,
+    size_t group_index,
+    size_t parameter_index,
+    int32_t has_state,
+    int64_t step,
+    at::Tensor* exp_avg,
+    at::Tensor* exp_avg_sq,
+    at::Tensor* max_exp_avg_sq);
+
+// AdamW has the same options and parameter-state layout as Adam, but LibTorch uses distinct runtime types that require separate checked entry points.
+extern "C"  ulong tho_adam_w_group_count(torch::optim::Optimizer* opt);
+
+extern "C"  void tho_adam_w_get_defaults(
+    torch::optim::Optimizer* opt,
+    tho_adam_options* out);
+
+extern "C"  void tho_adam_w_get_group(
+    torch::optim::Optimizer* opt,
+    size_t group_index,
+    tho_adam_group* out);
+
+extern "C"  void tho_adam_w_get_param_state(
+    torch::optim::Optimizer* opt,
+    size_t group_index,
+    size_t parameter_index,
+    tho_adam_param_state* out);
+
+extern "C"  void tho_adam_w_set_defaults(
+    torch::optim::Optimizer* opt,
+    const tho_adam_options* options);
+
+extern "C"  void tho_adam_w_set_group_options(
+    torch::optim::Optimizer* opt,
+    size_t group_index,
+    const tho_adam_options* options);
+
+extern "C"  void tho_adam_w_set_param_state(
     torch::optim::Optimizer* opt,
     size_t group_index,
     size_t parameter_index,
