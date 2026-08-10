@@ -192,7 +192,7 @@ where
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
                 OptSnapshot::Opt { opt, vs, module } => {
-                    (unsafe { adam_snapshot(opt.as_raw_c_optimizer())? }, vs)
+                    (unsafe { adam_snapshot(opt.as_raw_c_optimizer(), ThoDevice::from(vs.device()).tho_device_idx())? }, vs)
                 }
                 _ => {
                     // var store should be already on cpu
@@ -302,6 +302,7 @@ fn detach_adam_snapshot(src: &AdamOptimizerSnapshot) -> AdamOptimizerSnapshot {
                 }).collect(),
             }
         }).collect(),
+        tho_device_idx: src.tho_device_idx,
     }
 }
 
@@ -310,7 +311,7 @@ async fn clone_owned_adam_snapshot_to(
     tho_device: ThoDevice,
 ) -> Result<AdamOptimizerSnapshot, ThoError> {
     debug!("clone_owned_adam_snapshot_to: src={src:?} tho_device={tho_device:?}");
-    let actor_device_idx = 1; //TODO add device to AdamOptimizerSnapshot?
+    let actor_device_idx = src.tho_device_idx; //TODO check that it's not same as dst
 
     let mut dst_groups = vec![];
     for src_group in src.groups {
@@ -347,6 +348,7 @@ async fn clone_owned_adam_snapshot_to(
     Ok(AdamOptimizerSnapshot{
         defaults: src.defaults,
         groups: dst_groups,
+        tho_device_idx: tho_device.tho_device_idx(),
     })
 }
 
