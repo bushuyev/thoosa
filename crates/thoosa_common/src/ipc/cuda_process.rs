@@ -2400,7 +2400,7 @@ mod tests {
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
     use crate::ipc::cuda_process::{CudaIPCActor, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload, read_text_frame, write_text_frame};
-    use crate::ipc::cuda_wokrer::{CudaWorker, WokerRunCtx};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::{init_ipc_test, run_ipc_test};
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
@@ -2426,6 +2426,8 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::Instant;
+    use futures_util::future::BoxFuture;
+    use mockall::PredicateBoxExt;
     use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -2440,6 +2442,7 @@ mod tests {
     use tokio::process::{Child, Command};
     use tokio::sync::Mutex;
     use tokio::task::JoinSet;
+    use futures_util::FutureExt;
 
     macro_rules! pure_module_path {
         () => {{
@@ -2597,6 +2600,13 @@ mod tests {
             }
         }
 
+        fn test_copy_ipc_unrecoverable_cuda_error_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) ->BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+            async {
+                debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
+                Ok(Box::new(_SyncStageJsonWrapper {}) as Box<dyn SyncStageIpcWrapper>)
+            }.boxed()
+        }
+
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(async {
             init_ipc_test("test_copy_ipc_unrecoverable_cuda_error", pure_module_path!()).await?;
@@ -2630,16 +2640,16 @@ mod tests {
                HashMap::from([
                             (
                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                                Box::new(|_s: Vec<u8>, _ws: std::sync::Arc<parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Box<dyn Workspace>>>, _all_tensors: &std::sync::Arc<parking_lot::lock_api::Mutex<parking_lot::RawMutex, std::collections::HashMap<u64, tch::Tensor>>>|{
-                                    debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper>)
-                                }) as crate::ipc::cuda_wokrer::InitFn,
+                                
+                                Box::new(test_copy_ipc_unrecoverable_cuda_error_init) as InitFn
                             )
                 ]),
                 ThoDevice::from(Cuda(0)),
             ).await
         })
     }
+
+
 
 
     #[test]
