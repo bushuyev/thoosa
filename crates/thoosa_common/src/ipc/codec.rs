@@ -43,17 +43,27 @@ impl IpcCodec for JsonIpcCodec {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct IpcSyncStageRunInput {
     input: Vec<u8>,
+    max_other_parallel: Option<u8>,
 }
 
 impl IpcSyncStageRunInput {
     pub fn new(input: Vec<u8>) -> Self {
         Self {
             input,
+            max_other_parallel: None,
         }
+    }
+
+    pub fn with_max_other_parallel(input: Vec<u8>, max_other_parallel: u8) -> Self {
+        Self { input, max_other_parallel: Some(max_other_parallel) }
     }
 
     pub fn input(self) -> Vec<u8> {
         self.input
+    }
+
+    pub fn into_parts(self) -> (Vec<u8>, Option<u8>) {
+        (self.input, self.max_other_parallel)
     }
 }
 
@@ -64,7 +74,7 @@ where
     C::encode(&IpcSyncStageRunInput::new(input.to_vec()))
 }
 
-//invoked form Proxy macro
+// Shared proxies serialize their endpoint-specific initializer through this helper.
 pub async fn install_ipc_endpoint<C, T>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
@@ -80,19 +90,6 @@ where
         .install_endpoint(stage_id, encode_endpoint_payload_bytes(endpoint_name, &init_msg))
         .await
 }
-//invoked form Proxy macro, don't use it, Proxy macro is going to be removed
-pub async fn install_empty_ipc_endpoint(
-    actor: &dyn CudaActorHandle,
-    endpoint_name: &str,
-    stage_id: u32,
-) -> Result<(), ThoError> {
-    actor
-        .install_endpoint_bytes(
-            stage_id,
-            encode_endpoint_payload_bytes(endpoint_name, &[]).into_bytes()
-        ).await
-}
-
 pub async fn invoke_ipc_endpoint<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,

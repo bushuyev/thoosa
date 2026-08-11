@@ -8,7 +8,12 @@ use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::load_and_clc::loader::{LoadedRange, LoadedTensor};
-use crate::torch_runner::tests::load_and_clc::{ClcDynSyncStage, SYNC_CLC_ENDPOINT};
+use crate::torch_runner::tests::load_and_clc::SYNC_CLC_ENDPOINT;
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
+use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use log::debug;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -18,11 +23,10 @@ use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{Device, Kind, Scalar, Tensor};
 use thoosa_named_derive::Named;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, SyncStage};
-use thoosa_shared::{ThoError, simple_id};
-use tokio::sync::Mutex;
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage};
+use thoosa_shared::{CopyToDevice, ThoError, simple_id};
+use tokio::sync::{Mutex, MutexGuard};
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -35,29 +39,24 @@ impl Dims for MulK {
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "ClcTaskOutputId"]
 pub(crate) struct ClcStage {
+    id: SynKey,
     pub(crate) sync_clc: Arc<ClcDynSyncStage>,
 }
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    name = "ProxySyncClcStage",
-    endpoint = "SYNC_CLC_ENDPOINT",
-    new_args = "id: SynKey, k: f64, dim: i64, fail_until: Vec<FailUntil>, kind: Kind, tho_device: ThoDevice, use_matmul: bool",
-    prepare = "let (fail_until_dump_to_cpu, fail_until) = { let (dumped, rest): (Vec<_>, Vec<_>) = fail_until.into_iter().partition(|e| *e == FailUntil::DumpedToCpu); (!dumped.is_empty(), rest) };",
-    init = "SyncClcTaskInit::new(id.clone(), k, dim, fail_until, use_matmul)",
-    fields = "id: SynKey = id, fail_until_dump_to_cpu: bool = fail_until_dump_to_cpu",
-    out_id = "&self.id + input_id",
-    pre_run = "if self.fail_until_dump_to_cpu { let device_idx = ctx.tho_device_idx(); let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false); debug!(\"ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}\"); if !is_all_on_cpu { return Err(ThoError::oom()); } }",
-    endpoint_init = "sync_clc_endpoint_init",
-    init_type = "SyncClcTaskInit",
-    in_type = "ThoTensor<LoadedTensor, SynKey>",
-    init_stage = "SyncClcStage::init(init)"
-)]
+#[derive(Debug)]
 pub struct SyncClcStage {
     id: SynKey,
-    k: ThoTensor<MulK, SimpleId>,
+    // Keep the multiplier behind the state contract so worker execution never exports it.
+    k: Mutex<ThoTensor<MulK, SimpleId>>,
     fail_until: Vec<FailUntil>,
     use_matmul: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct ClcDynSyncStage {
+    id: SynKey,
+    fail_until_dump_to_cpu: bool,
+    stage: Arc<DynSyncStageWithStateEnum<SyncClcStage>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,12 +79,20 @@ impl SyncClcStage {
     {
         if GlobalCtx::global().is_ipc() {
             let k = k.to_f64().expect("SyncClcTask::new: IPC task multiplier must convert to f64");
-            let proxy = tokio::task::block_in_place(|| {//TODO remove
-                tokio::runtime::Handle::current().block_on(ProxySyncClcStage::new(id, k, dim, fail_until, kind, device, use_matmul))
-            }).expect("SyncClcTask::new: install IPC proxy sync task");
-            ClcDynSyncStage::new(Arc::new(proxy))
+            let (dumped, fail_until): (Vec<_>, Vec<_>) = fail_until.into_iter().partition(|value| *value == FailUntil::DumpedToCpu);
+            let init = SyncClcTaskInit::new(id.clone(), k, dim, fail_until, use_matmul);
+            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_CLC_ENDPOINT, 0, &init).await.expect("SyncClcStage::new: install endpoint");
+            ClcDynSyncStage {
+                id,
+                fail_until_dump_to_cpu: !dumped.is_empty(),
+                stage: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLC_ENDPOINT, 0, device.tho_device_idx())) }),
+            }
         } else {
-            ClcDynSyncStage::new(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))
+            ClcDynSyncStage {
+                id: id.clone(),
+                fail_until_dump_to_cpu: false,
+                stage: Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))),
+            }
         }
     }
 
@@ -112,7 +119,7 @@ impl SyncClcStage {
 
         debug!("ClcTask::new: use_matmul={use_matmul} i.size={:?}", k.size());
 
-        Self { id, k, fail_until, use_matmul }
+        Self { id, k: Mutex::new(k), fail_until, use_matmul }
     }
     pub fn init(init: SyncClcTaskInit) -> SyncClcStage {
         let SyncClcTaskInit{id, k, dim, fail_until, use_matmul} = init;
@@ -121,18 +128,6 @@ impl SyncClcStage {
         )
     }
 
-    pub async fn new_proxy(
-        id: SynKey,
-        k: f64,
-        fail_until: Vec<FailUntil>,
-        dim: i64,
-        kind: Kind,
-        device: ThoDevice,
-        use_matmul: bool,
-    ) -> Result<ProxySyncClcStage, ThoError> {
-
-        ProxySyncClcStage::new(id, k, dim, fail_until, kind, device, use_matmul).await
-    }
 }
 
 
@@ -150,9 +145,7 @@ impl ClcStage {
         K: Into<Scalar> + ToPrimitive + Copy,
     {
 
-        Self {
-            sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await),
-        }
+        Self { id: id.clone(), sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await) }
     }
 
     pub async fn new_proxy(
@@ -165,9 +158,7 @@ impl ClcStage {
         use_matmul: bool,
     ) -> Result<Self, ThoError> {
 
-        Ok(Self {
-            sync_clc: Arc::new(ClcDynSyncStage::new(Arc::new(SyncClcStage::new_proxy(id, k, fail_until, dim, kind, device, use_matmul).await?))),
-        })
+        Ok(Self { id: id.clone(), sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await) })
     }
 
 }
@@ -179,13 +170,19 @@ impl Adjustable for SyncClcStage {}
 impl OutId for ClcStage {
     fn out_id(&self, input_id: &SynKey) -> SynKey {
 
-        self.sync_clc.out_id(input_id)
+        &self.id + input_id
     }
 }
 
 impl OutId for SyncClcStage {
     fn out_id(&self, input_id: &SynKey) -> SynKey {
 
+        &self.id + input_id
+    }
+}
+
+impl OutId for ClcDynSyncStage {
+    fn out_id(&self, input_id: &SynKey) -> SynKey {
         &self.id + input_id
     }
 }
@@ -210,14 +207,25 @@ impl Stage for SyncClcStage {
 }
 
 impl SyncStage for SyncClcStage {
-    fn do_run<'a>(
-        self: Arc<Self>,
-        input: &Self::In<'a>,
-        ctx: &Self::Ctx,
-    ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        Some(self)
+    }
+}
+
+impl StageWithState for SyncClcStage {
+    type S = ThoTensor<MulK, SimpleId>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut k = self.k.lock().await;
+            if k.device() != to_device_idx {
+                *k = k.copy_to_device(to_device_idx).await?;
+            }
+            Ok(k)
+        }.boxed()
+    }
+
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
         debug!("MulTask::do_run: loaded.id={:?} input.size={:?} self.fail_until={:?}", input.id(), input.size(), self.fail_until);
 
@@ -258,11 +266,55 @@ impl SyncStage for SyncClcStage {
         }
 
         if self.use_matmul {
-            LoadedTensor::clc_sum(self.out_id(input.id()), input, &self.k)
+            LoadedTensor::clc_sum(self.out_id(input.id()), input, &k)
         } else {
-            LoadedTensor::clc_hadamard(self.out_id(input.id()), input, &self.k)
+            LoadedTensor::clc_hadamard(self.out_id(input.id()), input, &k)
         }
     }
+}
+
+impl Adjustable for ClcDynSyncStage {}
+
+impl Stage for ClcDynSyncStage {
+    type In<'a> = ThoTensor<LoadedTensor, SynKey>;
+    type Out = ThoTensor<ClcStageOutput, SynKey>;
+    type Ctx = RunCtxImpl;
+}
+
+impl SyncStage for ClcDynSyncStage {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        match self.stage.as_ref() {
+            DynSyncStageWithStateEnum::Local(_) => Some(self),
+            DynSyncStageWithStateEnum::Proxy { .. } => None,
+        }
+    }
+
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        if self.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false) {
+            return Err(ThoError::oom());
+        }
+        Arc::clone(&self.stage).do_run(input, ctx)
+    }
+}
+
+impl StageWithState for ClcDynSyncStage {
+    type S = ThoTensor<MulK, SimpleId>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        StageWithState::pre_run(self.stage.as_ref(), to_device_idx)
+    }
+
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        StageWithState::do_run_with_state(Arc::clone(&self.stage), input, state, ctx)
+    }
+}
+
+pub(crate) fn sync_clc_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = JsonIpcCodec::decode::<SyncClcTaskInit>(&init_msg)?;
+        // WorkerWrapperWithState keeps the multiplier on the worker across calls.
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClcStage::init(init)), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 // #[async_trait]

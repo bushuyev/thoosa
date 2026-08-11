@@ -1,7 +1,9 @@
 use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
-use crate::ipc::codec::IpcCodec;
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_wokrer::WorkerStageInput;
+use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -21,11 +23,10 @@ use std::sync::Arc;
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::Mutex;
 
@@ -190,7 +191,7 @@ impl OutId for TestTensorLoader {
         input_id: &<Self::In<'static> as WithId>::ID,
     ) -> <Self::Out as WithId>::ID {
         debug!("TestTensorLoader::out_id: input_id={input_id:?}");
-        self.sync_loader.out_id(input_id)
+        SynKey::new([mono_key!(input_id.0, "resource key")])
     }
 }
 
@@ -233,19 +234,7 @@ impl OutId for SyncTestTensorLoader {
     }
 }
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    name = "ProxySyncTestTensorLoader",
-    endpoint = "SYNC_TEST_TENSOR_LOADER_ENDPOINT",
-    new_args = "size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize",
-    init = "SyncTestTensorLoaderInit::new(size.clone(), kind)",
-    fields = "size: MonoMetrics<1, 2> = size",
-    out_id = "SynKey::new([mono_key!(input_id.0, \"resource key\")])",
-    endpoint_init = "sync_test_tensor_loader_endpoint_init",
-    init_type = "SyncTestTensorLoaderInit",
-    in_type = "LoaderInput",
-    init_stage = "SyncTestTensorLoader::init(init)?"
-)]
+#[derive(Debug)]
 pub struct SyncTestTensorLoader {
     size: MonoMetrics<1, 2>,
     kind: Kind,
@@ -269,10 +258,11 @@ impl SyncTestTensorLoaderInit {
 impl SyncTestTensorLoader {
     pub async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> LoaderDynSyncStage {
         if GlobalCtx::global().is_ipc() {
-
-            LoaderDynSyncStage::new(Arc::new(ProxySyncTestTensorLoader::new(size, kind, tho_device_idx).await.expect("ProxySyncTestTensorLoader::new")) as Arc<dyn DynSyncStageOutId<LoaderInput, ThoTensor<LoadedTensor, SynKey>,RunCtxImpl>>)
+            let init = SyncTestTensorLoaderInit::new(size, kind);
+            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, &init).await.expect("SyncTestTensorLoader::new: install endpoint");
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx)) }
         } else {
-            LoaderDynSyncStage::new(Arc::new(Self::new_local(size, kind)))
+            DynSyncStageEnum::Local(Arc::new(Self::new_local(size, kind)))
         }
     }
 
@@ -312,4 +302,14 @@ impl SyncStage for SyncTestTensorLoader {
     }
 }
 
-type LoaderDynSyncStage = DynSyncStageBox<LoaderInput, ThoTensor<LoadedTensor, SynKey>, RunCtxImpl>;
+pub(crate) fn sync_test_tensor_loader_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    use futures_util::FutureExt;
+    async move {
+        let init = JsonIpcCodec::decode::<SyncTestTensorLoaderInit>(&init_msg)?;
+        let stage = SyncTestTensorLoader::init(init)?;
+        // WorkerWrapper owns decoding and output tensor-reference registration.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(stage), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
+
+type LoaderDynSyncStage = DynSyncStageEnum<SyncTestTensorLoader>;
