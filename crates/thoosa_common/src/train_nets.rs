@@ -56,6 +56,7 @@ use crate::my_tch::MotifInitModeRangeOrValue;
 use crate::my_tch::MotifInitModeFields;
 use crate::my_tch::MotifInitModeBuilder;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tmp_file::TmpFile;
 use crate::tho_varstore::clone_var_store_to;
 
 #[derive(Args, Debug, Clone)]
@@ -148,7 +149,7 @@ pub struct TrainLabelNetRunConfigResult {
     pub loss: f32,
     label_node_params: LabelNetParams,
     train_label_nets_run_config: TrainLabelNetRunConfig,
-    var_store: VarStore,
+    var_store_path: TmpFile,
     motif_nets_ids:Vec<u32>
 }
 
@@ -167,7 +168,7 @@ impl TrainLabelNetRunConfigResult {
         loss: f32,
         label_node_params: LabelNetParams,
         train_label_nets_run_config: TrainLabelNetRunConfig,
-        var_store: VarStore,
+        var_store_path: TmpFile,
     ) -> Self {
         Self {
             train_label_nets_run_config_id: None,
@@ -175,7 +176,7 @@ impl TrainLabelNetRunConfigResult {
             loss,
             label_node_params,
             train_label_nets_run_config,
-            var_store,
+            var_store_path,
             motif_nets_ids: vec![],
         }
     }
@@ -211,7 +212,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
             .save_label_net(
                 run_config_id,
                 &self.label,
-                (&self.var_store).into(),
+                (&self.var_store_path).into(),
                 &self.label_node_params,
             ))?;
 
@@ -227,7 +228,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 pub struct TrainFinalNetsRunConfigResult {
     train_label_nets_run_config_ids: Vec<RunConfigId>,
     pub loss: f32,
-    var_store: VarStore,
+    var_store_path: TmpFile,
     final_node_params: FinalNetParams,
     train_final_net_run_config: TrainFinalNetRunConfig,
 }
@@ -236,7 +237,7 @@ impl TrainFinalNetsRunConfigResult {
     pub fn new(
         train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>,
         loss: f32,
-        var_store: VarStore,
+        var_store_path: TmpFile,
         final_node_params: FinalNetParams,
         train_final_nodes_values: TrainFinalNetRunConfig,
     ) -> Self {
@@ -245,7 +246,7 @@ impl TrainFinalNetsRunConfigResult {
                 .expect("train_label_nodes_run_config_ids")
                 .clone(),
             loss,
-            var_store,
+            var_store_path,
             final_node_params,
             train_final_net_run_config: train_final_nodes_values,
         }
@@ -270,7 +271,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         )).await?;
 
         let path = ws.read()
-            .save_final_net(run_config_id, (&self.var_store).into(), &self.final_node_params)?;
+            .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
 
         track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
@@ -893,9 +894,13 @@ impl CommonTrainingRunConfig {
     }
 
     pub fn build_optimizer(&self, vs: &VarStore)->Result<Optimizer, ThoError>{
+        self.tho_optimizer().build_for(vs, self.lr)
+    }
+
+    pub fn tho_optimizer(&self) -> crate::tho_varstore::ThoOptimizers {
         let optimizer = self.optimizer.clone().unwrap_or_else(Self::default_optimizer);
 
-        debug!("CommonTrainingRunConfig::build_optimizer: optimizer={optimizer:?}");
+        debug!("CommonTrainingRunConfig::tho_optimizer: optimizer={optimizer:?}");
 
         match optimizer {
             Optimizers::AdamW(AdamW{ beta1, beta2, wd, amsgrad }) => {
@@ -905,7 +910,7 @@ impl CommonTrainingRunConfig {
                     wd,
                     eps: 1e-8,
                     amsgrad,
-                }.build(&vs, self.lr).map_err(|e|e.into())
+                }.into()
             }
         }
     }
@@ -1847,7 +1852,7 @@ pub struct TrainMotifNetResult {
     pub loss: f32, //TODO pub
     channel: u32,
     motif_id: u32,
-    pub vs: VarStore,
+    pub vs: TmpFile,
     pub params: MotifNetParams,
     run_config_values: TrainMotifNetRunConfig,
     #[allow(dead_code)]
@@ -1860,7 +1865,7 @@ impl TrainMotifNetResult {
         loss: f32,
         channel: u32,
         motif_id: u32,
-        vs: VarStore,
+        vs: TmpFile,
         select_motifs_run_config_id: RunConfigId,
         params: MotifNetParams,
         run_config_values: TrainMotifNetRunConfig,
@@ -2030,20 +2035,20 @@ fn opt_param_alt_value<P: FieldName>(hp: &Hyperparameter<P>) -> Option<Val> {
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="opt_train"))]
-pub async fn opt_train<P, R, F, N: Debug + Default>(
+pub async fn opt_train<P, R, F, N: Debug + Default, A: Debug + Send + Sync + 'static>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     descr: &str,
     reusable_completed_trials: Vec<CompletedTrial>,
-) -> Result<(VarStore, N, R, f32), ThoError>
+) -> Result<(A, N, R, f32), ThoError>
 where
     P: FieldName + 'static,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
     F: for<'a, 'b> AsyncFnMut(
             R,
             &'a mut (dyn TrainListener + 'b),
-        ) -> Result<(VarStore, f32, N), ThoError>,
+        ) -> Result<(A, f32, N), ThoError>,
 {
     let const_vals = run_config_source
         .grid_run_config_source()
@@ -2052,7 +2057,7 @@ where
     const MAX_LOSS:f32 = 1f32;
     let min_loss = Arc::new(RwLock::new(MAX_LOSS));
 
-    let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
+    let min_var_store: Arc<RwLock<Option<(A, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
     let grid_runs = run_config_source.grid_to_vals_and_opt_params();
 
@@ -4017,8 +4022,11 @@ mod train_tests {
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 1000, 32000))?));
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
         let train_motif_nets_run_config_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
+        // Trained results now own a worker-written checkpoint rather than an in-memory VarStore.
+        let checkpoint_path = test_dir.join("train_label_checkpoint.safetensors");
+        VarStore::new(Cpu).save(&checkpoint_path)?;
 
         let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
             // vec![source_run_config_id],
@@ -4026,7 +4034,7 @@ mod train_tests {
             0.125,
             LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
             TrainLabelNetRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16))),
-            VarStore::new(Cpu),
+            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
         );
 
         let train_motif_nets_run_config_id_vec = vec![train_motif_nets_run_config_id];
@@ -4049,13 +4057,16 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 1000, 32000))?));
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
         let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
         let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
+        // Exercise the same checkpoint handoff used by local and IPC training.
+        let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
+        VarStore::new(Cpu).save(&checkpoint_path)?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
             Some(&vec![label_run_config_id_0, label_run_config_id_1]),
             0.125,
-            VarStore::new(Cpu),
+            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
             FinalNetParams::new(4, 2, 3),
             TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
         );

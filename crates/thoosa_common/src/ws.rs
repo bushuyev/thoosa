@@ -17,6 +17,7 @@ use tch::nn::{self, VarStore};
 use tch::{Device, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key, panic_to_err};
 use thoosa_shared::traits::ToJsonFile;
 
@@ -814,7 +815,7 @@ impl Workspace for FsWorkspace {
 
 pub enum VarStoreOrPath<'a> {
     VarStore(&'a VarStore),
-    Path(&'a PathBuf)
+    Path(&'a Path)
 }
 
 impl <'a> VarStoreOrPath<'a> {
@@ -844,7 +845,14 @@ impl <'a>  From<&'a VarStore> for VarStoreOrPath<'a> {
 
 impl <'a>  From<&'a PathBuf> for VarStoreOrPath<'a> {
     fn from(value: &'a PathBuf) -> Self {
-        Self::Path(value)
+        Self::Path(value.as_path())
+    }
+}
+
+impl <'a> From<&'a TmpFile> for VarStoreOrPath<'a> {
+    fn from(value: &'a TmpFile) -> Self {
+        // Preserve TmpFile ownership while the workspace atomically moves its checkpoint.
+        Self::Path(value.path())
     }
 }
 
