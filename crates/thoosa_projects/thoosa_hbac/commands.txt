@@ -86,13 +86,6 @@ insert into selected_motifs (motif_id, run_id, rate) select motif_id, 0, 0.0 fro
 
 
 
-write test similar to test_apply_motif_nets_* in crates/thoosa_main/src/tasks/apply_motif_nets.rs but in crates/thoosa_projects/thoosa_hbac/src/data.rs.
-take one tensor from crates/thoosa_projects/thoosa_hbac/test_data/eeg, apply frequency filters [{SavGolFilter:{window_len:111,poly_order:3,stride:5,padding:{Zero:{}}}},{NotchBandFilter:{low_hz:62.0,high_hz:59.0}}]  (like in crates/thoosa_main/src/cli.rs:1894),   select slice of, say, 1000 length, and  train MotifNetTypeArgsRangeOrValue::CosineNet motif net using TrainMotifNets (MotifsBatch generate should add jitter to original slice to build batch, so one slice theoretically should suffice for a test).
-just make sure all compile, the test may still fail
-
-
-
-
 sqlite> insert into selected_motifs (motif_id, run_id, rate) values
  (53606472, 66957, 1.0),
  ...
@@ -102,16 +95,5 @@ sqlite> insert into selected_motifs (motif_id, run_id, rate) values
 
 gdb -p 572915 -batch   -ex "set pagination off"   -ex "set height 0"   -ex "set width 0"   -ex "set print thread-events off"   -ex "set backtrace limit 0"   -ex "set logging file /tmp/gdb_threads_572915_full.txt"   -ex "set logging overwrite on"   -ex "set logging redirect on"   -ex "set logging enabled on"   -ex "info threads"   -ex "thread apply all bt full 200"   -ex "set logging enabled off"
 
-the workspace is now in the middle of refactoring aimed at applying filters, which are currently used in FindMotifsStage, during import.
-The first step, which is in the progress, is to add freq_filters  (crates/thoosa_main/src/cli.rs:231) to the  ImportResourcesArgs. Compilation fails with
-```
-error[E0599]: the method `value_parser` exists for reference `&&&&&&clap::builder::_infer_ValueParser_for<InputFilter>`, but its trait bounds were not satisfied
-    --> thoosa_main/src/cli.rs:230:5
-     |
- 230 | /     #[arg(long, value_enum)]
- 231 | |     pub freq_filter: Vec<InputFilter>,
-     | |_____________________________________^ method cannot be called due to unsatisfied trait bounds
-```
-
-fix error my implementing std::str::FromStr for InputFilter and adding all required Derive directive as needed.
-Then instantiate   FreqFilter (crates/thoosa_main/src/tasks/transforms/freq_filter.rs:82) in crates/thoosa_main/src/cli.rs:430 and pass it down to import_resources_with_pure_sets (crates/thoosa_main/src/cli.rs:1625) where it should be applied to tensors being imported at crates/thoosa_main/src/cli.rs:1663
+$ RUST_LOG=Info cargo nextest run --release --no-capture --profile heavy heavy_test_run_all_local > /tmp/heavy_test_run_all_local.log 2>&1
+$ RUST_LOG=Info cargo nextest run --release --no-capture --profile heavy heavy_test_run_all_ipc > /tmp/heavy_test_run_all_ipc.log 2>&1

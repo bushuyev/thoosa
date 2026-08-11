@@ -12,7 +12,7 @@ use tch::Tensor;
 use tokio::sync::MutexGuard;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{CachableIdTr, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
@@ -184,6 +184,15 @@ where
     type Ctx = St::Ctx;
     type In<'a> = St::In<'a>;
     type Out = St::Out;
+}
+
+impl <St> Adjustable for DynSyncStageWithStateEnum<St>
+where
+    St: SyncStage + StageWithState + Adjustable,
+    for <'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
+    <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
+{
+    // Preserve the wrapped stage's adjustment capability across local/proxy dispatch.
 }
 
 impl <St> SyncStage for DynSyncStageWithStateEnum<St>
