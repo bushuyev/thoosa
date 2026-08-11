@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::future::BoxFuture;
@@ -7,7 +8,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::{Device, Kind, Tensor};
@@ -433,37 +434,70 @@ where
     min_input_split_len:i64
 }
 
+type Cache = HashMap<
+    TypeId,
+    Box<dyn Any + Send + Sync>,
+>;
+
+static CACHES: LazyLock<tokio::sync::Mutex<crate::tasks::transforms::freq_filter::Cache>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
 impl<C> FreqFilter<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
 
 
-    pub async fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Self, ThoError> {
-        let (num_channels, sample_rate)  = {
-            let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
-            (guard.channels() as i64, guard.sample_rate() as f64)
-        };
+    pub async fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Arc<Self>, ThoError> {
+        debug!("FreqFilter::new: find_motifs_run_config_id={find_motifs_run_config_id} tho_device_idx={tho_device_idx}");
+        let id:SynKey = mono_key!(find_motifs_run_config_id, "FreqFilter").into();
 
 
-        let effective_output_stride = Self::effective_output_stride(filter_configs)?;
-        let min_input_split_len = Self::min_input_split_len(filter_configs)?;
 
-        let sync_freq_filter= Arc::new(SyncFreqFilter::new(
-            filter_configs, num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx
-        ).await?);
+        let mut caches = CACHES.lock().await;
 
-        Ok(Self {
-            //avoids caching each run_config separately when they have same filter
-            id: mono_key!(0, "todo").into(),
-            filter_configs: filter_configs.to_vec(),
-            _ctx: PhantomData,
-            num_channels,
-            sample_rate,
-            sync_freq_filter,
-            effective_output_stride,
-            min_input_split_len
-        })
+        let cache = caches
+            .entry(TypeId::of::<C>())
+            .or_insert_with(|| {
+                Box::new(HashMap::<SynKey, Arc<FreqFilter<C>>>::new())
+            })
+            .downcast_mut::<HashMap<SynKey, Arc<FreqFilter<C>>>>()
+            .unwrap();
+
+
+        if let Some(v) = cache.get(&id) {
+            Ok(Arc::clone(v))
+        } else {
+            let (num_channels, sample_rate)  = {
+                let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
+                (guard.channels() as i64, guard.sample_rate() as f64)
+            };
+
+
+            let effective_output_stride = Self::effective_output_stride(filter_configs)?;
+            let min_input_split_len = Self::min_input_split_len(filter_configs)?;
+
+            let sync_freq_filter= Arc::new(SyncFreqFilter::new(
+                filter_configs, num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx
+            ).await?);
+
+
+            let v = Arc::new(Self {
+                //avoids caching each run_config separately when they have same filter - use filter_configs to build unique ids
+                id:id.clone(),
+                filter_configs: filter_configs.to_vec(),
+                _ctx: PhantomData,
+                num_channels,
+                sample_rate,
+                sync_freq_filter,
+                effective_output_stride,
+                min_input_split_len
+            });
+
+            cache.insert(id, Arc::clone(&v));
+            Ok(v)
+        }
+
+
     }
 
 
@@ -963,7 +997,7 @@ mod tests {
         let mut ctx = RunCtxImpl::new(1, "test");
 
         let size = [20, 12800];
-        let r = Arc::new(bf).run(
+        let r = bf.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)),
             ctx.branch(false)
         ).await?;

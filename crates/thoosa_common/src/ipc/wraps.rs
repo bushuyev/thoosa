@@ -109,6 +109,8 @@ where
         let stage_id = self.stage_id;
         let tho_device_idx = self.tho_device_idx;
 
+        debug!("ProxyStage::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}");
+
         tokio::spawn(async move {
             if let Err(error) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_endpoint(stage_id, endpoint_name).await {
                 error!("ProxyStage::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
