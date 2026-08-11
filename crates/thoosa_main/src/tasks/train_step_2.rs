@@ -713,6 +713,7 @@ mod tests {
                     Ok((
                         DynSyncStageWithStateEnum::Proxy {
                             stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT, train_step_id, ctx.tho_device_idx())),
+                            init: (),
                         },
                         TestNetXParams { in_features: run_config.in_features, layers: run_config.layers }
                     ))
@@ -1431,6 +1432,7 @@ mod tests {
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyNetStage2Init>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, apply_id, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT, apply_id, device.tho_device_idx())),
+                init: (),
             })
         } else {
             Ok(DynSyncStageWithStateEnum::Local(Arc::new(ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await?)))
@@ -1476,6 +1478,7 @@ mod tests {
             let (train_step, params): (DynSyncStageWithStateEnum<TrainStep2<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>>, TestNetXParams) = (
                 DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP2_ENDPOINT, train_step_id, tho_device_idx)),
+                    init: (),
                 },
                 x_params
             );

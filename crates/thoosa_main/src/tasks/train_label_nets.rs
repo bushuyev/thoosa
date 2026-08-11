@@ -1058,7 +1058,7 @@ where
             let stage_id = TRAIN_LABEL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainLabelStepIpcInit>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_LABEL_STEP_ENDPOINT, stage_id, &init).await?;
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())) }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
             let training_config = run_config.common_training_args.clone();

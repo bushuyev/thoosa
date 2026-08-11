@@ -15,12 +15,13 @@ use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Instant;
+use serde::{Deserialize, Serialize};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tch::{Device, IndexOp, Kind, Tensor, nn};
-use tracing::field::debug;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::debug_plot;
@@ -37,7 +38,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore, TrainMotifsNetsResult};
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
-use thoosa_common::ws::Workspace;
+use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -48,14 +49,17 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, ErasedStageWithState, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, StageWithState, SyncStage, WithId};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet};
-
+use tracing::field::debug;
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage};
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
@@ -63,8 +67,11 @@ use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::tasks::stft::SyncStft;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::tmp_cache::TmpCached;
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::tracked_await::track_await;
+use crate::tasks::train_step_2::APPLY_NET2_X_ENDPOINT;
 
+pub(crate) const APPLY_MOTIF_NET_ENDPOINT: &str = "APPLY_MOTIF_NET_ENDPOINT";
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNets<C>
@@ -74,9 +81,9 @@ where
     id: SynKey,
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
-    apply_motif_nets: Vec<(u32/*net_id*/, Arc<ApplyMotifNet<C>>)>,
+    apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>)>,
     pub slice_step: u32,//should be in the input
-    pub motif_width:u32,
+    // pub motif_width:u32,
     stack_applied_motif_nets:Arc<StackAppliedMotifNets<C>>
 
 }
@@ -170,6 +177,23 @@ impl ApplyMotifNetSplitsContext {
             output: Tensor::f_zeros([output_size], options)?,
             added_partial_output_len: 0,
         })
+    }
+}
+
+impl<'a, C> InputContext<'a, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>> for ApplyMotifNetSplitsContext
+where
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+{
+    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
+        todo!()
+    }
+
+    fn all_done(&self) -> bool {
+        todo!()
+    }
+
+    async fn build_final_output(self) -> Result<<ApplyMotifNet<C> as Stage>::Out, ThoError> {
+        todo!()
     }
 }
 
@@ -314,109 +338,51 @@ where
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 
         //this defines order in which motif nets should be applied to a resource before running label net
-        let futures = trained_nets
-            .into_iter()
-            .map(|trained_net| {
-                let id = trained_net.id;
-                let path = trained_net.net_path;
-                let ws = Arc::clone(&ws);
-                let load_motif_net = Arc::clone(&load_motif_net);
-                let load_ctx = stage_ctx.branch(false);
-                async move {
-                    match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
-                        Ok(net) => {
-                            debug!("ApplyMotifNets::new: loaded net={net:?}");
-                            Ok::<_, ThoError>(Some((id, net)))
-                        }
-                        Err(e) => {
-                            error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
-                            Ok::<_, ThoError>(None)
-                        }
-                    }
-                }
-            });
-
-        let loaded_motif_nets: Vec<(u32, Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>)> = track_await(collect_futures_with_progress(
-            futures,
-            trained_nets_len,
-            FuturesOrdering::Ordered, //to keep same order as in trained_nets_ids
-            "ApplyMotifNets::new/load motif nets",
-        )).await
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
-        if loaded_motif_nets.is_empty() {
-            return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
-        };
-
-        let mut motif_widths = HashSet::new();
-        let mut freq_filters_by_find_motifs_run_config_id: HashMap<RunConfigId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
-
-        let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
-        for (net_id, motif_net) in loaded_motif_nets {
-            let extra = track_await(motif_net.extra()).await?;
-
-            let motif_id = extra.motif_id();
-            let motif_width = extra.motif_net_params.num_features();
-            motif_widths.insert(motif_width);
-
-            let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
-
-            let maybe_freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
-                freq_filter.clone()
-            } else {
-
-                if let Some(filters) = find_motifs_run_config.freq_filter.as_ref() {
-                    debug!("ApplyMotifNets::from_trained_nets: creating new FreqFilter for  find_motifs_run_config_id={find_motifs_run_config_id}");
-
-                    let freq_filter =FreqFilter::<C>::new(filters.as_slice(), ws, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?;
-                    freq_filters_by_find_motifs_run_config_id.insert(find_motifs_run_config_id, Some(Arc::clone(&freq_filter)));
-                    Some(freq_filter)
-                } else {
-                    None
-                }
-               
-            };
-
-            let freq_filter_find_motifs_run_config_id = if maybe_freq_filter.is_some() { Some(find_motifs_run_config_id) } else { None };
-
-            // ApplyMotifNet owns its inference state so it can participate in
-            // the same stateful device-restoration path as training stages.
-            let motif_net = track_await(motif_net.load_from_any_device_(0)).await?.copy_to_device(0).await?;//TODO remove?
-            loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_config_id, maybe_freq_filter));
-        }
-
-        if motif_widths.len() > 1 {
-            warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} trained_net_ids={trained_net_ids:?}. Will run per-net and pad outputs for concat.");
-        }
-
-        let Some(motif_width) = motif_widths.iter().copied().max() else {
-            return Err(ThoError::new("no motif_width"));
-        };
-
-        debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
         let stack_applied_motif_nets = Arc::new(StackAppliedMotifNets::<C>::new(id.clone()));
+
+        let mut apply_motif_nets = vec![];
+        for trained_net in trained_nets.into_iter() {
+            // let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&trained_net.net_path, &ThoDevice::from(1).into(), false).unwrap();
+            let (channel, motif_id) = FsWorkspace::parse_motif_path(&trained_net.net_path).unwrap();
+
+            let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
+
+            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
+
+           let maybe_freq_filter= match find_motifs_run_config.freq_filter.as_ref() {
+               None => None,
+               Some(freq_filter_config) => {
+                   Some((find_motifs_run_config_id, FreqFilter::<C>::new(freq_filter_config.as_slice(), ws, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?))
+               }
+           };
+
+            apply_motif_nets.push(
+                (
+                    trained_net.id,
+                    maybe_freq_filter,
+                    Arc::new(ApplyMotifNet::new_apply_motif_net_stage(
+                        slice_step, //TODO shouldn't be same as one used when training motif net
+                        trained_net,
+                        // trained_net.net_path,
+                        channel,
+                        motif_id,
+                        ThoDevice::from(1),//TODO
+                        ws,
+                        #[cfg(test)]
+                        fail_if_size_bigger_than,
+                    ).await?)
+                )
+            );
+        }
+
         Ok(Self {
             id,
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
-            apply_motif_nets: loaded_motif_nets_with_filters
-                .into_iter()
-                .map(|(motif_id, net_id, net, motif_width, freq_filter_find_motifs_run_config_id, freq_filter)| (net_id, Arc::new(ApplyMotifNet::new(
-                    motif_id,
-                    net,
-                    motif_width,
-                    freq_filter_find_motifs_run_config_id,//TODO pass as tuple freq_filter_find_motifs_run_config_id + freq_filter
-                    freq_filter,
-                    slice_step, //TODO shouldn't be same as one used when training motif net
-                    #[cfg(test)]
-                    fail_if_size_bigger_than
-                )))).collect(),
+            apply_motif_nets,
             slice_step,
-            motif_width,
+            // motif_width,
             stack_applied_motif_nets
         })
     }
@@ -459,19 +425,19 @@ where
         let mut inputs_by_filter_group: HashMap<Option<RunConfigId>, Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> = HashMap::new();
         inputs_by_filter_group.insert(None, Arc::clone(&input));
 
-        for (net_id, apply_motif_net) in &apply_motif_nets {
-            let group_key = apply_motif_net.freq_filter_find_motifs_run_config_id;
+        for (net_id, freq_filter_find_motifs_run_config_id_freq_filter, apply_motif_net) in &apply_motif_nets {
+            let group_key = freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v|v.0);
             if inputs_by_filter_group.contains_key(&group_key) {
                 continue;
             }
-            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = match &apply_motif_net.freq_filter {
+            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = match &freq_filter_find_motifs_run_config_id_freq_filter.as_ref().map(|v|Arc::clone(&v.1)) {
                 Some(freq_filter) => {
-                    debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id, apply_motif_net.freq_filter_find_motifs_run_config_id);
+                    debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id(), freq_filter_find_motifs_run_config_id_freq_filter);
 
                     track_await(freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true))).await?
                 }
                 None => {
-                    debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id);
+                    debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id());
                     Arc::clone(&input)
                 },
             };
@@ -486,12 +452,12 @@ where
         // TODO(perf): group nets by filter/run id, channel, and motif width so the same input slice can feed a batched multi-net pass instead of thousands of tiny ApplyMotifNet/OOMHandler runs.
         let futures = apply_motif_nets
             .into_iter()
-            .map(|(net_id, apply_motif_net)|{
+            .map(|(net_id, freq_filter_find_motifs_run_config_id_freq_filter, apply_motif_net)|{
                 let inputs_by_filter_group = Arc::clone(&inputs_by_filter_group);
-                let group_key = apply_motif_net.freq_filter_find_motifs_run_config_id;
+                let group_key = freq_filter_find_motifs_run_config_id_freq_filter.map(|v|v.0);
 
                 let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
-                let motif_width = apply_motif_net.motif_width;
+                let motif_width = apply_motif_net.as_ref().motif_width();
                 let motif_width_i64 = motif_width as i64;
                 let step_aligned_min_split_len = ((motif_width_i64 + self.slice_step as i64 - 1) / self.slice_step as i64) * self.slice_step as i64;
                 let min_split_len = step_aligned_min_split_len.max(motif_width_i64);
@@ -509,7 +475,7 @@ where
 
                 let slice_step = self.slice_step;
 
-                debug!("ApplyMotifNets::run: input.size={:?} motif_width={motif_width:?} self.motif_width(max)={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
+                debug!("ApplyMotifNets::run: input.size={:?} motif_width={motif_width:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size());
 
                 let out_id_arc = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
                 let tmp_cache = Arc::clone(&tmp_cache);
@@ -878,12 +844,55 @@ where
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ApplyMotifNetInit {
+    slice_step:u32,
+    // trained_net:TrainedNet,
+    // params: MotifNetParams,
+    motif_net_path:PathBuf, //ThoModuleWithStore<Batch<Slice>, MotifProbability>,
+    channel:u32,
+    motif_id:u32,
+    #[cfg(test)]
+    fail_if_size_bigger_than:Option<usize>,
+}
 
-#[derive(Debug)]
+impl ApplyMotifNetInit {
+    pub fn new(slice_step: u32,
+               /*params: MotifNetParams,*/
+               motif_net_path: PathBuf,
+               channel: u32,
+               motif_id: u32,
+               #[cfg(test)]fail_if_size_bigger_than: Option<usize>
+    ) -> Self {
+        Self {
+            slice_step,
+            // params,
+            motif_net_path,
+            channel,
+            motif_id,
+            #[cfg(test)]
+            fail_if_size_bigger_than
+        }
+    }
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ApplyMotifNetInput<'a> {
     batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
 }
 
+impl WorkerStageInput for ApplyMotifNetInput<'_> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<Self>(input)?;
+        let ThoDataRef::Owned(batch_ref) = input.batch else {
+            panic!("unexpected ref: input.batch={:?}", input.batch);
+        };
+        Ok(Self{
+            batch: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, batch_ref)?)
+        })
+    }
+}
 
 impl Data for ApplyMotifNetInput<'_> {
     type Metrics = MonoMetrics<1, 2>;
@@ -983,45 +992,163 @@ where
     id: SynKey,
     // Keep the module and motif metadata under one state lock for device moves.
     motif_net: tokio::sync::Mutex<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>,
-    motif_width: u32,
-    freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
-    freq_filter: Option<Arc<FreqFilter<C>>>,
+    params: MotifNetParams,
+    // freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
+    // freq_filter: Option<Arc<FreqFilter<C>>>,
     slice_step:u32,
     pd:PhantomData<C>,
+    channel:u32,
+    motif_id:MonoKey,
     #[cfg(test)]
     fail_if_size_bigger_than:Option<usize>,
-    motif_id:MonoKey,
+
 }
+
+
+
+pub trait ApplyMotifNetExt {
+    type C: RunCtx + MaxParallelCtx + Adjustable + 'static;
+
+    fn motif_width(&self)->u32;
+    fn motif_id(&self)->u32;
+
+    fn out_id(&self, input:&<<ApplyMotifNet<<Self as ApplyMotifNetExt>::C> as Stage>::In<'_> as WithId>::ID)-> <<ApplyMotifNet<<Self as ApplyMotifNetExt>::C> as Stage>::Out as WithId>::ID;
+}
+
+impl <C> ApplyMotifNetExt for DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>
+where
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+{
+    type C = C;
+
+    fn motif_width(&self) -> u32 {
+        match self {
+            DynSyncStageWithStateEnum::Local(stage) => {
+                stage.motif_width()
+            }
+            DynSyncStageWithStateEnum::Proxy { init, .. } => {
+                init.motif_net_params().num_features()
+            }
+        }
+    }
+
+    fn motif_id(&self) -> u32 {
+        match self {
+            DynSyncStageWithStateEnum::Local(stage) => {
+                stage.motif_id.to_data_id().0
+            }
+            DynSyncStageWithStateEnum::Proxy { init, .. } => {
+                init.motif_id()
+            }
+        }
+    }
+
+    fn out_id(&self, input_id:&<<ApplyMotifNet<C> as Stage>::In<'_> as WithId>::ID) -> <<ApplyMotifNet<C> as Stage>::Out as WithId>::ID {
+        match self {
+            DynSyncStageWithStateEnum::Local(stage) => {
+                stage.out_id(input_id)
+            }
+            DynSyncStageWithStateEnum::Proxy { init, .. } => {
+                mono_key!(init.motif_id(), "MotifNetProxy") + input_id
+            }
+        }
+    }
+}
+
+
 impl <C> ApplyMotifNet<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
-    pub fn new(
-        motif_id:u32,
-        motif_net: DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
-        motif_width: u32,
-        freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
-        freq_filter: Option<Arc<FreqFilter<C>>>,
+    async fn new_apply_motif_net_stage(
         slice_step:u32,
+        trained_net:TrainedNet,
+        channel:u32,
+        motif_id:u32,
+        device: ThoDevice,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
         #[cfg(test)]
-        fail_if_size_bigger_than:Option<usize>
+        fail_if_size_bigger_than:Option<usize>,
+
+    ) -> Result<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>, ThoError> {
+
+        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(//TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+            &trained_net.net_path,
+            &ThoDevice::from(1).into(), //TODO config
+            false//TODO
+        )?;
+
+        if GlobalCtx::global().is_ipc() {
+            let init  = ApplyMotifNetInit::new(
+                slice_step,
+                trained_net.net_path,
+                channel,
+                motif_id,
+                #[cfg(test)]
+                fail_if_size_bigger_than
+            );
+
+            static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
+            // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
+            let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            // The proxy must dispatch with the id used to install this particular apply stage.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyMotifNetInit>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, apply_id, &init).await?;
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT, apply_id, device.tho_device_idx())),
+                init: MotifNetMeta::new(motif_id, channel, params),
+            })
+        } else {
+
+
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
+                slice_step, //TODO shouldn't be same as one used when training motif net
+                trained_net,
+                params,
+                net,
+                channel,
+                motif_id,
+                #[cfg(test)]
+                fail_if_size_bigger_than,
+            ).await)))
+        }
+    }
+
+    pub async fn new_local(
+        slice_step:u32,
+        trained_net:TrainedNet,
+        params: MotifNetParams,
+        motif_net:ThoModuleWithStore<Batch<Slice>, MotifProbability>,
+        channel:u32,
+        motif_id:u32,
+        #[cfg(test)]
+        fail_if_size_bigger_than:Option<usize>,
+
     ) -> Self {
 
         debug!("ApplyMotifNet::new: motif_net.id={:?}", motif_net.id());
 
 
+
+        // Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(motif_id, channel, params)))))
+
+
         Self {
             id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + motif_net.id(),
-            motif_net: tokio::sync::Mutex::new(motif_net),
-            motif_width,
-            freq_filter_find_motifs_run_config_id,
-            freq_filter,
+            motif_net: tokio::sync::Mutex::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, params.clone()))),
+            params,
+            // freq_filter_find_motifs_run_config_id,
+            // freq_filter,
             slice_step,
-            pd: PhantomData ,
+            pd: PhantomData,
+            channel,
+            motif_id: mono_key!(motif_id, "motif_id"),
             #[cfg(test)]
             fail_if_size_bigger_than,
-            motif_id: mono_key!(motif_id, "motif_id")
         }
+    }
+
+    pub fn motif_width(&self)->u32 {
+        self.params.num_features()
     }
 }
 
@@ -1282,7 +1409,6 @@ pub(crate) mod tests {
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1302,6 +1428,7 @@ pub(crate) mod tests {
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::test_utils::{MotifKind, gen_motif};
     use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, Named, RunCtx, SimpleId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_store::{MockStoreBuilder, RunConfigRow, Store, TrainedNet};

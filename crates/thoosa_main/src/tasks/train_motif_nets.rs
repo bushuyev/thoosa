@@ -196,7 +196,7 @@ where
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainMotifStepIpcInit>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_MOTIF_STEP_ENDPOINT, stage_id, &init).await?;
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())) }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())), init: () }, node_params))
         } else {
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
@@ -1721,6 +1721,7 @@ mod tests {
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStepInit>(GlobalCtx::global().cuda_actor(1).as_ref(), TRAIN_TEST_STEP_ENDPOINT, stage_id, &init).await?;
             let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1)),
+                init: (),
             };
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
             let input = TrainStepInput::<InDims, OutDims>::new(
