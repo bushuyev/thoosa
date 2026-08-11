@@ -1713,7 +1713,7 @@ where
 
     if let Some(freq_filters) = freq_filters {
         let filter_frag = sanitize_plot_path_segment(&freq_filters.iter().map(|f|format!("{:?}", f)).collect::<String>());//TODO remove "*Params"
-        let filtered = track_await(Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id, ctx.tho_device_idx()).await?)
+        let filtered = track_await(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id, ctx.tho_device_idx()).await?
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
@@ -1766,7 +1766,7 @@ where
 
 
     let filtered_or_raw = if let Some(freq_filters) = find_motifs_run_config.freq_filter.clone() {
-        let filtered = track_await(Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id, ctx.tho_device_idx()).await?)
+        let filtered = track_await(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id, ctx.tho_device_idx()).await?
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
@@ -2584,7 +2584,7 @@ mod cli_tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
 
         for freq in 0..100 {
-            let freq_filter = Arc::new(FreqFilter::<MockRunCtx>::new(&[
+            let freq_filter = FreqFilter::<MockRunCtx>::new(&[
                             InputFilter::BandPassFilter(BandPassFilterParams {
                                 low_hz: freq as f64,
                                 band_hz: 1.0,
@@ -2593,7 +2593,7 @@ mod cli_tests {
                                 padding: Padding::zero(),
                             })
                         ], &ws,
-                                                                     0, 0).await?);
+                                                                     0, 0).await?;
 
             let mut ctx = mock_run_ctx::default(1);
 

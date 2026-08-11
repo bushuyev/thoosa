@@ -562,7 +562,7 @@ where
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!(run_config_id, "seq_scan_ab_stage")]),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(freq_filter, ws, run_config_id, 0).await?),
+                FreqFilter::<C>::new(freq_filter, ws, run_config_id, 0).await?,
             ))))
         }
     };
