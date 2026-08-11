@@ -4,6 +4,10 @@ use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
+use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
@@ -13,7 +17,7 @@ use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput,
 use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_STAGE_ID};
 use async_trait::async_trait;
 use cached_derive::Cached;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -22,7 +26,6 @@ use std::sync::atomic::Ordering::Acquire;
 use tch::{Kind, Tensor};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
@@ -30,7 +33,6 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use tracing::debug;
-use crate::ipc::cuda_wokrer::WokerRunCtx;
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
@@ -298,37 +300,32 @@ struct ABClcSyncStageIpcInput {
     from_b: ThoTensor<BStageOutputDims, ()>,
 }
 
-#[derive(Debug)]
-struct ABClcSyncStageIpcWrapper {
-    stage: std::sync::Arc<ABClcSyncStage>,
-}
-impl crate::ipc::json_ser::SyncStageIpcWrapper for ABClcSyncStageIpcWrapper {
-    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, ctx:&WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-        type __ProxyIpcCodec = crate::ipc::codec::JsonIpcCodec;
-        let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(_input)?;
-        let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, _all_cuda_tensors)?;
-        let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, _all_cuda_tensors)?;
-        let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?;
-        <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&out)
-    }
-}
-
-#[derive(Debug, Named, Proxy)]
-#[proxy(
-    name = "ProxyABClcSyncStage",
-    endpoint = "SYNC_AB_CLC_ENDPOINT",
-    new_args = "tho_device_idx: usize",
-    fields = "id: MonoKey = mono_key!(AB_SYNC_CLC_STAGE_ID, \"ABClcSyncStage\"), num_calls: AtomicUsize = Default::default()",
-    out_id = "&self.id + input_id",
-    pre_run = "self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);",
-    run_input = "ABClcSyncStageIpcInputRef::new(input)",
-    counter = "num_calls",
-    endpoint_init = "sync_ab_clc_endpoint_init",
-    wrapper = "ABClcSyncStageIpcWrapper"
-)]
+#[derive(Debug, Named)]
 pub struct ABClcSyncStage {
     id:MonoKey,
     num_calls:AtomicUsize,
+}
+
+#[derive(Debug, Named)]
+pub struct ProxyABClcSyncStage {
+    id: MonoKey,
+    num_calls: AtomicUsize,
+    stage: Arc<DynSyncStageEnum<ABClcSyncStage>>,
+}
+
+impl ProxyABClcSyncStage {
+    pub async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
+        crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_AB_CLC_ENDPOINT, 0, &()).await?;
+        Ok(Self {
+            id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
+            num_calls: AtomicUsize::default(),
+            stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx)) }),
+        })
+    }
+
+    pub fn num_calls(&self) -> usize {
+        self.num_calls.load(Acquire)
+    }
 }
 
 impl ABClcSyncStage {
@@ -402,6 +399,28 @@ impl <'a> ABClcSyncStageInput<'a> {
     }
 }
 
+impl Serialize for ABClcSyncStageInput<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        ABClcSyncStageIpcInputRef::new(self).serialize(serializer)
+    }
+}
+
+impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<ABClcSyncStageIpcInput>(input)?;
+        let from_a = ThoTensor::ref_to_tensor(all_cuda_tensors, input.from_a)?;
+        let from_b = ThoTensor::ref_to_tensor(all_cuda_tensors, input.from_b)?;
+        Ok(Self {
+            id: input.id.clone(),
+            from_a: ThoDataRef::Owned(AStageOutput::from_value(input.id.clone(), from_a)),
+            from_b: ThoDataRef::Owned(BStageOutput::from_value(input.id, from_b)),
+        })
+    }
+}
+
 impl Data for ABClcSyncStageInput<'_> {
     type Metrics = MonoMetrics<0, 1>;
     type M = CpuOnly<Self>;
@@ -439,4 +458,39 @@ impl SyncStage for ABClcSyncStage {
         self.do_run_inner(input, _ctx)
     }
 
+}
+
+impl WorkerStageOutput for ABClcStageOutput {
+    fn encode_from_worker<C: IpcCodec>(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        C::encode(&self)
+    }
+}
+
+impl Adjustable for ProxyABClcSyncStage {}
+
+impl OutId for ProxyABClcSyncStage {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl Stage for ProxyABClcSyncStage {
+    type Ctx = RunCtxImpl;
+    type In<'a> = ABClcSyncStageInput<'a>;
+    type Out = ABClcStageOutput;
+}
+
+impl SyncStage for ProxyABClcSyncStage {
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Arc::clone(&self.stage).do_run(input, ctx)
+    }
+}
+
+pub fn sync_ab_clc_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    use futures_util::FutureExt;
+    async move {
+        // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(ABClcSyncStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }

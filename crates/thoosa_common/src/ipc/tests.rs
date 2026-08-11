@@ -40,15 +40,13 @@ use tokio::task::JoinSet;
 // use crate::torch_runner::tests::model_test::common::ModelTestId;
 use crate::utils::lin_for_size;
 use thoosa_named_derive::Named;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::perf_logging::{PERF, format_perf_map};
 use thoosa_shims::context::ThoCudaContext;
 
 macro_rules! pure_module_path {
     () => {{
-        let p = module_path!();
-
-        match p.split_once("::") {
+        let path = module_path!();
+        match path.split_once("::") {
             Some((_crate_name, rest)) => rest,
             None => "",
         }
@@ -203,7 +201,6 @@ mod tests {
     use crate::utils::lin_for_size;
     use crate::ws::mock_ws_simp;
     use thoosa_named_derive::Named;
-    use thoosa_proxy_derive::Proxy;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shims::context::ThoCudaContext;
 
@@ -232,20 +229,7 @@ mod tests {
 
     const SYNC_CONSUME_TEST_ENDPOINT: &str = "SyncConsumeTestStage";
 
-    #[derive(Debug, Named, Proxy)]
-    #[proxy(
-        name = "ProxySyncConsumeTestStage",
-        endpoint = "SYNC_CONSUME_TEST_ENDPOINT",
-        new_args = "tho_device_idx: usize",
-        init = "()",
-        fields = "id: SynKey = mono_key!(\"SyncConsumeTestStage\", \"stage\").into()",
-        out_id = "&self.id + input_id",
-        endpoint_init = "sync_consume_test_endpoint_init",
-        init_type = "()",
-        in_type = "ThoTensor<LoadedTensor, SynKey>",
-        init_stage = "SyncConsumeTestStage::new()",
-        consume = "true"
-    )]
+    #[derive(Debug, Named)]
     pub struct SyncConsumeTestStage {
         id: SynKey,
     }
@@ -284,6 +268,21 @@ mod tests {
                 Err(error) => ConsumeResult::Failed { input, error },
             }
         }
+    }
+
+    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::wraps::DynSyncStageEnum<SyncConsumeTestStage>, ThoError> {
+        // The shared proxy carries consume requests and releases worker inputs only after success.
+        crate::ipc::codec::install_ipc_endpoint::<crate::ipc::codec::JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CONSUME_TEST_ENDPOINT, 0, &()).await?;
+        Ok(crate::ipc::wraps::DynSyncStageEnum::Proxy {
+            stage: Arc::new(crate::ipc::wraps::ProxyStage::proxy_with_max_parallel(SYNC_CONSUME_TEST_ENDPOINT, 0, tho_device_idx)),
+        })
+    }
+
+    fn sync_consume_test_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        use futures_util::FutureExt;
+        async move {
+            Ok(Box::new(crate::ipc::wraps::WorkerWrapper::<crate::ipc::codec::JsonIpcCodec, _, _, _>::new(Arc::new(SyncConsumeTestStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        }.boxed()
     }
 
     #[derive(Debug)]
@@ -335,7 +334,7 @@ mod tests {
             async {
                 let _ctx = init_ipc_test("test_consume_stage_ipc_releases_inputs_only_on_success", pure_module_path!()).await?;
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                let stage = Arc::new(ProxySyncConsumeTestStage::new(1).await?);
+                let stage = Arc::new(new_sync_consume_test_stage(1).await?);
                 let oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
 
                 let input_tensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?;

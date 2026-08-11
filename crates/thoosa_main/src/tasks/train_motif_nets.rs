@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use plotters::style::RED;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CUDA;
@@ -24,7 +24,7 @@ use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -58,7 +58,6 @@ use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeAr
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_proxy_derive::Proxy;
 use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
@@ -846,18 +845,16 @@ struct SyncMotifBatchIpcInputRef<'a> {
     random_slices: &'a ThoTensor<MotifSlices, SynKey>,
     num_slices: i64,
     descr: &'a str,
-    max_other_parallel: u8,
 }
 
 impl<'a> SyncMotifBatchIpcInputRef<'a> {
-    fn new(input: &'a SyncMotifBatchInput<'_>, ctx: &RunCtxImpl) -> Self {
+    fn new(input: &'a SyncMotifBatchInput<'_>) -> Self {
         Self {
             id: &input.id,
             motifs: input.motifs.as_ref(),
             random_slices: input.random_slices.as_ref(),
             num_slices: input.num_slices,
             descr: input.descr.as_str(),
-            max_other_parallel: ctx.max_other_parallel(),
         }
     }
 }
@@ -869,44 +866,31 @@ struct SyncMotifBatchIpcInput {
     random_slices: ThoTensor<MotifSlices, SynKey>,
     num_slices: i64,
     descr: String,
-    max_other_parallel: u8,
 }
 
-#[derive(Debug)]
-struct SyncMotifBatchIpcWrapper {
-    stage: Arc<SyncMotifBatch>,
-}
-
-impl SyncStageIpcWrapper for SyncMotifBatchIpcWrapper {
-    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncMotifBatchIpcInput>(_input)?;
-        let motifs = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.motifs)?;
-        let random_slices = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.random_slices)?;
-        let stage_input = SyncMotifBatchInput {
-            id: input.id,
-            motifs: ThoDataRef::Borrowed(&motifs),
-            random_slices: ThoDataRef::Borrowed(&random_slices),
-            num_slices: input.num_slices,
-            descr: input.descr,
-        };
-        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
-        ctx.set_max_other_parallel(input.max_other_parallel);
-        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
+impl Serialize for SyncMotifBatchInput<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SyncMotifBatchIpcInputRef::new(self).serialize(serializer)
     }
 }
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    common = "thoosa_common",
-    name = "ProxySyncMotifBatch",
-    endpoint = "SYNC_MOTIF_BASTCH_ENDPOINT",
-    new_args = "tho_device_idx: usize",
-    out_id = "input_id.clone()",
-    run_input = "SyncMotifBatchIpcInputRef::new(input, ctx)",
-    endpoint_init = "sync_motif_bastch_endpoint_init",
-    wrapper = "SyncMotifBatchIpcWrapper"
-)]
+impl WorkerStageInput for SyncMotifBatchInput<'_> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<SyncMotifBatchIpcInput>(input)?;
+        Ok(Self {
+            id: input.id,
+            motifs: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.motifs)?),
+            random_slices: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.random_slices)?),
+            num_slices: input.num_slices,
+            descr: input.descr,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct SyncMotifBatch;
 
 impl SyncMotifBatch {
@@ -962,14 +946,8 @@ impl SyncStage for SyncMotifBatch {
 }
 
 #[derive(Debug)]
-enum SyncMotifBatchStage {
-    Local(Arc<SyncMotifBatch>),
-    Proxy(Arc<ProxySyncMotifBatch>),
-}
-
-#[derive(Debug)]
 struct SyncMotifBatchDynStage<C> {
-    stage: SyncMotifBatchStage,
+    stage: Arc<DynSyncStageEnum<SyncMotifBatch>>,
     pd: PhantomData<C>,
 }
 
@@ -979,11 +957,15 @@ where
 {
     async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
         let stage = if GlobalCtx::global().is_ipc() {
-            SyncMotifBatchStage::Proxy(Arc::new(ProxySyncMotifBatch::new(tho_device_idx).await?))
+            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+            // Install one shared-wrapper endpoint per proxy so worker tensor ownership stays isolated.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, &()).await?;
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
-            SyncMotifBatchStage::Local(Arc::new(SyncMotifBatch::new()))
+            DynSyncStageEnum::Local(Arc::new(SyncMotifBatch::new()))
         };
-        Ok(Self { stage, pd: PhantomData })
+        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
 }
 
@@ -1014,11 +996,15 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
         stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        match &self.stage {
-            SyncMotifBatchStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
-            SyncMotifBatchStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
-        }
+        Arc::clone(&self.stage).do_run(input, &stage_ctx)
     }
+}
+
+pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 pub(crate) const SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT: &str = "SplitMotifIntoTrainValid";
@@ -1120,12 +1106,11 @@ impl WorkerStageOutput for SplitMotifIntoTrainValidOutput {
 struct SplitMotifIntoTrainValidIpcInputRef<'a> {
     id: &'a SynKey,
     motif: &'a ThoTensor<MotifSlices, SynKey>,
-    max_other_parallel: u8,
 }
 
 impl<'a> SplitMotifIntoTrainValidIpcInputRef<'a> {
-    fn new(input: &'a SplitMotifIntoTrainValidInput<'_>, ctx: &RunCtxImpl) -> Self {
-        Self { id: &input.id, motif: input.motif.motif(), max_other_parallel: ctx.max_other_parallel() }
+    fn new(input: &'a SplitMotifIntoTrainValidInput<'_>) -> Self {
+        Self { id: &input.id, motif: input.motif.motif() }
     }
 }
 
@@ -1133,37 +1118,25 @@ impl<'a> SplitMotifIntoTrainValidIpcInputRef<'a> {
 struct SplitMotifIntoTrainValidIpcInput {
     id: SynKey,
     motif: ThoTensor<MotifSlices, SynKey>,
-    max_other_parallel: u8,
 }
 
-#[derive(Debug)]
-struct SplitMotifIntoTrainValidIpcWrapper {
-    stage: Arc<SplitMotifIntoTrainValid>,
-}
-
-impl SyncStageIpcWrapper for SplitMotifIntoTrainValidIpcWrapper {
-    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SplitMotifIntoTrainValidIpcInput>(_input)?;
-        let motif = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.motif)?;
-        let stage_input = SplitMotifIntoTrainValidInput { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Borrowed(&motif)) };
-        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
-        ctx.set_max_other_parallel(input.max_other_parallel);
-        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
+impl Serialize for SplitMotifIntoTrainValidInput<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SplitMotifIntoTrainValidIpcInputRef::new(self).serialize(serializer)
     }
 }
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    common = "thoosa_common",
-    name = "ProxySplitMotifIntoTrainValid",
-    endpoint = "SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT",
-    new_args = "tho_device_idx: usize",
-    out_id = "input_id.clone()",
-    run_input = "SplitMotifIntoTrainValidIpcInputRef::new(input, ctx)",
-    endpoint_init = "split_motif_into_train_valid_endpoint_init",
-    wrapper = "SplitMotifIntoTrainValidIpcWrapper"
-)]
+impl WorkerStageInput for SplitMotifIntoTrainValidInput<'_> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<SplitMotifIntoTrainValidIpcInput>(input)?;
+        Ok(Self { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.motif)?)) })
+    }
+}
+
+#[derive(Debug)]
 pub struct SplitMotifIntoTrainValid;
 
 impl SplitMotifIntoTrainValid {
@@ -1217,14 +1190,8 @@ impl SyncStage for SplitMotifIntoTrainValid {
 }
 
 #[derive(Debug)]
-enum SplitMotifIntoTrainValidStage {
-    Local(Arc<SplitMotifIntoTrainValid>),
-    Proxy(Arc<ProxySplitMotifIntoTrainValid>),
-}
-
-#[derive(Debug)]
 struct SplitMotifIntoTrainValidDynStage<C> {
-    stage: SplitMotifIntoTrainValidStage,
+    stage: Arc<DynSyncStageEnum<SplitMotifIntoTrainValid>>,
     pd: PhantomData<C>,
 }
 
@@ -1234,11 +1201,15 @@ where
 {
     async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
         let stage = if GlobalCtx::global().is_ipc() {
-            SplitMotifIntoTrainValidStage::Proxy(Arc::new(ProxySplitMotifIntoTrainValid::new(tho_device_idx).await?))
+            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+            // The shared proxy carries throttling separately from the borrowed tensor payload.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, &()).await?;
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
-            SplitMotifIntoTrainValidStage::Local(Arc::new(SplitMotifIntoTrainValid::new()))
+            DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
         };
-        Ok(Self { stage, pd: PhantomData })
+        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
 }
 
@@ -1269,11 +1240,15 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
         stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        match &self.stage {
-            SplitMotifIntoTrainValidStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
-            SplitMotifIntoTrainValidStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
-        }
+        Arc::clone(&self.stage).do_run(input, &stage_ctx)
     }
+}
+
+pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        // Decode borrowed motif input into worker-owned storage before running the shared stage.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SplitMotifIntoTrainValid::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 
@@ -1487,7 +1462,6 @@ mod tests {
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_proxy_derive::Proxy;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::hyperparameter::Hyperparameter;

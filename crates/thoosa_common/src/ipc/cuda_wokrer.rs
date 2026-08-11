@@ -389,7 +389,7 @@ impl CudaWorker {
                     let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
                     match installed_endpoints.read().get(&endpoint_key) {
                         Some(endpoint) => {
-                            let run_ctx = WokerRunCtx;
+                            let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx(), 0);
 
                             let r = if let Some(with_state) = endpoint.as_with_state() {
                                 debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
@@ -650,7 +650,16 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
 
 
 #[derive(Debug)]
-pub struct WokerRunCtx;
+pub struct WokerRunCtx {
+    tho_device_idx: usize,
+    max_other_parallel: u8,
+}
+
+impl WokerRunCtx {
+    pub fn new(tho_device_idx: usize, max_other_parallel: u8) -> Self {
+        Self { tho_device_idx, max_other_parallel }
+    }
+}
 
 impl Named for WokerRunCtx {}
 
@@ -665,16 +674,26 @@ impl WithId for WokerRunCtx{
 
 impl RunCtx for WokerRunCtx {
     fn tho_device_idx(&self) -> usize {
-        1
+        self.tho_device_idx
     }
 
     fn branch(&mut self, with_new_cache_area: bool) -> Self
     where
         Self: Sized
     {
-        WokerRunCtx
+        WokerRunCtx::new(self.tho_device_idx, self.max_other_parallel)
     }
 
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
+    }
+}
+
+impl MaxParallelCtx for WokerRunCtx {
+    fn set_max_other_parallel(&mut self, permit: u8) {
+        self.max_other_parallel = permit;
+    }
+
+    fn max_other_parallel(&self) -> u8 {
+        self.max_other_parallel
     }
 }

@@ -384,7 +384,7 @@ where
 
             // ApplyMotifNet owns its inference state so it can participate in
             // the same stateful device-restoration path as training stages.
-            let motif_net = track_await(motif_net.load_from_any_device_(0)).await?.copy_to_device(0).await?;
+            let motif_net = track_await(motif_net.load_from_any_device_(0)).await?.copy_to_device(0).await?;//TODO remove?
             loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_config_id, maybe_freq_filter));
         }
 

@@ -7,7 +7,7 @@ use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::ready;
@@ -22,7 +22,7 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -56,7 +56,6 @@ use thoosa_common::train_nets::{CommonTrainingRunConfig, ConvNetArgs, ConvNetPar
 use thoosa_common::utils::{ListenerResponse, TrainListener, mix_x_binary_with_labels, pad_stack_with_mask};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -195,11 +194,10 @@ struct SyncLabelBatchIpcInputRef<'a> {
     x_0_lengths: Vec<&'a Vec<i64>>,
     num_nets: i64,
     label: &'a str,
-    max_other_parallel: u8,
 }
 
 impl<'a> SyncLabelBatchIpcInputRef<'a> {
-    fn new(input: &'a SyncLabelBatchInput<'_>, ctx: &RunCtxImpl) -> Self {
+    fn new(input: &'a SyncLabelBatchInput<'_>) -> Self {
         Self {
             id: &input.id,
             x_1: input.x_1.iter().map(|value| value.as_ref().data()).collect(),
@@ -208,7 +206,6 @@ impl<'a> SyncLabelBatchIpcInputRef<'a> {
             x_0_lengths: input.x_0.iter().map(|value| value.as_ref().extra()).collect(),
             num_nets: input.num_nets,
             label: input.label.as_str(),
-            max_other_parallel: ctx.max_other_parallel(),
         }
     }
 }
@@ -222,47 +219,36 @@ struct SyncLabelBatchIpcInput {
     x_0_lengths: Vec<Vec<i64>>,
     num_nets: i64,
     label: String,
-    max_other_parallel: u8,
 }
 
-#[derive(Debug)]
-struct SyncLabelBatchIpcWrapper {
-    stage: Arc<SyncLabelBatch>,
-}
-
-impl SyncStageIpcWrapper for SyncLabelBatchIpcWrapper {
-    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncLabelBatchIpcInput>(_input)?;
-        if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
-            return Err(ThoError::new("SyncLabelBatch: tensor and length metadata counts differ"));
-        }
-        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(_all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
-        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(_all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
-        let stage_input = SyncLabelBatchInput {
-            id: input.id,
-            x_1: x_1.iter().map(ThoDataRef::Borrowed).collect(),
-            x_0: x_0.iter().map(ThoDataRef::Borrowed).collect(),
-            num_nets: input.num_nets,
-            label: input.label,
-        };
-        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
-        ctx.set_max_other_parallel(input.max_other_parallel);
-        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
+impl Serialize for SyncLabelBatchInput<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SyncLabelBatchIpcInputRef::new(self).serialize(serializer)
     }
 }
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    common = "thoosa_common",
-    name = "ProxySyncLabelBatch",
-    endpoint = "SYNC_LABEL_BATCH_ENDPOINT",
-    new_args = "tho_device_idx: usize",
-    out_id = "input_id.clone()",
-    run_input = "SyncLabelBatchIpcInputRef::new(input, ctx)",
-    endpoint_init = "sync_label_batch_endpoint_init",
-    wrapper = "SyncLabelBatchIpcWrapper"
-)]
+impl WorkerStageInput for SyncLabelBatchInput<'_> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<SyncLabelBatchIpcInput>(input)?;
+        if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
+            return Err(ThoError::new("SyncLabelBatch: tensor and length metadata counts differ"));
+        }
+        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| Ok(ThoDataRef::Owned(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths)))).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| Ok(ThoDataRef::Owned(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths)))).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Self {
+            id: input.id,
+            x_1,
+            x_0,
+            num_nets: input.num_nets,
+            label: input.label,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct SyncLabelBatch;
 
 impl SyncLabelBatch {
@@ -309,14 +295,8 @@ impl SyncStage for SyncLabelBatch {
 }
 
 #[derive(Debug)]
-enum SyncLabelBatchStage {
-    Local(Arc<SyncLabelBatch>),
-    Proxy(Arc<ProxySyncLabelBatch>),
-}
-
-#[derive(Debug)]
 struct SyncLabelBatchDynStage<C> {
-    stage: SyncLabelBatchStage,
+    stage: Arc<DynSyncStageEnum<SyncLabelBatch>>,
     pd: PhantomData<C>,
 }
 
@@ -326,11 +306,15 @@ where
 {
     async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
         let stage = if GlobalCtx::global().is_ipc() {
-            SyncLabelBatchStage::Proxy(Arc::new(ProxySyncLabelBatch::new(tho_device_idx).await?))
+            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+            // Install each stateless batch stage through the shared endpoint wrapper.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LABEL_BATCH_ENDPOINT, stage_id, &()).await?;
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LABEL_BATCH_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
-            SyncLabelBatchStage::Local(Arc::new(SyncLabelBatch::new()))
+            DynSyncStageEnum::Local(Arc::new(SyncLabelBatch::new()))
         };
-        Ok(Self { stage, pd: PhantomData })
+        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
 }
 
@@ -361,11 +345,15 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
         stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        match &self.stage {
-            SyncLabelBatchStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
-            SyncLabelBatchStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
-        }
+        Arc::clone(&self.stage).do_run(input, &stage_ctx)
     }
+}
+
+pub fn sync_label_batch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        // WorkerStageInput reconstructs owned tensor-plus-length values for the borrowed stage API.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 #[derive(Debug)]

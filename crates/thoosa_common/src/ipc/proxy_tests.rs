@@ -20,7 +20,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use mockall::PredicateBoxExt;
 use tch::Tensor;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
