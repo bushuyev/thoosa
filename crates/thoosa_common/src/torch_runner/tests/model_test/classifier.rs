@@ -15,17 +15,15 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use thoosa_proxy_derive::Proxy;
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
+use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 
 use super::common::{ABData, ClsOut, ModelTestId};
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
 
-type ClassifierDynSyncStage = DynSyncStageBox<
-    ThoTensor<ABData, ModelTestId>,
-    ThoTensor<ClsOut, ModelTestId>,
-    RunCtxImpl,
->;
+type ClassifierDynSyncStage = DynSyncStageEnum<SyncClassifierStage>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SyncClassifierStageInit {
@@ -65,16 +63,17 @@ impl Classifier {
     ) -> Result<Self, ThoError>
     {
         if GlobalCtx::global().is_ipc() {
-            let proxy = ProxySyncClassifierStage::new(id.clone(), in_dim, epochs, lr, fail_until, device).await?;
+            let init = SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until);
+            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_CLASSIFIER_ENDPOINT, 0, &init).await?;
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(ClassifierDynSyncStage::new(Arc::new(proxy))),
+                sync_classifier: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLASSIFIER_ENDPOINT, 0, device.tho_device_idx())) }),
             })
         } else {
             let local = SyncClassifierStage::new(id.clone(), in_dim, epochs, lr, fail_until);
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(ClassifierDynSyncStage::new(Arc::new(local))),
+                sync_classifier: Arc::new(DynSyncStageEnum::Local(Arc::new(local))),
             })
         }
     }
@@ -87,7 +86,7 @@ impl OutId for Classifier {
         &self,
         input_id: &<Self::In<'static> as WithId>::ID,
     ) -> <Self::Out as WithId>::ID {
-        self.sync_classifier.out_id(input_id)
+        ModelTestId(format!("cls_{}_inp_{}", self.id.0, input_id.0).leak())
     }
 }
 
@@ -130,20 +129,7 @@ impl SyncStage for Classifier {
 
 
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    name = "ProxySyncClassifierStage",
-    endpoint = "SYNC_CLASSIFIER_ENDPOINT",
-    new_args = "id: ModelTestId, in_dim: i64, epochs: i64, lr: f64, fail_until: Vec<FailUntil>, device: ThoDevice",
-    init = "SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until)",
-    fields = "id: ModelTestId = id",
-    out_id = "ModelTestId(format!(\"cls_{}_inp_{}\", self.id.0, input_id.0).leak())",
-    pre_run = "if input.ref_key().is_none() { return Err(ThoError::new(format!(\"ProxySyncClassifierStage expected worker tensor ref input, got {input:?}\"))); }",
-    endpoint_init = "sync_classifier_endpoint_init",
-    init_type = "SyncClassifierStageInit",
-    in_type = "ThoTensor<ABData, ModelTestId>",
-    init_stage = "SyncClassifierStage::init(init)"
-)]
+#[derive(Debug)]
 pub struct SyncClassifierStage {
     id: ModelTestId,
     in_dim: i64,
@@ -244,4 +230,13 @@ impl SyncStage for SyncClassifierStage {
             Ok(correct.view([1, 1]))
         })?)?)
     }
+}
+
+pub(crate) fn sync_classifier_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    use futures_util::FutureExt;
+    async move {
+        let init = JsonIpcCodec::decode::<SyncClassifierStageInit>(&init_msg)?;
+        // The worker reconstructs the stateless classifier configuration once per endpoint.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClassifierStage::init(init)), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }

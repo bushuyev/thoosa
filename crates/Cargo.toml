@@ -18,7 +18,6 @@ members = [
     "thoosa_macros/macros_tests",
     "thoosa_macros/cached_derive",
     "thoosa_macros/thoosa_named_derive",
-    "thoosa_macros/thoosa_proxy_derive",
     "thoosa_projects/thoosa_hbac",
     "thoosa_projects/thoosa_bird_clef",
     "thoosa_macros/macros_tests",
@@ -41,7 +40,6 @@ check-cfg = [
 [workspace.dependencies]
 cached_derive = { path = "thoosa_macros/cached_derive" }
 thoosa_named_derive = { path = "thoosa_macros/thoosa_named_derive" }
-thoosa_proxy_derive = { path = "thoosa_macros/thoosa_proxy_derive" }
 thoosa_dummy_data_derive = { path = "thoosa_macros/thoosa_dummy_data_derive" }
 
 rayon = "1"
