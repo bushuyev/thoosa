@@ -2,6 +2,8 @@
 
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use async_trait::async_trait;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use log::{debug, error, info, trace, warn};
 use mockall_double::double;
 use parking_lot::{Mutex, RwLock};
@@ -45,8 +47,8 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, WithId};
-use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, ErasedStageWithState, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 use thoosa_store::{Store, TrainedNet};
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -380,6 +382,9 @@ where
 
             let freq_filter_find_motifs_run_config_id = if maybe_freq_filter.is_some() { Some(find_motifs_run_config_id) } else { None };
 
+            // ApplyMotifNet owns its inference state so it can participate in
+            // the same stateful device-restoration path as training stages.
+            let motif_net = track_await(motif_net.load_from_any_device_(0)).await?.copy_to_device(0).await?;
             loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_config_id, maybe_freq_filter));
         }
 
@@ -500,7 +505,7 @@ where
                 };
                 let out_id = apply_motif_net.out_id(&input.id());
                 let apply_motif_net_ctx = ctx.branch(true);
-                let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));//The reason to copy apply_motif_net.net_wrapper into apply_motif_net input is to get it out of Wrapper in sync do_run method
+                let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input)));
 
                 let slice_step = self.slice_step;
 
@@ -877,7 +882,6 @@ where
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
     batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
-    motif_net: ThoDataRef<'a, DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>
 }
 
 
@@ -899,12 +903,12 @@ impl Data for ApplyMotifNetInput<'_> {
 }
 
 impl <'a> ApplyMotifNetInput<'a> {
-    pub fn new(batch: &'a ThoTensor<ChannelsData, SynKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
-        Self { batch: ThoDataRef::Borrowed(batch), motif_net: ThoDataRef::Borrowed(motif_net) }
+    pub fn new(batch: &'a ThoTensor<ChannelsData, SynKey>) -> Self {
+        Self { batch: ThoDataRef::Borrowed(batch) }
     }
 
-    fn from_data_refs(batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>, motif_net: ThoDataRef<'a, DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>) -> Self {
-        Self { batch, motif_net }
+    fn from_data_ref(batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>) -> Self {
+        Self { batch }
     }
 }
 
@@ -920,15 +924,13 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
 #[derive(Debug)]
 struct ApplyMotifNetInputWrapper {
     batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
-    motif_net: Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
 }
 
 impl ApplyMotifNetInputWrapper {
     fn new(
         batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
-        motif_net: Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
     ) -> Self {
-        Self { batch, motif_net }
+        Self { batch }
     }
 }
 
@@ -950,8 +952,7 @@ impl BorrowRef for ApplyMotifNetInputWrapper {
     {
         async move {
             let batch = track_await(BorrowRef::borrow_to(&self.batch, to_device_idx)).await?;
-            let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
-            Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
+            Ok(ApplyMotifNetInput::from_data_ref(batch))
         }
     }
 }
@@ -968,8 +969,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
                 return BorrowRef::borrow_to(self, to_device_idx).await;
             };
             let batch = track_await(SelectRef::borrow_to(&self.batch, to_device_idx, Some(selector))).await?;
-            let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
-            Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
+            Ok(ApplyMotifNetInput::from_data_ref(batch))
         }
     }
 }
@@ -981,7 +981,8 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
-    net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+    // Keep the module and motif metadata under one state lock for device moves.
+    motif_net: tokio::sync::Mutex<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>,
     motif_width: u32,
     freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
     freq_filter: Option<Arc<FreqFilter<C>>>,
@@ -997,7 +998,7 @@ where
 {
     pub fn new(
         motif_id:u32,
-        net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
+        motif_net: DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
         motif_width: u32,
         freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
         freq_filter: Option<Arc<FreqFilter<C>>>,
@@ -1006,12 +1007,12 @@ where
         fail_if_size_bigger_than:Option<usize>
     ) -> Self {
 
-        debug!("ApplyMotifNet::new: net_wrapper.id={:?}", net_wrapper.id());
+        debug!("ApplyMotifNet::new: motif_net.id={:?}", motif_net.id());
 
 
         Self {
-            id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + net_wrapper.id(),
-            net_wrapper,
+            id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + motif_net.id(),
+            motif_net: tokio::sync::Mutex::new(motif_net),
             motif_width,
             freq_filter_find_motifs_run_config_id,
             freq_filter,
@@ -1052,9 +1053,30 @@ where
 impl <C> SyncStage for ApplyMotifNet<C> where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        Some(self)
+    }
+}
+
+impl<C> StageWithState for ApplyMotifNet<C>
+where
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+{
+    type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut motif_net = self.motif_net.lock().await;
+            if motif_net.device() != to_device_idx {
+                *motif_net = motif_net.copy_to_device(to_device_idx).await?;
+            }
+            Ok(motif_net)
+        }.boxed()
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let motif_id = input.motif_net.as_ref().extra().motif_id();
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let motif_id = motif_net.extra().motif_id();
 
         debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t={:?}", self.id, input.batch.t_ref());
         trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t_ref());
@@ -1067,7 +1089,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let out_id = self.out_id(&input.id());
 
-        let out = apply_motif_net_forward(out_id, &input.batch, input.motif_net.as_ref(), self.slice_step, input.id())?;
+        let out = apply_motif_net_forward(out_id, &input.batch, &motif_net, self.slice_step, input.id())?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t_ref());
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());

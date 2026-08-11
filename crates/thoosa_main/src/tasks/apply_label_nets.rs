@@ -1,4 +1,6 @@
 use cached_derive::Cached;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use log::{debug, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
@@ -29,8 +31,8 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, SyncStage, WithId};
-use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet};
 
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
@@ -308,7 +310,7 @@ where
                     }
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
-                    let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs, Arc::clone(&apply_label_net.net_wrapper)));
+                    let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                     let result: ThoTensor<LabelProbability, SynKey> = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?;
 
@@ -576,7 +578,6 @@ where
 struct ApplyLabelNetInput<'a> {
     id: SynKey,
     input: ThoDataRef<'a, DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>,
-    net: ThoDataRef<'a, ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
 }
 
 impl Data for ApplyLabelNetInput<'_> {
@@ -592,7 +593,7 @@ impl Data for ApplyLabelNetInput<'_> {
     }
 
     fn mem_size(&self) -> u64 {
-        self.input.as_ref().mem_size() + self.net.as_ref().mem_size()
+        self.input.as_ref().mem_size()
     }
 }
 
@@ -610,12 +611,11 @@ impl Input for ApplyLabelNetInput<'_> {}
 struct ApplyLabelNetInputWrapper {
     id: SynKey,
     input: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>,
-    net: Arc<DevicesWrap<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>>,
 }
 
 impl ApplyLabelNetInputWrapper {
-    fn new(input: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, net: Arc<DevicesWrap<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>>) -> Self {
-        Self { id: input.id().clone(), input, net }
+    fn new(input: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>) -> Self {
+        Self { id: input.id().clone(), input }
     }
 }
 
@@ -636,8 +636,7 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
     {
         async move {
             let input = track_await(BorrowRef::borrow_to(&self.input, to_device_idx)).await?;
-            let net = track_await(BorrowRef::borrow_to(&self.net, to_device_idx)).await?;
-            Ok(ApplyLabelNetInput { id: self.id.clone(), input, net })
+            Ok(ApplyLabelNetInput { id: self.id.clone(), input })
         }
     }
 }
@@ -650,7 +649,8 @@ where
     id: SynKey,
     label: String,
     train_label_net_run_config_id: RunConfigId,
-    net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>>,
+    // Inference state is acquired once per sync run instead of being copied in every input.
+    net: tokio::sync::Mutex<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
     pd: PhantomData<C>,
     batch_in_chunks: usize
 }
@@ -669,7 +669,7 @@ where
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
             train_label_net_run_config_id,
-            net_wrapper: Arc::new(DevicesWrap::wrap(net)),
+            net: tokio::sync::Mutex::new(net),
             batch_in_chunks,
             pd: PhantomData,
         }
@@ -695,11 +695,31 @@ impl<C> SyncStage for ApplyLabelNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        Some(self)
+    }
+}
+
+impl<C> StageWithState for ApplyLabelNet<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type S = ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut net = self.net.lock().await;
+            if net.device() != to_device_idx {
+                *net = net.copy_to_device(to_device_idx).await?;
+            }
+            Ok(net)
+        }.boxed()
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("ApplyLabelNet::run: id={:?} input={input:?}", self.id);
         let out_id = self.out_id(input.id());
-        let net = input.net.as_ref();
         let input = input.input.as_ref();
         let batch_input_parts = split_padded_motif_scores(input.data().t_ref(), input.extra(), self.batch_in_chunks as i64, 0.0)?;
         let batch_input = Tensor::f_stack(batch_input_parts.0.as_slice(), 1)?.f_transpose(0, 1)?;

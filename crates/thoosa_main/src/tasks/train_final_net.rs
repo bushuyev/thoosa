@@ -1,10 +1,11 @@
 use crate::tasks::apply_label_nets::{ApplyLabelNets, MotifNetsOutput};
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::train_net::{TrainNet, TrainNetInput};
+use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures_util::StreamExt;
 use futures_util::future::try_join_all;
+use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
@@ -13,21 +14,24 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::ready;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use thoosa_common::dims::{ChannelsData, MotifProbability};
 use thoosa_common::stages_seq::ABStage;
 
 use crate::ApplyMotifNets;
 use crate::tasks::stft::SyncStftSelector;
-use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepIpcRequest, TrainStepOutput, TrainStepProxyFactory, TrainStepProxyParts, TrainStepWeightsSync, TrainStepXFn};
+use crate::tasks::train_step::{TrainStep, TrainStepXFn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx};
-use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -37,11 +41,11 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::train_nets::final_net;
 use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetsRunConfigResult};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -239,28 +243,13 @@ where
 
                     ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len)).boxed()
                 },
-                move |_:C, rc: &TrainFinalNetRunConfig, vs: Arc<Mutex<VarStore>>| {
-                    let net_params = FinalNetParams::new(num_label_nets, labels_len_u32, rc.net.num_layers);
-                    ready(Ok((final_net(&net_params).unwrap().build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&vs.lock().root()).unwrap(), net_params))).boxed()
-                },
+                Arc::new(TrainFinalStepFactory::new(num_label_nets, labels_len_u32)),
                 opt_config,
                 train_final_run_configs,
-                |pred: &Tensor, target: &Tensor| {
-                    trace!("TrainFinalNet::run, loss_fn: pred.size={:?} target.size={:?}", pred.size(), target.size());
-                    Ok(pred.binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).set_requires_grad(true))
-                },
-                move |rc: &TrainFinalNetRunConfig, vs: &VarStore| AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e| e.into()),
-                |t: ThoBatch<LabelProbability>| {
-                    debug!("TrainFinalNet::run, x_f: t=\n{t}");
-
-                    t
-                },
                 |rc: &TrainFinalNetRunConfig| rc.common_training_args.epochs,
                 1,
                 "final".to_string(),
-            )
-                // In IPC mode the final classifier's trainable state must remain in the CUDA worker.
-                .with_train_step_proxy_factory(Arc::new(TrainFinalNetProxyFactory::new(num_label_nets, labels_len_u32))));
+            ));
 
             let result = track_await(Arc::into_inner(track_await(train_net.run(
                 Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
@@ -268,7 +257,7 @@ where
             ).unwrap()
                 .take_data(0)).await?;
 
-            let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
+            let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store_path, result.node_params, result.run_config);
             info!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
             Ok(Arc::new(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result)))
@@ -546,211 +535,93 @@ where
 pub(crate) struct TrainFinalStepIpcInit {
     params: FinalNetParams,
     training_config: CommonTrainingRunConfig,
+    tho_device_idx: usize,
+    vs_path: PathBuf,
 }
 
-type SyncTrainFinalStep = TrainStep<TrainStepXFn<LabelProbability>, LabelProbability, LabelsProbabilities, RunCtxImpl>;
+type SyncTrainFinalStep<C> = TrainStep<TrainStepXFn<LabelProbability>, LabelProbability, LabelsProbabilities, C>;
 
 fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
     pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).map_err(ThoError::from)
 }
 
-const TRAIN_FINAL_OPTIMIZER_FN: fn(&CommonTrainingRunConfig, &VarStore) -> Result<Optimizer, ThoError> = |training_config, var_store| {
-    AdamW::default().amsgrad(true).build(var_store, training_config.lr).map_err(ThoError::from)
-};
-
-fn new_train_final_step_for_ipc(init: &TrainFinalStepIpcInit) -> Result<SyncTrainFinalStep, ThoError> {
-    let params = init.params.clone();
-    let x_f: Arc<TrainStepXFn<LabelProbability>> = Arc::new(Box::new(|batch| batch));
-    let (train_step, ()) = futures::executor::block_on(TrainStep::new_local(
-        Cuda(0).into(),
-        move |var_store| async move {
-            let net = final_net(&params)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.lock().root())?;
-            Ok((net, ()))
-        },
-        TRAIN_FINAL_OPTIMIZER_FN,
-        x_f,
-        train_final_loss,
-        &init.training_config,
-    ))?;
-    Ok(train_step)
+impl WorkerStageInput for TrainFinalStepIpcInit {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        C::decode(input)
+    }
 }
 
-// The worker initializes the final classifier only on first use, after its CUDA context is active.
-#[derive(Debug)]
-struct TrainFinalStepIpcInitStage {
-    init: TrainFinalStepIpcInit,
-    stage: Mutex<Option<Arc<SyncTrainFinalStep>>>,
-}
-
-impl TrainFinalStepIpcInitStage {
-    fn new(init: TrainFinalStepIpcInit) -> Self {
-        Self { init, stage: Mutex::new(None) }
-    }
-
-    fn stage(&self) -> Result<Arc<SyncTrainFinalStep>, ThoError> {
-        let mut stage = self.stage.lock();
-        if stage.is_none() {
-            stage.replace(Arc::new(new_train_final_step_for_ipc(&self.init)?));
-        }
-        Ok(Arc::clone(stage.as_ref().ok_or_else(|| ThoError::new("TrainFinalStepIpcInitStage failed to initialize stage"))?))
-    }
+fn train_final_step_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = TrainFinalStepIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let params = init.params.clone();
+        let params_for_module = params.clone();
+        let training_config = init.training_config.clone();
+        let (train_step, _): (SyncTrainFinalStep<WokerRunCtx>, ()) = TrainStep::new_local(
+            init.tho_device_idx.into(),
+            move |_run_config, device| async move {
+                let config = ModConfig::new(
+                    AdamW::default().amsgrad(true).into(),
+                    move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
+                    training_config.lr,
+                );
+                Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+            },
+            Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
+            train_final_loss,
+            init.training_config,
+            init.vs_path,
+        ).await?;
+        // Shared stateful dispatch keeps final-net weights inside the CUDA worker.
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 #[derive(Debug)]
-struct TrainFinalStepIpcWrapper {
-    stage: Arc<TrainFinalStepIpcInitStage>,
-}
-
-impl SyncStageIpcWrapper for TrainFinalStepIpcWrapper {
-    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-        match JsonIpcCodec::decode::<TrainStepIpcRequest>(_input)? {
-            TrainStepIpcRequest::Run { x, lengths, expected_y, train, max_other_parallel } => {
-                let stage = self.stage.stage()?;
-                let remove_x = x.remove_after_run.then_some(x.ref_key);
-                let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
-                let x = ThoTensor::ref_to_tensor(_all_cuda_tensors, x.into_tensor::<LabelProbability>()?)?;
-                let expected_y = ThoTensor::ref_to_tensor(_all_cuda_tensors, expected_y.into_tensor::<LabelsProbabilities>()?)?;
-                let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
-                let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), TRAIN_FINAL_STEP_ENDPOINT);
-                ctx.set_max_other_parallel(max_other_parallel);
-                let result = stage.do_run(&input, &ctx);
-                drop(input);
-                // Request-owned copies can be released once the synchronous forward/backward call returns.
-                if remove_x.is_some() || remove_expected_y.is_some() {
-                    let mut tensors = _all_cuda_tensors.lock();
-                    if let Some(key) = remove_x {
-                        tensors.remove(&key);
-                    }
-                    if let Some(key) = remove_expected_y {
-                        tensors.remove(&key);
-                    }
-                }
-                JsonIpcCodec::encode(&result?)
-            }
-            TrainStepIpcRequest::ExportWeights => Err(ThoError::new("TrainFinalStep ExportWeights requires binary endpoint invocation")),
-        }
-    }
-
-    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
-        // if matches!(JsonIpcCodec::decode::<TrainStepIpcRequest>(input)?, TrainStepIpcRequest::ExportWeights) {
-        //     let stage = self.stage.stage()?;
-        //     Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
-        // } else {
-            self.do_run(input, all_cuda_tensors, tho_device, &run_ctx).map(SyncStageIpcResponse::Encoded)
-        // }
-    }
-}
-
-#[derive(Debug, Proxy)]
-#[proxy(
-    common = "thoosa_common",
-    name = "ProxyTrainFinalStep",
-    endpoint = "TRAIN_FINAL_STEP_ENDPOINT",
-    new_args = "init: TrainFinalStepIpcInit, tho_device_idx: usize",
-    init = "init",
-    fields = "tho_device_idx: usize = tho_device_idx",
-    out_id = "()",
-    run_input = "thoosa_shared::tracked_await::track_await(TrainStepIpcRequest::run(input, ctx)).await?",
-    endpoint_init = "train_final_step_endpoint_init",
-    init_type = "TrainFinalStepIpcInit",
-    init_stage = "TrainFinalStepIpcInitStage::new(init)",
-    wrapper = "TrainFinalStepIpcWrapper"
-)]
-struct TrainFinalStepProxyTarget {
-    base: TrainStep<TrainStepXFn<LabelProbability>, LabelProbability, LabelsProbabilities, RunCtxImpl>,
-}
-
-impl ProxyTrainFinalStep {
-    async fn export_weights(&self) -> Result<std::fs::File, ThoError> {
-        thoosa_common::ipc::codec::invoke_ipc_endpoint_to_file::<JsonIpcCodec, _>(
-            GlobalCtx::global().cuda_actor(self.tho_device_idx).as_ref(),
-            TRAIN_FINAL_STEP_ENDPOINT,
-            0,
-            &TrainStepIpcRequest::ExportWeights,
-        ).await
-    }
-}
-
-// This adapter keeps TrainNet generic over its original context while forwarding through RunCtxImpl.
-#[derive(Debug)]
-struct TrainFinalStepProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-    proxy: Arc<ProxyTrainFinalStep>,
-    pd: PhantomData<C>,
-}
-
-impl<C> Stage for TrainFinalStepProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-    type Ctx = C;
-    type In<'a> = TrainStepInput<LabelProbability, LabelsProbabilities>;
-    type Out = TrainStepOutput;
-}
-
-impl<C> SyncStage for TrainFinalStepProxyCtx<C>
-where
-    C: RunCtx + MaxParallelCtx + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), TRAIN_FINAL_STEP_ENDPOINT);
-        proxy_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        Arc::clone(&self.proxy).do_run(input, &proxy_ctx)
-    }
-}
-
-impl<C> OutId for TrainFinalStepProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-    fn out_id<'a>(&self, _input_id: &SynKey) -> () {
-        ()
-    }
-}
-
-impl<C> Adjustable for TrainFinalStepProxyCtx<C> where C: RunCtx + 'static {}
-
-#[derive(Debug)]
-struct TrainFinalStepWeightsSync {
-    proxy: Arc<ProxyTrainFinalStep>,
-}
-
-#[async_trait]
-impl TrainStepWeightsSync for TrainFinalStepWeightsSync {
-    async fn into_var_store(&self) -> Result<VarStore, ThoError> {
-        let weights = track_await(self.proxy.export_weights()).await?;
-        let named_tensors = Tensor::load_multi_from_stream_with_device(weights, Cpu)?;
-        let var_store = VarStore::new(Cpu);
-        var_store.variables_.lock().map_err(|_| ThoError::new("TrainFinalStepWeightsSync VarStore lock poisoned"))?.named_variables.extend(named_tensors);
-        Ok(var_store)
-    }
-}
-
-#[derive(Debug)]
-struct TrainFinalNetProxyFactory {
+struct TrainFinalStepFactory {
     num_label_nets: u32,
     labels_len: u32,
 }
 
-impl TrainFinalNetProxyFactory {
+impl TrainFinalStepFactory {
     fn new(num_label_nets: u32, labels_len: u32) -> Self {
         Self { num_label_nets, labels_len }
     }
 }
 
 #[async_trait]
-impl<C> TrainStepProxyFactory<LabelProbability, LabelsProbabilities, C, FinalNetParams, TrainFinalNetRunConfig> for TrainFinalNetProxyFactory
+impl<C> TrainStepFactory<LabelProbability, LabelsProbabilities, C, FinalNetParams, TrainFinalNetRunConfig> for TrainFinalStepFactory
 where
-    C: RunCtx + MaxParallelCtx + 'static,
+    C: RunCtx + 'static,
 {
-    async fn new_proxy(&self, run_config: &TrainFinalNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<LabelProbability, LabelsProbabilities, C, FinalNetParams>, ThoError> {
+    async fn new(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
         let node_params = FinalNetParams::new(self.num_label_nets, self.labels_len, run_config.net.num_layers);
-        let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone() };
-        let proxy = Arc::new(ProxyTrainFinalStep::new(init, tho_device_idx).await?);
-        let stage = Arc::new(DynSyncStageBox::new(Arc::new(TrainFinalStepProxyCtx::<C> { proxy: Arc::clone(&proxy), pd: PhantomData })));
-        Ok(TrainStepProxyParts::new(stage, Arc::new(TrainFinalStepWeightsSync { proxy }), node_params))
+        if GlobalCtx::global().is_ipc() {
+            static TRAIN_FINAL_STEP_ID: AtomicU32 = AtomicU32::new(0);
+            let stage_id = TRAIN_FINAL_STEP_ID.fetch_add(1, Ordering::AcqRel);
+            let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainFinalStepIpcInit>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_FINAL_STEP_ENDPOINT, stage_id, &init).await?;
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_FINAL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())) }, node_params))
+        } else {
+            let params_for_module = node_params.clone();
+            let training_config = run_config.common_training_args.clone();
+            let (train_step, _) = TrainStep::new_local(
+                ctx.tho_device_idx().into(),
+                move |_run_config, device| async move {
+                    let config = ModConfig::new(
+                        AdamW::default().amsgrad(true).into(),
+                        move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
+                        training_config.lr,
+                    );
+                    Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+                },
+                Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
+                train_final_loss,
+                run_config,
+                vs_path,
+            ).await?;
+            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
+        }
     }
 }
 

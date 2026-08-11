@@ -1,43 +1,43 @@
 use crate::tasks::train_net::maybe_cuda_mem;
 use async_trait::async_trait;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use log::{debug, trace};
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
-use std::io::Write;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tch::Device;
-use tch::nn::{Optimizer, VarStore};
+use tch::Tensor;
 use thoosa_common::batches::BatchLengths;
-use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use thoosa_common::my_tch::{LossFp, ThoModule};
-use thoosa_shared::traits::MaxParallelCtx;
+use thoosa_common::ipc::codec::IpcCodec;
+use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_common::my_tch::LossFp;
 use thoosa_common::runner::common::cachable::{BorrowRef, ThoDataRef};
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::tho_varstore::ThoTrainModule;
 use thoosa_common::utils::optimizer_mem_size;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
-use thoosa_shared::{CopyToDevice, ThoError, mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_lock};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
+use tokio::sync::MutexGuard;
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
-    net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
-
-    opt: Mutex<Optimizer>,
-    var_store: Arc<Mutex<VarStore>>,
-
+    // Keep the module, optimizer, and VarStore under one state owner so none of
+    // them crosses the local/IPC boundary independently.
+    train_module: tokio::sync::Mutex<ThoTrainModule<DI, DO>>,
     x_f: Arc<F>,
     loss_fn: LossFp,
+    best_checkpoint_path: PathBuf,
     pd: PhantomData<C>,
 }
 
@@ -63,21 +63,23 @@ where
     C:RunCtx,
     Self:Send + Sync
 {
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+    async fn has_gpu_data(&self, _device_idx: usize) -> bool {
         true
     }
 
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("TrainStep::purge_gpu");
-        todo!()
+        // Moving the complete state together preserves optimizer snapshots when
+        // the OOM handler evicts this stage from a GPU.
+        self.train_module.lock().await.move_to_device(0).await
     }
 
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("TrainStep::drop_gpu");
         todo!()
     }
 
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
+    async fn purge_cpu(&self, _purge_until: u64) -> usize {
         debug!("TrainStep::purge_cpu");
         0
     }
@@ -85,7 +87,7 @@ where
 
 impl<F, DI: Dims, DO: Dims, C: RunCtx> Debug for TrainStep<F, DI, DO, C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrainStep").finish()
+        f.debug_struct("TrainStep").field("best_checkpoint_path", &self.best_checkpoint_path).finish()
     }
 }
 
@@ -97,68 +99,21 @@ where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::new"))]
-    pub(crate) async fn new<NP, NB, NBF, OF, RC>(tho_device: ThoDevice, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, proxy_factory: Option<&Arc<dyn TrainStepProxyFactory<DI, DO, C, NP, RC>>>, run_config: &RC) -> Result<(TrainStepDynSyncStage<F, DI, DO, C>, NP), ThoError>
+    pub(crate) async fn new_local<NP, TMB, TMBF, RC>(device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, run_config: RC, best_checkpoint_path: PathBuf) -> Result<(Self, NP), ThoError>
     where
-        DI: 'static,
-        DO: 'static,
-        C: 'static,
-        NP: Debug + Send + Sync + 'static,
-        RC: Debug + Send + Sync + 'static,
-        NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
-        NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
-        OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
+        TMB: FnOnce(RC, ThoDevice) -> TMBF,
+        TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
     {
-        if GlobalCtx::global().is_ipc()
-            && let Some(proxy_factory) = proxy_factory
-        {
-            let TrainStepProxyParts { stage, weights_sync, node_params } = proxy_factory.new_proxy(run_config, tho_device.tho_device_idx()).await?;
-            return Ok((TrainStepDynSyncStage::Proxy { stage, weights_sync }, node_params));
-        }
-
-        let (stage, node_params) = Self::new_local(tho_device, net_builder, optimizer_builder, x_f, loss_fn, run_config).await?;
-        Ok((TrainStepDynSyncStage::Local(Arc::new(stage)), node_params))
-    }
-
-    pub(crate) async fn  new_local<NP, NB, NBF, OF, RC>(device: ThoDevice, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
-    where
-        NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
-        NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
-        OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
-    {
-        let var_store = Arc::new(Mutex::new(VarStore::new(device.clone().into())));
-        let (net, node_params) = net_builder(Arc::clone(&var_store)).await?;
-        let opt = {
-            let var_store = perf_log!(sync_mutex_lock!(var_store));
-            optimizer_builder(run_config, &var_store)?
-        };
+        let (train_module, node_params) = train_module_builder(run_config, device).await?;
+        debug!("TrainStep::new_local: best_checkpoint_path={best_checkpoint_path:?}");
         Ok((Self {
             device,
-            net: Mutex::new(net),
-            opt: Mutex::new(opt),
-            var_store,
+            train_module: tokio::sync::Mutex::new(train_module),
             x_f,
             loss_fn,
+            best_checkpoint_path,
             pd: PhantomData,
         }, node_params))
-    }
-
-    pub fn into_var_store(self) -> Result<VarStore, ThoError> {
-        let Self { net, opt, var_store, .. } = self;
-        drop(net);
-        drop(opt);
-        Arc::try_unwrap(var_store).map(Mutex::into_inner).map_err(|_| ThoError::new("TrainStep::into_var_store: VarStore still shared after training"))
-    }
-
-    pub(crate) fn save_var_store_to_stream(&self, output: &mut dyn Write) -> Result<(), ThoError> {
-        let var_store = perf_log!(sync_mutex_lock!(self.var_store));
-        debug!("save_var_store_to_stream: var_store={var_store:?}");
-        var_store.save_to_stream(output).map_err(ThoError::from)
-    }
-
-    fn set_lr(&self, lr: f64) {
-        let mut opt = perf_log!(sync_mutex_lock!(self.opt));
-        opt.set_lr(lr);
     }
 }
 
@@ -181,8 +136,31 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        // The common runner acquires and restores the whole mutable training state.
+        Some(self)
+    }
+}
+
+impl<F, DI, DO, C> StageWithState for TrainStep<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    type S = ThoTrainModule<DI, DO>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut guard = self.train_module.lock().await;
+            guard.move_to_device(to_device_idx).await?;
+            Ok(guard)
+        }.boxed()
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("TrainStep::do_run: os_thread_id={}", os_thread_id());
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
@@ -198,9 +176,7 @@ where
         let mut calculate_loss = || {
 
 
-            let net = perf_log!(sync_mutex_lock!(self.net));
-            let predicted_y = net.tho_forward(&x_t, lengths.as_mut(), input.train)?;
-            drop(net);
+            let predicted_y = train_module.module().tho_forward(&x_t, lengths.as_mut(), input.train)?;
 
             debug!("TrainStep::do_run: predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
 
@@ -216,8 +192,11 @@ where
         let loss_value = panic_to_err!(Ok::<_, ThoError>(loss.double_value(&[])))? as f32;
 
         if input.train {
-            // TODO(perf): lock_opt is per batch; keep optimizer ownership local to the training task or queue optimizer steps to avoid mutex traffic in TrainStep::do_run.
-            let mut opt = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.opt));
+            // Save inside the state owner so IPC training never exports a VarStore.
+            if loss_value < input.best_valid_loss {
+                train_module.save_var_store(&self.best_checkpoint_path)?;
+            }
+            let opt = train_module.opt();
             debug!("TrainStep::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
             debug!("TrainStep::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));
@@ -231,6 +210,7 @@ where
 
             panic_to_err!({
                 opt.backward_step(&loss.set_requires_grad(true));
+                opt.zero_grad();
                 Ok::<_, ThoError>(())
             })?;
 
@@ -269,40 +249,26 @@ where
 
 pub(crate) type TrainStepXFn<D> = Box<dyn Fn(ThoBatch<D>) -> ThoBatch<D> + Send + Sync + 'static>;
 
-#[async_trait]
-pub(crate) trait TrainStepWeightsSync: Debug + Send + Sync {
-    async fn into_var_store(&self) -> Result<VarStore, ThoError>;
-}
-
-#[async_trait]
-pub(crate) trait TrainStepProxyFactory<DX, DY, C, NP, RC>: Debug + Send + Sync
-where
-    DX: Dims + 'static,
-    DY: Dims + 'static,
-    C: RunCtx + 'static,
-    NP: Debug + Send + Sync + 'static,
-    RC: Debug + Send + Sync + 'static,
-{
-    async fn new_proxy(&self, run_config: &RC, tho_device_idx: usize) -> Result<TrainStepProxyParts<DX, DY, C, NP>, ThoError>;
-}
-
 #[derive(Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
     id: SynKey,
     pub x: ThoBatch<DI>,
     pub lengths: Option<BatchLengths>,
     pub expected_y: ThoBatch<DO>,
     train: bool,
+    best_valid_loss: f32,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
-    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool) -> Self {
+    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool, best_valid_loss: f32) -> Self {
         Self {
             id: SynKey::new([mono_key!("train_step", "stage")]),
             x,
             lengths,
             expected_y,
             train,
+            best_valid_loss,
         }
     }
 
@@ -378,6 +344,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
             lengths: self.lengths.clone(),
             expected_y: track_await(self.expected_y.copy_to_device(dst_device)).await?,
             train: self.train,
+            best_valid_loss: self.best_valid_loss,
         })
     }
 }
@@ -432,12 +399,11 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TrainStepOutput {
     pub loss: f32,
-    pub vs_ref: String,
 }
 
 impl TrainStepOutput {
     fn new(loss: f32) -> Self {
-        Self { loss, vs_ref: "todo".to_string() }
+        Self { loss }
     }
 }
 
@@ -451,241 +417,27 @@ impl WithId for TrainStepOutput {
 
 impl Output for TrainStepOutput {}
 
-pub(crate) enum TrainStepDynSyncStage<F, DI: Dims + 'static, DO: Dims + 'static, C: RunCtx + 'static> {
-    Local(Arc<TrainStep<F, DI, DO, C>>),
-    Proxy {
-        stage: Arc<DynSyncStageBox<TrainStepInput<DI, DO>, TrainStepOutput, C>>,
-        weights_sync: Arc<dyn TrainStepWeightsSync>,
-    },
-}
-
-#[async_trait]
-impl <F, DI, DO, C> FuturesRunnerMapPurger for TrainStepDynSyncStage<F, DI, DO, C>
+impl<DI, DO> WorkerStageInput for TrainStepInput<DI, DO>
 where
-    DI:Dims,
-    DO:Dims,
-    C:RunCtx,
-    Self:Send + Sync
+    DI: Dims,
+    DO: Dims,
+    Self: serde::de::DeserializeOwned,
 {
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        match self {
-            TrainStepDynSyncStage::Local(local) => {
-                local.has_gpu_data(device_idx).await
-            }
-            TrainStepDynSyncStage::Proxy { .. } => {
-                true
-            }
-        }
-    }
-
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            TrainStepDynSyncStage::Local(local) => {
-                local.purge_gpu(ids_to_keep, device_idx, name).await
-            }
-            TrainStepDynSyncStage::Proxy {  stage, .. } => {
-                Ok(())
-            }
-        }
-
-    }
-
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            TrainStepDynSyncStage::Local(local) => {
-                local.drop_gpu(device_idx, name).await
-            }
-            TrainStepDynSyncStage::Proxy { .. } => {
-                Ok(())
-            }
-        }
-
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        match self {
-            TrainStepDynSyncStage::Local(local) => {
-                local.purge_cpu(purge_until).await
-            }
-            TrainStepDynSyncStage::Proxy { .. } => {
-                0
-            }
-        }
-
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<Self>(input)?;
+        // Shared wrappers decode worker references before the stateful stage runs.
+        Ok(Self::new(
+            ThoTensor::ref_to_tensor(all_cuda_tensors, input.x)?,
+            input.lengths,
+            ThoTensor::ref_to_tensor(all_cuda_tensors, input.expected_y)?,
+            input.train,
+            input.best_valid_loss,
+        ))
     }
 }
 
-impl<F, DI, DO, C> Debug for TrainStepDynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrainStepDynSyncStage").finish()
-    }
-}
-
-impl<F, DI, DO, C> TrainStepDynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStepDynSyncStage::into_var_store"))]
-    pub(crate) async fn into_var_store(self) -> Result<VarStore, ThoError> {
-        match self {
-            Self::Local(stage) => Arc::try_unwrap(stage).map_err(|_| ThoError::new("TrainStepDynSyncStage::into_var_store: local TrainStep still shared"))?.into_var_store(),
-            Self::Proxy { weights_sync, .. } => weights_sync.into_var_store().await,
-        }
-    }
-}
-
-impl<F, DI, DO, C> Stage for TrainStepDynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    type Ctx = C;
-    type In<'a> = TrainStepInput<DI, DO>;
-    type Out = TrainStepOutput;
-}
-
-impl<F, DI, DO, C> SyncStage for TrainStepDynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-        }
-    }
-}
-
-impl<F, DI, DO, C> OutId for TrainStepDynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    fn out_id<'a>(&self, _input_id: &SynKey) -> () {
-        ()
-    }
-}
-
-impl<F, DI, DO, C> Adjustable for TrainStepDynSyncStage<F, DI, DO, C>
-where
-    DI: Dims + 'static,
-    DO: Dims + 'static,
-    C: RunCtx + 'static,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{}
-
-// Train-step proxies pass worker tensor references instead of serializing batch tensors through JSON.
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct TrainStepTensorRef {
-    pub(crate) ref_key: u64,
-    size: Vec<i64>,
-    kind: String,
-    tho_device_idx: usize,
-    pub(crate) remove_after_run: bool,
-}
-
-impl TrainStepTensorRef {
-    fn from_ref<D, Id>(tensor: &ThoTensor<D, Id>) -> Result<Self, ThoError>
-    where
-        D: Dims,
-        Id: thoosa_shared::traits::Named + Debug + Clone,
-    {
-        Ok(Self {
-            ref_key: tensor.ref_key().ok_or_else(|| ThoError::new(format!("TrainStep expected worker tensor ref, got {tensor:?}")))?,
-            size: tensor.size(),
-            kind: thoosa_common::ipc::json_ser::tho_tensor::kind_to_str(&tensor.kind()).map_err(ThoError::new)?.to_string(),
-            tho_device_idx: tensor.tho_device().tho_device_idx(),
-            remove_after_run: false,
-        })
-    }
-
-    async fn from_tensor<D>(tensor: &ThoBatch<D>, tho_device_idx: usize) -> Result<Self, ThoError>
-    where
-        D: Dims,
-    {
-        if tensor.ref_key().is_some() {
-            return Self::from_ref(tensor);
-        }
-
-        // CPU-built label/final batches must be copied into the worker before invoking the train step.
-        let cpu_tensor = tensor.t_ref().f_to_device(Device::Cpu)?;
-        let worker_ref = track_await(GlobalCtx::global().cuda_actor(tho_device_idx).copy(cpu_tensor.into(), ThoDevice::from(tho_device_idx))).await?;
-        let mut tensor_ref = Self::from_ref(&worker_ref)?;
-        tensor_ref.remove_after_run = true;
-        Ok(tensor_ref)
-    }
-
-    pub(crate) fn into_tensor<D>(self) -> Result<ThoBatch<D>, ThoError>
-    where
-        D: Dims,
-    {
-        let kind = thoosa_common::ipc::json_ser::tho_tensor::str_to_kind(&self.kind).ok_or_else(|| ThoError::new(format!("TrainStep received unsupported tensor kind {:?}", self.kind)))?;
-        Ok(ThoTensor::new_ref(thoosa_shared::simple_id!("train_step_ipc"), self.ref_key, self.size, kind, None, self.tho_device_idx))
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum TrainStepIpcRequest {
-    Run {
-        x: TrainStepTensorRef,
-        lengths: Option<Vec<i64>>,
-        expected_y: TrainStepTensorRef,
-        train: bool,
-        max_other_parallel: u8,
-    },
-    ExportWeights,
-}
-
-impl TrainStepIpcRequest {
-    pub(crate) async fn run<DI, DO, C>(input: &TrainStepInput<DI, DO>, ctx: &C) -> Result<Self, ThoError>
-    where
-        DI: Dims,
-        DO: Dims,
-        C: RunCtx + MaxParallelCtx,
-    {
-        Ok(Self::Run {
-            x: track_await(TrainStepTensorRef::from_tensor(input.x_ref(), ctx.tho_device_idx())).await?,
-            lengths: input.lengths_ref().map(|lengths| lengths.as_slice().to_vec()),
-            expected_y: track_await(TrainStepTensorRef::from_tensor(input.expected_y_ref(), ctx.tho_device_idx())).await?,
-            train: input.train(),
-            max_other_parallel: ctx.max_other_parallel(),
-        })
-    }
-}
-
-pub(crate) struct TrainStepProxyParts<DX, DY, C, NP>
-where
-    DX: Dims + 'static,
-    DY: Dims + 'static,
-    C: RunCtx + 'static,
-{
-    stage: Arc<DynSyncStageBox<TrainStepInput<DX, DY>, TrainStepOutput, C>>,
-    weights_sync: Arc<dyn TrainStepWeightsSync>,
-    node_params: NP,
-}
-
-impl<DX, DY, C, NP> TrainStepProxyParts<DX, DY, C, NP>
-where
-    DX: Dims + 'static,
-    DY: Dims + 'static,
-    C: RunCtx + 'static,
-{
-    pub(crate) fn new(stage: Arc<DynSyncStageBox<TrainStepInput<DX, DY>, TrainStepOutput, C>>, weights_sync: Arc<dyn TrainStepWeightsSync>, node_params: NP) -> Self {
-        Self { stage, weights_sync, node_params }
+impl WorkerStageOutput for TrainStepOutput {
+    fn encode_from_worker<C: IpcCodec>(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        C::encode(&self)
     }
 }
