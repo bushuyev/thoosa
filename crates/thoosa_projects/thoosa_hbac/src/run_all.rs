@@ -752,7 +752,7 @@ mod tests {
 
         // log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2);
-        let result = run_heavy_test_run_all("heavy_test_run_all_local").await;
+        let result = do_heavy_test_run_all("heavy_test_run_all_local").await;
         global_ctx.shutdown().await;
 
         info!("\n{}", format_perf_map(&PERF));
@@ -772,7 +772,7 @@ mod tests {
                     "--nocapture".to_string(), "--no-capture".to_string(),
                 ]).await?;
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                run_heavy_test_run_all("heavy_test_run_all_ipc").await?;
+                do_heavy_test_run_all("heavy_test_run_all_ipc").await?;
 
                 Ok(())
             },
@@ -786,7 +786,7 @@ mod tests {
         )
     }
 
-    async fn run_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
+    async fn do_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let test_dir = Path::new("/tmp").join(test_name);

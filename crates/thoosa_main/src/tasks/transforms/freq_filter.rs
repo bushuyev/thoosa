@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use cached_derive::Cached;
+use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
 use log::debug;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -17,10 +18,9 @@ use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterCont
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
-use thoosa_shared::traits::{AsyncStage, OutId, Stage, SyncStage};
+use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageWithState, SyncStage};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
@@ -32,27 +32,23 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
 use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
-use thoosa_proxy_derive::Proxy;
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::json_ser::{SyncStageIpcWrapper};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
+use tokio::sync::MutexGuard;
+use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
-#[derive(Debug)]
-pub enum FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    Local(Arc<SyncFreqFilter<C>>),
-    Proxy(Arc<ProxySyncFreqFilter>),
-}
-
 #[derive(Debug, Clone)]
-struct BandPassDims;
+pub struct BandPassDims;
 
 impl Dims for BandPassDims {
     type Metrics = AnyMetrics;//TODO
@@ -87,30 +83,19 @@ impl SyncFreqFilterIpcInit {
     }
 }
 
-#[derive(Debug, Proxy)]//// fields = "id: SynKey = init.id.clone()",
-#[proxy(
-    common = "thoosa_common",
-    name = "ProxySyncFreqFilter",
-    endpoint = "SYNC_FREQ_FILTER_ENDPOINT",
-    new_args = "init: SyncFreqFilterIpcInit, tho_device_idx: usize",
-    init = "init.clone()",
-    fields = "id: SynKey = (FREQ_FILTER, \"SyncFreqFilter\").into()",
-    out_id = "&self.id + input_id",
-    endpoint_init = "sync_freq_filter_endpoint_init",
-    init_type = "SyncFreqFilterIpcInit",
-    init_stage = "SyncFreqFilter::new_for_ipc(init)?"
-)]
-struct SyncFreqFilterProxyTarget {
-    base: SyncFreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>,
+impl WorkerStageInput for SyncFreqFilterIpcInit {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        C::decode(input)
+    }
 }
 
 #[derive(Debug)]
 pub struct SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
-    filters: Vec<PreparedFilter>,
+    filters: tokio::sync::Mutex<Vec<PreparedFilter>>,
     num_channels:i64,
     sample_rate:f64,
     pd:PhantomData<C>
@@ -118,22 +103,27 @@ where
 
 impl<C> SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
 
 
-    pub async fn new(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<FreqFilterDynSyncStage<C>, ThoError> {
+    pub async fn new(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<DynSyncStageWithStateEnum<SyncFreqFilter<C>>, ThoError> {
 
         if GlobalCtx::global().is_ipc() {
-            Ok(FreqFilterDynSyncStage::Proxy(Arc::new(ProxySyncFreqFilter::new(SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id), tho_device_idx).await?)))
+            let init = SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id);
+            // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, SyncFreqFilterIpcInit>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_FREQ_FILTER_ENDPOINT, find_motifs_run_config_id, &init).await?;
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_FREQ_FILTER_ENDPOINT, find_motifs_run_config_id, tho_device_idx)),
+            })
         } else {
-            Ok(FreqFilterDynSyncStage::Local(Arc::new(Self::new_local(filter_configs, num_channels, sample_rate, find_motifs_run_config_id)?)))
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(filter_configs, num_channels, sample_rate, find_motifs_run_config_id)?)))
         }
     }
 
     pub fn new_local(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId) ->Result<Self, ThoError>{
 
-        let filters = SyncFreqFilter::<RunCtxImpl>::prepare_filters(filter_configs, num_channels, sample_rate)?;
+        let filters = Self::prepare_filters(filter_configs, num_channels, sample_rate)?;
         let filters_have_config = filters.iter().any(|f|{
             match f {
                 PreparedFilter::ZNorm { .. } => false,
@@ -162,7 +152,7 @@ where
 
         Ok(Self {
             id,
-            filters,
+            filters: tokio::sync::Mutex::new(filters),
             num_channels,
             sample_rate,
             pd: Default::default(),
@@ -277,11 +267,16 @@ where
     }
 
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData, SynKey>) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
-        debug!("FreqFilter::apply_tho_tensor: self.filters={:?}", self.filters);
+        let filters = self.filters.try_lock().map_err(|error| ThoError::new(format!("SyncFreqFilter::apply_tho_tensor could not lock prepared filters: {error}")))?;
+        self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
+    }
+
+    fn apply_tho_tensor_with_state(&self, filters: &[PreparedFilter], input_tensor: &ThoTensor<ChannelsData, SynKey>) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
+        debug!("FreqFilter::apply_tho_tensor: filters={filters:?}");
 
         let mut filtered_t = input_tensor.as_ref().shallow_clone();//.f_totype(Float)?;
 
-        for filter in self.filters.iter() {
+        for filter in filters.iter() {
             match filter {
                 PreparedFilter::NotchBand { low_hz, high_hz } => {
                     let filtered_t_out = notch_band_rfft(&filtered_t, self.sample_rate, *low_hz, *high_hz)?;
@@ -366,7 +361,7 @@ where
 
 impl <C> WithId for SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     type ID = SynKey;
 
@@ -375,7 +370,7 @@ where
     }
 }
 
-impl SyncFreqFilter<RunCtxImpl> {
+impl SyncFreqFilter<WokerRunCtx> {
     pub(crate) fn new_for_ipc(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
         Ok(Self::new_local(
             &init.filter_configs,
@@ -386,50 +381,19 @@ impl SyncFreqFilter<RunCtxImpl> {
     }
 }
 
-impl<C> Adjustable for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-}
+pub fn sync_freq_filter_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = SyncFreqFilterIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let stage = SyncFreqFilter::<WokerRunCtx>::new_for_ipc(init)?;
 
-impl<C> OutId for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        match self {
-            FreqFilterDynSyncStage::Local(local) => local.out_id(input_id),
-            FreqFilterDynSyncStage::Proxy(proxy) => proxy.out_id(input_id),
-        }
-    }
-}
-
-impl<C> Stage for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData, SynKey>;
-    type Out = ThoTensor<ChannelsData, SynKey>;
-}
-
-impl<C> SyncStage for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            FreqFilterDynSyncStage::Local(local) => Arc::clone(local).do_run(input, ctx),
-            FreqFilterDynSyncStage::Proxy(proxy) => {
-                let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxySyncFreqFilter requires RunCtxImpl"))?;
-                Arc::clone(proxy).do_run(input, ctx)
-            }
-        }
-    }
+        // The common stateful wrapper prepares filter tensors on the worker device before each synchronous invocation.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 #[derive(Debug)]
-enum PreparedFilter {
+// This is public because the public StageWithState implementation exposes the prepared filters as its associated state.
+pub enum PreparedFilter {
     NotchBand { low_hz: f64, high_hz: f64 },
     BandPass {
         kernel: ThoTensor<BandPassDims, SynKey>,
@@ -464,7 +428,7 @@ where
     _ctx: PhantomData<C>,
     num_channels:i64,
     sample_rate:f64,
-    sync_freq_filter: Arc<FreqFilterDynSyncStage<C>>,
+    sync_freq_filter: Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>,
     effective_output_stride:i64,
     min_input_split_len:i64
 }
@@ -708,13 +672,13 @@ where
 
 impl<C> Adjustable for SyncFreqFilter<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
 }
 
 impl<C> OutId for SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -723,7 +687,7 @@ where
 
 impl<C> Stage for SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData, SynKey>;
@@ -732,12 +696,99 @@ where
 
 impl<C> SyncStage for SyncFreqFilter<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        // Expose the prepared filters to the runner so their device placement is handled before the synchronous call.
+        Some(self)
+    }
+
     fn do_run<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         self.apply_tho_tensor(input_tensor)
     }
 }
+
+impl<C> StageWithState for SyncFreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
+    type S = Vec<PreparedFilter>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut filters = self.filters.lock().await;
+            for filter in filters.iter_mut() {
+                match filter {
+                    PreparedFilter::BandPass { kernel, .. } if kernel.device() != to_device_idx => {
+                        *kernel = track_await(kernel.copy_to_device(to_device_idx)).await?;
+                    }
+                    PreparedFilter::SavGol { weights, .. } if weights.device() != to_device_idx => {
+                        *weights = track_await(weights.copy_to_device(to_device_idx)).await?;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(filters)
+        }.boxed()
+    }
+
+    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
+    }
+}
+
+#[async_trait]
+impl <C> FuturesRunnerMapPurger for SyncFreqFilter<C>
+where
+    C:RunCtx,
+    Self:Send + Sync
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        let mut filters = self.filters.lock().await;
+        for filter in filters.iter_mut() {
+            match filter {
+                PreparedFilter::BandPass { kernel, .. } if kernel.device() != 0 => {
+                    return  true
+                }
+                PreparedFilter::SavGol { weights, .. } if weights.device() != 0 => {
+                    return  true
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("SyncFreqFilter::purge_gpu");
+        let mut filters = self.filters.lock().await;
+        for filter in filters.iter_mut() {
+            match filter {
+                PreparedFilter::BandPass { kernel, .. } if kernel.device() != 0 => {
+                    *kernel = track_await(kernel.copy_to_device(0)).await?;
+                }
+                PreparedFilter::SavGol { weights, .. } if weights.device() != 0 => {
+                    *weights = track_await(weights.copy_to_device(0)).await?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    //it's called when local GPU reset is requested
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("TrainStep2::drop_gpu");
+        todo!()
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        debug!("TrainStep2::purge_cpu");
+        0
+    }
+}
+
 
 impl<C> OutId for FreqFilter<C>
 where

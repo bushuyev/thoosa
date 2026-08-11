@@ -676,7 +676,7 @@ mod tests {
     struct TrainStepXFactory {//X for Motifs, Label, Final in TrainMotifNet, TrainLabelNets, TrainFinalNet
     }
 
-    trait TrainStepFactory {
+    trait TrainStep2Factory {
         type NP:FromJsonFile+ToJsonFile + Debug +Sync  + Send;
         type R:RunConfig + Debug + Sync + Send + Clone;
         type InDims:Dims + Serialize + serde::de::DeserializeOwned + 'static;
@@ -689,7 +689,7 @@ mod tests {
         fn new(run_config:Self::R, ctx:Self::C, vs_path: PathBuf) -> impl Future<Output = Result<(DynSyncStageWithStateEnum<TrainStep2<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>>, Self::NP), ThoError>> + Send;
     }
 
-    impl TrainStepFactory for TrainStepXFactory {
+    impl TrainStep2Factory for TrainStepXFactory {
         type NP = TestNetXParams;
         type R = TestXRunConfig;
         type InDims = InDimsX;
@@ -830,7 +830,7 @@ mod tests {
 
     struct TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
@@ -841,7 +841,7 @@ mod tests {
 
     impl <SF, B> Debug for TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
@@ -878,7 +878,7 @@ mod tests {
 
     impl <SF, B> Stage for TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
@@ -891,20 +891,20 @@ mod tests {
     //-->for test only to avoid errors because of run_config_source which is not Sync and Send
     unsafe impl <SF, B> Sync for TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {}
     unsafe impl <SF, B> Send for TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {}//<--
 
     impl <SF, B> AsyncStage for TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
 
@@ -935,7 +935,7 @@ mod tests {
 
     impl <SF, B> TrainNet2<SF, B>
     where
-        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF: TrainStep2Factory + Debug + Send + Sync  +'static,
         SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
@@ -1382,7 +1382,7 @@ mod tests {
         fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
             async move {
                 let mut guard = self.tho_module.lock().await;
-                if guard.device() != 1 { //TODO pass device to pre_run
+                if guard.device() != to_device_idx { 
                     *guard = guard.copy_to_device(to_device_idx).await?;
                 }
                 Ok(guard)
