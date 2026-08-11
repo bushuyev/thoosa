@@ -44,6 +44,7 @@ use rand::seq::SliceRandom;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Error, OpenFlags, Transaction, params, ToSql};
 use rusqlite::trace::TraceEvent;
+use serde::{Deserialize, Serialize};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::run_configs::{run_id, RunConfigId, RunId};
 use thoosa_shared::val::Val;
@@ -141,7 +142,7 @@ pub struct TrainedNetEntry {
     pub net_path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainedNet {
     pub id: u32,
     pub run_config_id: RunConfigId,

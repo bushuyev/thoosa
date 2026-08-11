@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -234,43 +235,48 @@ where
 }
 ///
 #[derive(Debug)]
-pub enum DynSyncStageWithStateEnum<St>
+pub enum DynSyncStageWithStateEnum<St, Init=()>
 where
     St:SyncStage+StageWithState,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
 {
     Local(Arc<St>),
     Proxy {
         stage: Arc<ProxyStage<St>>,
+        init: Init
     }
 }
 
-impl <St> Stage for DynSyncStageWithStateEnum<St>
+impl <St, Init> Stage for DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
 {
     type Ctx = St::Ctx;
     type In<'a> = St::In<'a>;
     type Out = St::Out;
 }
 
-impl <St> Adjustable for DynSyncStageWithStateEnum<St>
+impl <St, Init> Adjustable for DynSyncStageWithStateEnum<St, Init>
 where
     St: SyncStage + StageWithState + Adjustable,
     for <'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
 {
     // Preserve the wrapped stage's adjustment capability across local/proxy dispatch.
 }
 
-impl <St> SyncStage for DynSyncStageWithStateEnum<St>
+impl <St, Init> SyncStage for DynSyncStageWithStateEnum<St, Init>
 where
     St: SyncStage + StageWithState + Send + Sync,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
@@ -293,11 +299,12 @@ where
 
 
 ///
-impl <St> StageWithState for DynSyncStageWithStateEnum<St>
+impl <St, Init> StageWithState for DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState+Send+Sync,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
 {
     type S = <St as StageWithState>::S;
 
@@ -321,12 +328,12 @@ where
 ///
 ///
 #[async_trait]
-impl <St> FuturesRunnerMapPurger for DynSyncStageWithStateEnum<St>
+impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
-
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self {

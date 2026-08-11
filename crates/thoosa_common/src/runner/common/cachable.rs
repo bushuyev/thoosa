@@ -21,6 +21,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thoosa_shared::Cause;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -308,6 +309,41 @@ impl<D> ThoDataRef<'_, D> {
         }
     }
 }
+
+impl <D>  Serialize for ThoDataRef<'_, D>
+where
+    D:Serialize
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer
+    {
+        match self {
+            ThoDataRef::Borrowed(d) => {
+                d.serialize(serializer)
+            }
+            ThoDataRef::ReadLocked(d) => {
+                d.serialize(serializer)
+            }
+            ThoDataRef::Owned(v) => {
+                v.serialize(serializer)
+            }
+        }
+    }
+}
+
+impl <'de, D> Deserialize<'de> for ThoDataRef<'_, D>
+where
+    D:Deserialize<'de>
+{
+    fn deserialize<Ds>(deserializer: Ds) -> Result<Self, Ds::Error>
+    where
+        Ds: Deserializer<'de>
+    {
+        Ok(ThoDataRef::Owned(D::deserialize(deserializer)?))
+    }
+}
+
 
 impl <O> BorrowRef for DevicesWrap<O>
 where

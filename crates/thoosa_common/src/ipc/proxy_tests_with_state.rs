@@ -282,6 +282,7 @@ impl ProxyTestStage {
             ).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx)),
+                init: (),
             })
         } else {
             Ok(DynSyncStageWithStateEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))

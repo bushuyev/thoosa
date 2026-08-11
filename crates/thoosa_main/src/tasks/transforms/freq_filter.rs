@@ -116,6 +116,7 @@ where
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, SyncFreqFilterIpcInit>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_FREQ_FILTER_ENDPOINT, find_motifs_run_config_id, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(SYNC_FREQ_FILTER_ENDPOINT, find_motifs_run_config_id, tho_device_idx)),
+                init: (),
             })
         } else {
             Ok(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(filter_configs, num_channels, sample_rate, find_motifs_run_config_id)?)))
