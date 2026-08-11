@@ -18,6 +18,7 @@ use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tch::{Device, IndexOp, Kind, Tensor, nn};
+use tracing::field::debug;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::debug_plot;
@@ -349,6 +350,7 @@ where
 
         let mut motif_widths = HashSet::new();
         let mut freq_filters_by_find_motifs_run_config_id: HashMap<RunConfigId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
+
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
         for (net_id, motif_net) in loaded_motif_nets {
             let extra = track_await(motif_net.extra()).await?;
@@ -360,13 +362,14 @@ where
             let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
             let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
 
-            let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
+            let maybe_freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
                 freq_filter.clone()
             } else {
 
                 if let Some(filters) = find_motifs_run_config.freq_filter.as_ref() {
+                    debug!("ApplyMotifNets::from_trained_nets: creating new FreqFilter for  find_motifs_run_config_id={find_motifs_run_config_id}");
 
-                    let freq_filter =Arc::new(FreqFilter::<C>::new(filters.as_slice(), ws, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?);
+                    let freq_filter =FreqFilter::<C>::new(filters.as_slice(), ws, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?;
                     freq_filters_by_find_motifs_run_config_id.insert(find_motifs_run_config_id, Some(Arc::clone(&freq_filter)));
                     Some(freq_filter)
                 } else {
@@ -375,8 +378,9 @@ where
                
             };
 
-            let freq_filter_find_motifs_run_config_id = if freq_filter.is_some() { Some(find_motifs_run_config_id) } else { None };
-            loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_config_id, freq_filter));
+            let freq_filter_find_motifs_run_config_id = if maybe_freq_filter.is_some() { Some(find_motifs_run_config_id) } else { None };
+
+            loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_config_id, maybe_freq_filter));
         }
 
         if motif_widths.len() > 1 {
@@ -400,7 +404,7 @@ where
                     motif_id,
                     net,
                     motif_width,
-                    freq_filter_find_motifs_run_config_id,
+                    freq_filter_find_motifs_run_config_id,//TODO pass as tuple freq_filter_find_motifs_run_config_id + freq_filter
                     freq_filter,
                     slice_step, //TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
