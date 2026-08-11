@@ -7,10 +7,9 @@ use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
-use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper, TrainStepOutput, TrainStepProxyFactory, TrainStepWeightsSync, TrainStepXFn};
+use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper, TrainStepXFn};
 use futures_util::{StreamExt, future::BoxFuture};
 use log::{debug, info, trace, warn};
-use parking_lot::Mutex;
 use rand::random;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -24,13 +23,12 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Instant, SystemTime};
 use tch::Kind::Float;
-use tch::nn::{Optimizer, VarStore};
-use tch::{Device, nn};
+use tch::Device;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use thoosa_common::my_tch::{LossFp, ThoModule};
+use thoosa_common::ipc::wraps::DynSyncStageWithStateEnum;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -50,7 +48,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
@@ -96,7 +94,9 @@ where
     R:Debug + Send + Sync + 'static,
 {
     id: SynKey,
-    pub var_store: VarStore,
+    // The worker saves weights directly; only the temporary path crosses back
+    // into the async orchestration and result-saving layers.
+    pub var_store_path: TmpFile,
     pub node_params:N,
     pub run_config:R,
     pub min_loss:f32
@@ -107,8 +107,8 @@ where
     N:Debug + Send + Sync + 'static,
     R:Debug + Send + Sync + 'static,
 {
-    pub fn new(id: SynKey, var_store: VarStore, node_params: N, run_config: R, min_loss:f32) -> Self {
-        Self { id, var_store, node_params, run_config, min_loss }
+    pub fn new(id: SynKey, var_store_path: TmpFile, node_params: N, run_config: R, min_loss:f32) -> Self {
+        Self { id, var_store_path, node_params, run_config, min_loss }
     }
 }
 
@@ -132,46 +132,50 @@ where
 
 }
 
-pub struct TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+#[async_trait]
+pub(crate) trait TrainStepFactory<DX, DY, C, NP, RC>: Debug + Send + Sync
+where
+    DX: Dims + 'static,
+    DY: Dims + 'static,
+    C: RunCtx + 'static,
+    NP: Debug + Send + Sync + 'static,
+    RC: Debug + Send + Sync + 'static,
+{
+    async fn new(&self, run_config: RC, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, NP), ThoError>;
+}
+
+pub struct TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + Adjustable + 'static,
-    DX: Dims + 'static, DY: Dims + 'static,
+    DX: Dims + 'static,
+    DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    for<'a> NF:Fn(C, &'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
-    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     batch:BF,
-    net:NF,
+    train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
     opt_config:Arc<OptConfig>,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
-    loss_fn:LossFp,
-    optimizer:FO,
-    x_f:XF,
     epochs:FC,
     validation_step: u32,
     descr:String,
     reusable_completed_trials: Vec<CompletedTrial>,
-    train_step_proxy_factory: Option<Arc<dyn TrainStepProxyFactory<DX, DY, C, NP, RC>>>,
     pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
 
-impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Debug for TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NP, FC> Debug for TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + Adjustable + 'static,
-    DX: Dims + 'static, DY: Dims + 'static,
+    DX: Dims + 'static,
+    DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    for<'a> NF:Fn(C, &'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
-    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -180,22 +184,20 @@ where
     }
 }
 
-impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NP, FC> TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    DX: Dims + 'static, DY: Dims + 'static,
+    DX: Dims + 'static,
+    DY: Dims + 'static,
     B: AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    NF: Fn(C, &RC, Arc<Mutex<VarStore>>) -> BoxFuture<Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> + Send + Sync + 'static,
-    FO: Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
-    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch: BF, net: NF, opt_config: Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>, loss_fn: LossFp, optimizer: FO, x_f: XF, epochs: FC, validation_step: u32, descr: String) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs, validation_step, descr, reusable_completed_trials: vec![], train_step_proxy_factory: None }
+    pub fn new(batch: BF, train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>, opt_config: Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>, epochs: FC, validation_step: u32, descr: String) -> Self {
+        Self { batch, train_step_factory, pd: PhantomData, opt_config, run_config_source, epochs, validation_step, descr, reusable_completed_trials: vec![] }
     }
 
     pub fn with_reusable_completed_trials(mut self, reusable_completed_trials: Vec<CompletedTrial>) -> Self {
@@ -203,37 +205,26 @@ where
         self
     }
 
-    pub(crate) fn with_train_step_proxy_factory(mut self, train_step_proxy_factory: Arc<dyn TrainStepProxyFactory<DX, DY, C, NP, RC>>) -> Self {
-        self.train_step_proxy_factory = Some(train_step_proxy_factory);
-        self
-    }
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run_inner"))]
     fn run_inner(
         self: Arc<Self>,
         mut ctx: C,
-        tho_device_idx: usize,
+        _tho_device_idx: usize,
         run_config: RC,
         validation_step: u32,
         descr:String
-    ) -> BoxFuture<'static, Result<(VarStore, f32, NP), ThoError>> {
+    ) -> BoxFuture<'static, Result<(TmpFile, f32, NP), ThoError>> {
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
 
             let device = Device::from(ThoDevice::from(ctx.tho_device_idx()));
             let epochs = (self.epochs)(&run_config);
 
-            let self_x_f = Arc::clone(&self);
-            let x_f: Arc<TrainStepXFn<DX>> = Arc::new(Box::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)));
-            let (train_step, params) = track_await(TrainStep::new(
-                ThoDevice::from(ctx.tho_device_idx()),
-                |var_store| (self.net)(ctx.branch(false), &run_config, var_store),
-                |run_config, var_store| (self.optimizer)(&run_config, var_store),
-                x_f,
-                self.loss_fn,
-                self.train_step_proxy_factory.as_ref(),
-                &run_config,
-            )).await?;
+            // The path is part of worker initialization so the state owner can
+            // checkpoint without exporting its VarStore.
+            std::fs::create_dir_all("/tmp/thoosa")?;
+            let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
+            let (train_step, params) = track_await(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
             static STEP_COUNT:AtomicU32 = AtomicU32::new(0);//TODO
             let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
@@ -264,10 +255,6 @@ where
                 None,
             );
 
-            //TODO configure in ws
-            std::fs::create_dir_all("/tmp/thoosa")?;
-            let best_checkpoint_path = TmpFile::new(PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>())));
-
             let mut best_valid_loss = f32::MAX;
 
             let mut saved_best = false;
@@ -287,7 +274,7 @@ where
                 while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
-                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true)));
+                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, best_valid_loss)));
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
@@ -322,7 +309,7 @@ where
                     while let Some(Ok((x_t_0, lengths, y_t))) = batches.next()
                         .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
                         .await {
-                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false)));
+                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false, best_valid_loss)));
                         let output = oom_handler.run(
                             &train_step,
                             input,
@@ -380,26 +367,21 @@ where
                 warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
             }
 
-            let train_step = Arc::try_unwrap(train_step).map_err(|_| ThoError::new("TrainNet::run_inner: TrainStep still shared after training"))?;
-            let var_store =  track_await(train_step.into_var_store()).await?;//nn::VarStore::new(device); //
-
-            Ok((var_store, best_valid_loss, params))
+            Ok((TmpFile::new(best_checkpoint_path), best_valid_loss, params))
         })
 
     }
 }
 
-impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> Stage for TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NP, FC> Stage for TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + Adjustable + 'static,
-    DX: Dims, DY: Dims,
+    DX: Dims + 'static,
+    DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY, C>,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    for<'a> NF:Fn(C, &'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
-    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -409,17 +391,15 @@ where
 }
 
 
-impl<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC> AsyncStage for TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
+impl<C, B, BF, DX, DY, P, RC, NP, FC> AsyncStage for TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    DX: Dims + 'static, DY: Dims + 'static,
+    DX: Dims + 'static,
+    DY: Dims + 'static,
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
-    for<'a> NF:Fn(C, &'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
-    FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
-    XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -439,7 +419,7 @@ where
 
             let descr = self.descr.clone();
             let validation_step = self.validation_step;
-            let (var_store, node_params, run_config, loss) = track_await(opt_train::<_, _, _, NP>(
+            let (var_store_path, node_params, run_config, loss) = track_await(opt_train::<_, _, _, NP, TmpFile>(
                 Arc::clone(&self.opt_config),
                 move |run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
                     debug!("TrainNet::run, about to call run_inner: descr={descr:?} run_config={:?}", run_config);
@@ -461,7 +441,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            Ok(Arc::new(DevicesWrap::wrap_plain(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store, node_params, run_config, loss))))
+            Ok(Arc::new(DevicesWrap::wrap_plain(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store_path, node_params, run_config, loss))))
         }
     }
 }
@@ -473,6 +453,7 @@ pub mod tests {
     use futures::stream::{self, BoxStream};
     use futures_util::StreamExt;
     use std::future::ready;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tch::Tensor;
@@ -487,10 +468,12 @@ pub mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::{AsyncStage, RunCtx};
     #[allow(unused_imports)]
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue};
-    use crate::tasks::train_net::{TrainNet, TrainNetInput};
+    use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
+    use crate::tasks::train_step::{TrainStep, TrainStepXFn};
+    use async_trait::async_trait;
     use futures::FutureExt;
     use futures_util::future::BoxFuture;
     use log::debug;
@@ -498,6 +481,8 @@ pub mod tests {
     use parking_lot::Mutex;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::train_nets::AdamWRangeOrValue;
+    use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
+    use thoosa_common::ipc::wraps::DynSyncStageWithStateEnum;
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -569,6 +554,32 @@ pub mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct DummyTrainStepFactory;
+
+    #[async_trait]
+    impl TrainStepFactory<DummyX, DummyY, MockRunCtx, (), DummyRunConfig> for DummyTrainStepFactory {
+        async fn new(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DummyX>, DummyX, DummyY, MockRunCtx>>, ()), ThoError> {
+            let x_f: Arc<TrainStepXFn<DummyX>> = Arc::new(Box::new(dummy_x_f));
+            let (stage, ()) = TrainStep::new_local(
+                ctx.tho_device_idx().into(),
+                move |_run_config, device| async move {
+                    let config = ModConfig::new(
+                        AdamW::default().amsgrad(true).into(),
+                        |var_store| Ok(Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(var_store.root() / "linear", 1, 1, LinearConfig::default(), #[cfg(any(debug_assertions, tho_debug))] "test_train_net".to_string())?) as Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>>),
+                        0.001,
+                    );
+                    Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+                },
+                x_f,
+                dummy_loss_fn,
+                run_config,
+                vs_path,
+            ).await?;
+            Ok((DynSyncStageWithStateEnum::Local(Arc::new(stage)), ()))
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_net() -> Result<(), ThoError> {
         X_F_CALLS.store(0, Ordering::SeqCst);
@@ -599,12 +610,6 @@ pub mod tests {
             }
             .opt_run_configs().expect("DummyRunConfigRangeOrValue::opt_run_configs should not fail"),
         );
-        let optimizer = |_rc: &DummyRunConfig, vs: &VarStore| {
-            AdamW::default()
-                .amsgrad(true)
-                .build(&vs, 0.001)
-                .map_err(ThoError::from)
-        };
         let epochs_count = 10u32;
         let epochs = move |_rc: &DummyRunConfig| epochs_count;
 
@@ -619,28 +624,12 @@ pub mod tests {
         let mut ctx = mock_run_ctx::default(1);
 
         let validation_step = 10;
-        let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _>> = Arc::new(
+        let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, (), _>> = Arc::new(
             TrainNet::new(
                 move |c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
-                |_:MockRunCtx, _rc: &DummyRunConfig, vs:Arc<Mutex<VarStore>>| {
-                    async move {
-                        let net: Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>> =
-                            Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(
-                                vs.lock().root() / "linear",
-                                1,
-                                1,
-                                LinearConfig::default(),
-                                #[cfg(any(debug_assertions, tho_debug))]
-                                "test_train_net".to_string(),
-                            )?);
-                        Ok((net, ())) // Net params, dummy
-                    }.boxed()
-                },
+                Arc::new(DummyTrainStepFactory),
                 Arc::clone(&opt_config),
                 Arc::clone(&run_config),
-                dummy_loss_fn,
-                optimizer,
-                dummy_x_f,
                 epochs,
                 validation_step,
                 "n/a".to_string(),
