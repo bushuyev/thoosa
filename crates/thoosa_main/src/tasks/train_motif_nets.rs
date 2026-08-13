@@ -432,7 +432,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
 {
-    pub fn new(
+    pub async fn new(
         loader:Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
@@ -445,11 +445,11 @@ where
         epoch_size: u32,
         descr: Option<String>
     ) -> Result<Self, ThoError> {
-        let motif_loader = Arc::new(MotifLoader::new(
+        let motif_loader = MotifLoader::new(
             Arc::clone(&store),
             Arc::clone(&loader),
             ws
-        ));
+        ).await?;
 
         let random_slices_loader = Arc::new(RandomSlicesLoader::new(
             Arc::clone(&store),
@@ -1576,7 +1576,7 @@ mod tests {
             run_configs,
             10,
             None
-        )?);
+        ).await?);
 
         let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)));
 

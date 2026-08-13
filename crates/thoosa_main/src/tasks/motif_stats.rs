@@ -1613,7 +1613,7 @@ mod tests {
             Arc::clone(&store),
             Arc::clone(&loader),
             Arc::clone(&ws),
-            Arc::new(MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), &ws)),
+            MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), &ws).await?,
         ));
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));

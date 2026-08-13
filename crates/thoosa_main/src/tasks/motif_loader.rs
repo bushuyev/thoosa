@@ -1,5 +1,6 @@
 #![allow(unexpected_cfgs)]
 
+use std::any::{Any, TypeId};
 use async_trait::async_trait;
 use cached_derive::Cached;
 use log::{debug, error, info, trace, warn};
@@ -9,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter, format};
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 use tch::Device::Cpu;
@@ -124,7 +125,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    id: MonoKey,
+    id: SynKey,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -136,18 +137,22 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    pub fn new(
+    pub async fn new(
         store: Arc<Box<dyn Store>>,
         loader: Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Self {
-        Self {
-            id: mono_key!(MOTIF_LOADER, "MotifLoader"),
+    ) -> Result<Arc<Self>, ThoError> {
+        let id:SynKey = mono_key!(MOTIF_LOADER, "MotifLoader").into();
+
+
+
+        Ok(Arc::new(Self {
+            id,
             store,
             loader,
             ws: Arc::clone(&ws),
             pd: Default::default(),
-        }
+        }))
     }
 }
 
@@ -559,21 +564,44 @@ where
     pd: PhantomData<C>,
 }
 
+static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
 impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncMotifLoader<C>>, ThoError> {
+    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
         let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
-        if GlobalCtx::global().is_ipc() {
+        let mut instances = INSTANCES.lock().await;
+
+
+        let cache = instances
+            .entry(TypeId::of::<C>())
+            .or_insert_with(|| {
+                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>::new())
+            })
+            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>>()
+            .unwrap();
+
+        if let Some(v) = cache.get(&id) {
+            return Ok(Arc::clone(v))
+        }
+
+        debug!("SyncMotifLoader::new: id={id:?} TypeId::of::<C>={:?}", TypeId::of::<C>());
+
+        let v = if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
             install_ipc_endpoint::<JsonIpcCodec, SynKey>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_MOTIF_LOADER_ENDPOINT, stage_id, &id).await?;
-            Ok(DynSyncStageEnum::Proxy {
+            Arc::new(DynSyncStageEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx())),
             })
         } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?)))
-        }
+            Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id.clone()).await?)))
+        };
+
+        cache.insert(id, Arc::clone(&v));
+
+        Ok(v)
     }
 
     pub async fn new_local(id: SynKey) -> Result<Self, ThoError>{
@@ -710,7 +738,7 @@ where
             "motif loader",
         )).await?;
         let loaded_resources_name = loaded_resources.registered_name();
-        let sync_motif_loader = Arc::new(SyncMotifLoader::new(ctx.tho_device_idx().into()).await?);
+        let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
 
         let sync_input = SyncMotifLoaderInputWrapper::new(
             input_id.clone(),
@@ -872,7 +900,7 @@ where
             "random loader",
         )).await?;
         let loaded_resources_name = loaded_resources.registered_name();
-        let sync_motif_loader = Arc::new(SyncMotifLoader::new(ctx.tho_device_idx().into()).await?);
+        let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
         let sync_input = SyncMotifLoaderInputWrapper::new(
             mono_key!(*motif_id_value, "random_slices_loader_input").into(),
             motif_id_value,
@@ -1767,7 +1795,7 @@ mod tests {
             )])
             .build();
 
-        let motif_loader = Arc::new(MotifLoader::new(
+        let motif_loader = MotifLoader::new(
             Arc::new(store),
             Arc::new(
                 mock_tensor_loader::build()
@@ -1779,7 +1807,7 @@ mod tests {
                     .finish(),
             ),
             &ws
-        ));
+        ).await?;
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
