@@ -24,7 +24,7 @@ use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
@@ -62,6 +62,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Adjustable;
+use crate::tasks::apply_motif_nets::{StackAppliedMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
@@ -562,12 +563,33 @@ impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn new() -> Self {
-        Self {
-            id: (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into(),
-            pd: PhantomData,
+    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncMotifLoader<C>>, ThoError> {
+        let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
+        if GlobalCtx::global().is_ipc() {
+            let stage_id = 0;
+            install_ipc_endpoint::<JsonIpcCodec, SynKey>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_MOTIF_LOADER_ENDPOINT, stage_id, &id).await?;
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx())),
+            })
+        } else {
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?)))
         }
     }
+
+    pub async fn new_local(id: SynKey) -> Result<Self, ThoError>{
+        Ok(Self {
+            id,
+            pd: PhantomData,
+        })
+    }
+}
+
+pub fn sync_motif_loader_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    use futures_util::FutureExt;
+    async move {
+        let init = JsonIpcCodec::decode(&init_msg)?;
+        Ok(Box::new(WorkerWrapper::new(Arc::new(SyncMotifLoader::<RunCtxImpl>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 impl<C> Adjustable for SyncMotifLoader<C>
@@ -597,6 +619,7 @@ impl<C> SyncStage for SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifLoader::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif = build_motif_from_loaded_resources(
@@ -618,71 +641,13 @@ where
             },
         ))
     }
-}
 
-#[derive(Debug)]
-enum SyncMotifLoaderDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    Shared(Arc<DynSyncStageEnum<SyncMotifLoader<RunCtxImpl>>>, PhantomData<C>),
-}
-
-impl<C> SyncMotifLoaderDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // The consuming shared wrapper removes worker tensor references only after success.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_MOTIF_LOADER_ENDPOINT, stage_id, &()).await?;
-            Ok(Self::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, tho_device_idx)) }), PhantomData))
-        } else {
-            Ok(Self::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(SyncMotifLoader::new()))), PhantomData))
+    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
+        match  self.do_run(&input, &ctx) {
+            Ok(r) => ConsumeResult::Ok(r),
+            Err(error) => ConsumeResult::Failed { input, error}
         }
     }
-}
-
-impl<C> Adjustable for SyncMotifLoaderDynSyncStage<C> where C: RunCtx + Adjustable + 'static {}
-
-impl<C> OutId for SyncMotifLoaderDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &SynKey::from((MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader")) + input_id
-    }
-}
-
-impl<C> Stage for SyncMotifLoaderDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type In<'a> = SyncMotifLoaderInput;
-    type Out = SyncMotifLoaderOutput;
-    type Ctx = C;
-}
-
-impl<C> SyncStage for SyncMotifLoaderDynSyncStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
-        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_MOTIF_LOADER_ENDPOINT);
-        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        let Self::Shared(stage, _) = self.as_ref();
-        Arc::clone(stage).consume(input, stage_ctx)
-    }
-}
-
-pub fn sync_motif_loader_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    use futures_util::FutureExt;
-    async move {
-        // The shared consuming wrapper owns decoded resources for the duration of motif assembly.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifLoader::<RunCtxImpl>::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
 }
 
 impl<L, C> Stage for MotifLoader<L, C>
@@ -745,7 +710,7 @@ where
             "motif loader",
         )).await?;
         let loaded_resources_name = loaded_resources.registered_name();
-        let sync_motif_loader = Arc::new(SyncMotifLoaderDynSyncStage::new(ctx.tho_device_idx()).await?);
+        let sync_motif_loader = Arc::new(SyncMotifLoader::new(ctx.tho_device_idx().into()).await?);
 
         let sync_input = SyncMotifLoaderInputWrapper::new(
             input_id.clone(),
@@ -907,7 +872,7 @@ where
             "random loader",
         )).await?;
         let loaded_resources_name = loaded_resources.registered_name();
-        let sync_motif_loader = Arc::new(SyncMotifLoaderDynSyncStage::new(ctx.tho_device_idx()).await?);
+        let sync_motif_loader = Arc::new(SyncMotifLoader::new(ctx.tho_device_idx().into()).await?);
         let sync_input = SyncMotifLoaderInputWrapper::new(
             mono_key!(*motif_id_value, "random_slices_loader_input").into(),
             motif_id_value,

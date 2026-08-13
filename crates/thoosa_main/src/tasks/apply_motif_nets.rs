@@ -56,7 +56,7 @@ use tracing::field::debug;
 use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 #[double]
@@ -71,9 +71,8 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::tracked_await::track_await;
-use crate::tasks::train_step_2::{APPLY_NET2_X_ENDPOINT, STACK_APPLIED_MOTIF_NETS};
 
-pub(crate) const APPLY_MOTIF_NET_ENDPOINT: &str = "APPLY_MOTIF_NET_ENDPOINT";
+pub const APPLY_MOTIF_NET_ENDPOINT: &str = "APPLY_MOTIF_NET_ENDPOINT";
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNets<C>
@@ -731,6 +730,7 @@ impl ConsumeData for StackAppliedMotifNetsInputWrapper {
     }
 }
 
+pub const STACK_APPLIED_MOTIF_NETS_ENDPOINT: &str = "STACK_APPLIED_MOTIF_NETS_ENDPOINT";
 
 #[derive(Debug, Named)]
 pub struct StackAppliedMotifNets<C>
@@ -748,9 +748,9 @@ where
     pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedMotifNets<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
-            install_ipc_endpoint::<JsonIpcCodec, ()>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, stage_id, &()).await?;
+            install_ipc_endpoint::<JsonIpcCodec, SynKey>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, &id).await?;
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS, stage_id, device.tho_device_idx())),
+                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, device.tho_device_idx())),
             })
         } else {
             Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?)))
@@ -764,6 +764,14 @@ where
         })
 
     }
+
+}
+
+pub fn stack_applied_motif_nets(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = JsonIpcCodec::decode(&init_msg)?;
+        Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedMotifNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 impl<C> Adjustable for StackAppliedMotifNets<C>
@@ -911,7 +919,7 @@ impl WorkerStageInput for ApplyMotifNetInit {
 
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ApplyMotifNetInput<'a> {
+pub struct ApplyMotifNetInput<'a> {
     batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
 }
 
@@ -1018,7 +1026,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
 
 
 #[derive(Debug)]
-struct ApplyMotifNet<C>
+pub struct ApplyMotifNet<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
@@ -1085,7 +1093,6 @@ where
     }
 }
 
-
 impl <C> ApplyMotifNet<C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
@@ -1124,9 +1131,9 @@ where
             // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
             let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
             // The proxy must dispatch with the id used to install this particular apply stage.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyMotifNetInit>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_NET2_X_ENDPOINT, apply_id, &init).await?;
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyMotifNetInit>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_MOTIF_NET_ENDPOINT, apply_id, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_NET2_X_ENDPOINT, apply_id, device.tho_device_idx())),
+                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx())),
                 init: MotifNetMeta::new(motif_id, channel, params),
             })
         } else {
@@ -1172,33 +1179,35 @@ where
         self.params.num_features()
     }
 
-    fn apply_motif_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-        async move {
-            let init = ApplyMotifNetInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
-            debug!("apply_net_stage_2_endpoint_init: init={init:?}");
-
-            let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-                   &init.motif_net_path,
-                   &Cuda(0),//TODO
-                   init.quantize
-            )?;
-
-            let stage: ApplyMotifNet<WokerRunCtx> = ApplyMotifNet::new_local(
-                init.slice_step,
-                params,
-                net,
-                init.channel,
-                init.motif_id,
-                #[cfg(test)]
-                init.fail_if_size_bigger_than
-            ).await?;
-
-            // The common stateful wrapper performs state preparation and converts worker outputs back to references.
-            Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-        }.boxed()
-    }
 
 }
+
+pub fn apply_motif_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = ApplyMotifNetInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        debug!("apply_net_stage_2_endpoint_init: init={init:?}");
+
+        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+                                                                           &init.motif_net_path,
+                                                                           &Cuda(0),//TODO
+                                                                           init.quantize
+        )?;
+
+        let stage: ApplyMotifNet<WokerRunCtx> = ApplyMotifNet::new_local(
+            init.slice_step,
+            params,
+            net,
+            init.channel,
+            init.motif_id,
+            #[cfg(test)]
+            init.fail_if_size_bigger_than
+        ).await?;
+
+        // The common stateful wrapper performs state preparation and converts worker outputs back to references.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
+
 
 impl <C> Adjustable for ApplyMotifNet<C>
 where
