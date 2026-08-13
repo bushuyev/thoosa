@@ -36,7 +36,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcWrapper};
-use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
@@ -45,6 +45,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::MutexGuard;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use crate::tasks::motif_loader::SyncMotifLoader;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
@@ -57,30 +58,19 @@ impl Dims for BandPassDims {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SyncFreqFilterIpcInit {
-    filter_configs: Vec<InputFilter>,
-    num_channels: i64,
-    sample_rate: f64,
-    find_motifs_run_config_id: RunConfigId
+    pub filter_configs: Vec<InputFilter>,
+    pub num_channels: i64,
+    pub sample_rate: f64,
+    pub find_motifs_run_config_id: RunConfigId,
+    pub tho_device_idx: usize
 }
 
-impl<C> From<&FreqFilter<C>> for SyncFreqFilterIpcInit
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn from(freq_filter: &FreqFilter<C>) -> Self {
-        Self {
-            filter_configs: freq_filter.filter_configs.clone(),
-            num_channels: freq_filter.num_channels,
-            sample_rate: freq_filter.sample_rate,
-            find_motifs_run_config_id: 0, //TODO
-        }
-    }
-}
 
 impl SyncFreqFilterIpcInit {
-    pub fn new(filter_configs: Vec<InputFilter>, num_channels: i64, sample_rate: f64, find_motifs_run_config_id: RunConfigId) -> Self {
+
+    pub fn new(filter_configs: Vec<InputFilter>, num_channels: i64, sample_rate: f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Self {
         //id: mono_key!(0, "").into(),
-        Self {  filter_configs, num_channels, sample_rate,find_motifs_run_config_id }
+        Self {  filter_configs, num_channels, sample_rate,find_motifs_run_config_id, tho_device_idx }
     }
 }
 
@@ -102,30 +92,67 @@ where
     pd:PhantomData<C>
 }
 
+static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
+pub fn sync_freq_filter_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = SyncFreqFilterIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let stage = SyncFreqFilter::<WokerRunCtx>::new_local(SyncFreqFilterIpcInit::new(
+            init.filter_configs.clone(),
+            init.num_channels,
+            init.sample_rate,
+            init.find_motifs_run_config_id,
+            1
+        ))?;
+
+        // The common stateful wrapper prepares filter tensors on the worker device before each synchronous invocation.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
+
+
 impl<C> SyncFreqFilter<C>
 where
     C: RunCtx + 'static,
 {
 
+    pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
+        let id = init.find_motifs_run_config_id;
+        let mut instances = INSTANCES.lock().await;
 
-    pub async fn new(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<DynSyncStageWithStateEnum<SyncFreqFilter<C>>, ThoError> {
 
-        if GlobalCtx::global().is_ipc() {
-            let init = SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id);
+        let cache = instances
+            .entry(init.find_motifs_run_config_id)
+            .or_insert_with(|| {
+                Box::new(HashMap::<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>::new())
+            })
+            .downcast_mut::<HashMap<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>>()
+            .unwrap();
+
+        if let Some(v) = cache.get(&init.find_motifs_run_config_id) {
+            return Ok(Arc::clone(v))
+        }
+
+        let v = if GlobalCtx::global().is_ipc() {
+
             // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, SyncFreqFilterIpcInit>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_FREQ_FILTER_ENDPOINT, find_motifs_run_config_id, &init).await?;
-            Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_FREQ_FILTER_ENDPOINT, find_motifs_run_config_id, tho_device_idx)),
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, SyncFreqFilterIpcInit>(GlobalCtx::global().cuda_actor(init.tho_device_idx).as_ref(), SYNC_FREQ_FILTER_ENDPOINT, init.find_motifs_run_config_id, &init).await?;
+            Arc::new(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_FREQ_FILTER_ENDPOINT, init.find_motifs_run_config_id, init.tho_device_idx)),
                 init: (),
             })
         } else {
-            Ok(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(filter_configs, num_channels, sample_rate, find_motifs_run_config_id)?)))
-        }
+            Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
+        };
+
+        cache.insert(id, Arc::clone(&v));
+
+        Ok(v)
     }
 
-    pub fn new_local(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId) ->Result<Self, ThoError>{
+    pub fn new_local(init:SyncFreqFilterIpcInit) ->Result<Self, ThoError>{
 
-        let filters = Self::prepare_filters(filter_configs, num_channels, sample_rate)?;
+        let filters = Self::prepare_filters(&init.filter_configs, init.num_channels, init.sample_rate)?;
         let filters_have_config = filters.iter().any(|f|{
             match f {
                 PreparedFilter::ZNorm { .. } => false,
@@ -143,7 +170,7 @@ where
             SynKey::new([
                 mono_key!(FREQ_FILTER, "FreqFilter"),
                 //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
-                mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
+                mono_key!(init.find_motifs_run_config_id, format!("find_motifs_run_config_id={}", init.find_motifs_run_config_id)),
             ])
         } else {
             SynKey::new([
@@ -155,8 +182,8 @@ where
         Ok(Self {
             id,
             filters: tokio::sync::Mutex::new(filters),
-            num_channels,
-            sample_rate,
+            num_channels:init.num_channels,
+            sample_rate:init.sample_rate,
             pd: Default::default(),
         })
     }
@@ -374,20 +401,6 @@ where
 
 impl SyncFreqFilter<WokerRunCtx> {}
 
-pub fn sync_freq_filter_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    async move {
-        let init = SyncFreqFilterIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
-        let stage = SyncFreqFilter::<WokerRunCtx>::new_local(
-            &init.filter_configs,
-            init.num_channels,
-            init.sample_rate,
-            init.find_motifs_run_config_id
-        )?;
-
-        // The common stateful wrapper prepares filter tensors on the worker device before each synchronous invocation.
-        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
 
 #[derive(Debug)]
 // This is public because the public StageWithState implementation exposes the prepared filters as its associated state.
@@ -431,12 +444,7 @@ where
     min_input_split_len:i64
 }
 
-type Cache = HashMap<
-    TypeId,
-    Box<dyn Any + Send + Sync>,
->;
 
-static CACHES: LazyLock<tokio::sync::Mutex<crate::tasks::transforms::freq_filter::Cache>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
 impl<C> FreqFilter<C>
 where
@@ -449,55 +457,33 @@ where
         let id:SynKey = mono_key!(find_motifs_run_config_id, "FreqFilter").into();
 
 
-
-        let mut caches = CACHES.lock().await;
-
-        let cache = caches
-            .entry(TypeId::of::<C>())
-            .or_insert_with(|| {
-                Box::new(HashMap::<SynKey, Arc<FreqFilter<C>>>::new())
-            })
-            .downcast_mut::<HashMap<SynKey, Arc<FreqFilter<C>>>>()
-            .unwrap();
+        let (num_channels, sample_rate)  = {
+            let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
+            (guard.channels() as i64, guard.sample_rate() as f64)
+        };
 
 
-        if let Some(v) = cache.get(&id) {
-            Ok(Arc::clone(v))
-        } else {
-            let (num_channels, sample_rate)  = {
-                let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
-                (guard.channels() as i64, guard.sample_rate() as f64)
-            };
+        let effective_output_stride = Self::effective_output_stride(filter_configs)?;
+        let min_input_split_len = Self::min_input_split_len(filter_configs)?;
+
+        let sync_freq_filter= SyncFreqFilter::new(
+            SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx)
+        ).await?;
 
 
-            let effective_output_stride = Self::effective_output_stride(filter_configs)?;
-            let min_input_split_len = Self::min_input_split_len(filter_configs)?;
-
-            let sync_freq_filter= Arc::new(SyncFreqFilter::new(
-                filter_configs, num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx
-            ).await?);
-
-
-            let v = Arc::new(Self {
-                //avoids caching each run_config separately when they have same filter - use filter_configs to build unique ids
-                id:id.clone(),
-                filter_configs: filter_configs.to_vec(),
-                _ctx: PhantomData,
-                num_channels,
-                sample_rate,
-                sync_freq_filter,
-                effective_output_stride,
-                min_input_split_len
-            });
-
-            cache.insert(id, Arc::clone(&v));
-            Ok(v)
-        }
-
+        Ok(Arc::new(Self {
+            //avoids caching each run_config separately when they have same filter - use filter_configs to build unique ids
+            id:id.clone(),
+            filter_configs: filter_configs.to_vec(),
+            _ctx: PhantomData,
+            num_channels,
+            sample_rate,
+            sync_freq_filter,
+            effective_output_stride,
+            min_input_split_len
+        }))
 
     }
-
-
 
     fn run_conv_with_padding(&self, stride: u32, padding: &Padding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
         let t = input_t.size()[1];
@@ -887,7 +873,7 @@ where
 mod tests {
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::stft::SyncStftSelector;
-    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter};
+    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use crate::tasks::transforms::smoothing::{median, moving_average};
     use log::debug;
     use parking_lot::RwLock;
@@ -957,7 +943,7 @@ mod tests {
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], 2, 100.0, 1)?).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })], 2, 100.0, 1, 1))?).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
         let expected = median(input.as_ref(), 5)?;
         let output_flat = output.as_ref().f_view([-1])?;
         let expected_flat = expected.f_view([-1])?;
@@ -974,7 +960,7 @@ mod tests {
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0 )?).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0, 1) )?).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
         let expected = moving_average(input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));

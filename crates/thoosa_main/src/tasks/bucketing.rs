@@ -1612,11 +1612,11 @@ mod tests {
 
         debug!("res={res:?} motifs={motifs:?}");
 
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
+        let motif_loader_impl = MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
             Arc::clone(&store),
             Arc::clone(&loader),
             &ws
-        ));
+        ).await?;
 
         let motif_stats = Arc::new(MotifStats::new(
             Arc::clone(&store),
@@ -1866,11 +1866,11 @@ mod tests {
 
         debug!("res={res:?} motifs={motifs:?}");
 
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
+        let motif_loader_impl = MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
             Arc::clone(&store),
             Arc::clone(&loader),
             &ws
-        ));
+        ).await?;
 
         let motif_stats = Arc::new(MotifStats::new(
             Arc::clone(&store),

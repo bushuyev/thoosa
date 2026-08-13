@@ -211,11 +211,11 @@ pub(crate) async fn run_all(
                                     &ws_for_select_buckets,
                                     &store_for_select_buckets,
                                     Arc::clone(&loader_for_select_buckets),
-                                    Arc::new(MotifLoader::new(
+                                    MotifLoader::new(
                                         Arc::clone(&store_for_select_buckets),
                                         Arc::clone(&loader_for_select_buckets),
                                         &ws_for_select_buckets
-                                    )),
+                                    ).await?,
                                     run_configs,
                                     find_motifs_run_config_ids_for_select_buckets,
                                     select_motifs_input_for_select_buckets,
@@ -253,7 +253,7 @@ pub(crate) async fn run_all(
                                     run_configs,
                                     run_all_args.train_motifs_epoch_size,
                                     Some(label.clone())
-                                )?))
+                                ).await?))
                             },
                             || label_ctx.branch(false),
                         ).instrument(tracing::debug_span!("run_all/6", file = file!(), line = line!())).await?;

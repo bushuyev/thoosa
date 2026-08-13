@@ -1188,9 +1188,9 @@ pub fn apply_motif_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn W
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
         let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-                                                                           &init.motif_net_path,
-                                                                           &Cuda(0),//TODO
-                                                                           init.quantize
+           &init.motif_net_path,
+           &Cuda(0),//TODO
+           init.quantize
         )?;
 
         let stage: ApplyMotifNet<WokerRunCtx> = ApplyMotifNet::new_local(
