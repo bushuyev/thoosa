@@ -5,12 +5,13 @@
 mod data;
 mod run_all;
 
+use crate::run_all::{run_all, run_all_config_0};
+use clap::Parser;
+use log::{debug, error, info};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use log::{debug, error, info};
 use std::time::Instant;
-use clap::Parser;
-use parking_lot::RwLock;
 use tch::Device;
 use tch::Device::{Cpu, Cuda};
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
@@ -21,22 +22,22 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
-use thoosa_common::ws::{WsConfigs, Workspace};
-use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
+use thoosa_common::ws::{Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::tasks::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
-use thoosa_main::tasks::motif_stats::{motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init, MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT};
-use thoosa_main::tasks::tensor_loader::{sync_raw_tensor_loader_endpoint_init, SYNC_RAW_TENSOR_LOADER_ENDPOINT};
+use thoosa_main::cli::{Cli, RunAllArgs, run_cli};
+use thoosa_main::tasks::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets};
+use thoosa_main::tasks::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
+use thoosa_main::tasks::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
+use thoosa_main::tasks::tensor_loader::{SYNC_RAW_TENSOR_LOADER_ENDPOINT, sync_raw_tensor_loader_endpoint_init};
 use thoosa_main::tasks::train_final_net::train_final_step_endpoint_inits;
 use thoosa_main::tasks::train_label_nets::train_label_step_endpoint_inits;
 use thoosa_main::tasks::train_motif_nets::train_motif_step_endpoint_inits;
-use thoosa_main::tasks::transforms::freq_filter::{sync_freq_filter_endpoint_init, SYNC_FREQ_FILTER_ENDPOINT};
+use thoosa_main::tasks::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, sync_freq_filter_endpoint_init};
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::{ThoError, cdt_for_dir};
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_shared::{cdt_for_dir, ThoError};
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
-use crate::run_all::{run_all, run_all_config_0};
-use thoosa_shared::tracked_await::track_await;
 
 fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
     let mut endpoints = train_motif_step_endpoint_inits();
@@ -63,6 +64,14 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
         (
             SYNC_RAW_TENSOR_LOADER_ENDPOINT.to_string(),
             Box::new(sync_raw_tensor_loader_endpoint_init) as InitFn,
+        ),
+        (
+            APPLY_MOTIF_NET_ENDPOINT.to_string(),
+            Box::new(apply_motif_net_endpoint_init) as InitFn,
+        ),
+        (
+            STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
+            Box::new(stack_applied_motif_nets) as InitFn,
         ),
     ]);
     endpoints

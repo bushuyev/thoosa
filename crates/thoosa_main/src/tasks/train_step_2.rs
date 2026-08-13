@@ -47,7 +47,7 @@ use tokio::sync::{MutexGuard, RwLockReadGuard};
 // endpoint name in both normal and cfg(test) builds.
 pub(crate) const TRAIN_TEST_STEP2_ENDPOINT: &str = "TRAIN_TEST_STEP2_ENDPOINT";
 pub(crate) const APPLY_NET2_X_ENDPOINT: &str = "APPLY_NET2_X_ENDPOINT";
-pub(crate) const STACK_APPLIED_MOTIF_NETS: &str = "StackAppliedMotifNets";
+
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
