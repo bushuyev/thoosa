@@ -14,6 +14,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::{IndexOp, Kind, Tensor};
+use tch::Device::Cuda;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d, cosine_conv2d_bank_logits};
@@ -283,14 +284,14 @@ where
             let res = track_await(oom_handler.run(&apply_sync, apply_sync_input, ctx.branch(false), NoContexts)).await?.motifs_applied;
 
             //TODO stretch motifs in StackAppliedMotifNets
-            let batch = Arc::new(StackAppliedMotifNets::<C>::new(mono_key!(0, "StackAppliedMotifNets").into()));
+            let batch = Arc::new(StackAppliedMotifNets::<C>::new(mono_key!(0, "StackAppliedMotifNets").into(), Cuda(0).into()).await?);
 
             match batch.consume(StackAppliedMotifNetsInput::new(self.out_id(&input_id), res, ctx.tho_device_idx()), ctx.branch(false)) {
                 ConsumeResult::Failed { input, error } => {
                     Err(ThoError::from(error))
                 }
                 ConsumeResult::Ok(v) => {
-                    Ok(Arc::new(v))
+                    Ok(Arc::new(DevicesWrap::wrap(v)))
                 }
             }
         }
