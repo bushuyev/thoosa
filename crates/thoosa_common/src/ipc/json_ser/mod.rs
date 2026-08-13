@@ -153,7 +153,8 @@ where
 
         let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
         debug!("IpcSyncStageWrapper::do_run: out={out:?}");
-        out.encode_from_worker::<C>(_all_cuda_tensors, _tho_device)
+        // WorkerStageOutput only converts worker-owned fields; encode the complete output once.
+        C::encode(&out.encode_from_worker(_all_cuda_tensors, _tho_device)?)
     }
 
     fn consume_response(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
@@ -163,7 +164,7 @@ where
 
         match Arc::clone(&self.sync_stage).consume(input, ctx) {
             thoosa_shared::traits::ConsumeResult::Ok(output) => {
-                let response = output.encode_from_worker::<C>(all_cuda_tensors, _tho_device)?;
+                let response = C::encode(&output.encode_from_worker(all_cuda_tensors, _tho_device)?)?;
                 Ok(SyncStageIpcConsumeResponse::encoded(response, consumed_tensor_keys))
             }
             thoosa_shared::traits::ConsumeResult::Failed { error, .. } => Err(error),

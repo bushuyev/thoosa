@@ -619,19 +619,19 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 }
 
 impl thoosa_common::ipc::cuda_wokrer::WorkerStageOutput for CrossUnfoldClcOutput<DistsMask> {
-    fn encode_from_worker<C: thoosa_common::ipc::codec::IpcCodec>(
+    fn encode_from_worker(
         self,
         all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
         tho_device: &ThoDevice,
-    ) -> Result<Vec<u8>, ThoError> {
+    ) -> Result<Self, ThoError> {
         let Self {
             id,
             clc_result,
             iter_0,
             iter_1,
         } = self;
-        let clc_result = clc_result.into_worker_ipc_refs(all_cuda_tensors, tho_device)?;
-        C::encode(&CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, id))
+        let clc_result = clc_result.encode_from_worker(all_cuda_tensors, tho_device)?;
+        Ok(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, id))
     }
 }
 
