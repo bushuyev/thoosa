@@ -11,27 +11,29 @@ use dashmap::DashMap;
 use futures_util::future::BoxFuture;
 use log::{debug, error, LevelFilter};
 use parking_lot::{Mutex, RwLock};
-use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
+use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError, CopyToDevice};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tch::{Device, Tensor};
 use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Serializer;
 use tracing::field::debug;
-use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::perf_logging::init_tracing;
 use crate::cuda_utils::cuda_mem_for_device;
 use crate::dims::Dims;
-use crate::ipc::codec::IpcCodec;
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
+use crate::ipc::proxy_tests::TestOutput;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -564,6 +566,21 @@ where
     }
 }
 
+
+impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
+where
+    D: WorkerStageOutput + Data + CopyToDevice + WithId,
+    E: Serialize + Debug + Send + Sync,
+{
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+
+        JsonIpcCodec::encode(&DataWithExtra::new(
+            self.data.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?,
+            self.extra(),
+        ))
+    }
+}
+
 impl<D, Id> ThoTensor<D, Id>
 where
     D: Dims,
@@ -653,6 +670,10 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
 pub struct WokerRunCtx {
     tho_device_idx: usize,
     max_other_parallel: u8,
+}
+
+impl Adjustable for WokerRunCtx {//TODO, remove Adjustable bounds in stages + run_cached
+
 }
 
 impl WokerRunCtx {

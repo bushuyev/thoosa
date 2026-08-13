@@ -156,14 +156,14 @@ where
         out.encode_from_worker::<C>(_all_cuda_tensors, _tho_device)
     }
 
-    fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
+    fn consume_response(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
 
-        let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<C>(&C::decode::<IpcSyncStageRunInput>(_input)?.input(), _all_cuda_tensors)?;
+        let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<C>(&C::decode::<IpcSyncStageRunInput>(_input)?.input(), all_cuda_tensors)?;
         let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), self.endpoint_name);
 
         match Arc::clone(&self.sync_stage).consume(input, ctx) {
             thoosa_shared::traits::ConsumeResult::Ok(output) => {
-                let response = output.encode_from_worker::<C>(_all_cuda_tensors, _tho_device)?;
+                let response = output.encode_from_worker::<C>(all_cuda_tensors, _tho_device)?;
                 Ok(SyncStageIpcConsumeResponse::encoded(response, consumed_tensor_keys))
             }
             thoosa_shared::traits::ConsumeResult::Failed { error, .. } => Err(error),
