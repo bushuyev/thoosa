@@ -28,11 +28,12 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::perf_logging::init_tracing;
 use crate::cuda_utils::cuda_mem_for_device;
 use crate::dims::Dims;
-use crate::ipc::codec::IpcCodec;
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
+use crate::ipc::proxy_tests::TestOutput;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -568,11 +569,15 @@ where
 
 impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
 where
-    D: Data + CopyToDevice + WithId,
+    D: WorkerStageOutput + Data + CopyToDevice + WithId,
     E: Serialize + Debug + Send + Sync,
 {
     fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        todo!()
+
+        JsonIpcCodec::encode(&DataWithExtra::new(
+            self.data.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?,
+            self.extra(),
+        ))
     }
 }
 

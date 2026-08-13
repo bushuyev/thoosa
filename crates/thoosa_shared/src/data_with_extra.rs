@@ -1,7 +1,8 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 use async_trait::async_trait;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::ser::SerializeStruct;
 use thoosa_shared::traits::{Adjustable, ThoSelector};
 use crate::applicables_runner::{Input, Output};
 use crate::{CopyToDevice, ThoError};
@@ -36,16 +37,46 @@ where
     }
 }
 
+impl <D, E> Serialize for DataWithExtra<D, E>
+where
+    D: Serialize + Data + CopyToDevice + WithId + Sync,
+    E: Serialize + Debug + Send + Sync,
+
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer
+    {
+        let mut state = serializer.serialize_struct("DataWithExtra", 2)?;
+
+        state.serialize_field("data", &self.data)?;
+        state.serialize_field("extra", self.extra.as_ref())?;
+
+        state.end()
+    }
+}
+
 impl <'de, Da, E> Deserialize<'de > for DataWithExtra<Da, E>
 where
-    Da: Data + CopyToDevice + WithId + Sync,
-    E: Debug + Send + Sync,
+    Da: Deserialize<'de> + Data + CopyToDevice + WithId + Sync,
+    E: Deserialize<'de> + Debug + Send + Sync,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>
     {
-        todo!()
+        #[derive(Deserialize)]
+        struct DataWithExtra_<Da, E> {
+            data: Da,
+            extra: E,
+        }
+
+        let helper = DataWithExtra_::<Da, E>::deserialize(deserializer)?;
+
+        Ok(DataWithExtra{
+            data: helper.data,
+            extra: Arc::new(helper.extra)
+        })
     }
 }
 

@@ -186,16 +186,33 @@ impl<'a, C> InputContext<'a, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNe
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
-        todo!()
+    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {//TODO move impl to ApplyMotifNetSplitsContext
+        let input_len = self.input_len.dim::<1>();
+        let split_start = self.done_to.dim::<1>();
+        let split_len = self.split_len.dim::<1>();
+        let valid_len = valid_partial_output_len(input_len, split_start, split_len, self.motif_width, self.slice_step);
+        let partial_len = partial.size()[0];
+
+        debug!("ApplyMotifNetSplitsContext::add_partial_output: input_len={input_len} split_start={split_start} split_len={split_len} motif_width={} slice_step={} partial_len={partial_len} valid_len={valid_len}", self.motif_width, self.slice_step);
+
+        if valid_len > 0 {
+            self.output
+                .narrow(0, self.added_partial_output_len, valid_len)
+                .copy_(&partial.t_ref().narrow(0, 0, valid_len));
+            self.added_partial_output_len += valid_len;
+        }
+
+        self.done_to += self.split_len.clone();
+
+        debug!("ApplyMotifNetSplitsContext::add_partial_output: done_to={:?} split_len={:?}", self.done_to, self.split_len);
     }
 
     fn all_done(&self) -> bool {
-        todo!()
+        self.done_to >= self.input_len
     }
 
     async fn build_final_output(self) -> Result<<ApplyMotifNet<C> as Stage>::Out, ThoError> {
-        todo!()
+        ThoTensor::new(self.output_id, self.output)
     }
 }
 
@@ -203,7 +220,7 @@ impl<'a, C> InputContext<'a, ApplyMotifNet<C>> for ApplyMotifNetSplitsContext
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
+    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {//TODO move impl to ApplyMotifNetSplitsContext
         let input_len = self.input_len.dim::<1>();
         let split_start = self.done_to.dim::<1>();
         let split_len = self.split_len.dim::<1>();
