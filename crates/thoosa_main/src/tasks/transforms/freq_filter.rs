@@ -457,8 +457,6 @@ where
         let id:SynKey = mono_key!(find_motifs_run_config_id, "FreqFilter").into();
 
 
-
-
         let (num_channels, sample_rate)  = {
             let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
             (guard.channels() as i64, guard.sample_rate() as f64)
@@ -486,8 +484,6 @@ where
         }))
 
     }
-
-
 
     fn run_conv_with_padding(&self, stride: u32, padding: &Padding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
         let t = input_t.size()[1];
