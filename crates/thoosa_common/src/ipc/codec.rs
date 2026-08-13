@@ -171,10 +171,8 @@ where
     I: Debug + Serialize + ?Sized,
     O: Debug + DeserializeOwned,
 {
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} 0. input={input:?}");
 
     let input = C::encode(input)?;
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id} 1. input={input:?}");
 
     let input = encode_sync_stage_run_input::<C>(&input)?;
 

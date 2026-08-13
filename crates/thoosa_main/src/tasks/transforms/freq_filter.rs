@@ -372,21 +372,17 @@ where
     }
 }
 
-impl SyncFreqFilter<WokerRunCtx> {
-    pub(crate) fn new_for_ipc(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
-        Ok(Self::new_local(
-            &init.filter_configs,
-            init.num_channels,
-            init.sample_rate,
-            init.find_motifs_run_config_id
-        )?)
-    }
-}
+impl SyncFreqFilter<WokerRunCtx> {}
 
 pub fn sync_freq_filter_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = SyncFreqFilterIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
-        let stage = SyncFreqFilter::<WokerRunCtx>::new_for_ipc(init)?;
+        let stage = SyncFreqFilter::<WokerRunCtx>::new_local(
+            &init.filter_configs,
+            init.num_channels,
+            init.sample_rate,
+            init.find_motifs_run_config_id
+        )?;
 
         // The common stateful wrapper prepares filter tensors on the worker device before each synchronous invocation.
         Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
