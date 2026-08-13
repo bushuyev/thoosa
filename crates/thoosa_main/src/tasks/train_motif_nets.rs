@@ -829,12 +829,12 @@ impl WithId for SyncMotifBatchOutput {
 impl Output for SyncMotifBatchOutput {}
 
 impl WorkerStageOutput for SyncMotifBatchOutput {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, x, y } = self;
-        //TODO fix encode/decode/encode
-        let x = C::decode::<ThoTensor<Batch<Slice>, SynKey>>(&<ThoTensor<Batch<Slice>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(x, all_cuda_tensors, tho_device)?)?;
-        let y = C::decode::<ThoTensor<Batch<MotifProbability>, SynKey>>(&<ThoTensor<Batch<MotifProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(y, all_cuda_tensors, tho_device)?)?;
-        C::encode(&Self { id, x, y })
+        // Convert tensor fields first so the wrapper can encode this output exactly once.
+        let x = x.encode_from_worker(all_cuda_tensors, tho_device)?;
+        let y = y.encode_from_worker(all_cuda_tensors, tho_device)?;
+        Ok(Self { id, x, y })
     }
 }
 
@@ -1093,12 +1093,12 @@ impl WithId for SplitMotifIntoTrainValidOutput {
 impl Output for SplitMotifIntoTrainValidOutput {}
 
 impl WorkerStageOutput for SplitMotifIntoTrainValidOutput {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, train_motifs, valid_motifs, num_motif_slices } = self;
-        //TODO fix encode/decode/encode
-        let train_motifs = C::decode::<ThoTensor<MotifSlices, SynKey>>(&<ThoTensor<MotifSlices, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(train_motifs, all_cuda_tensors, tho_device)?)?;
-        let valid_motifs = C::decode::<ThoTensor<MotifSlices, SynKey>>(&<ThoTensor<MotifSlices, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(valid_motifs, all_cuda_tensors, tho_device)?)?;
-        C::encode(&Self { id, train_motifs, valid_motifs, num_motif_slices })
+        // Convert tensor fields first so the wrapper can encode this output exactly once.
+        let train_motifs = train_motifs.encode_from_worker(all_cuda_tensors, tho_device)?;
+        let valid_motifs = valid_motifs.encode_from_worker(all_cuda_tensors, tho_device)?;
+        Ok(Self { id, train_motifs, valid_motifs, num_motif_slices })
     }
 }
 

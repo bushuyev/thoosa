@@ -176,12 +176,12 @@ impl WithId for SyncLabelBatchOutput {
 impl Output for SyncLabelBatchOutput {}
 
 impl WorkerStageOutput for SyncLabelBatchOutput {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, x, lengths, y } = self;
-        //TODO fix encode/decode/encode
-        let x = C::decode::<ThoTensor<Batch<MotifProbability>, SynKey>>(&<ThoTensor<Batch<MotifProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(x, all_cuda_tensors, tho_device)?)?;
-        let y = C::decode::<ThoTensor<Batch<LabelProbability>, SynKey>>(&<ThoTensor<Batch<LabelProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(y, all_cuda_tensors, tho_device)?)?;
-        C::encode(&Self { id, x, lengths, y })
+        // Convert tensor fields first so the wrapper can encode this output exactly once.
+        let x = x.encode_from_worker(all_cuda_tensors, tho_device)?;
+        let y = y.encode_from_worker(all_cuda_tensors, tho_device)?;
+        Ok(Self { id, x, lengths, y })
     }
 }
 
