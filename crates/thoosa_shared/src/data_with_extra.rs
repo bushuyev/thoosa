@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 use async_trait::async_trait;
+use serde::{Deserialize, Deserializer};
 use thoosa_shared::traits::{Adjustable, ThoSelector};
 use crate::applicables_runner::{Input, Output};
 use crate::{CopyToDevice, ThoError};
@@ -17,7 +18,6 @@ where
     extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
 }
 
-
 impl<D, E> DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId,
@@ -33,6 +33,19 @@ where
 
     pub fn extra(&self) -> &E {
         &self.extra
+    }
+}
+
+impl <'de, Da, E> Deserialize<'de > for DataWithExtra<Da, E>
+where
+    Da: Data + CopyToDevice + WithId + Sync,
+    E: Debug + Send + Sync,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>
+    {
+        todo!()
     }
 }
 

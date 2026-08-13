@@ -85,7 +85,7 @@ impl SyncClcStage {
             ClcDynSyncStage {
                 id,
                 fail_until_dump_to_cpu: !dumped.is_empty(),
-                stage: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLC_ENDPOINT, 0, device.tho_device_idx())) }),
+                stage: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLC_ENDPOINT, 0, device.tho_device_idx())), init: () }),
             }
         } else {
             ClcDynSyncStage {
