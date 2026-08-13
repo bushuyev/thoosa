@@ -598,13 +598,13 @@ where
             let freq_filter = if import_resources_args.freq_filters.is_empty() {
                 None
             } else {
-                Some(Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(
-                    import_resources_args.freq_filters.as_slice(),
+                Some(Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
+                    import_resources_args.freq_filters.clone(),
                     ws.read().channels() as i64,
                     ws.read().sample_rate() as f64,
                     0,
-                    // root_ctx.tho_device_idx(),
-                )?))
+                    root_ctx.tho_device_idx(),
+                ))?))
             };
             track_await(import_resources(
                 &ws,
@@ -700,11 +700,11 @@ where
 
             let input_wrapper = Arc::new(SelectMotifsInput::standalone(ResourcesConfigInput::new(select_motifs_args.resource_config())));
             //TODO move it into SelectMotifsStage
-            let motif_loader = Arc::new(MotifLoader::new(
+            let motif_loader = MotifLoader::new(
                 Arc::clone(&store),
                 Arc::clone(&loader),
                 &ws
-            ));
+            ).await?;
 
             let run_config_ids = track_await(run_grid::</*Labeled,*/ _, _, _, _, _>(
                 None,
@@ -737,11 +737,11 @@ where
                 Arc::clone(&store),
                 Arc::clone(&loader),
                 Arc::clone(&ws),
-                Arc::new(MotifLoader::new(
+                MotifLoader::new(
                     Arc::clone(&store),
                     Arc::clone(&loader),
                     &ws
-                ))
+                ).await?
             ));
 
             let output = track_await(Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
@@ -775,7 +775,7 @@ where
                         run_configs,
                         train_motif_nets_args.epoch_size,
                         None,
-                    )?))
+                    ).await?))
                 },
                 || root_ctx.branch(true),
             )).await?;
@@ -1255,11 +1255,12 @@ where
 
     let print_to_stdout = plot_params.print_to_stdout();
 
-    let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<C>, C>::new(
+    let motif_loader_impl = MotifLoader::<RawTensorLoader<C>, C>::new(
         Arc::clone(store),
         Arc::clone(loader),
         ws
-    ));
+    ).await?;
+
     let clc_dist = Arc::new(MotifStats::new(
         Arc::clone(store),
         Arc::clone(loader),
@@ -2127,7 +2128,7 @@ mod cli_tests {
     use crate::tasks::slices_stats::{Aggr, Metrics};
     use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter};
+    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -2508,13 +2509,13 @@ mod cli_tests {
                            32000)
         )?));
         let store = Arc::new(SqlStore::in_mem().await?);
-        let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(
-            &[InputFilter::MedianFilter(MedianFilterParams { window: 5 })],
+        let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
+            vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })],
             ws.read().channels() as i64,
             ws.read().sample_rate() as f64,
             0,
-            // root_ctx.tho_device_idx(),
-        )?);
+            1,
+        ))?);
 
         let imported_ids = import_resources(
             &ws,

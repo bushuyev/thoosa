@@ -167,11 +167,11 @@ pub(crate) async fn run_all(
                             &ws,
                             &store,
                             Arc::clone(&loader),
-                            Arc::new(MotifLoader::new(
+                            MotifLoader::new(
                                 Arc::clone(&store),
                                 Arc::clone(&loader),
                                 &ws
-                            )),
+                            ).await?,
                             run_configs,
                             vec![*find_motifs_run_config_id],
                             // #[cfg(test)]
@@ -250,7 +250,7 @@ pub(crate) async fn run_all(
                 run_configs,
                 run_all_args.train_motifs_epoch_size,
                 None,
-            )?))
+            ).await?))
         },
         || root_ctx.branch(true),
     )).await?;
@@ -762,24 +762,29 @@ mod tests {
 
     #[test]
     fn heavy_test_run_all_ipc() -> Result<(), ThoError> {
-
+        let test_fn_name = "heavy_test_run_all_ipc";
         run_ipc_test(
             async {
                 let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::heavy_test_run_all_ipc");
+                let test_name = format!("{module}::{test_fn_name}");
                 GlobalCtx::init_devices_ipc(2, vec![
                     test_name, "--exact".to_string(),
                     "--nocapture".to_string(), "--no-capture".to_string(),
                 ]).await?;
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                do_heavy_test_run_all("heavy_test_run_all_ipc").await?;
+
+                do_heavy_test_run_all(test_fn_name).await?;
 
                 Ok(())
             },
             async |sock_path| {
                 // set_max_level(Debug);
+                let test_dir = Path::new("/tmp").join(test_fn_name);
                 return {
-                    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                    let ws = Arc::new(RwLock::new(FsWorkspace::new(
+                        test_dir.clone(),
+                        WsConfigs::new(1, 0, 100)
+                    )?));
                     CudaWorker::run_worker(sock_path, &ws,  crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await
                 }
             }
