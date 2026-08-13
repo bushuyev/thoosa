@@ -450,10 +450,9 @@ impl WithId for SyncMotifLoaderOutput {
 impl Output for SyncMotifLoaderOutput {}
 
 impl WorkerStageOutput for SyncMotifLoaderOutput {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        //TODO fix encode/decode/encode
-        let motif = C::decode::<ThoTensor<MotifSlices, SynKey>>(&<ThoTensor<MotifSlices, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(self.motif, all_cuda_tensors, tho_device)?)?;
-        C::encode(&Self::new(motif, self.motif_meta))
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        // Convert the tensor field first so the wrapper can encode this output exactly once.
+        Ok(Self::new(self.motif.encode_from_worker(all_cuda_tensors, tho_device)?, self.motif_meta))
     }
 }
 

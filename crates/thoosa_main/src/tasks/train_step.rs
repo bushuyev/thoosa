@@ -437,7 +437,7 @@ where
 }
 
 impl WorkerStageOutput for TrainStepOutput {
-    fn encode_from_worker<C: IpcCodec>(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        C::encode(&self)
+    fn encode_from_worker(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        Ok(self)
     }
 }

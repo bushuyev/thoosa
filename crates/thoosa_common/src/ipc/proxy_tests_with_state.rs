@@ -113,10 +113,8 @@ impl WithId for TestOutput {
 
 
 impl WorkerStageOutput for TestOutput {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        JsonIpcCodec::encode(&TestOutput{
-            value: self.value.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?,
-        })
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        Ok(TestOutput { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
     }
 }
 

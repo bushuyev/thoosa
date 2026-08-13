@@ -463,7 +463,8 @@ where
         let out = Arc::clone(&self.base).do_run(&input, &stage_ctx)?;
 
 
-        out.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, _tho_device)
+        // Convert nested worker outputs before encoding the complete stage output.
+        Co::encode(&out.encode_from_worker(all_cuda_tensors, _tho_device)?)
 
     }
 
@@ -474,7 +475,7 @@ where
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx(), max_other_parallel.unwrap_or_else(|| run_ctx.max_other_parallel()));
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
         match Arc::clone(&self.base).consume(input, stage_ctx) {
-            ConsumeResult::Ok(output) => Ok(SyncStageIpcConsumeResponse::encoded(output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)?, consumed_tensor_keys)),
+            ConsumeResult::Ok(output) => Ok(SyncStageIpcConsumeResponse::encoded(Co::encode(&output.encode_from_worker(all_cuda_tensors, tho_device)?)?, consumed_tensor_keys)),
             ConsumeResult::Failed { error, .. } => Err(error),
         }
     }
@@ -569,7 +570,7 @@ where
                 let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &stage_ctx)?;
                 debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
 
-                output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+                Co::encode(&output.encode_from_worker(all_cuda_tensors, tho_device)?)
             })
         }).map(SyncStageIpcResponse::Encoded)
     }

@@ -1071,8 +1071,8 @@ mod tests {
     }
 
     impl WorkerStageOutput for TrainStep2Output {
-        fn encode_from_worker<C: IpcCodec>(self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-            C::encode(&self)
+        fn encode_from_worker(self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+            Ok(self)
         }
     }
 
@@ -1339,13 +1339,12 @@ mod tests {
     where
         DO:Dims,
     {
-        fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-            let output = ApplyNetStage2Output {
+        fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+            Ok(ApplyNetStage2Output {
                 id: self.id,
-                y: self.y.worker_tensor_to_ref(all_cuda_tensors, tho_device)?,
+                y: self.y.encode_from_worker(all_cuda_tensors, tho_device)?,
                 lengths: self.lengths,
-            };
-            C::encode(&output)
+            })
         }
     }
 

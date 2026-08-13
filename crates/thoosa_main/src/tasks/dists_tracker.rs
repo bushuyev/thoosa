@@ -16,7 +16,6 @@ use tch::{Kind, Tensor};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::dims::AnyDims;
-use thoosa_common::ipc::codec::IpcCodec;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageOutput, insert_worker_tensor};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
@@ -882,8 +881,8 @@ impl<'de> Deserialize<'de> for DistsMask {
 }
 
 impl WorkerStageOutput for DistsMask {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        C::encode(&self.into_worker_ipc_refs(all_cuda_tensors, tho_device)?)
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        self.into_worker_ipc_refs(all_cuda_tensors, tho_device)
     }
 }
 
