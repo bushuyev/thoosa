@@ -28,7 +28,7 @@ use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -570,7 +570,7 @@ impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
+    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageWithStateEnum<SyncMotifLoader<C>>>, ThoError> {
         let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
         let mut instances = INSTANCES.lock().await;
 
@@ -578,9 +578,9 @@ where
         let cache = instances
             .entry(TypeId::of::<C>())
             .or_insert_with(|| {
-                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>::new())
+                Box::new(HashMap::<SynKey, Arc<DynSyncStageWithStateEnum<SyncMotifLoader<C>>>>::new())
             })
-            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>>()
+            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageWithStateEnum<SyncMotifLoader<C>>>>>()
             .unwrap();
 
         if let Some(v) = cache.get(&id) {
@@ -592,11 +592,12 @@ where
         let v = if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
             install_ipc_endpoint::<JsonIpcCodec, SynKey>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_MOTIF_LOADER_ENDPOINT, stage_id, &id).await?;
-            Arc::new(DynSyncStageEnum::Proxy {
+            Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx())),
+                init: (),
             })
         } else {
-            Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id.clone()).await?)))
+            Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(id.clone()).await?)))
         };
 
         cache.insert(id, Arc::clone(&v));
@@ -1139,7 +1140,7 @@ impl SyncStage for SyncLoadMotifResources {
 
 #[derive(Debug)]
 struct SyncLoadMotifResourcesDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncLoadMotifResources>>,
+    stage: Arc<DynSyncStageWithStateEnum<SyncLoadMotifResources>>,
     pd: PhantomData<C>,
 }
 
@@ -1153,9 +1154,9 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install the borrowed-input loader with the shared stateless worker wrapper.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx)), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLoadMotifResources::new()))
+            DynSyncStageWithStateEnum::Local(Arc::new(SyncLoadMotifResources::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1401,7 +1402,7 @@ impl SyncStage for SyncLoadRandomSlices {
 
 #[derive(Debug)]
 struct SyncLoadRandomSlicesDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncLoadRandomSlices>>,
+    stage: Arc<DynSyncStageWithStateEnum<SyncLoadRandomSlices>>,
     pd: PhantomData<C>,
 }
 
@@ -1415,9 +1416,9 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Shared proxy dispatch keeps tensor-reference decoding consistent with other loaders.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx)), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLoadRandomSlices::new()))
+            DynSyncStageWithStateEnum::Local(Arc::new(SyncLoadRandomSlices::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }

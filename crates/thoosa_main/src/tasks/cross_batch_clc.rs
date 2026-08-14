@@ -20,7 +20,7 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
@@ -490,7 +490,7 @@ struct CrossUnfoldClcProxyCtx<C>
 where
     C: RunCtx + 'static,
 {
-    proxy: Arc<DynSyncStageEnum<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>>,
+    proxy: Arc<DynSyncStageWithStateEnum<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>>,
     _pd: PhantomData<C>,
 }
 
@@ -539,7 +539,10 @@ where
             // Install the configured find-motifs stage once, then use shared proxy dispatch.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, &init).await?;
             Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(CrossUnfoldClcProxyCtx::<C> {
-                proxy: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx)) }),
+                proxy: Arc::new(DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx)),
+                    init: ()
+                }),
                 _pd: PhantomData,
             })))
         } else {

@@ -7,7 +7,7 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
@@ -310,7 +310,7 @@ pub struct ABClcSyncStage {
 pub struct ProxyABClcSyncStage {
     id: MonoKey,
     num_calls: AtomicUsize,
-    stage: Arc<DynSyncStageEnum<ABClcSyncStage>>,
+    stage: Arc<DynSyncStageWithStateEnum<ABClcSyncStage>>,
 }
 
 impl ProxyABClcSyncStage {
@@ -319,7 +319,7 @@ impl ProxyABClcSyncStage {
         Ok(Self {
             id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
             num_calls: AtomicUsize::default(),
-            stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx)) }),
+            stage: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx)), init: () }),
         })
     }
 

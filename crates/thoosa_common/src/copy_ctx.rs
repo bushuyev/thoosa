@@ -160,11 +160,17 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
 
-        let state = if let Some(with_state) = stage.as_with_state() {
-            // Select stateful execution before preparation so only stateful stages run pre_run.
-            Some(with_state.pre_run(to_device_idx).await?)
-        } else {
-            None
+        // let state = if let Some(with_state) = stage.as_with_state() {
+        //     // Select stateful execution before preparation so only stateful stages run pre_run.
+        //     Some(with_state.pre_run(to_device_idx).await?)
+        // } else {
+        //     None
+        // };
+        let state = match stage.pre_run(to_device_idx) {
+            None => None,
+            Some(fut) => {
+                Some(fut.await)
+            }
         };
 
         debug!("CudaActorHandle::run_stage: stage={stage:?} with_state={}", state.is_some());
@@ -180,7 +186,7 @@ impl dyn CudaActorHandle + '_ {
                 Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
             }
             Some(state) => {
-                state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx)
+                Arc::clone(&stage).do_run_with_state(borrowed.borrow(), state?, ctx)
             }
         };
 
@@ -207,11 +213,17 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
-        let state = if let Some(with_state) = stage.as_with_state() {
-            // Keep selector-based execution consistent with the primary stateful runner path.
-            Some(with_state.pre_run(to_device_idx).await?)
-        } else {
-            None
+        // let state = if let Some(with_state) = stage.as_with_state() {
+        //     // Keep selector-based execution consistent with the primary stateful runner path.
+        //     Some(with_state.pre_run(to_device_idx).await?)
+        // } else {
+        //     None
+        // };
+        let state = match stage.pre_run(to_device_idx) {
+            None => None,
+            Some(fut) => {
+                Some(fut.await)
+            }
         };
 
         let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
@@ -221,10 +233,13 @@ impl dyn CudaActorHandle + '_ {
         let sync_ctx = handle_ctx.sync_ctx()?;
 
         let out = match state {
-            Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx),
-            None => Arc::clone(&stage).do_run(borrowed.borrow(), ctx),
+            None => {
+                Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
+            }
+            Some(state) => {
+                Arc::clone(&stage).do_run_with_state(borrowed.borrow(), state?, ctx)
+            }
         };
-
         handle_ctx.on_after_run()?;
 
         out

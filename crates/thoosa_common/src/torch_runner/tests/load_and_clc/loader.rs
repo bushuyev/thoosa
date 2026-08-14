@@ -3,7 +3,7 @@ use crate::dims::{Dims, LocalSelect};
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_wokrer::WorkerStageInput;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -260,9 +260,9 @@ impl SyncTestTensorLoader {
         if GlobalCtx::global().is_ipc() {
             let init = SyncTestTensorLoaderInit::new(size, kind);
             crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, &init).await.expect("SyncTestTensorLoader::new: install endpoint");
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx)) }
+            DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx)), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(Self::new_local(size, kind)))
+            DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(size, kind)))
         }
     }
 
@@ -312,4 +312,4 @@ pub(crate) fn sync_test_tensor_loader_endpoint_init(init_msg: Vec<u8>, _ws: Arc<
     }.boxed()
 }
 
-type LoaderDynSyncStage = DynSyncStageEnum<SyncTestTensorLoader>;
+type LoaderDynSyncStage = DynSyncStageWithStateEnum<SyncTestTensorLoader>;

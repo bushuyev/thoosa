@@ -22,7 +22,7 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -296,7 +296,7 @@ impl SyncStage for SyncLabelBatch {
 
 #[derive(Debug)]
 struct SyncLabelBatchDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncLabelBatch>>,
+    stage: Arc<DynSyncStageWithStateEnum<SyncLabelBatch>>,
     pd: PhantomData<C>,
 }
 
@@ -310,9 +310,9 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install each stateless batch stage through the shared endpoint wrapper.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LABEL_BATCH_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LABEL_BATCH_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LABEL_BATCH_ENDPOINT, stage_id, tho_device_idx)), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLabelBatch::new()))
+            DynSyncStageWithStateEnum::Local(Arc::new(SyncLabelBatch::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }

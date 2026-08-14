@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tch::{Device, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -92,7 +92,7 @@ where
 {
     Local(Arc<SyncRawTensorLoader<C>>),
     Proxy {
-        stage: Arc<DynSyncStageEnum<SyncRawTensorLoaderProxyTarget>>,
+        stage: Arc<DynSyncStageWithStateEnum<SyncRawTensorLoaderProxyTarget>>,
         loader_fn: DebugLoadFn,
         device: ThoDevice,
     },
@@ -146,7 +146,7 @@ where
             // The closure runs in the main process; only its copied tensor crosses the shared endpoint.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, &()).await?;
             Ok(RawTensorLoaderDynSyncStage::Proxy {
-                stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, tho_device_idx)) }),
+                stage: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, tho_device_idx)), init: () }),
                 loader_fn: DebugLoadFn(loader_fn),
                 device,
             })

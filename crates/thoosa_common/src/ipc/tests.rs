@@ -270,11 +270,12 @@ mod tests {
         }
     }
 
-    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::wraps::DynSyncStageEnum<SyncConsumeTestStage>, ThoError> {
+    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::wraps::DynSyncStageWithStateEnum<SyncConsumeTestStage>, ThoError> {
         // The shared proxy carries consume requests and releases worker inputs only after success.
         crate::ipc::codec::install_ipc_endpoint::<crate::ipc::codec::JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CONSUME_TEST_ENDPOINT, 0, &()).await?;
-        Ok(crate::ipc::wraps::DynSyncStageEnum::Proxy {
+        Ok(crate::ipc::wraps::DynSyncStageWithStateEnum::Proxy {
             stage: Arc::new(crate::ipc::wraps::ProxyStage::proxy_with_max_parallel(SYNC_CONSUME_TEST_ENDPOINT, 0, tho_device_idx)),
+            init: (),
         })
     }
 

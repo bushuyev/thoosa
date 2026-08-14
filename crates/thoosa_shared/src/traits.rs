@@ -817,7 +817,7 @@ static INSTANCES: LazyLock<
 
 pub trait SyncStage: Stage + Debug {
     type Init = ();
-
+    type St: Debug + Send + Sync = ();
 
     fn new_local(init: Self::Init) -> Self
     where
@@ -828,10 +828,19 @@ pub trait SyncStage: Stage + Debug {
 
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
     where
-        Self: Sized,
+        Self: StageWithState + Sized,
     {
         None
     }
+
+    fn pre_run(&self, to_device_idx: usize) -> Option<BoxFuture<'_, Result<MutexGuard<'_, Self::St>, ThoError>>> {
+        None
+    }
+
+    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::St>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        unimplemented!()
+    }
+
 
     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
         unimplemented!()
@@ -1004,7 +1013,7 @@ pub trait ErasedStageWithState<S>
 where
     S: SyncStage,
 {
-    //TODO add device param
+
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
 }
 

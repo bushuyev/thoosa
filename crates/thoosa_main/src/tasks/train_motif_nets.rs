@@ -24,7 +24,7 @@ use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -947,7 +947,7 @@ impl SyncStage for SyncMotifBatch {
 
 #[derive(Debug)]
 struct SyncMotifBatchDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncMotifBatch>>,
+    stage: Arc<DynSyncStageWithStateEnum<SyncMotifBatch>>,
     pd: PhantomData<C>,
 }
 
@@ -961,9 +961,9 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install one shared-wrapper endpoint per proxy so worker tensor ownership stays isolated.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx)), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncMotifBatch::new()))
+            DynSyncStageWithStateEnum::Local(Arc::new(SyncMotifBatch::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1191,7 +1191,7 @@ impl SyncStage for SplitMotifIntoTrainValid {
 
 #[derive(Debug)]
 struct SplitMotifIntoTrainValidDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SplitMotifIntoTrainValid>>,
+    stage: Arc<DynSyncStageWithStateEnum<SplitMotifIntoTrainValid>>,
     pd: PhantomData<C>,
 }
 
@@ -1205,9 +1205,9 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // The shared proxy carries throttling separately from the borrowed tensor payload.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx)), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
+            DynSyncStageWithStateEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }

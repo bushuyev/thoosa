@@ -17,13 +17,13 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper};
 
 use super::common::{ABData, ClsOut, ModelTestId};
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
 
-type ClassifierDynSyncStage = DynSyncStageEnum<SyncClassifierStage>;
+type ClassifierDynSyncStage = DynSyncStageWithStateEnum<SyncClassifierStage>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SyncClassifierStageInit {
@@ -67,13 +67,13 @@ impl Classifier {
             crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_CLASSIFIER_ENDPOINT, 0, &init).await?;
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLASSIFIER_ENDPOINT, 0, device.tho_device_idx())) }),
+                sync_classifier: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLASSIFIER_ENDPOINT, 0, device.tho_device_idx())), init: () }),
             })
         } else {
             let local = SyncClassifierStage::new(id.clone(), in_dim, epochs, lr, fail_until);
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(DynSyncStageEnum::Local(Arc::new(local))),
+                sync_classifier: Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(local))),
             })
         }
     }

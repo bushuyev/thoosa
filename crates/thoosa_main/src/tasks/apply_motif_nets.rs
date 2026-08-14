@@ -56,7 +56,7 @@ use tracing::field::debug;
 use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 #[double]
@@ -85,7 +85,7 @@ where
     apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>)>,
     pub slice_step: u32,//should be in the input
     // pub motif_width:u32,
-    stack_applied_motif_nets:Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>
+    stack_applied_motif_nets:Arc<DynSyncStageWithStateEnum<StackAppliedMotifNets<C>>>
 
 }
 
@@ -745,15 +745,16 @@ impl<C> StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedMotifNets<C>>, ThoError> {
+    pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageWithStateEnum<StackAppliedMotifNets<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
             install_ipc_endpoint::<JsonIpcCodec, SynKey>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, &id).await?;
-            Ok(DynSyncStageEnum::Proxy {
+            Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, device.tho_device_idx())),
+                init: (),
             })
         } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?)))
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(id).await?)))
         }
     }
 
