@@ -233,6 +233,33 @@ where
 
 
 }
+
+impl <St> StageWithState for DynSyncStageEnum<St>
+where
+    St:SyncStage+StageWithState+Send+Sync,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+{
+    type S = <St as StageWithState>::S;
+
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        match self {
+            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
+            Self::Proxy { .. } => async {
+                Err(ThoError::new("proxy ApplyStage2 does not have local state"))
+            }.boxed(),
+        }
+    }
+
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+        }
+    }
+}
+
 ///
 #[derive(Debug)]
 pub enum DynSyncStageWithStateEnum<St, Init=()>
