@@ -17,7 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use mockall::PredicateBoxExt;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -160,12 +160,34 @@ where
     pd:PhantomData<(P, C)>
 }
 
+
+
 impl <P, C> TestStage<P, C>
 where
     P:Debug,
     C:RunCtx
 {
-    pub fn new(init:TestStageInit) -> Self {
+
+    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<DynSyncStageEnum<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+
+    {
+        if GlobalCtx::global().is_ipc() {
+            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
+                GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
+                TEST_ENDPOINT,
+                0,
+                &init
+            ).await?;
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
+            })
+        } else {
+            Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new_local(init))))
+        }
+
+    }
+
+    pub fn new_local(init:TestStageInit) -> Self {
         Self { k: init.k, pd: PhantomData }
     }
 }
@@ -194,39 +216,14 @@ where
 }
 
 
-#[derive(Debug)]
-pub struct ProxyTestStage;
-
 const TEST_ENDPOINT: &str = "TestStage";
 
-
-impl ProxyTestStage {
-
-    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<DynSyncStageEnum<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
-
-    {
-        if GlobalCtx::global().is_ipc() {
-            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
-                GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
-                TEST_ENDPOINT,
-                0,
-                &init
-            ).await?;
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
-            })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
-        }
-
-    }
-}
 
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
 
     async move {
         Ok(Box::new(WorkerWrapper::new(
-            Arc::new(TestStage::<(), WokerRunCtx>::new(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
+            Arc::new(TestStage::<(), WokerRunCtx>::new_local(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
             PhantomData::<JsonIpcCodec>
         )) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
@@ -235,7 +232,7 @@ pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn tho
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests::{ProxyTestStage, TEST_ENDPOINT, TestOutput, TestStageInit, test_simp_init};
+    use crate::ipc::proxy_tests::{ TEST_ENDPOINT, TestOutput, TestStageInit, test_simp_init};
     use crate::ipc::proxy_tests::{TestInput, TestRunCtx, TestStage};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
@@ -305,7 +302,7 @@ mod tests {
     async fn do_test_simp() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-        let test_stage = Arc::new(ProxyTestStage::new(1, TestStageInit::new(2)).await?);
+        let test_stage = Arc::new(TestStage::<u32, TestRunCtx>::new(1, TestStageInit::new(2)).await?);
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
