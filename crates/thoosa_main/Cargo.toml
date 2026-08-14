@@ -49,6 +49,9 @@ thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
 thoosa_named_derive = {path = "../thoosa_macros/thoosa_named_derive" }
 
+thoosa_digest_id = {path = "../thoosa_macros/thoosa_digest_id" }
+thoosa_digest_id_derive = {path = "../thoosa_macros/thoosa_digest_id_derive" }
+
 
 thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
@@ -61,7 +64,7 @@ file-rotate.workspace = true
 console-subscriber.workspace = true
 mockall_double.workspace = true
 typetag.workspace = true
-
+blake3.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"
