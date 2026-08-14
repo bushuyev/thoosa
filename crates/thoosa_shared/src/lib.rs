@@ -4,6 +4,7 @@
 #![allow(incomplete_features)]
 #![allow(confusable_idents)]
 #![allow(deprecated)]
+#![feature(associated_type_defaults)]
 
 extern crate self as thoosa_shared;
 

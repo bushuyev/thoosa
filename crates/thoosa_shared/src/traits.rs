@@ -7,17 +7,18 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::debug;
 use mockall::automock;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use std::any::Any;
+use std::any::{Any, TypeId};
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use tokio::sync::MutexGuard;
@@ -771,6 +772,7 @@ where
 
 }
 
+pub type StageHash = [u8; 32];
 /// a Stage is just a function with explicitly defined state, execution context and input so that all three can be adjusted to handle OOM
 /// see ['thoosa_common::runner::oom_handler::Adjusters'] enum
 pub trait Stage: Debug {
@@ -809,7 +811,21 @@ where
     }
 }
 
+static INSTANCES: LazyLock<
+    Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
 pub trait SyncStage: Stage + Debug {
+    type Init = ();
+
+
+    fn new_local(init: Self::Init) -> Self
+    where
+        Self:Sized
+    {
+        todo!()
+    }
+
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
     where
         Self: Sized,

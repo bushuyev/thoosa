@@ -10,12 +10,14 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::ThoError;
+use thoosa_digest_id::DigestHash;
 
 pub trait InputFilterLengthAdjuster {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync>;
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)] //PartialEq - for tests
+#[digest(tag = "thoosa.BandPassFilterParams:v1")]
 pub struct BandPassFilterParams {
     #[in_map]
     #[run_config]
@@ -61,7 +63,8 @@ impl InputFilterLengthAdjuster for BandPassFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)] //PartialEq - for tests
+#[digest(tag = "thoosa.NotchBandFilterParams:v1")]
 pub struct NotchBandFilterParams {
     #[in_map]
     #[run_config]
@@ -78,7 +81,9 @@ impl InputFilterLengthAdjuster for NotchBandFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
+// Every InputFilter payload needs its own stable schema tag before the enum can hash nested content.
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.SavGolFilterParams:v1")]
 pub struct SavGolFilterParams {
     #[in_map]
     #[run_config]
@@ -121,7 +126,8 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.MedianFilterParams:v1")]
 pub struct MedianFilterParams {
     #[in_map]
     #[run_config]
@@ -136,7 +142,8 @@ impl InputFilterLengthAdjuster for MedianFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.AverageFilterParams:v1")]
 pub struct AverageFilterParams {
     #[in_map]
     #[run_config]
@@ -265,7 +272,8 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 }
 
 
-#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, DigestHash)]
+#[digest(tag = "thoosa.Padding:v1")]
 pub enum Padding {
     /// Pad with zeros (uses conv1d's built-in padding).
     Zero(ZeroPadding),
@@ -289,13 +297,16 @@ impl Padding {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default, DigestHash)]
+#[digest(tag = "thoosa.ZeroPadding:v1")]
 pub struct ZeroPadding {}
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default, DigestHash)]
+#[digest(tag = "thoosa.ReflectPadding:v1")]
 pub struct ReflectPadding {}
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default, DigestHash)]
+#[digest(tag = "thoosa.ReplicatePadding:v1")]
 pub struct ReplicatePadding {}
 
 
@@ -399,7 +410,9 @@ pub fn savgol_smooth_1d_channels(
     Ok(y3.squeeze_dim(0))
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
+// The unit-like ZNorm payload still needs a tag so its type remains domain-separated in the digest.
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.ZNormFilterParams:v1")]
 pub struct ZNormFilterParams {
 
 }
@@ -525,7 +538,8 @@ mod tests {
 
 }
 
-#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.InputFilter:v1")]
 pub enum InputFilter {
     NotchBandFilter(NotchBandFilterParams),
     BandPassFilter(BandPassFilterParams),

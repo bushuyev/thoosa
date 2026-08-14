@@ -47,6 +47,9 @@ thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
 thoosa_dummy_data_derive = { path = "../thoosa_macros/thoosa_dummy_data_derive" }
 
+thoosa_digest_id = {path = "../thoosa_macros/thoosa_digest_id" }
+thoosa_digest_id_derive = {path = "../thoosa_macros/thoosa_digest_id_derive" }
+
 plotters.workspace = true
 
 chrono = { version = "0.4.32" }

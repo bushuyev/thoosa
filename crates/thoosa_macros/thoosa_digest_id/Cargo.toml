@@ -1,0 +1,11 @@
+[package]
+name = "thoosa_digest_id"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+blake3 = "1"
+thoosa_digest_id_derive = { path = "../thoosa_digest_id_derive" }
+
+[lints]
+workspace = true
