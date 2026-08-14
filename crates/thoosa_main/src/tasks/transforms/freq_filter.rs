@@ -45,6 +45,8 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::MutexGuard;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_digest_id::DigestHash;
+
 use crate::tasks::motif_loader::SyncMotifLoader;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
@@ -56,7 +58,8 @@ impl Dims for BandPassDims {
     type Metrics = AnyMetrics;//TODO
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, DigestHash)]
+#[digest(tag = "thoosa.SyncFreqFilterIpcInit:v1")]
 pub(crate) struct SyncFreqFilterIpcInit {
     pub filter_configs: Vec<InputFilter>,
     pub num_channels: i64,
@@ -871,6 +874,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hash;
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
@@ -878,6 +882,8 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
+    use polars::polars_utils::parma::raw::Key;
+    use serde::{Deserialize, Serialize};
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::dims::ChannelsData;
@@ -889,6 +895,7 @@ mod tests {
     use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::from;
     use thoosa_common::ws::mock_ws_simp;
+    use thoosa_digest_id::DigestHash;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
@@ -999,5 +1006,49 @@ mod tests {
         }?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_hash_enum() {
+        // Exercise every Rust enum field shape in the one test allowed for this change.
+        #[derive(DigestHash)]
+        #[digest(tag = "thoosa.tests.EnumHashProbe:v1")]
+        enum EnumHashProbe {
+            Unit,
+            Tuple(u32),
+            #[digest(name = "RenamedTuple")]
+            OtherTuple(u32),
+            Named { value: u32 },
+        }
+
+        let unit_hash = EnumHashProbe::Unit.blake3_hash();
+        let tuple_hash = EnumHashProbe::Tuple(1).blake3_hash();
+        let other_tuple_hash = EnumHashProbe::OtherTuple(1).blake3_hash();
+        let named_hash = EnumHashProbe::Named { value: 1 }.blake3_hash();
+
+        assert_ne!(unit_hash, tuple_hash);
+        assert_ne!(tuple_hash, other_tuple_hash);
+        assert_ne!(tuple_hash, named_hash);
+    }
+
+    #[test]
+    fn test_hash(){
+
+
+        let init = SyncFreqFilterIpcInit::new(
+            vec![
+                // Keep the smoke test non-empty so it executes the generated enum arm, not only Vec hashing.
+                InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
+            ],
+            3,
+            0.63,
+            3,
+            4
+        );
+
+
+        let d : blake3::Hash = init.blake3_hash();
+        assert_eq!(d.size(), 32);
+
     }
 }

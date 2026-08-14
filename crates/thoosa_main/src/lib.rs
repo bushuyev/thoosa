@@ -1,4 +1,5 @@
 #![feature(unboxed_closures)]
+#![feature(trivial_bounds)]
 #![recursion_limit = "256"]
 #![allow(
     unused_imports,
