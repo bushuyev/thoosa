@@ -882,6 +882,7 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
+    use blake3::OUT_LEN;
     use polars::polars_utils::parma::raw::Key;
     use serde::{Deserialize, Serialize};
     use tch::Tensor;
@@ -899,7 +900,7 @@ mod tests {
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::traits::{AsyncStage, RunCtx, SyncStage};
+    use thoosa_shared::traits::{AsyncStage, RunCtx, StageHash, SyncStage};
 
     #[tokio::test]
     async fn test_band_pass() -> Result<(), ThoError> {
@@ -1047,7 +1048,7 @@ mod tests {
         );
 
 
-        let d : blake3::Hash = init.blake3_hash();
+        let d : StageHash = init.blake3_hash().into();
         assert_eq!(d.size(), 32);
 
     }
