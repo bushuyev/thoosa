@@ -161,7 +161,13 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("TrainStep::do_run: os_thread_id={}", os_thread_id());
+        debug!("TrainStep::do_run: input={input:?}");
+        // Save inside the state owner so IPC training never exports a VarStore.
+        if input.save_var_store {
+            debug!("TrainStep::do_run: saved to={:?}", self.best_checkpoint_path);
+            train_module.save_var_store(&self.best_checkpoint_path)?;
+        }
+
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
 
@@ -192,10 +198,7 @@ where
         let loss_value = panic_to_err!(Ok::<_, ThoError>(loss.double_value(&[])))? as f32;
 
         if input.train {
-            // Save inside the state owner so IPC training never exports a VarStore.
-            if loss_value < input.best_valid_loss {
-                train_module.save_var_store(&self.best_checkpoint_path)?;
-            }
+
             let opt = train_module.opt();
             debug!("TrainStep::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
@@ -257,18 +260,18 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
     pub lengths: Option<BatchLengths>,
     pub expected_y: ThoBatch<DO>,
     train: bool,
-    best_valid_loss: f32,
+    save_var_store: bool,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
-    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool, best_valid_loss: f32) -> Self {
+    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool, save_var_store: bool) -> Self {
         Self {
             id: SynKey::new([mono_key!("train_step", "stage")]),
             x,
             lengths,
             expected_y,
             train,
-            best_valid_loss,
+            save_var_store,
         }
     }
 
@@ -344,7 +347,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
             lengths: self.lengths.clone(),
             expected_y: track_await(self.expected_y.copy_to_device(dst_device)).await?,
             train: self.train,
-            best_valid_loss: self.best_valid_loss,
+            save_var_store: self.save_var_store,
         })
     }
 }
@@ -431,7 +434,7 @@ where
             input.lengths,
             ThoTensor::ref_to_tensor(all_cuda_tensors, input.expected_y)?,
             input.train,
-            input.best_valid_loss,
+            input.save_var_store,
         ))
     }
 }

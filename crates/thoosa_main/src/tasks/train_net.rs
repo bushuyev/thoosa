@@ -274,11 +274,12 @@ where
                 while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
-                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, best_valid_loss)));
+                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, saved_best)));
+                    saved_best = false;
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
-                    oom_handler.run(
+                    let out = oom_handler.run(
                         &train_step,
                         Arc::clone(&input),
                         ctx.branch(false),
@@ -292,7 +293,7 @@ where
                         .instrument(tracing::debug_span!("run_inner/oom_handler.run", file = file!(),line = line!()))
                         .await?;
 
-                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
+                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?} out={out:?}", input.id(), tokio::task::try_id());
 
                     collect_eta_record_completion(batch_eta_guard.id());
 
@@ -309,7 +310,7 @@ where
                     while let Some(Ok((x_t_0, lengths, y_t))) = batches.next()
                         .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
                         .await {
-                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false, best_valid_loss)));
+                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false, false)));
                         let output = oom_handler.run(
                             &train_step,
                             input,
@@ -323,13 +324,13 @@ where
                         )
                             .instrument(tracing::debug_span!("run_inner/validation_step/oom_handler.run", file = file!(),line = line!()))
                             .await?;
-                        debug!("TrainNet::run_inner: descr={descr} valid_loss={}", output.loss);
+                        debug!("TrainNet::run_inner, valid: descr={descr} valid_loss={}", output.loss);
                         valid_loss_sum += output.loss;
                         valid_loss_count += 1;
                     }
                     if valid_loss_count > 0 {
                         let avg_valid_loss = valid_loss_sum / valid_loss_count as f32;
-                        debug!("TrainNet::run_inner: descr={descr}  avg_valid_loss={avg_valid_loss}");
+                        debug!("TrainNet::run_inner, valid: descr={descr}  avg_valid_loss={avg_valid_loss}");
 
                         if avg_valid_loss < best_valid_loss - min_delta {
                             best_valid_loss = avg_valid_loss;
@@ -344,13 +345,13 @@ where
                         } else {
                             bad_epochs += 1;
                             if bad_epochs >= patience {
-                                debug!("TrainNet::run_inner: descr={descr}  early stopping triggered valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                                debug!("TrainNet::run_inner, valid: descr={descr}  early stopping triggered valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                                 break;
                             }
                         }
-                        debug!("TrainNet::run_inner: descr={descr}  valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                        debug!("TrainNet::run_inner, valid: descr={descr}  valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                     } else {
-                        debug!("TrainNet::run_inner: descr={descr}  valid_loss skipped, no validation batches");
+                        debug!("TrainNet::run_inner, valid: descr={descr}  valid_loss skipped, no validation batches");
                     }
 
                 }
@@ -362,7 +363,7 @@ where
             if saved_best {
                 // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO
                 // vs_guard.load(&best_checkpoint_path)?;
-                debug!("TrainNet::run_inner: descr={descr}  final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
+                debug!("TrainNet::run_inner: descr={descr} final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
             } else {
                 warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
             }
