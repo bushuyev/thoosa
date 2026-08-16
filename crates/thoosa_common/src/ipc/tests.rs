@@ -107,10 +107,10 @@ where
         main_rt.block_on(async {
             let r = main_f.await;
 
-            GlobalCtx::global().shutdown().await;
-
             info!("\n{}", format_perf_map(&PERF));
             info!("main done: r={r:?}");
+
+            GlobalCtx::global().shutdown().await;
 
             // Preserve the original tests' behavior by propagating main-process assertion failures.
             r

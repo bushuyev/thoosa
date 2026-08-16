@@ -15,7 +15,8 @@ use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU8};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tch::Kind::Float;
@@ -561,11 +562,13 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-
+        debug!("ApplyMotifNets::run: 0. motif_nets_applied={motif_nets_applied:?}");
 
         let stack_input = StackAppliedMotifNetsInputWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
+        debug!("ApplyMotifNets::run: 0.1 tmp_cache_name={tmp_cache_name:?} required_tmp_cache_ids={required_tmp_cache_ids:?}");
+
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
@@ -585,6 +588,8 @@ where
                 ),
             ),
         )).await?;
+
+        debug!("ApplyMotifNets::run: 1. motif_nets_applied={motif_nets_applied:?}");
 
         Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied)))
 
@@ -621,7 +626,12 @@ impl StackAppliedMotifNetsInput {
 }
 impl WorkerStageInput for StackAppliedMotifNetsInput {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        todo!()
+        let input = C::decode::<StackAppliedMotifNetsInput>(input)?;
+        Ok(StackAppliedMotifNetsInput{
+            id: input.id,
+            device_idx: input.device_idx,
+            motif_nets_applied: input.motif_nets_applied.into_iter().map(|v|ThoTensor::<MotifProbability, SynKey>::ref_to_tensor(all_cuda_tensors, v)).collect::<Result<_, ThoError>>()?,
+        })
     }
 }
 
@@ -699,14 +709,13 @@ impl ConsumeData for StackAppliedMotifNetsInputWrapper {
     {
         async move {
             let StackAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
-            let device_idx = if GlobalCtx::global().is_ipc() { 0 } else { ctx.tho_device_idx() };
 
-            match track_await(tmp_cache.take_all_recovering(device_idx)).await {
+            match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
                 Ok(motif_nets_applied) => {
-                    do_run(StackAppliedMotifNetsInput::new(id, motif_nets_applied, device_idx), ctx)
+                    do_run(StackAppliedMotifNetsInput::new(id, motif_nets_applied, to_device_idx), ctx)
                 }
                 Err(err) => {
-                    let input = StackAppliedMotifNetsInput::new(id, err.data, device_idx);
+                    let input = StackAppliedMotifNetsInput::new(id, err.data, to_device_idx);
                     ConsumeResult::Failed {
                         input,
                         error: err.error,
@@ -746,7 +755,8 @@ where
 {
     pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedMotifNets<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
-            let stage_id = 0;
+            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
+            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
             install_ipc_endpoint::<JsonIpcCodec, SynKey>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, &id).await?;
             Ok(DynSyncStageEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, device.tho_device_idx())),
@@ -803,6 +813,8 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedMotifNets::consume"))]
     fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
+        debug!("StackAppliedMotifNets::consume:");
+
         let input_id = input.id().clone();
         let mut motif_nets_applied = std::mem::take(&mut input.motif_nets_applied);
 
