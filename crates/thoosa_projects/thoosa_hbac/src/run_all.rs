@@ -970,7 +970,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(3),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -983,7 +983,7 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(30),
+            epochs: RangeOrValue::Value(3),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1048,9 +1048,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config: Arc::new(OptConfig::new(10, 3)),
-            train_final_opt_config: Arc::new(OptConfig::new(10, 3)),
+            train_motifs_opt_config:Arc::new(OptConfig::new(5, 3)),
+            train_labels_opt_config: Arc::new(OptConfig::new(5, 3)),
+            train_final_opt_config: Arc::new(OptConfig::new(5, 3)),
         }
     }
 

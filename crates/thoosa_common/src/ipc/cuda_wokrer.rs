@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
-use log::{debug, error, LevelFilter};
+use log::{debug, error, LevelFilter, trace};
 use parking_lot::{Mutex, RwLock};
 use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError, CopyToDevice};
 use tokio::net::UnixStream;
@@ -194,7 +194,7 @@ impl CudaWorker {
             };
             let (id, payload) = cuda_process::parse_wire_msg(&frame)?;
 
-            debug!("run_worker: worker received: id={id}, payload={payload:?}");
+            debug!("run_worker: worker received: id={id}, payload={:?}", payload.get(..1000));
 
             if payload == "shutdown" {
                 reply_tx
@@ -398,7 +398,7 @@ impl CudaWorker {
                                 // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
                                 panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx)).map(|response| (response, Vec::new()))
                             } else {
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} consume={consume} no state");
 
                                 panic_to_err!({
                                     let _guard = ThoStreamGuard::new(&stream)?;
@@ -408,6 +408,8 @@ impl CudaWorker {
                                     } else {
                                         endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device, &run_ctx).map(|response| (response, Vec::new()))
                                     };
+                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} response={response:?}");
+
                                     let sync_result = stream.synchronize();
                                     match (response, sync_result) {
                                         (Ok(response), Ok(())) => Ok(response),
@@ -420,7 +422,7 @@ impl CudaWorker {
                             };
 
                             if let  Err(e) = &r {
-
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} e={e:?}");
                                 error!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
                             } else if let Ok(response) = &r {
                                 let (response_is_binary, response_len) = match &response.0 {
@@ -589,7 +591,8 @@ where
 
         let tensors = all_cuda_tensors.lock();
 
-        debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
+        debug!("ThoTensor::ref_to_tensor: input_key={input_key:?}");
+        trace!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
 
         let source = tensors
             .get(&input_key)
