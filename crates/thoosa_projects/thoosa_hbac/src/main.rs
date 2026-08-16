@@ -30,7 +30,7 @@ use thoosa_main::tasks::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_
 use thoosa_main::tasks::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
 use thoosa_main::tasks::tensor_loader::{SYNC_RAW_TENSOR_LOADER_ENDPOINT, sync_raw_tensor_loader_endpoint_init};
 use thoosa_main::tasks::train_final_net::train_final_step_endpoint_inits;
-use thoosa_main::tasks::train_label_nets::train_label_step_endpoint_inits;
+use thoosa_main::tasks::train_label_nets::{train_label_step_endpoint_inits, SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
 use thoosa_main::tasks::train_motif_nets::train_motif_step_endpoint_inits;
 use thoosa_main::tasks::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, sync_freq_filter_endpoint_init};
 use thoosa_shared::tracked_await::track_await;
@@ -72,6 +72,10 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
         (
             STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
             Box::new(stack_applied_motif_nets) as InitFn,
+        ),
+        (
+            SYNC_LABEL_BATCH_ENDPOINT.to_string(),
+            Box::new(sync_label_batch_endpoint_init) as InitFn,
         ),
     ]);
     endpoints
