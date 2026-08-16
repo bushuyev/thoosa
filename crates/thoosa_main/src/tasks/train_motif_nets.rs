@@ -1729,7 +1729,7 @@ mod tests {
                 None,
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
                 false,
-                f32::MAX,
+                false,
             );
             let output = Arc::new(train_step).do_run(&input, &RunCtxImpl::new(1, "train_step_ipc"))?;
             assert!(output.loss.is_finite());

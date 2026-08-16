@@ -56,7 +56,7 @@ impl WithId for  LoadMotifNetInput{
 
 
 #[derive(Debug, Cached, Named)]
-pub struct LoadMotifNet<C>
+pub struct LoadMotifNet<C>//use only from ApplyCosine2D, to be removed - load is done in ApplyMotifNet
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -113,26 +113,18 @@ where
     type Out = Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>;
 }
 
-// #[async_trait]
+
 impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    // type RunInput = Self::In<'static>;
-    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    // fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-    //     thoosa_shared::traits::WithId::id(input)
-    // }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
     async fn run(self: Arc<Self>, input: LoadMotifNetInput, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-        let device_idx = if GlobalCtx::global().is_ipc() { 0 } else { ctx.tho_device_idx() };
-
-        // let input = track_await(input.load_from_any_device_(0)).await?;//TODO clone_from_cpu
 
 
-        let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into(), input.quantize)?;
+        let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(ctx.tho_device_idx()).into(), input.quantize)?;
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
 

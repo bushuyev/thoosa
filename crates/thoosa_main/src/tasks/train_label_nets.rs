@@ -343,9 +343,8 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
-        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        Arc::clone(&self.stage).do_run(input, &stage_ctx)
+
+        Arc::clone(&self.stage).do_run(input, ctx)
     }
 }
 
@@ -704,6 +703,10 @@ where
                     let label_for_batch = label.clone();
                     let sync_label_batch = Arc::new(SyncLabelBatchDynStage::<C>::new(ctx_for_task.tho_device_idx()).await?);
 
+                    debug!("TrainLabelNets::run: label={label} resources_1_train={resources_1_train:?}");
+                    debug!("TrainLabelNets::run: label={label} resources_1_valid={resources_1_valid:?}");
+                    debug!("TrainLabelNets::run: label={label} resources_0_train={resources_0_train:?}");
+                    debug!("TrainLabelNets::run: label={label} resources_0_valid={resources_0_valid:?}");
 
                     let train_net = Arc::new(TrainNet::new(
                         move |_ctx_for_batch:C,rc:&TrainLabelNetRunConfig| {
@@ -873,7 +876,7 @@ where
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
-        debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
+        debug!("ResourcesBatch::train_batch_stream: batches={batches:?}");
         assert!(!batches.is_empty(), "train_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}",self.resources_1_train,  self.resources_0_train);
 
         Self::build_batch_stream(
@@ -889,7 +892,7 @@ where
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
-        debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
+        debug!("ResourcesBatch::valid_batch_stream: batches={batches:?}");
         assert!(!batches.is_empty(), "valid_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}",self.resources_1_train,  self.resources_0_train);
 
         Self::build_batch_stream(

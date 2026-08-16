@@ -350,7 +350,6 @@ where
     where
         R: RunCtx + MaxParallelCtx + Adjustable + 'static
     {
-        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws, quantize));//TODO move to new
         let trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
