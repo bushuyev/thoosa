@@ -16,7 +16,7 @@ where
     E:Debug + Send + Sync,
 {
     pub data: D,//needs to be copied to GPU
-    extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
+    pub extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
 }
 
 impl<D, E> DataWithExtra<D, E>

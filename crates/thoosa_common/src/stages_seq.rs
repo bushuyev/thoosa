@@ -169,9 +169,18 @@ where
         input: Self::In<'static>,
         mut ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
+        let input_id = input.id().clone();
+        debug!("ABStage::run_cached: input.id={input_id:?}");
+
         let mut ctx_c: C = ctx;
         let output_a: A::Out = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx_c.branch(false))).await?;
-        track_await(Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).await
+        debug!("ABStage::run_cached: input.id={input_id:?} output_a={output_a:?} a done");
+
+        let output_b = track_await(Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).await?;
+
+        debug!("ABStage::run_cached: input.id={input_id:?} output_b={output_b:?} b done");
+
+        Ok(output_b)
     }
 }
 

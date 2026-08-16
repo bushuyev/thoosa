@@ -19,7 +19,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::nn::{Optimizer, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
@@ -249,30 +249,71 @@ impl WorkerStageInput for SyncLabelBatchInput<'_> {
 }
 
 #[derive(Debug)]
-pub struct SyncLabelBatch;
+pub struct SyncLabelBatch<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
+    pd:PhantomData<C>
+}
 
-impl SyncLabelBatch {
-    fn new() -> Self {
-        Self
+impl <C> SyncLabelBatch<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
+    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLabelBatch<C>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            let stage_id = 0;
+            install_ipc_endpoint::<JsonIpcCodec, ()>(
+                thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(),
+                SYNC_LABEL_BATCH_ENDPOINT,
+                stage_id,
+                &()
+            ).await?;
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, stage_id, device.tho_device_idx())),
+            })
+        } else {
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?)))
+        }
+    }
+
+    pub async fn new_local() -> Result<Self, ThoError>{
+        Ok(Self {
+            pd: PhantomData,
+        })
+
     }
 }
 
-impl Adjustable for SyncLabelBatch {}
+impl <C> Adjustable for SyncLabelBatch<C>
+where
+    C: RunCtx + Adjustable + 'static
+{}
 
-impl OutId for SyncLabelBatch {
+impl <C> OutId for SyncLabelBatch<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
     }
 }
 
-impl Stage for SyncLabelBatch {
-    type Ctx = RunCtxImpl;
+impl <C> Stage for SyncLabelBatch<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
+    type Ctx = C;
     type In<'a> = SyncLabelBatchInput<'a>;
     type Out = SyncLabelBatchOutput;
 }
 
-impl SyncStage for SyncLabelBatch {
+impl <C> SyncStage for SyncLabelBatch<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("SyncLabelBatch::do_run: input={input:?}");
         let x_1 = input.x_1.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
         let x_0 = input.x_0.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
         if x_1.is_empty() || x_0.is_empty() {
@@ -285,6 +326,9 @@ impl SyncStage for SyncLabelBatch {
         let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), input.num_nets, max_input)?;
         let (x, lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&BatchLengths::new(lengths_1)), &x_0_batch, Some(&BatchLengths::new(lengths_0)))?;
         let lengths = lengths.ok_or_else(|| ThoError::new("SyncLabelBatch: mixed batch did not return lengths"))?;
+
+        debug!("SyncLabelBatch::do_run: lengths={lengths:?} x={x:?} y={y:?}");
+
         Ok(SyncLabelBatchOutput {
             id: input.id.clone(),
             x: ThoTensor::new(SynKey::new([mono_key!("x", "SyncLabelBatch")]), x)?,
@@ -294,64 +338,12 @@ impl SyncStage for SyncLabelBatch {
     }
 }
 
-#[derive(Debug)]
-struct SyncLabelBatchDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncLabelBatch>>,
-    pd: PhantomData<C>,
-}
 
-impl<C> SyncLabelBatchDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
-        let stage = if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Install each stateless batch stage through the shared endpoint wrapper.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LABEL_BATCH_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LABEL_BATCH_ENDPOINT, stage_id, tho_device_idx)) }
-        } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLabelBatch::new()))
-        };
-        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
-    }
-}
-
-impl<C> Adjustable for SyncLabelBatchDynStage<C> where C: RunCtx + Adjustable + 'static {}
-
-impl<C> OutId for SyncLabelBatchDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
-    }
-}
-
-impl<C> Stage for SyncLabelBatchDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = SyncLabelBatchInput<'a>;
-    type Out = SyncLabelBatchOutput;
-}
-
-impl<C> SyncStage for SyncLabelBatchDynStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
-        Arc::clone(&self.stage).do_run(input, ctx)
-    }
-}
 
 pub fn sync_label_batch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // WorkerStageInput reconstructs owned tensor-plus-length values for the borrowed stage API.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::<WokerRunCtx>::new_local().await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -377,6 +369,7 @@ where
     store: Arc<Box<dyn Store>>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
+    sync_label_batch:Arc<DynSyncStageEnum<SyncLabelBatch<C>>>
 
 }
 
@@ -499,6 +492,7 @@ where
             opt_config,
             labels,
 
+            sync_label_batch:  Arc::new(SyncLabelBatch::<C>::new(1.into()).await?),
         })
     }
 
@@ -689,6 +683,7 @@ where
 
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
                 let num_nets = self.num_nets;
+                let sync_label_batch = Arc::clone(&self.sync_label_batch);
                 async move {
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
@@ -701,7 +696,7 @@ where
                     let resources_0_valid = Arc::new(resources_0.1.clone());
                     let label = label.clone();
                     let label_for_batch = label.clone();
-                    let sync_label_batch = Arc::new(SyncLabelBatchDynStage::<C>::new(ctx_for_task.tho_device_idx()).await?);
+
 
                     debug!("TrainLabelNets::run: label={label} resources_1_train={resources_1_train:?}");
                     debug!("TrainLabelNets::run: label={label} resources_1_valid={resources_1_valid:?}");
@@ -885,7 +880,8 @@ where
             Arc::clone(&self.loader),
             ctx,
             Arc::clone(&self.resources_1_train),
-            Arc::clone(&self.resources_0_train)
+            Arc::clone(&self.resources_0_train),
+            "train"
         )
     }
 
@@ -901,7 +897,8 @@ where
             Arc::clone(&self.loader),
             ctx,
             Arc::clone(&self.resources_1_valid),
-            Arc::clone(&self.resources_0_valid)
+            Arc::clone(&self.resources_0_valid),
+            "valid"
         )
     }
 
@@ -918,7 +915,7 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
-    fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
+    fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>, descr: &'static str) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 
         // TODO(perf): each produced batch waits for collect_futures_with_progress to load/apply both sides; add a bounded prefetch queue so ApplyMotifNets overlaps TrainNet forward/backward.
@@ -930,10 +927,12 @@ where
             let mut ctx_for_build_fn = ctx.branch(false);
 
             async move {
-                debug!("ResourcesBatch::build_batch_stream: batch_i={i} batch_keys={batch_keys:?}");
+                debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} batch_keys={batch_keys:?}");
 
                 let batch_len = batch_keys.len();
                 let futures = batch_keys.into_iter().map(|index| {
+                    debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} in future 0");
+
                     let loader = Arc::clone(&loader);
                     let x_1 = Arc::clone(&x_1);
                     let x_0 = Arc::clone(&x_0);
@@ -941,6 +940,8 @@ where
                     let ctx_x0 = ctx_for_build_fn.branch(false);
 
                     async move {
+                        debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} in future 1");
+
                         try_join!(
                             Arc::clone(&loader).run_cached(Arc::new(x_1[index].clone()), ctx_x1),
                             Arc::clone(&loader).run_cached(Arc::new(x_0[index].clone()), ctx_x0)
@@ -949,6 +950,9 @@ where
                 });
 
                 let futures = futures.map(|future| async move { Ok::<_, ThoError>(track_await(future).await) });
+
+                debug!("ResourcesBatch::build_batch_stream: descr={descr} futures.len={}", futures.len());
+
                 let (x_1_wrapped, x_0_wrapped) = track_await(collect_futures_with_progress(
                     futures,
                     batch_len,
@@ -964,9 +968,11 @@ where
                         a
                     });
                 //
+                debug!("ResourcesBatch::build_batch_stream: descr={descr} x_1_wrapped={x_1_wrapped:?} x_0_wrapped={x_0_wrapped:?}");
+
                 let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = track_await(build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn)).await;
 
-                debug!("ResourcesBatch::build_batch_stream: batch_i={i} r={r:?}");
+                debug!("ResourcesBatch::build_batch_stream: descr={descr} batch_i={i} r={r:?}");
 
                 r
             }

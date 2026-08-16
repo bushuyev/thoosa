@@ -6,12 +6,17 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
+use serde::{Deserialize, Serialize};
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
+use tch::Device::Cuda;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::cuda_utils::split_padded_motif_scores;
-use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, MotifProbability};
+use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, MotifProbability, Slice};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
@@ -22,7 +27,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster,
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{LabelNetParams, ThoModuleWithStore};
+use thoosa_common::train_nets::{LabelNetParams, MotifNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
@@ -36,10 +41,18 @@ use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_wit
 use thoosa_store::{Store, TrainedNet};
 
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use crate::tasks::apply_motif_nets::ApplyMotifNets;
+use crate::tasks::apply_motif_nets::{ApplyMotifNet, ApplyMotifNets, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT};
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
 use thoosa_shared::tracked_await::track_await;
+use crate::tasks::load_motif_net::MotifNetMeta;
+
+
+pub const APPLY_LABEL_NET_ENDPOINT: &str = "APPLY_LABEL_NET_ENDPOINT";
 
 pub type MotifNetsOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
 
@@ -180,8 +193,8 @@ where
     {
         let tho_device_idx = stage_ctx.tho_device_idx();
 
-        let label_net_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { tho_device_idx };
-        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(label_net_device_idx).into(), false)?;
+
+        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false)?;
 
         let mut apply_nets = vec![];
 
@@ -214,7 +227,7 @@ where
 
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)),
+                    apply_label_net: Arc::new(track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)).await?),
                 });
             }
         }
@@ -300,6 +313,7 @@ where
                         .run(input, ctx.branch(false))
                         .await?;
 
+                    debug!("ApplyLabelNets::run: motif_probs={motif_probs:?}");
 
                     #[cfg(test)]{
                         {
@@ -313,6 +327,8 @@ where
                     let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                     let result: ThoTensor<LabelProbability, SynKey> = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?;
+
+                    debug!("ApplyLabelNets::run: result={result:?}");
 
                     #[cfg(test)]{
                         {
@@ -574,7 +590,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ApplyLabelNetInput<'a> {
     id: SynKey,
     input: ThoDataRef<'a, DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>,
@@ -606,6 +622,25 @@ impl WithId for ApplyLabelNetInput<'_> {
 }
 
 impl Input for ApplyLabelNetInput<'_> {}
+
+impl WorkerStageInput for ApplyLabelNetInput<'_> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<Self>(input)?;
+        let ThoDataRef::Owned(input_ref) = input.input else {
+            panic!("unexpected ref: input.batch={:?}", input.input);
+        };
+
+        let DataWithExtra{data, extra} = input_ref;
+
+        Ok(Self{
+            id: input.id,
+            input: ThoDataRef::Owned(DataWithExtra::new(
+                ThoTensor::ref_to_tensor(all_cuda_tensors, data)?,
+                Arc::into_inner(extra).unwrap()//TODO
+            ))
+        })
+    }
+}
 
 #[derive(Debug)]
 struct ApplyLabelNetInputWrapper {
@@ -641,10 +676,31 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApplyLabelNetInit {
+    label: String,
+    train_label_net_run_config_id: RunConfigId,
+    label_net_path:PathBuf,
+    batch_in_chunks: usize,
+}
+
+impl ApplyLabelNetInit {
+    pub fn new(label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, batch_in_chunks: usize) -> Self {
+        Self { label, train_label_net_run_config_id, label_net_path, batch_in_chunks }
+    }
+}
+
+impl WorkerStageInput for ApplyLabelNetInit {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        C::decode(input)
+    }
+}
+
+
 #[derive(Debug)]
 struct ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
     label: String,
@@ -657,23 +713,88 @@ where
 
 impl<C> ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + Adjustable + 'static,
 {
-    fn new(
+    async fn new(
+        label: String,
+        train_label_net_run_config_id: RunConfigId,
+        trained_net:TrainedNet,
+        device: ThoDevice,
+        batch_in_chunks: usize,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        quantize: bool,
+    ) -> Result<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>, ThoError> {
+        let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
+               &trained_net.net_path,
+               &device,
+               quantize
+        )?;
+
+        let init = ApplyLabelNetInit::new(
+            label.clone(),
+            train_label_net_run_config_id,
+            trained_net.net_path,
+            batch_in_chunks
+        );
+
+        if GlobalCtx::global().is_ipc() {
+            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
+            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyLabelNetInit>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_MOTIF_NET_ENDPOINT, stage_id, &init).await?;
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx())),
+                init,
+            })
+        } else {
+            Ok(
+                DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
+                    label,
+                    train_label_net_run_config_id,
+                    net,
+                    batch_in_chunks
+                ).await?))
+            )
+        }
+    }
+
+    async fn new_local(
         label: String,
         train_label_net_run_config_id: RunConfigId,
         net: ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
         batch_in_chunks: usize,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ThoError> {
+        Ok(Self {
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
             train_label_net_run_config_id,
             net: tokio::sync::Mutex::new(net),
             batch_in_chunks,
             pd: PhantomData,
-        }
+        })
     }
+}
+
+pub fn apply_label_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = ApplyLabelNetInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        debug!("apply_net_stage_2_endpoint_init: init={init:?}");
+
+        let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+               &init.motif_net_path,
+               &Cuda(0),//TODO
+               init.quantize
+        )?;
+
+        let stage: ApplyLabelNet<WokerRunCtx> = ApplyLabelNet::new_local(
+           init.label,
+           init.train_label_net_run_config_id,
+           net,
+           init.batch_in_chunks
+        ).await?;
+
+        // The common stateful wrapper performs state preparation and converts worker outputs back to references.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 impl<C> Adjustable for ApplyLabelNet<C>
