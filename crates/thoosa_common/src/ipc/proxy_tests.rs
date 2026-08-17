@@ -208,7 +208,9 @@ where
     P:Debug,
     C:RunCtx
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TestStage::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug("TestStage::do_run: input={input:?}");
         Ok(TestOutput{
             value: (input.value.as_ref() * self.k).into(),
         })
