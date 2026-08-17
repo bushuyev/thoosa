@@ -36,9 +36,7 @@ where
     stage_id: u32,
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
-    // Older proxies forwarded the OOM throttle through custom request types.
-    // Keep that behavior opt-in for stages whose context exposes it.
-    max_other_parallel: Option<fn(&St::Ctx) -> u8>,
+
 }
 
 impl <St> Stage for ProxyStage<St>
@@ -51,6 +49,8 @@ where
     type In<'a> = St::In<'a>;
     type Out = St::Out;
 }
+
+
 
 impl <St>SyncStage for ProxyStage<St>
 where
@@ -70,10 +70,7 @@ where
                 // let endpoint_name = crate::runner::test::proxy_tests::TEST_ENDPOINT;
                 let actor = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref();
                 let input = thoosa_common::ipc::codec::JsonIpcCodec::encode(input)?;
-                let input = match self.max_other_parallel {
-                    Some(max_other_parallel) => IpcSyncStageRunInput::with_max_other_parallel(input, max_other_parallel(ctx)),
-                    None => IpcSyncStageRunInput::new(input),
-                };
+                let input = IpcSyncStageRunInput::new(input);
                 let input = JsonIpcCodec::encode(&input)?;
                 tracing::debug!("invoke_ipc_sync_stage: endpoint_name={} stage_id={} 1. input={input:?}", self.endpoint_name, self.stage_id);
 
@@ -100,10 +97,7 @@ where
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let encoded = JsonIpcCodec::encode(&input)?;
-                let request = match self.max_other_parallel {
-                    Some(max_other_parallel) => IpcSyncStageRunInput::with_max_other_parallel(encoded, max_other_parallel(&ctx)),
-                    None => IpcSyncStageRunInput::new(encoded),
-                };
+                let request = IpcSyncStageRunInput::new(encoded);
                 let encoded = JsonIpcCodec::encode(&request)?;
                 let actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
                 let response = actor.consume_endpoint_bytes(
@@ -131,23 +125,10 @@ where
             endpoint_name,
             stage_id,
             tho_device_idx,
-            max_other_parallel: None,
             pd:PhantomData
         }
     }
 
-    pub fn proxy_with_max_parallel(endpoint_name: &'static str, stage_id: u32, tho_device_idx: usize) -> Self
-    where
-        St::Ctx: MaxParallelCtx,
-    {
-        Self {
-            endpoint_name,
-            stage_id,
-            tho_device_idx,
-            max_other_parallel: Some(MaxParallelCtx::max_other_parallel),
-            pd: PhantomData,
-        }
-    }
 
 }
 

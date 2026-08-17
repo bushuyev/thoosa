@@ -1,6 +1,6 @@
 pub mod tho_tensor;
 
-use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec, encode_sync_stage_run_input};
+use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;

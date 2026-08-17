@@ -539,7 +539,7 @@ where
             // Install the configured find-motifs stage once, then use shared proxy dispatch.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, &init).await?;
             Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(CrossUnfoldClcProxyCtx::<C> {
-                proxy: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx)) }),
+                proxy: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx)) }),
                 _pd: PhantomData,
             })))
         } else {

@@ -1153,7 +1153,7 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install the borrowed-input loader with the shared stateless worker wrapper.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
             DynSyncStageEnum::Local(Arc::new(SyncLoadMotifResources::new()))
         };
@@ -1415,7 +1415,7 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Shared proxy dispatch keeps tensor-reference decoding consistent with other loaders.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
             DynSyncStageEnum::Local(Arc::new(SyncLoadRandomSlices::new()))
         };

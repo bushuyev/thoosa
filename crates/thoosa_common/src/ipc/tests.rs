@@ -110,7 +110,7 @@ where
         main_rt.block_on(async {
             let r = main_f.await;
             GlobalCtx::global().shutdown().await;
-            
+
 
             info!("main perf:\n{}", format_perf_map(&PERF));
             info!("main done: r={r:?}");
@@ -279,7 +279,7 @@ mod tests {
         // The shared proxy carries consume requests and releases worker inputs only after success.
         crate::ipc::codec::install_ipc_endpoint::<crate::ipc::codec::JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CONSUME_TEST_ENDPOINT, 0, &()).await?;
         Ok(crate::ipc::wraps::DynSyncStageEnum::Proxy {
-            stage: Arc::new(crate::ipc::wraps::ProxyStage::proxy_with_max_parallel(SYNC_CONSUME_TEST_ENDPOINT, 0, tho_device_idx)),
+            stage: Arc::new(crate::ipc::wraps::ProxyStage::proxy(SYNC_CONSUME_TEST_ENDPOINT, 0, tho_device_idx)),
         })
     }
 
