@@ -146,7 +146,7 @@ where
             // The closure runs in the main process; only its copied tensor crosses the shared endpoint.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, &()).await?;
             Ok(RawTensorLoaderDynSyncStage::Proxy {
-                stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, tho_device_idx)) }),
+                stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, tho_device_idx)) }),
                 loader_fn: DebugLoadFn(loader_fn),
                 device,
             })

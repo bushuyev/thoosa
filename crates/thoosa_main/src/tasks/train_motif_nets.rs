@@ -961,7 +961,7 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install one shared-wrapper endpoint per proxy so worker tensor ownership stays isolated.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
             DynSyncStageEnum::Local(Arc::new(SyncMotifBatch::new()))
         };
@@ -1205,7 +1205,7 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // The shared proxy carries throttling separately from the borrowed tensor payload.
             thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx)) }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx)) }
         } else {
             DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
         };
@@ -1436,7 +1436,7 @@ mod tests {
     use thoosa_common::debug_plot;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
-    use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec, encode_sync_stage_run_input};
+    use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};

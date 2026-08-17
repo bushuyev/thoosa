@@ -872,10 +872,7 @@ struct OutgoingRequest {
 
 pub enum OutgoingRequestPayload {
     Msg(String),//action:data
-    // BinaryStream {
-    //     chunks: mpsc::Receiver<Result<Vec<u8>, ThoError>>,
-    //     completed: oneshot::Sender<Result<(), ThoError>>,
-    // },
+   
     SharedMemfdBuffer{
         meta: IpcTensorTransferMetadata,
         fd:OwnedFd,
@@ -1955,7 +1952,6 @@ async fn send_request_and_wait(
 ) -> Result<String, ThoError> {
     match send_request_and_wait_payload(tx, pending, request).await? {
         IncomingResponsePayload::Msg(response) => Ok(response),
-        // IncomingResponsePayload::BinaryChunk(_) | IncomingResponsePayload::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
     }
 }
 
@@ -2038,10 +2034,11 @@ fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8
     let mut frame = format!("{id}\t").into_bytes();
     match payload {
         OutgoingRequestPayload::Msg(msg) => frame.extend_from_slice(msg.as_bytes()),
-        // OutgoingRequestPayload::BinaryStream { .. } => return Err(ThoError::new("binary stream payload must be written by worker_response_writer_loop")),
+
         OutgoingRequestPayload::SharedMemfdBuffer{ meta, .. } => {
             let metadata_json = serde_json::to_string(meta)
                 .map_err(|e| ThoError::new(format!("failed to encode shared memfd metadata: {e}")))?;
+
             frame.extend_from_slice(format!("{SHARED_MEMFD_PAYLOAD_PREFIX}{metadata_json}").as_bytes());
         }
     }
@@ -2114,21 +2111,6 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    async fn invoke_endpoint_to_file_raw(&self, input: String, output: std::fs::File) -> Result<std::fs::File, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::InvokeEndpointToFile {
-                input,
-                output,
-                respond_to,
-            }
-        ).instrument(tracing::debug_span!(
-            "CudaIPCActorHandle::invoke_endpoint_to_file_raw",
-            agg_perf="CudaIPCActorHandle::invoke_endpoint_to_file_raw",
-        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
 }
 
 struct IPCHanldeCTx {
@@ -2226,25 +2208,27 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
 
     async fn install_endpoint_bytes(&self, stage_id: u32, init_msg: Vec<u8>) -> Result<(), ThoError> {
-        self.install_endpoint_raw(encode_stage_payload(stage_id, &String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?)).await
+        self.install_endpoint_raw(
+            encode_stage_payload(stage_id, &String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?)
+        ).await
     }
 
     async fn invoke_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
         let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?;
-        let response = self.invoke_endpoint_raw(encode_stage_payload(stage_id, &input)).await?;
+        let response = self.invoke_endpoint_raw(
+            encode_stage_payload(stage_id, &input)
+        ).await?;
         decode_endpoint_response_bytes(&response)
     }
 
     async fn consume_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
         let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint consume payload is not utf8: {e}")))?;
-        let response = self.consume_endpoint_raw(encode_stage_payload(stage_id, &input)).await?;
+        let response = self.consume_endpoint_raw(
+            encode_stage_payload(stage_id, &input)
+        ).await?;
         decode_endpoint_response_bytes(&response)
     }
 
-    async fn invoke_endpoint_to_file(&self, stage_id: u32, input: Vec<u8>, output: std::fs::File) -> Result<std::fs::File, ThoError> {
-        let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?;
-        self.invoke_endpoint_to_file_raw(encode_stage_payload(stage_id, &input), output).await
-    }
 
     async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
