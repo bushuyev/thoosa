@@ -18,7 +18,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{ThoError, mono_key};
-use thoosa_store::{SqlStore, Store};
+use thoosa_store::{SqlStore, Store, TrainedNetsBy};
 
 #[derive(Debug, Args, Clone)]
 pub struct ExportArgs {
@@ -212,7 +212,7 @@ where
     }
 
     async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<dyn Workspace>>>, label_net_run_config_ids: &[RunConfigId]) -> Result<(Vec<RunConfigId>, Vec<PathBuf>), ThoError> {
-        let label_nets = track_await(self.store.list_trained_nets(label_net_run_config_ids.to_vec(), None, None)).await?;
+        let label_nets = track_await(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(label_net_run_config_ids.to_vec()), None, None)).await?;
         let mut motif_net_run_config_ids = Vec::new();
         for label_net in &label_nets {
             motif_net_run_config_ids.extend(track_await(self.store.list_input_nets(label_net.id)).await?);
@@ -220,7 +220,7 @@ where
         motif_net_run_config_ids.sort_unstable();
         motif_net_run_config_ids.dedup();
 
-        let motif_nets = track_await(self.store.list_trained_nets(motif_net_run_config_ids.clone(), None, None)).await?;
+        let motif_nets = track_await(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids.clone()), None, None)).await?;
         let mut copied = Vec::new();
         let mut copied_targets = HashSet::new();
         {
