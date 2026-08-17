@@ -168,6 +168,20 @@ pub struct RunMotifEntry {
     pub slices_cnt: usize,
     pub resources_cnt: usize,
 }
+#[derive(Debug)]
+pub enum TrainedNetsBy {
+    RunConfigIds(Vec<RunConfigId>),
+    TrainNetId(Vec<u32>)
+}
+
+impl AsRef<Vec<u32>> for TrainedNetsBy {
+    fn as_ref(&self) -> &Vec<u32> {
+        match self{
+            TrainedNetsBy::RunConfigIds(v) => v,
+            TrainedNetsBy::TrainNetId(v) => v
+        }
+    }
+}
 
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
@@ -344,10 +358,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<u32, ThoError>;
 
-    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
+    async fn list_trained_nets(&self, run_config_ids: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
     async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-    async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
+    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &str) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
     async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
@@ -561,13 +575,13 @@ mock! {
         ) -> Result<u32, ThoError>;
         async fn list_trained_nets(
             &self,
-            run_config_ids: Vec<RunConfigId>,
+            run_config_ids: TrainedNetsBy,
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<TrainedNet>, ThoError>;
         async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
+        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type:&str) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
         async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
@@ -652,9 +666,9 @@ pub struct SqlStore {
 
 const SQL_STORE_READERS_CNT: usize = 8;
 static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
-const TRAIN_LABEL_NETS_RUN_CONFIG_TYPE: &str = "TrainLabelNetRunConfig";
-const TRAIN_FINAL_NETS_RUN_CONFIG_TYPE: &str = "TrainFinalNetRunConfig";
-const TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE: &str = "TrainMotifNetRunConfig";
+pub const TRAIN_LABEL_NETS_RUN_CONFIG_TYPE: &str = "TrainLabelNetRunConfig";
+pub const TRAIN_FINAL_NETS_RUN_CONFIG_TYPE: &str = "TrainFinalNetRunConfig";
+pub const TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE: &str = "TrainMotifNetRunConfig";
 
 #[derive(Debug)]
 struct RandomSliceResourceCtx {
@@ -2347,16 +2361,26 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError> {
+    async fn list_trained_nets(&self, by: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError> {
         self.with_reader_conn("list_trained_nets", move |conn| {
-            if run_config_ids.is_empty() {
+            let (field, ids) = match by {
+                TrainedNetsBy::RunConfigIds(ids) => {
+                    ("run_config_id", ids)
+                }
+                TrainedNetsBy::TrainNetId(ids) => {
+                    ("id", ids)
+                }
+            };
+            if ids.is_empty() {
                 return Ok(Vec::new());
             }
 
             let trained_nets = {
-                let run_config_ids_clause = run_config_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                let run_config_ids_clause = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                 let query = [
-                    "SELECT id, run_config_id, net_path, loss FROM trained_nets WHERE run_config_id IN (",
+                    "SELECT id, run_config_id, net_path, loss FROM trained_nets WHERE ",
+                    field,
+                    " IN (",
                     &run_config_ids_clause,
                     ")",
                     if loss.is_some() { " AND loss < ?" } else { "" },
@@ -2364,7 +2388,7 @@ impl Store for SqlStore {
                     if limit.is_some() { " LIMIT ?" } else { "" },
                 ].concat();
 
-                let mut params = run_config_ids
+                let mut params = ids
                     .iter()
                     .map(|run_config_id| rusqlite::types::Value::Integer(*run_config_id as i64))
                     .collect::<Vec<_>>();
@@ -2411,7 +2435,7 @@ impl Store for SqlStore {
         }).await
     }
 
-    async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError> {
+    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &str) -> Result<Vec<TrainedNetEntry>, ThoError> {
         self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
             stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, loss], Self::trained_net_entry)?
@@ -4441,7 +4465,7 @@ mod store_tests {
     use thoosa_shared::val::Val;
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
-    use crate::{LimitBy, MotifTrackerStore, RunConfigFilter, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError};
+    use crate::{LimitBy, MotifTrackerStore, RunConfigFilter, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError, TrainedNetsBy};
     use std::path::PathBuf;
 
     #[ctor::ctor]
@@ -5169,7 +5193,7 @@ mod store_tests {
             store.save_trained_net(run_config_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
         }
 
-        let selected = store.list_trained_nets(vec![run_config_id], None, None).await?;
+        let selected = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
         assert_eq!(105, selected.len());
         assert_eq!(run_config_id, selected[0].run_config_id);
         assert_eq!(PathBuf::from("nets/000"), selected[0].net_path);
@@ -5178,18 +5202,18 @@ mod store_tests {
         assert_eq!(PathBuf::from("nets/104"), selected[104].net_path);
         assert_eq!(104.0, selected[104].loss);
 
-        let limited = store.list_trained_nets(vec![run_config_id], None, Some(3)).await?;
+        let limited = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, Some(3)).await?;
         assert_eq!(3, limited.len());
         assert_eq!(PathBuf::from("nets/000"), limited[0].net_path);
         assert_eq!(PathBuf::from("nets/001"), limited[1].net_path);
         assert_eq!(PathBuf::from("nets/002"), limited[2].net_path);
 
-        let filtered = store.list_trained_nets(vec![run_config_id], Some(15.0), None).await?;
+        let filtered = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), Some(15.0), None).await?;
         assert_eq!(15, filtered.len());
         assert_eq!(PathBuf::from("nets/000"), filtered[0].net_path);
         assert_eq!(PathBuf::from("nets/014"), filtered[14].net_path);
 
-        let filtered_limited = store.list_trained_nets(vec![run_config_id], Some(15.0), Some(5)).await?;
+        let filtered_limited = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), Some(15.0), Some(5)).await?;
         assert_eq!(5, filtered_limited.len());
         assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].net_path);
         assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].net_path);
@@ -5201,14 +5225,14 @@ mod store_tests {
             HashMap::new(),
         ).await?;
         store.save_trained_net(second_run_config_id, PathBuf::from("nets/second"), 0.5, None).await?;
-        let multi_run = store.list_trained_nets(vec![run_config_id, second_run_config_id], Some(1.0), None).await?;
+        let multi_run = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id, second_run_config_id]), Some(1.0), None).await?;
         assert_eq!(2, multi_run.len());
         assert_eq!(run_config_id, multi_run[0].run_config_id);
         assert_eq!(PathBuf::from("nets/000"), multi_run[0].net_path);
         assert_eq!(second_run_config_id, multi_run[1].run_config_id);
         assert_eq!(PathBuf::from("nets/second"), multi_run[1].net_path);
 
-        let empty_run_config_ids = store.list_trained_nets(vec![], None, None).await?;
+        let empty_run_config_ids = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![]), None, None).await?;
         assert!(empty_run_config_ids.is_empty());
 
         Ok(())
@@ -6210,7 +6234,7 @@ impl MockStoreBuilder {
         self.store.expect_list_trained_nets().returning(
             move |run_config_ids, loss, limit| {
                 data.iter()
-                    .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_slice() && *expected_loss == loss && *expected_limit == limit)
+                    .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_ref().as_slice() && *expected_loss == loss && *expected_limit == limit)
                     .map(|(_, _, _, result)| result.clone())
                     .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
             }

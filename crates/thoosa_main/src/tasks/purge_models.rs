@@ -17,7 +17,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, recurse_files};
-use thoosa_store::{Store, TrainedNetEntry};
+use thoosa_store::{Store, TrainedNetEntry, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,7 +344,7 @@ async fn selected_purge_entries(roots: &ModelRoots, store: &Arc<Box<dyn Store>>,
         PurgeMode::PurgeLabelModels(by) => {
             let rows = match by {
                 PurgeLabelModelsBy::Date(date) => track_await(store.list_label_trained_nets_before(date.as_str().to_string())).await?,
-                PurgeLabelModelsBy::Loss(loss) => track_await(store.list_label_trained_nets_loss_gt(loss)).await?,
+                PurgeLabelModelsBy::Loss(loss) => track_await(store.list_trained_nets_loss_gt(loss, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE)).await?,
             };
             Ok(rows_to_purge_entries(roots, PurgeModelType::Labels, rows))
         }
@@ -464,7 +464,7 @@ mod tests {
     use thoosa_shared::run_configs::{RUN_ID, RunConfig};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::{SqlStore, Store};
+    use thoosa_store::{SqlStore, Store, TrainedNetsBy};
 
     #[test]
     fn test_purge_models_command_parses() {
@@ -505,7 +505,7 @@ mod tests {
         assert!(!ws.read().motifs_nets_path().join(&lost_motif_path).exists());
         assert!(!ws.read().labels_nets_path().join(&lost_label_path).exists());
         assert!(!ws.read().final_nets_path().join(&lost_final_path).exists());
-        assert_eq!(store.list_trained_nets(vec![run_config_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?.len(), 1);
 
         Ok(())
     }
@@ -534,8 +534,8 @@ mod tests {
         let output = run_stage(&ws, &store, PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Date(PurgeDate::new("2026-05-18").unwrap()))).await?;
         assert_eq!(output.purged().len(), 1);
         assert_eq!(output.purged()[0].net_path, old_path);
-        assert_eq!(store.list_trained_nets(vec![old_run_config_id], None, None).await?.len(), 0);
-        assert_eq!(store.list_trained_nets(vec![new_run_config_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![old_run_config_id]), None, None).await?.len(), 0);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![new_run_config_id]), None, None).await?.len(), 1);
         assert!(!ws.read().labels_nets_path().join("label").join("1").exists());
         assert!(ws.read().labels_nets_path().join("label").join("2").exists());
 
@@ -564,8 +564,8 @@ mod tests {
         let output = run_stage(&ws, &store, PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))).await?;
         assert_eq!(output.purged().len(), 1);
         assert_eq!(output.purged()[0].net_path, high_loss_path);
-        assert_eq!(store.list_trained_nets(vec![high_loss_run_config_id], None, None).await?.len(), 0);
-        assert_eq!(store.list_trained_nets(vec![low_loss_run_config_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![high_loss_run_config_id]), None, None).await?.len(), 0);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![low_loss_run_config_id]), None, None).await?.len(), 1);
         assert!(!ws.read().labels_nets_path().join("label").join("1").exists());
         assert!(ws.read().labels_nets_path().join("label").join("2").exists());
 
@@ -592,7 +592,7 @@ mod tests {
         let unused_motif_run_config_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "unused", HashMap::new()).await?;
         store.save_trained_net(used_motif_run_config_id, used_motif_path.clone(), 0.01, None).await?;
         store.save_trained_net(unused_motif_run_config_id, unused_motif_path.clone(), 0.01, None).await?;
-        let used_motif_id = store.list_trained_nets(vec![used_motif_run_config_id], None, None).await?[0].id;
+        let used_motif_id = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![used_motif_run_config_id]), None, None).await?[0].id;
 
         let label_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "label", HashMap::new()).await?;
         store.save_trained_net(label_run_config_id, label_path, 0.01, Some(vec![used_motif_id])).await?;
@@ -600,8 +600,8 @@ mod tests {
         let output = run_stage(&ws, &store, PurgeMode::PurgeUnusedMotifModels).await?;
         assert_eq!(output.purged().len(), 1);
         assert_eq!(output.purged()[0].net_path, unused_motif_path);
-        assert_eq!(store.list_trained_nets(vec![used_motif_run_config_id], None, None).await?.len(), 1);
-        assert_eq!(store.list_trained_nets(vec![unused_motif_run_config_id], None, None).await?.len(), 0);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![used_motif_run_config_id]), None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![unused_motif_run_config_id]), None, None).await?.len(), 0);
         assert!(ws.read().motifs_nets_path().join("0").join("10_1").exists());
         assert!(!ws.read().motifs_nets_path().join("0").join("11_2").exists());
 

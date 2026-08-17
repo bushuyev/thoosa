@@ -606,6 +606,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tch::{Device, Tensor};
+    use tracing::field::debug;
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::ipc::tests::run_ipc_test;
@@ -640,7 +641,7 @@ mod tests {
     use thoosa_shared::traits::{OutId, Stage, SyncStage};
     use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
     use thoosa_shims::context::ThoCudaContext;
-    use thoosa_store::SqlStore;
+    use thoosa_store::{SqlStore, TrainedNetsBy, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE};
     use thoosa_store::rusqlite::Transaction;
 
     #[derive(Clone, Debug)]
@@ -904,7 +905,10 @@ mod tests {
             }
         };
 
-        // store.list_trained_nets()
+        let final_nets = store.list_trained_nets_loss_gt(0.0, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE).await?;
+        let final_nets =store.list_trained_nets(TrainedNetsBy::TrainNetId(final_nets.into_iter().map(|tne|tne.id).collect()), None, None).await?;
+
+        debug!("heavy_test_run_all: final_nets={final_nets:?}");
 
         debug!("\n{}", format_perf_map(&PERF));
 

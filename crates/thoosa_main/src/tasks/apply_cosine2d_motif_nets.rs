@@ -39,7 +39,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
-use thoosa_store::{Store, TrainedNet};
+use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
@@ -95,7 +95,7 @@ where
 
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
-        let motif_nets = track_await(store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit)).await?;
+        let motif_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(train_motif_net_run_config_ids.clone()), max_loss, trained_nets_limit)).await?;
 
         if motif_nets.is_empty() {
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}")));
