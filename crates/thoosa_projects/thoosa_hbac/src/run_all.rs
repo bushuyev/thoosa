@@ -618,7 +618,7 @@ mod tests {
     use thoosa_common::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
+    use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
@@ -756,7 +756,7 @@ mod tests {
         let result = do_heavy_test_run_all("heavy_test_run_all_local").await;
         global_ctx.shutdown().await;
 
-        info!("\n{}", format_perf_map(&PERF));
+
         result
     }
 
@@ -908,9 +908,7 @@ mod tests {
         let final_nets = store.list_trained_nets_loss_gt(0.0, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE).await?;
         let final_nets =store.list_trained_nets(TrainedNetsBy::TrainNetId(final_nets.into_iter().map(|tne|tne.id).collect()), None, None).await?;
 
-        debug!("heavy_test_run_all: final_nets={final_nets:?}");
-
-        debug!("\n{}", format_perf_map(&PERF));
+        info!("heavy_test_run_all: final_nets={final_nets:?}");
 
         Ok(())
     }
@@ -963,7 +961,7 @@ mod tests {
 
         /////////////////////train_motifs
         let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(3),
+            epochs: RangeOrValue::Value(30),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -977,7 +975,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(3),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -990,7 +988,7 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(3),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1022,31 +1020,35 @@ mod tests {
             id: None,
             common_training_args: common_training_args_for_labels,
 
-            // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-            //     // num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-            //     num_conv_layers: RangeOrValue::Value(8),
-            //     hidden_conv_channels: RangeOrValue::Value(64),
-            //     num_head_layers: RangeOrValue::Value(10),
-            //     num_head_features: RangeOrValue::Value(256),
-            //     kernel: RangeOrValue::Value(10),
-            //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            //     // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
-            //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{_dummy:0}),
-            // }),
+            net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+                // num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+                num_conv_layers: RangeOrValue::Value(8),
+                hidden_conv_channels: RangeOrValue::Value(64),
+                num_head_layers: RangeOrValue::Value(10),
+                num_head_features: RangeOrValue::Value(256),
+                kernel: RangeOrValue::Value(10),
+                // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+                // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
+                joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
+            }),
 
-            net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet( SelfAttentionNetArgsRangeOrValue {
-                head_size: RangeOrValue::Value(2),
-                n_heads: RangeOrValue::Value(4),
-                ff_mult: RangeOrValue::Value(2),
-                dropout: RangeOrValue::Value(0.1),
-            })
+            // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet( SelfAttentionNetArgsRangeOrValue {
+            //     head_size: RangeOrValue::Value(2),
+            //     n_heads: RangeOrValue::Value(4),
+            //     ff_mult: RangeOrValue::Value(2),
+            //     dropout: RangeOrValue::Value(0.1),
+            // })
+            // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
+            //     num_layers:  RangeOrValue::Value(4),
+            //     features:  RangeOrValue::Value(100),
+            // })
         };
         //////////////////////train final
         let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
             id: None,
             common_training_args: common_training_args_for_final,
             net: FinalNetArgsRangeOrValue {
-                num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
+                num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
             },
         };
 
@@ -1055,9 +1057,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(5, 3)),
-            train_labels_opt_config: Arc::new(OptConfig::new(5, 3)),
-            train_final_opt_config: Arc::new(OptConfig::new(5, 3)),
+            train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
+            train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
         }
     }
 
@@ -1072,7 +1074,7 @@ mod tests {
             2,
             MotifKind::Sin,
             2,
-            MotifKind::Triangle,
+            MotifKind::Trill,
             100,
             0.01,
             0.2,
@@ -1117,14 +1119,14 @@ mod tests {
                         k: RangeOrValue::Value(3.0),
                         eps: RangeOrValue::Value(1e-8),
                     }),
-                    min: RangeOrValue::Value(0.5),
+                    min: RangeOrValue::Value(0.6),
                 },
                 MotifCriterionConstraintRangeOrValue {
                     metric: MetricsRangeOrValue::Coherence(CoherenceRunConfigRangeOrValue {
                         k: RangeOrValue::Value(10.0),
                         eps: RangeOrValue::Value(1e-8),
                     }),
-                    min: RangeOrValue::Value(0.5),
+                    min: RangeOrValue::Value(0.6),
                 },
             ],
         }

@@ -58,6 +58,8 @@ where
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage::do_run"))]
     fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
     where
         Self: Sized,
@@ -90,6 +92,7 @@ where
     }
 
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage::consume"))]
     fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out>
     where
         Self: Sized,
@@ -601,9 +604,4 @@ where
             })
         }).map(SyncStageIpcResponse::Encoded)
     }
-}
-#[test]
-fn test_0()
-{
-
 }

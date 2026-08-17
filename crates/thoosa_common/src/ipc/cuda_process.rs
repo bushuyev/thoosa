@@ -1157,46 +1157,45 @@ impl CudaIPCActor {
                 let _ = respond_to.send(Ok(()));
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
-                self.spawned_state.child.kill().await?;
-                // TODO - shutdow does nothing in the worker, remove?
-                // let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                // let (reply_tx, reply_rx) = oneshot::channel();
-                // let pending = Arc::clone(&self.spawned_state.pending);
-                // let self_tx = self.spawned_state.tx.clone();
-                //
-                //
-                // tokio::spawn(async move {
-                //     {
-                //         let mut pending = pending.lock().await;
-                //         let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
-                //         debug_assert!(old.is_none());
-                //     }
-                //
-                //     if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()) }).await.is_err() {
-                //         let mut pending = pending.lock().await;
-                //         pending.remove(&id);
-                //         let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
-                //         return;
-                //     }
-                //
-                //     let reply = reply_rx
-                //         .await
-                //         .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
-                //         .and_then(|reply| reply)
-                //         .and_then(IncomingResponsePayload::into_msg);
-                //
-                //     match reply {
-                //         Ok(reply) if reply == "shutdown-ok" => {
-                //             let _ = respond_to.send(Ok(()));
-                //         }
-                //         Ok(reply) => {
-                //             let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
-                //         }
-                //         Err(error) => {
-                //             let _ = respond_to.send(Err(error));
-                //         }
-                //     }
-                // });
+                // self.spawned_state.child.kill().await?;
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let (reply_tx, reply_rx) = oneshot::channel();
+                let pending = Arc::clone(&self.spawned_state.pending);
+                let self_tx = self.spawned_state.tx.clone();
+
+
+                tokio::spawn(async move {
+                    {
+                        let mut pending = pending.lock().await;
+                        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
+                        debug_assert!(old.is_none());
+                    }
+
+                    if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()) }).await.is_err() {
+                        let mut pending = pending.lock().await;
+                        pending.remove(&id);
+                        let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                        return;
+                    }
+
+                    let reply = reply_rx
+                        .await
+                        .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
+                        .and_then(|reply| reply)
+                        .and_then(IncomingResponsePayload::into_msg);
+
+                    match reply {
+                        Ok(reply) if reply == "shutdown-ok" => {
+                            let _ = respond_to.send(Ok(()));
+                        }
+                        Ok(reply) => {
+                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
+                        }
+                        Err(error) => {
+                            let _ = respond_to.send(Err(error));
+                        }
+                    }
+                });
             }
             CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -2201,12 +2200,16 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 
     async fn shutdown(&self) -> Result<(), ThoError> {
+        debug!("CudaIPCActorHandle::shutdown");
+
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Shutdown {
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        debug!("CudaIPCActorHandle::shutdown: recv={recv:?}");
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }

@@ -1767,7 +1767,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
             None,
         )?
         .linear_s(
-            2 * params.in_features,
+            100 * params.in_features,
             "final_net_first_layer".to_string(),
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -1775,7 +1775,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     for i in 0..params.num_layers {
         net = net
             .linear_s(
-                params.in_features,
+                100 * params.in_features,
                 format!("final_net_{i}th_layer"),
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -2354,8 +2354,7 @@ pub struct ConvNetArgs {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AttnPool1dArgs{
-    #[in_map]
-    pub _dummy: u32,
+
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]

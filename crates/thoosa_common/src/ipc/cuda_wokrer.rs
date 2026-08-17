@@ -177,7 +177,7 @@ impl CudaWorker {
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
         let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
-
+        let mut is_shutting_down = false;
         loop {
             let frame = match cuda_process::read_text_frame(&mut reader, "run_worker").await {
                 Ok(frame) => frame,
@@ -197,6 +197,7 @@ impl CudaWorker {
             debug!("run_worker: worker received: id={id}, payload={:?}", payload.get(..1000));
 
             if payload == "shutdown" {
+                debug!("run_worker: worker got shutdown command");
                 reply_tx
                     .send(WorkerReply {
                         id,
@@ -205,9 +206,10 @@ impl CudaWorker {
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
-                debug!("run_worker: worker got shutdown command");
+                debug!("run_worker: worker sent shutdown rs");
                 break;
             }
+           
 
             if let Some(tensor_key) = payload.strip_prefix(DESCRIBE_REF_PAYLOAD_PREFIX) {
 

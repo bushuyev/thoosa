@@ -361,7 +361,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn list_trained_nets(&self, run_config_ids: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
     async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &str) -> Result<Vec<TrainedNetEntry>, ThoError>;
+    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
     async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
@@ -581,7 +581,7 @@ mock! {
         ) -> Result<Vec<TrainedNet>, ThoError>;
         async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type:&str) -> Result<Vec<TrainedNetEntry>, ThoError>;
+        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type:&'static str) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
         async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
@@ -2435,10 +2435,10 @@ impl Store for SqlStore {
         }).await
     }
 
-    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &str) -> Result<Vec<TrainedNetEntry>, ThoError> {
+    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> Result<Vec<TrainedNetEntry>, ThoError> {
         self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
-            stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, loss], Self::trained_net_entry)?
+            stmt.query_map(params![net_type, loss], Self::trained_net_entry)?
                 .map(|v| v.map_err(ThoError::from))
                 .collect::<Result<Vec<_>, ThoError>>()
         }).await

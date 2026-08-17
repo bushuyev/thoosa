@@ -30,7 +30,7 @@ use thoosa_shared::test_utils::init_test_logging;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
-use thoosa_shared::{ThoError, mono_key};
+use thoosa_shared::{mono_key, panic_to_err_async, ThoError};
 use tokio::task::JoinSet;
 
 // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
@@ -65,6 +65,9 @@ where
     FW:AsyncFn(OsString)->Result<(), ThoError>,
 {
     if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        debug!("run_ipc_test: sock_path={sock_path:?}");
+
+
         let tho_cuda_context = ThoCudaContext::new(0)?;
 
         let worker_rt = tokio::runtime::Builder::new_multi_thread()
@@ -84,9 +87,9 @@ where
             .build()?;
 
         worker_rt.block_on(async {
-            let r = worker_f(sock_path).await;
+            let r = panic_to_err_async!(worker_f(sock_path));
 
-            info!("\n{}", format_perf_map(&PERF));
+            info!("worker perf:\n{}", format_perf_map(&PERF));
             info!("worker done: r={r:?}");
 
             // Preserve the original tests' behavior by propagating worker failures through the harness.
@@ -106,11 +109,13 @@ where
 
         main_rt.block_on(async {
             let r = main_f.await;
+            GlobalCtx::global().shutdown().await;
+            
 
-            info!("\n{}", format_perf_map(&PERF));
+            info!("main perf:\n{}", format_perf_map(&PERF));
             info!("main done: r={r:?}");
 
-            GlobalCtx::global().shutdown().await;
+
 
             // Preserve the original tests' behavior by propagating main-process assertion failures.
             r
