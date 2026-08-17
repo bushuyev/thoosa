@@ -227,7 +227,7 @@ where
 
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: Arc::new(track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, label_net, 1.into(), 10/*TODO config*/, ws, false)).await?),
+                    apply_label_net: Arc::new(track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, label_net, 1.into(), batch_in_chunks, ws, false)).await?),
                 });
             }
         }

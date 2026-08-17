@@ -895,13 +895,16 @@ mod tests {
             all_configs,
         )}){
             Ok(_) => {
-                debug!("ok");
+                debug!("run_all done");
+
             }
             Err(e) => {
                 info!("e={e:?}");
                 panic!("test failed")
             }
         };
+
+        // store.list_trained_nets()
 
         debug!("\n{}", format_perf_map(&PERF));
 
