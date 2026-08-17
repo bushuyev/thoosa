@@ -31,7 +31,7 @@ use thoosa_common::train_nets::{LabelNetParams, MotifNetParams, ThoModuleWithSto
 use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::comp_id::{SynKey, hashmap_as_vec};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
@@ -41,13 +41,13 @@ use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_wit
 use thoosa_store::{Store, TrainedNet};
 
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use crate::tasks::apply_motif_nets::{ApplyMotifNet, ApplyMotifNets, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT};
+use crate::tasks::apply_motif_nets::{ApplyMotifNet, ApplyMotifNets, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_shared::tracked_await::track_await;
 use crate::tasks::load_motif_net::MotifNetMeta;
 
@@ -64,7 +64,7 @@ where
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     apply_motif_nets: Arc<AMN>,
-    apply_label_net: Arc<ApplyLabelNet<C>>
+    apply_label_net: Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>,ApplyLabelNetInit>>
 }
 
 /// Applies label nets and returns per-model probabilities. Output is a flat list of label-model
@@ -227,7 +227,7 @@ where
 
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: Arc::new(track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)).await?),
+                    apply_label_net: Arc::new(track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, label_net, 1.into(), 10/*TODO config*/, ws, false)).await?),
                 });
             }
         }
@@ -362,7 +362,7 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| ThoError::new("ApplyLabelNets::run: missing label output id"))?;
-        let stack_applied_label_nets = Arc::new(StackAppliedLabelNets::<C>::new(self.id.clone(), label_output_order));
+        let stack_applied_label_nets = Arc::new(StackAppliedLabelNets::<C>::new(self.id.clone(), label_output_order, 1.into()).await?);
         let stack_input = StackAppliedLabelNetsInputWrapper::new(input_id.clone(), Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
@@ -388,7 +388,7 @@ where
         #[cfg(debug_assertions)]
         debug!("ApplyLabelNets::run: done, input={input_debug:?}");
 
-        Ok(Arc::new(label_outputs))
+        Ok(Arc::new(DevicesWrap::wrap(label_outputs)))
     }
 }
 
@@ -403,7 +403,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StackAppliedLabelNetsInput {
     id: SynKey,
     device_idx: usize,
@@ -413,6 +413,17 @@ pub struct StackAppliedLabelNetsInput {
 impl StackAppliedLabelNetsInput {
     fn new(id: SynKey, label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>, device_idx: usize) -> Self {
         Self { id, device_idx, label_outputs }
+    }
+}
+
+impl WorkerStageInput for StackAppliedLabelNetsInput {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<StackAppliedLabelNetsInput>(input)?;
+        Ok(StackAppliedLabelNetsInput{
+            id: input.id,
+            device_idx: input.device_idx,
+            label_outputs: input.label_outputs.into_iter().map(|v|ThoTensor::<LabelProbability, SynKey>::ref_to_tensor(all_cuda_tensors, v)).collect::<Result<_, ThoError>>()?,
+        })
     }
 }
 
@@ -500,6 +511,22 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     }
 }
 
+pub const STACK_APPLIED_LABEL_NETS_ENDPOINT: &str = "STACK_APPLIED_LABEL_NETS_ENDPOINT";
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StackAppliedLabelNetsInit {
+    id: SynKey,
+
+    #[serde(with = "hashmap_as_vec")]
+    label_output_order: HashMap<SynKey, usize>,
+}
+
+impl StackAppliedLabelNetsInit {
+    pub fn new(id: SynKey, label_output_order: HashMap<SynKey, usize>) -> Self {
+        Self { id, label_output_order }
+    }
+}
+
 #[derive(Debug, Named)]
 pub struct StackAppliedLabelNets<C>
 where
@@ -514,14 +541,39 @@ impl<C> StackAppliedLabelNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn new(id: SynKey, label_output_order: Vec<SynKey>) -> Self {
-        Self {
-            id,
-            label_output_order: label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect(),
-            pd: PhantomData,
+    async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedLabelNets<C>>, ThoError> {
+        let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
+
+        if GlobalCtx::global().is_ipc() {
+            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
+            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+            install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, &StackAppliedLabelNetsInit::new(id, order)).await?;
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, device.tho_device_idx())),
+            })
+        } else {
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(StackAppliedLabelNetsInit::new(id, order)).await?)))
         }
     }
+
+    pub async fn new_local(init:StackAppliedLabelNetsInit) -> Result<Self, ThoError>{
+        Ok(Self {
+            id:init.id,
+            label_output_order:init.label_output_order,
+            pd: PhantomData,
+        })
+
+    }
+
 }
+
+pub fn stack_applied_label_nets(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init = JsonIpcCodec::decode(&init_msg)?;
+        Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
+
 
 impl<C> Adjustable for StackAppliedLabelNets<C>
 where
@@ -544,7 +596,7 @@ where
 {
     type Ctx = C;
     type In<'a> = StackAppliedLabelNetsInput;
-    type Out = DevicesWrap<ThoTensor<LabelProbability, SynKey>>;
+    type Out = ThoTensor<LabelProbability, SynKey>;
 }
 
 impl<C> SyncStage for StackAppliedLabelNets<C>
@@ -581,7 +633,7 @@ where
         };
 
         match ThoTensor::new(out_id, tensor) {
-            Ok(tensor) => ConsumeResult::Ok(DevicesWrap::wrap(tensor)),
+            Ok(tensor) => ConsumeResult::Ok(tensor),
             Err(error) => {
                 input.label_outputs = label_outputs;
                 ConsumeResult::Failed { input, error }
@@ -682,11 +734,12 @@ pub struct ApplyLabelNetInit {
     train_label_net_run_config_id: RunConfigId,
     label_net_path:PathBuf,
     batch_in_chunks: usize,
+    quantize:bool
 }
 
 impl ApplyLabelNetInit {
-    pub fn new(label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, batch_in_chunks: usize) -> Self {
-        Self { label, train_label_net_run_config_id, label_net_path, batch_in_chunks }
+    pub fn new(label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, batch_in_chunks: usize, quantize:bool) -> Self {
+        Self { label, train_label_net_run_config_id, label_net_path, batch_in_chunks, quantize }
     }
 }
 
@@ -718,7 +771,7 @@ where
     async fn new(
         label: String,
         train_label_net_run_config_id: RunConfigId,
-        trained_net:TrainedNet,
+        trained_net:&TrainedNet,
         device: ThoDevice,
         batch_in_chunks: usize,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -733,14 +786,15 @@ where
         let init = ApplyLabelNetInit::new(
             label.clone(),
             train_label_net_run_config_id,
-            trained_net.net_path,
-            batch_in_chunks
+            trained_net.net_path.clone(),
+            batch_in_chunks,
+            quantize
         );
 
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyLabelNetInit>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_MOTIF_NET_ENDPOINT, stage_id, &init).await?;
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyLabelNetInit>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_LABEL_NET_ENDPOINT, stage_id, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx())),
                 init,
@@ -780,7 +834,7 @@ pub fn apply_label_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn W
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-               &init.motif_net_path,
+               &init.label_net_path,
                &Cuda(0),//TODO
                init.quantize
         )?;
