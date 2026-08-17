@@ -433,6 +433,36 @@ impl From<(u32, &str)> for SynKey {
     }
 }
 
+pub mod hashmap_as_vec {
+    use std::collections::HashMap;
+    use serde::{Deserializer, Serializer};
+    use super::*;
+
+    pub fn serialize<S, K, V>(
+        value: &HashMap<K, V>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        K: Serialize,
+        V: Serialize,
+    {
+        value.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D, K, V>(
+        deserializer: D,
+    ) -> Result<HashMap<K, V>, D::Error>
+    where
+        D: Deserializer<'de>,
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
+    {
+        let entries = Vec::<(K, V)>::deserialize(deserializer)?;
+        Ok(entries.into_iter().collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use log::debug;
@@ -468,4 +498,5 @@ mod tests {
 
         assert!(key_1.gt(&key_0));
     }
+    
 }
