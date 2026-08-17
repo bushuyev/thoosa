@@ -1142,7 +1142,7 @@ where
             // Use the shared stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
             let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
             // The proxy must dispatch with the id used to install this particular apply stage.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyMotifNetInit>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_MOTIF_NET_ENDPOINT, apply_id, &init).await?;
+            install_ipc_endpoint::<JsonIpcCodec, ApplyMotifNetInit>(thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_MOTIF_NET_ENDPOINT, apply_id, &init).await?;
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx())),
                 init: MotifNetMeta::new(motif_id, channel, params),
