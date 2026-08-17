@@ -1,4 +1,4 @@
-use crate::tasks::apply_label_nets::{ApplyLabelNets, MotifNetsOutput};
+use crate::tasks::apply_label_nets::{ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput, APPLY_LABEL_NET_ENDPOINT};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use async_trait::async_trait;
@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering::Relaxed;
 use thoosa_common::dims::{ChannelsData, MotifProbability};
 use thoosa_common::stages_seq::ABStage;
 
@@ -29,9 +30,9 @@ use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -265,12 +266,33 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct SyncLogitsBatchInput<'a> {
     id: SynKey,
     outputs: Vec<ThoDataRef<'a, ThoTensor<LabelProbability, SynKey>>>,
     labels: Vec<Vec<f32>>,
     labels_len: usize,
+}
+
+impl WorkerStageInput for SyncLogitsBatchInput<'_> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input = C::decode::<Self>(input)?;
+
+        Ok(
+            SyncLogitsBatchInput{
+                id: input.id,
+                outputs: input.outputs.into_iter().map(|input_ref|{
+                    let ThoDataRef::Owned(input_ref) = input_ref else {
+                        panic!("unexpected ref: input_ref={:?}", input_ref);
+                    };
+
+                    Ok(ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input_ref)?))
+                }).collect::<Result<Vec<_>, ThoError>>()?,
+                labels: input.labels,
+                labels_len: input.labels_len,
+            }
+        )
+    }
 }
 
 impl Data for SyncLogitsBatchInput<'_> {
@@ -337,7 +359,7 @@ impl BorrowRef for SyncLogitsBatchInputWrapper {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct SyncLogitsBatchOutput {
     id: SynKey,
     x: ThoBatch<LabelProbability>,
@@ -347,6 +369,16 @@ struct SyncLogitsBatchOutput {
 impl SyncLogitsBatchOutput {
     fn into_parts(self) -> (ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>) {
         (self.x, None, self.y)
+    }
+}
+
+impl WorkerStageOutput for SyncLogitsBatchOutput {
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        Ok(SyncLogitsBatchOutput{
+            id: self.id,
+            x: self.x.encode_from_worker(all_cuda_tensors, tho_device)?,
+            y: self.y.encode_from_worker(all_cuda_tensors, tho_device)?,
+        })
     }
 }
 
@@ -360,15 +392,50 @@ impl WithId for SyncLogitsBatchOutput {
 
 impl Output for SyncLogitsBatchOutput {}
 
+
+pub const SYNC_LOGITS_BATCH_ENDPOINT: &str = "SYNC_LOGITS_BATCH_ENDPOINT";
+
 #[derive(Debug)]
-struct SyncLogitsBatch<C> {
+struct SyncLogitsBatch<C>
+where
+    C: RunCtx  + 'static
+{
     pd: PhantomData<C>,
 }
 
-impl<C> SyncLogitsBatch<C> {
-    fn new() -> Self {
-        Self { pd: PhantomData }
+impl<C> SyncLogitsBatch<C>
+where
+    C: RunCtx  + 'static
+{
+    async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLogitsBatch<C>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
+            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_LOGITS_BATCH_ENDPOINT, stage_id, &()).await?;
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, stage_id, device.tho_device_idx())),
+            })
+        } else {
+            Ok(
+                DynSyncStageEnum::Local(Arc::new(SyncLogitsBatch::new_local().await?))
+            )
+        }
     }
+
+    async fn new_local()-> Result<Self, ThoError>{
+        Ok(Self {
+            pd: PhantomData
+        })
+    }
+
+}
+
+pub fn sync_logits_batch_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
+
+        Ok(Box::new(WorkerWrapper::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 impl<C> Adjustable for SyncLogitsBatch<C> where C: RunCtx + 'static {}
@@ -503,7 +570,7 @@ where
                     a
                 });
 
-                let stage = Arc::new(SyncLogitsBatch::<C>::new());
+                let stage = Arc::new(SyncLogitsBatch::<C>::new(1.into()).await?);
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                 let output = track_await(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
