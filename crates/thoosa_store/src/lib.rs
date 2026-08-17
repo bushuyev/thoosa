@@ -653,6 +653,7 @@ pub struct SqlStore {
 const SQL_STORE_READERS_CNT: usize = 8;
 static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const TRAIN_LABEL_NETS_RUN_CONFIG_TYPE: &str = "TrainLabelNetRunConfig";
+const TRAIN_FINAL_NETS_RUN_CONFIG_TYPE: &str = "TrainFinalNetRunConfig";
 const TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE: &str = "TrainMotifNetRunConfig";
 
 #[derive(Debug)]
