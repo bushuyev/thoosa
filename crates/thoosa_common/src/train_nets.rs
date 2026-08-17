@@ -2559,7 +2559,7 @@ mod train_tests {
     use thoosa_shared::perf_logging::set_panic_hook;
     use thoosa_shared::val::Val;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len, CopyToDevice, ThoError};
-    use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore, TrainedNet};
+    use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore, TrainedNet, TrainedNetsBy};
     use torch_sys::at_autocast_clear_cache;
     use thoosa_shared::traits::SimpleId;
     use crate::train_nets::ConvNetArgsFields::Joint;
@@ -4044,7 +4044,7 @@ mod train_tests {
             motif_nets_ids: &motif_nets_ids,
         }).await?;
         let run_config_values = store.list_run_config_values(train_label_nets_run_config_id).await?;
-        let trained_nets = store.list_trained_nets(vec![train_label_nets_run_config_id], None, None).await?;
+        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_nets_run_config_id]), None, None).await?;
 
         assert_eq!(vec![train_label_nets_run_config_id], store.list_output_run_config_ids(train_motif_nets_run_config_id).await?);
         assert_eq!(vec![TrainedNet { id: 1, run_config_id: train_label_nets_run_config_id, net_path: PathBuf::from(format!("alpha/{train_label_nets_run_config_id}")), loss: 0.125 }], trained_nets);
@@ -4073,7 +4073,7 @@ mod train_tests {
 
         let run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
         let run_config_values = store.list_run_config_values(run_config_id).await?;
-        let trained_nets = store.list_trained_nets(vec![run_config_id], None, None).await?;
+        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
 
         assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
         Ok(())

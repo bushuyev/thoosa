@@ -43,7 +43,7 @@ use thoosa_shared::run_configs::{RunConfig, RunConfigId, run_id};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::{FuturesOrdering, RangeOrValue, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async};
-use thoosa_store::Store;
+use thoosa_store::{Store, TrainedNetsBy};
 use tracing::Instrument;
 
 pub enum RunMode {
@@ -327,7 +327,7 @@ pub(crate) async fn run_all(
                             ) {
                                 Ok(train_label_nets_run_config_ids) => {
                                     info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
-                                    let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).instrument(tracing::debug_span!("run_all/9", file = file!(), line = line!())).await?
+                                    let min_loss = store.list_trained_nets(TrainedNetsBy::RunConfigIds(train_label_nets_run_config_ids), None, None).instrument(tracing::debug_span!("run_all/9", file = file!(), line = line!())).await?
                                         .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                     if min_loss < *best_min_loss.read() {
@@ -466,7 +466,7 @@ pub(crate) async fn run_all(
                         ) {
                             Ok(train_label_nets_run_config_ids) => {
                                 info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
-                                let min_loss = track_await(store.list_trained_nets(train_label_nets_run_config_ids, None, None)).await?
+                                let min_loss = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(train_label_nets_run_config_ids), None, None)).await?
                                     .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                 if min_loss < 0.1 {

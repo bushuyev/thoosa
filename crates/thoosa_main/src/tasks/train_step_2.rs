@@ -601,7 +601,7 @@ mod tests {
     use thoosa_shared::traits::ErasedStageWithState;
     use thoosa_shared::traits::{AsyncStage, CachableIdTr, Data, FromJsonFile, MaxParallelCtx, MonoMetrics, RunCtx, SimpleId, Stage, StageWithState, SyncStage, ToJsonFile, WithId};
     use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, cdt_for_dir, mono_key, now_ms, panic_to_err, simple_id};
-    use thoosa_store::{MockStoreBuilder, SqlStore, Store};
+    use thoosa_store::{MockStoreBuilder, SqlStore, Store, TrainedNetsBy};
     use tokio::sync::MutexGuard;
     use tokio::task::coop::cooperative;
     use tracing::field::debug;
@@ -1604,7 +1604,7 @@ mod tests {
         debug!("do_test_train_net_2: r={r:?}");
 
         // let rr = TrainNetXResult::new()
-        let x_nets = track_await(store.list_trained_nets(vec![run_config_id], None, None)).await?;
+        let x_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None)).await?;
         debug!("do_test_train_net_2: x_nets={x_nets:?}");
         for x_net in x_nets {
 

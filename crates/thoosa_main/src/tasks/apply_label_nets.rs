@@ -38,7 +38,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_store::{Store, TrainedNet};
+use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::tasks::apply_motif_nets::{ApplyMotifNet, ApplyMotifNets, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
@@ -205,7 +205,7 @@ where
             debug!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
 
             for (train_label_net_run_config_id, label_net_params, net) in nets {
-                let label_nets = track_await(store.list_trained_nets(vec![train_label_net_run_config_id], None, None)).await?;
+                let label_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
@@ -221,7 +221,7 @@ where
                     continue//TODO, change to assert, just for tests
                 }
 
-                let motif_nets = track_await(store.list_trained_nets(motif_net_run_config_ids, None, None)).await?;
+                let motif_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids), None, None)).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
