@@ -387,7 +387,7 @@ pub struct ThoError {
     //TODO enum
     pub msg: String,
     #[allow(dead_code)]
-    backtrace: Backtrace,
+    backtrace: Arc<Backtrace>,
     pub what: Cause,
 }
 
@@ -397,7 +397,7 @@ impl Clone for ThoError {
     fn clone(&self) -> Self {
         ThoError {
             msg: self.msg.clone(),
-            backtrace: Backtrace::capture(),
+            backtrace: Arc::clone(&self.backtrace),
             what: self.what.clone(),
         }
     }
@@ -439,7 +439,7 @@ impl ThoError {
 
         Self {
             msg: msg.into(),
-            backtrace,
+            backtrace: Arc::new(backtrace),
             what,
         }
     }
@@ -451,7 +451,7 @@ impl ThoError {
 
         Self {
             msg: "oom".into(),
-            backtrace,
+            backtrace: Arc::new(backtrace),
             what: Cause::Cuda {
                 action: CudaAction::HandleOOM,
                 msg: "test".to_string(),

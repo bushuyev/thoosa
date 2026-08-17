@@ -1916,6 +1916,8 @@ fn parse_worker_tensor_info_payload(payload: &str) -> Result<WorkerTensorInfoPay
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_copy_error_payload"))]
 fn parse_worker_copy_error_payload(payload: &str) -> ThoError {
+    debug!("parse_worker_copy_error_payload: payload={payload}");
+
     match serde_json::from_str::<WorkerCopyErrorPayload>(payload) {
         Ok(error) => error.into_error(),
         Err(_) => WorkerCopyErrorPayload::from_legacy_message(payload).into_error(),
