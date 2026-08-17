@@ -67,7 +67,7 @@ impl Classifier {
             crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_CLASSIFIER_ENDPOINT, 0, &init).await?;
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_CLASSIFIER_ENDPOINT, 0, device.tho_device_idx())) }),
+                sync_classifier: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_CLASSIFIER_ENDPOINT, 0, device.tho_device_idx())) }),
             })
         } else {
             let local = SyncClassifierStage::new(id.clone(), in_dim, epochs, lr, fail_until);

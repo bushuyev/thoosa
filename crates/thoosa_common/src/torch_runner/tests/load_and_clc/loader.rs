@@ -260,7 +260,7 @@ impl SyncTestTensorLoader {
         if GlobalCtx::global().is_ipc() {
             let init = SyncTestTensorLoaderInit::new(size, kind);
             crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, &init).await.expect("SyncTestTensorLoader::new: install endpoint");
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_max_parallel(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx)) }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx)) }
         } else {
             DynSyncStageEnum::Local(Arc::new(Self::new_local(size, kind)))
         }

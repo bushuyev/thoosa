@@ -109,11 +109,6 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         self.invoke_endpoint_bytes(stage_id, input).await
     }
 
-    async fn invoke_endpoint_to_file(&self, stage_id: u32, input: Vec<u8>, mut output: std::fs::File)-> Result<std::fs::File, ThoError> {
-        output.write_all(&self.invoke_endpoint_bytes(stage_id, input).await?)?;
-        output.seek(SeekFrom::Start(0))?;
-        Ok(output)
-    }
 
     async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError>
     {

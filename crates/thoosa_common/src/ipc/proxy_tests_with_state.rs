@@ -1,5 +1,5 @@
 use crate::dims::{Batch, Dims};
-use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec, encode_sync_stage_run_input};
+use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
