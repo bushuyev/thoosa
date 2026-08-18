@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -15,9 +16,10 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, MaxParallelCtx, RunCtx, Stage, StageWithState, SyncStage};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
+use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcConsumeResponse, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_device::ThoDevice;
@@ -37,6 +39,7 @@ where
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
 
+    is_2: bool
 }
 
 impl <St> Stage for ProxyStage<St>
@@ -64,8 +67,26 @@ where
     where
         Self: Sized,
     {
+        let is_2 = self.is_2;
+
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
+                if is_2{
+                    let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
+                    let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+
+                    let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
+                        request_id: 0,
+                        operation: Operation::InvokeStage {
+
+                        },
+                    }).await?;
+
+                    debug!("ProxyStage::do_run: rs={rs:?}");
+
+                    todo!()
+                }
 
                 // let endpoint_name = crate::runner::test::proxy_tests::TEST_ENDPOINT;
                 let actor = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref();
@@ -94,8 +115,11 @@ where
     where
         Self: Sized,
     {
+
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
+
+
                 let encoded = JsonIpcCodec::encode(&input)?;
                 let request = IpcSyncStageRunInput::new(encoded);
                 let encoded = JsonIpcCodec::encode(&request)?;
@@ -125,9 +149,21 @@ where
             endpoint_name,
             stage_id,
             tho_device_idx,
+            is_2: false,
             pd:PhantomData
         }
     }
+
+    pub fn proxy2(endpoint_name:&'static str, stage_id: u32, tho_device_idx: usize) -> Self {
+        Self {
+            endpoint_name,
+            stage_id,
+            tho_device_idx,
+            is_2: true,
+            pd:PhantomData
+        }
+    }
+
 
 
 }
