@@ -8,7 +8,7 @@ pub trait WorkerInput:Any + Send + Sync + Debug{
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
-    InstallStage{key:String, init_data:Box<dyn WorkerInput>},
+    InstallStage{key:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
     InvokeStage
 }
 
