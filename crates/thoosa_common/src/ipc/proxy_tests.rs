@@ -193,7 +193,7 @@ where
             debug!("TestStage::new: rs={rs:?}");
 
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
+                stage: Arc::new(ProxyStage::proxy2(TEST_ENDPOINT, 0, tho_device_idx)),
             })
         } else {
             Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new_local(init))))
@@ -344,18 +344,18 @@ mod tests {
 
         let test_stage = Arc::new(TestStage::<u32, TestRunCtx>::new(1, TestStageInit::new(2)).await?);
 
-        // let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
-        //
-        // debug!("test_simp_target: cuda_tensor={cuda_tensor:?}");
-        //
-        // let input = TestInput {
-        //     value: cuda_tensor,
-        // };
-        // let ctx = TestRunCtx;
-        //
-        // let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
-        //
-        // debug!("result={result:?}");
+        let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
+
+        debug!("test_simp_target: cuda_tensor={cuda_tensor:?}");
+
+        let input = TestInput {
+            value: cuda_tensor,
+        };
+        let ctx = TestRunCtx;
+
+        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+
+        debug!("result={result:?}");
         //
         // let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
         //
