@@ -1,0 +1,41 @@
+use std::any::Any;
+use std::fmt::Debug;
+use serde::{Deserialize, Serialize};
+
+#[typetag::serde(tag = "type")]
+pub trait WorkerInput:Any + Send + Sync + Debug{
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Operation {
+    InstallStage{key:String, init_data:Box<dyn WorkerInput>},
+    InvokeStage
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CudaWorkerMsgIn {
+    pub request_id:u64,
+    pub operation:Operation
+}
+
+impl CudaWorkerMsgIn {
+    pub fn new(request_id: u64, operation:Operation) -> Self {
+        Self {
+            request_id,
+            operation
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum OpResult {
+    Ok(Option<Box<dyn WorkerInput>>),
+    Failed(String)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CudaWorkerMsgOut {
+    pub request_id:u64,
+    pub status:OpResult
+
+}

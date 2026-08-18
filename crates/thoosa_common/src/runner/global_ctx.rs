@@ -41,7 +41,7 @@ pub struct GlobalCtx {
     purger: Purger,
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
-    cuda_actors:Vec<Box<dyn CudaActorHandle>>,
+    cuda_actors:Vec<Box<dyn CudaActorHandle>>,//TODO change to enum, return Enum from cuda_actor() and use instead of is_ipc
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
     is_ipc: bool,

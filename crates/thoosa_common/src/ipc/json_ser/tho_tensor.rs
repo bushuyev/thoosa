@@ -165,15 +165,21 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::fmt::Debug;
     use log::debug;
+    use serde::{Deserialize, Serialize};
     use tch::Kind;
+    use tracing::field::debug;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use crate::dims::AnyDims;
+    use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
     use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
     #[test]
-    fn postcard_tho_tensor_ref_test(){
+    fn test_postcard_tho_tensor_ref_test(){
         let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, 2);
         // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, 2);
 
@@ -205,6 +211,114 @@ mod tests {
         assert_eq!(kind, Kind::Float);
         assert_eq!(size, vec![3,10]);
         assert_eq!(tho_device_idx, 2);
+
+    }
+
+    #[test]
+    fn test_postcard_with_enum(){
+        trait StageWrapper:Debug {
+
+        }
+
+
+        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        struct StageAInit {
+            value:u32
+        }
+        impl StageAInit {
+            pub fn new(value: u32) -> Self {
+                Self { value }
+            }
+        }
+
+
+        #[derive(Debug)]
+        struct StageA {}
+
+        impl StageWrapper for StageA{}
+        impl StageA {
+            pub fn new(init:StageAInit) -> Self {
+                Self {}
+            }
+        }
+
+
+
+        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        struct StageBInit {
+            value:u32
+        }
+
+        impl StageBInit {
+            pub fn new(value: u32) -> Self {
+                Self { value }
+            }
+        }
+
+        #[derive(Debug)]
+        struct StageB {}
+        impl StageWrapper for StageB{}
+        impl StageB {
+            pub fn new(init:StageBInit) -> Self {
+                Self {}
+            }
+        }
+
+        #[typetag::serde]
+        impl WorkerInput for StageAInit {
+
+        }
+
+
+
+        fn test_a_init(init:Box<dyn WorkerInput>) -> Box<dyn StageWrapper> {
+            let init: Box<dyn Any> = init;
+
+            let init_a = init.downcast::<StageAInit>().unwrap();
+            Box::new(StageA::new(*init_a)) as Box<dyn StageWrapper>
+        }
+
+        fn test_b_init(init:Box<dyn WorkerInput>) -> Box<dyn StageWrapper> {
+            let init: Box<dyn Any> = init;
+
+            let init_b = init.downcast::<StageBInit>().unwrap();
+            Box::new(StageB::new(*init_b)) as Box<dyn StageWrapper>
+        }
+
+        let mut endpoint_inits = HashMap::from([
+            (
+                "test_a".to_string(),
+                Box::new(test_a_init) as Box<dyn Fn(Box<dyn WorkerInput>)->Box<dyn StageWrapper>>
+            ),
+            (
+                "test_b".to_string(),
+                Box::new(test_b_init) as Box<dyn Fn(Box<dyn WorkerInput>)->Box<dyn StageWrapper>>
+            )
+        ]);
+
+        let msg = CudaWorkerMsgIn::new(0, Operation::InstallStage{
+            key:"test_a".to_string(),
+            init_data: Box::new(StageAInit::new(1))
+        });
+
+        let msg_bytes = postcard::to_allocvec(&msg).unwrap();
+        let msg_de: CudaWorkerMsgIn =  postcard::from_bytes::<CudaWorkerMsgIn>(&msg_bytes).unwrap();
+        debug!("msg_de={msg_de:?}");
+
+        assert_eq!(msg.request_id, msg_de.request_id);
+
+        let Operation::InstallStage{ key, init_data } = msg.operation else {
+            panic!("wrong operation");
+        };
+
+        assert_eq!("test_a".to_string(), key);
+
+        let mut stage_a_init = endpoint_inits.get(&key).unwrap();
+
+        let stage_a = stage_a_init(init_data);
+
+
+        debug!("stage_a={stage_a:?}");
 
     }
 }
