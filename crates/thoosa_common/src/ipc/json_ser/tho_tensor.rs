@@ -175,7 +175,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use crate::dims::AnyDims;
-    use crate::ipc::worker_msg::{CudaWorkerMsg, Operation, WorkerInput};
+    use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
     use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
     #[test]
@@ -296,13 +296,13 @@ mod tests {
             )
         ]);
 
-        let msg = CudaWorkerMsg::new(0, Operation::InstallStage{
+        let msg = CudaWorkerMsgIn::new(0, Operation::InstallStage{
             key:"test_a".to_string(),
             init_data: Box::new(StageAInit::new(1))
         });
 
         let msg_bytes = postcard::to_allocvec(&msg).unwrap();
-        let msg_de:CudaWorkerMsg =  postcard::from_bytes::<CudaWorkerMsg>(&msg_bytes).unwrap();
+        let msg_de: CudaWorkerMsgIn =  postcard::from_bytes::<CudaWorkerMsgIn>(&msg_bytes).unwrap();
         debug!("msg_de={msg_de:?}");
 
         assert_eq!(msg.request_id, msg_de.request_id);

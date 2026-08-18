@@ -13,16 +13,29 @@ pub enum Operation {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CudaWorkerMsg {
+pub struct CudaWorkerMsgIn {
     pub request_id:u64,
     pub operation:Operation
 }
 
-impl CudaWorkerMsg {
+impl CudaWorkerMsgIn {
     pub fn new(request_id: u64, operation:Operation) -> Self {
         Self {
             request_id,
             operation
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum OpResult {
+    Ok(Option<Box<dyn WorkerInput>>),
+    Failed(String)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CudaWorkerMsgOut {
+    pub request_id:u64,
+    pub status:OpResult
+
 }

@@ -55,7 +55,7 @@ use tracing::Instrument;
 use tracing::field::debug;
 use tub::{Guard, Pool};
 use crate::ipc::cuda_wokrer::insert_worker_tensor;
-use crate::ipc::worker_msg::CudaWorkerMsg;
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut};
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
@@ -393,6 +393,7 @@ impl PendingWorkerD2hTransfer {
 pub(crate) struct WorkerReply {
     pub(crate) id: u64,
     pub(crate) payload: OutgoingRequestPayload,
+    pub msg:Option<CudaWorkerMsgOut>//TODO replace WorkerReply with CudaWorkerMsgOut
 }
 
 pub(crate) struct IpcChunkWriter {
@@ -428,6 +429,11 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(reply) = reply_rx.recv().await {
+        if let Some(msg) = reply.msg {
+            write_frame(&mut writer, &postcard::to_allocvec(&msg).unwrap()/*TODO move to codec*/, "worker").await?;
+            debug!("worker_response_writer_loop: msg out ok");
+            continue
+        }
         let write_result = match reply.payload {
             // OutgoingRequestPayload::BinaryStream { chunks, completed } => {
             //     let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
@@ -679,7 +685,7 @@ pub(crate) fn spawn_worker_h2d_copy_task(
             Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&e)),
         };
 
-        let _ = reply_tx.send(WorkerReply { id: request_id, payload }).await;
+        let _ = reply_tx.send(WorkerReply { id: request_id, payload, msg: None }).await;
     });
 }
 
@@ -802,7 +808,7 @@ pub(crate) fn spawn_worker_d2h_copy_task(
             Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&e)),
         };
 
-        let _ = reply_tx.send(WorkerReply { id: request_id, payload }).await;
+        let _ = reply_tx.send(WorkerReply { id: request_id, payload, msg: None }).await;
     });
 }
 
@@ -866,15 +872,15 @@ pub enum CudaIPCActorMessage {
     },
 
     SendMsg {
-        input: CudaWorkerMsg,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
+        input: CudaWorkerMsgIn,
+        respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>
     },
 }
 
 struct OutgoingRequest {
     id: u64,
     payload: OutgoingRequestPayload,
-    msg:Option<CudaWorkerMsg>//TODO replace OutgoingRequest with CudaWorkerMsg
+    msg:Option<CudaWorkerMsgIn>//TODO replace OutgoingRequest with CudaWorkerMsg
 }
 
 
@@ -911,6 +917,7 @@ enum PendingResponse {
         respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
         error: Option<ThoError>,
     },
+    Msg(oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>)
 }
 
 type PendingResponses = Arc<Mutex<HashMap<u64, PendingResponse>>>;
@@ -1240,7 +1247,7 @@ impl CudaIPCActor {
 
                 tokio::spawn(async move {
 
-                    let response = send_request_and_wait(
+                    let response = send_request_and_wait_msg(
                         self_tx,
                         pending,
                         OutgoingRequest {
@@ -1248,15 +1255,7 @@ impl CudaIPCActor {
                             payload: OutgoingRequestPayload::Msg("dummy".to_string()),
                             msg: Some(input),
                         },
-                    ).await.and_then(|response| {
-                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                            Err(parse_worker_copy_error_payload(error))
-                        } else if response == ENDPOINT_OK_PAYLOAD {
-                            Ok(())
-                        } else {
-                            Err(ThoError::new(format!("unexpected endpoint install response: {response:?}")))
-                        }
-                    });
+                    ).await;
                     let _ = respond_to.send(response);
 
                     Ok::<_, ThoError>(())
@@ -1845,6 +1844,19 @@ async fn reader_loop<R>(
             }
         };
 
+        if let Ok(msg) =  postcard::from_bytes::<CudaWorkerMsgOut>(&frame) {
+            debug!("reader_loop: msg={msg:?}");
+            let pending_response = {
+                let mut pending = pending.lock().await;
+                let waiter = pending.remove(&msg.request_id).expect(&format!("not waiter for {}", msg.request_id));
+                if let PendingResponse::Msg(msg_waiter) = waiter {
+                    msg_waiter.send(Ok(msg)).expect("failed to send todo");
+                    debug!("reader_loop: send ok");
+                }
+            };
+            continue
+        }
+
 
         let (id, payload) = match parse_wire_response(frame) {
             Ok(parsed) => parsed,
@@ -1896,6 +1908,9 @@ async fn reader_loop<R>(
             }
             None => {
                 error!("received response for unknown request id={id}");
+            }
+            Some(PendingResponse::Msg(payload)) => {
+
             }
         }
     }
@@ -2046,6 +2061,29 @@ async fn send_request_and_wait_payload(
         .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))?
 }
 
+async fn send_request_and_wait_msg(
+    tx: mpsc::Sender<OutgoingRequest>,
+    pending: PendingResponses,
+    request: OutgoingRequest,
+) -> Result<CudaWorkerMsgOut, ThoError> {
+    let id = request.id;
+    let (reply_tx, reply_rx) = oneshot::channel();
+    {
+        let mut pending = pending.lock().await;
+        let old = pending.insert(id, PendingResponse::Msg(reply_tx));
+        debug_assert!(old.is_none());
+    }
+    if tx.send(request).await.is_err() {
+        let mut pending = pending.lock().await;
+        pending.remove(&id);
+        return Err(ThoError::new("worker IPC writer task is closed"));
+    }
+    reply_rx
+        .await
+        .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))?
+}
+
+
 async fn remove_pending_request(
     pending: &PendingResponses,
     id: u64,
@@ -2073,6 +2111,9 @@ async fn fail_one_pending(
             PendingResponse::File { respond_to, .. } => {
                 let _ = respond_to.send(Err(ThoError::new(msg)));
             }
+            PendingResponse::Msg(respond_to) => {
+                let _ = respond_to.send(Err(ThoError::new(msg)));
+            }
         }
     }
 }
@@ -2092,6 +2133,9 @@ async fn fail_all_pending(
                 let _ = reply_tx.send(Err(ThoError::new(msg.clone())));
             }
             PendingResponse::File { respond_to, .. } => {
+                let _ = respond_to.send(Err(ThoError::new(msg.clone())));
+            }
+            PendingResponse::Msg(respond_to) => {
                 let _ = respond_to.send(Err(ThoError::new(msg.clone())));
             }
         }
@@ -2150,7 +2194,7 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    pub async fn send_msg(&self, init_msg: CudaWorkerMsg) -> Result<(), ThoError> {
+    pub async fn send_msg(&self, init_msg: CudaWorkerMsgIn) -> Result<CudaWorkerMsgOut, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
@@ -2381,7 +2425,7 @@ where
 {
     let payload = read_frame(reader, descr, MAX_FRAME_LEN).await?;
 
-    match postcard::from_bytes::<CudaWorkerMsg>(&payload) {
+    match postcard::from_bytes::<CudaWorkerMsgIn>(&payload) {
         Ok(v) => {
             debug!("postcard: ok={v:?}");
             return Ok("Ok".to_string())

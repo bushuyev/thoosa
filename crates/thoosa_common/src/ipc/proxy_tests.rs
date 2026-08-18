@@ -26,7 +26,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
-use crate::ipc::worker_msg::{CudaWorkerMsg, Operation, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TestStageInit {
@@ -181,13 +181,15 @@ where
             let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
             let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
-            let rs = ipc_actor.send_msg(CudaWorkerMsg {
+            let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
                 request_id: 0,
                 operation: Operation::InstallStage {
                     key: TEST_ENDPOINT.to_string(),
                     init_data: Box::new(init),
                 },
             }).await?;
+
+            debug!("TestStage::new: rs={rs:?}");
             // crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
             //     GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
             //     TEST_ENDPOINT,
