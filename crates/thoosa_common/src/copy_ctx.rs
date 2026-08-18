@@ -70,7 +70,7 @@ pub trait HandleCtx:Send {
 
 
 #[async_trait]
-pub trait CudaActorHandle: Debug + Send + Sync {
+pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + Debug + Send + Sync {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
 
     async fn reset(&self) -> Result<(), ThoError>;

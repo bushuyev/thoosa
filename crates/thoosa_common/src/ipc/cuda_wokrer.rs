@@ -34,6 +34,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayloa
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::ipc::proxy_tests::TestOutput;
+use crate::ipc::worker_msg::CudaWorkerMsg;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -179,7 +180,31 @@ impl CudaWorker {
         let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
         let mut is_shutting_down = false;
         loop {
-            let frame = match cuda_process::read_text_frame(&mut reader, "run_worker").await {
+            let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
+            match postcard::from_bytes::<CudaWorkerMsg>(&payload) {
+                Ok(v) => {
+                    debug!("postcard: ok={v:?}");
+
+                    reply_tx
+                        .send(WorkerReply {
+                            id: v.request_id,
+                            payload: OutgoingRequestPayload::Msg("CudaWorkerMsg-ok".to_string()),
+                        })
+                        .await
+                        .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+
+                    continue
+                },
+                Err(e)=>{
+                    debug!("postcard: e={e:?}");
+                }
+            };
+
+            let frame = String::from_utf8(payload)
+                .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")));
+
+            let frame = match frame {
                 Ok(frame) => frame,
                 Err(error) => {
                     if Error::source(&error)
