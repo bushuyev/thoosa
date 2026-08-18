@@ -298,6 +298,7 @@ mod tests {
 
         let msg = CudaWorkerMsgIn::new(0, Operation::InstallStage{
             key:"test_a".to_string(),
+            stage_id: 0,
             init_data: Box::new(StageAInit::new(1))
         });
 
@@ -307,7 +308,7 @@ mod tests {
 
         assert_eq!(msg.request_id, msg_de.request_id);
 
-        let Operation::InstallStage{ key, init_data } = msg.operation else {
+        let Operation::InstallStage{ key, stage_id, init_data } = msg.operation else {
             panic!("wrong operation");
         };
 

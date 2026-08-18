@@ -34,7 +34,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayloa
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::ipc::proxy_tests::TestOutput;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -48,6 +48,7 @@ static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
 pub struct CudaWorker;
 
 pub type InitFn = Box<dyn Fn(Vec<u8>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>>  >;
+pub type InitFn2 = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>>  >;
 
 pub trait Init {
     fn init() -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>;
@@ -138,6 +139,16 @@ impl CudaWorker {
         endpoint_inits: HashMap<String, InitFn>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
+        Self::run_worker2(sock_path, ws, endpoint_inits, HashMap::new(), tho_device).await
+    }
+
+    pub async fn run_worker2(
+        sock_path:OsString,
+        ws:&Arc<RwLock<Box<dyn Workspace>>>,
+        endpoint_inits: HashMap<String, InitFn>,
+        endpoint_inits2: HashMap<String, InitFn2>,
+        tho_device: ThoDevice
+    ) -> Result<(), ThoError> {
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
         GlobalCtx::init_devices(2);//TODO config
 
@@ -177,7 +188,7 @@ impl CudaWorker {
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
-        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
+        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));//TODO change key to (String, u32)
         let mut is_shutting_down = false;
         loop {
             let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
@@ -185,13 +196,49 @@ impl CudaWorker {
                 Ok(v) => {
                     debug!("postcard: ok={v:?}");
 
+                    match v.operation{
+                        Operation::InstallStage { key, stage_id, init_data } => {
+                            let Some(init_fn) = endpoint_inits2.get(&key) else {
+                                //TODO send error
+                                panic!("todo")
+                            };
+
+                            let Ok(endpoint_wrapper) = init_fn(init_data, Arc::clone(&ws), &all_cuda_tensors).await else {
+                                //TODO send error
+                                panic!("todo")
+                            };
+
+
+                            let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
+                            debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
+                            installed_endpoints.write().insert(endpoint_key, endpoint_wrapper);
+
+
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(None),
+                                    }),
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                            continue
+                        }
+                        Operation::InvokeStage => {
+
+                        }
+                    }
+
                     reply_tx
                         .send(WorkerReply {
                             id: v.request_id,
                             payload: OutgoingRequestPayload::Msg("dummy".to_string()),
                             msg: Some(CudaWorkerMsgOut{
                                 request_id: v.request_id,
-                                status: OpResult::Ok(None),
+                                status: OpResult::Failed("todo".to_string()),
                             }),
                         })
                         .await

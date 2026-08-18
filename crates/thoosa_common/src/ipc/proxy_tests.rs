@@ -185,21 +185,16 @@ where
                 request_id: 0,
                 operation: Operation::InstallStage {
                     key: TEST_ENDPOINT.to_string(),
+                    stage_id: 1,
                     init_data: Box::new(init),
                 },
             }).await?;
 
             debug!("TestStage::new: rs={rs:?}");
-            // crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
-            //     GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
-            //     TEST_ENDPOINT,
-            //     0,
-            //     &init
-            // ).await?;
-            // Ok(DynSyncStageEnum::Proxy {
-            //     stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
-            // })
-            todo!()
+
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
+            })
         } else {
             Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new_local(init))))
         }
@@ -250,10 +245,28 @@ pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn tho
     }.boxed()
 }
 
+pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
+    debug!("test_simp_init_2: 0");
+    let init: Box<dyn Any> = init;
+
+    let init = init.downcast::<TestStageInit>().unwrap();
+
+    async move {
+        debug!("test_simp_init_2: 1");
+
+        Ok(Box::new(WorkerWrapper::new(
+            Arc::new(TestStage::<(), WokerRunCtx>::new_local(*init)),
+            PhantomData::<JsonIpcCodec>
+        )) as Box<dyn SyncStageIpcWrapper>)
+
+    }.boxed()
+}
+
+
 
 mod tests {
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests::{ TEST_ENDPOINT, TestOutput, TestStageInit, test_simp_init};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
+    use crate::ipc::proxy_tests::{test_simp_init, test_simp_init_2, TestOutput, TestStageInit, TEST_ENDPOINT};
     use crate::ipc::proxy_tests::{TestInput, TestRunCtx, TestStage};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
@@ -305,13 +318,19 @@ mod tests {
 
             async |sock_path| {
 
-                CudaWorker::run_worker(
+                CudaWorker::run_worker2(
                     sock_path,
                     &ws,
                     HashMap::from([
                         (
                             TEST_ENDPOINT.to_string(),
                             Box::new(test_simp_init) as InitFn,
+                        ),
+                    ]),
+                    HashMap::from([
+                        (
+                            TEST_ENDPOINT.to_string(),
+                            Box::new(test_simp_init_2) as InitFn2,
                         ),
                     ]),
                     ThoDevice::from(Cuda(0)),

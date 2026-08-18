@@ -1848,7 +1848,7 @@ async fn reader_loop<R>(
             debug!("reader_loop: msg={msg:?}");
             let pending_response = {
                 let mut pending = pending.lock().await;
-                let waiter = pending.remove(&msg.request_id).expect(&format!("not waiter for {}", msg.request_id));
+                let waiter = pending.remove(&msg.request_id).expect(&format!("no waiter for {}", msg.request_id));
                 if let PendingResponse::Msg(msg_waiter) = waiter {
                     msg_waiter.send(Ok(msg)).expect("failed to send todo");
                     debug!("reader_loop: send ok");
