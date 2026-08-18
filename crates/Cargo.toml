@@ -102,6 +102,7 @@ libc = "0.2.175"
 sha2 = "0.11"
 typetag = "0.2.22"
 blake3 = "1.8.6"
+postcard = { version = "1", features = ["alloc"] }
 [profile.test]
 opt-level = 0
 [profile.dev]

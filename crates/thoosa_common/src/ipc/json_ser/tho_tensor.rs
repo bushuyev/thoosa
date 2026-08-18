@@ -163,3 +163,46 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use log::debug;
+    use tch::Kind;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::mono_key;
+    use crate::dims::AnyDims;
+    use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+
+    #[test]
+    fn postcard_tho_tensor_ref_test(){
+        let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, 2);
+
+        let cuda_tensor_bytes = serde_json::to_vec(&t_ref).unwrap();
+        let cuda_tensor:ThoTensor<AnyDims, SynKey> = serde_json::from_slice(&cuda_tensor_bytes).unwrap();
+
+        debug!("cuda_tensor={cuda_tensor:?}");
+
+        let ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } = cuda_tensor.inner else {
+            panic!("should be ref");
+        };
+
+        assert_eq!(key, 10);
+        assert_eq!(kind, Kind::Float);
+        assert_eq!(size, vec![3,10]);
+        assert_eq!(tho_device_idx, 2);
+
+        let cuda_tensor_bytes = postcard::to_allocvec(&t_ref).unwrap();
+        let cuda_tensor:ThoTensor<AnyDims, SynKey> =  postcard::from_bytes::<ThoTensor<AnyDims, SynKey>>(&cuda_tensor_bytes).unwrap();
+
+
+        let ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } = cuda_tensor.inner else {
+            panic!("should be ref");
+        };
+
+        assert_eq!(key, 10);
+        assert_eq!(kind, Kind::Float);
+        assert_eq!(size, vec![3,10]);
+        assert_eq!(tho_device_idx, 2);
+
+    }
+}
