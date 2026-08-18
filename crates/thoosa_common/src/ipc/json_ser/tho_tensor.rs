@@ -146,16 +146,15 @@ where
         match &self.inner {
             ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
 
-                let mut state = serializer.serialize_struct("ThoTensor", 4)?;
+                // Postcard encodes struct fields positionally, so every field, including a None selector, must keep its slot.
+                let mut state = serializer.serialize_struct("ThoTensor", 6)?;
 
                 state.serialize_field("id", &self.id)?;
                 state.serialize_field("ref_key", key)?;
                 state.serialize_field("size", size)?;
 
                 state.serialize_field("kind", kind_to_str(kind).map_err(S::Error::custom)?)?;
-                if let Some(selector) = selector {
-                    state.serialize_field("selector", selector)?;
-                }
+                state.serialize_field("selector", selector)?;
                 state.serialize_field("tho_device_idx", tho_device_idx)?;
                 state.end()
             }
@@ -176,9 +175,11 @@ mod tests {
     #[test]
     fn postcard_tho_tensor_ref_test(){
         let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, 2);
+        // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, 2);
 
         let cuda_tensor_bytes = serde_json::to_vec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> = serde_json::from_slice(&cuda_tensor_bytes).unwrap();
+        // let cuda_tensor:ThoTensor<AnyDims, ()> = serde_json::from_slice(&cuda_tensor_bytes).unwrap();
 
         debug!("cuda_tensor={cuda_tensor:?}");
 
@@ -193,6 +194,7 @@ mod tests {
 
         let cuda_tensor_bytes = postcard::to_allocvec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> =  postcard::from_bytes::<ThoTensor<AnyDims, SynKey>>(&cuda_tensor_bytes).unwrap();
+        // let cuda_tensor:ThoTensor<AnyDims, ()> =  postcard::from_bytes::<ThoTensor<AnyDims, ()>>(&cuda_tensor_bytes).unwrap();
 
 
         let ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } = cuda_tensor.inner else {
