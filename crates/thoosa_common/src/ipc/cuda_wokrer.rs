@@ -194,7 +194,7 @@ impl CudaWorker {
             let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
             match postcard::from_bytes::<CudaWorkerMsgIn>(&payload) {
                 Ok(v) => {
-                    debug!("postcard: ok={v:?}");
+                    debug!("run_worker: postcard: ok={v:?}");
 
                     match v.operation{
                         Operation::InstallStage { key, stage_id, init_data } => {
@@ -228,7 +228,7 @@ impl CudaWorker {
                             continue
                         }
                         Operation::InvokeStage => {
-
+                            debug!("run_worker: Operation::InvokeStage");
                         }
                     }
 
