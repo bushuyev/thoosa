@@ -34,6 +34,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayloa
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::ipc::proxy_tests::TestOutput;
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -179,7 +180,35 @@ impl CudaWorker {
         let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
         let mut is_shutting_down = false;
         loop {
-            let frame = match cuda_process::read_text_frame(&mut reader, "run_worker").await {
+            let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
+            match postcard::from_bytes::<CudaWorkerMsgIn>(&payload) {
+                Ok(v) => {
+                    debug!("postcard: ok={v:?}");
+
+                    reply_tx
+                        .send(WorkerReply {
+                            id: v.request_id,
+                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                            msg: Some(CudaWorkerMsgOut{
+                                request_id: v.request_id,
+                                status: OpResult::Ok(None),
+                            }),
+                        })
+                        .await
+                        .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+
+                    continue
+                },
+                Err(e)=>{
+                    debug!("postcard: e={e:?}");
+                }
+            };
+
+            let frame = String::from_utf8(payload)
+                .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")));
+
+            let frame = match frame {
                 Ok(frame) => frame,
                 Err(error) => {
                     if Error::source(&error)
@@ -202,6 +231,7 @@ impl CudaWorker {
                     .send(WorkerReply {
                         id,
                         payload: OutgoingRequestPayload::Msg("shutdown-ok".to_string()),
+                        msg: None,
                     })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
@@ -231,6 +261,7 @@ impl CudaWorker {
                     .send(WorkerReply {
                         id,
                         payload: OutgoingRequestPayload::Msg(payload),
+                        msg: None,
                     })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
@@ -262,6 +293,7 @@ impl CudaWorker {
                     .send(WorkerReply {
                         id,
                         payload: OutgoingRequestPayload::Msg(payload),
+                        msg: None,
                     })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
@@ -375,6 +407,7 @@ impl CudaWorker {
                     .send(WorkerReply {
                         id,
                         payload: OutgoingRequestPayload::Msg(payload),
+                        msg: None,
                     })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
@@ -450,7 +483,7 @@ impl CudaWorker {
                     Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
                 };
                 reply_tx
-                    .send(WorkerReply { id, payload })
+                    .send(WorkerReply { id, payload, msg: None })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
@@ -468,7 +501,7 @@ impl CudaWorker {
                 };
 
                 reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(msg.to_string()) })
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(msg.to_string()), msg: None })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
@@ -489,7 +522,7 @@ impl CudaWorker {
                     }
                 };
                 reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg("ok".to_string()) })
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg("ok".to_string()), msg: None })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
@@ -504,7 +537,7 @@ impl CudaWorker {
                 let removed = installed_endpoints.write().remove(&endpoint_key).is_some();
                 debug!("run_worker: drop endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} removed={removed}");
                 reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(ENDPOINT_OK_PAYLOAD.to_string()) })
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(ENDPOINT_OK_PAYLOAD.to_string()), msg: None })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
@@ -520,7 +553,7 @@ impl CudaWorker {
                 debug!("run_worker: reply={reply}");
 
                 let _ = reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(reply) })
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(reply), msg: None })
                     .await;
             });
         }
