@@ -227,7 +227,7 @@ impl CudaWorker {
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
                             continue
                         }
-                        Operation::InvokeStage => {
+                        Operation::InvokeStage{stage_id, input, consume } => {
                             debug!("run_worker: Operation::InvokeStage");
                         }
                     }
@@ -619,6 +619,11 @@ impl CudaWorker {
 }
 
 pub trait WorkerStageInput: Debug + Sized {
+
+    fn clone_refs(&self) -> Result<Self, ThoError> {
+        todo!()
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
 
     fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {

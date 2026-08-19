@@ -26,6 +26,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
+use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,6 +97,11 @@ impl WorkerStageInput for TestInput {
 
         Ok(input)
     }
+}
+
+#[typetag::serde]
+impl WorkerInput for TestInput {
+
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -174,7 +180,7 @@ where
     C:RunCtx
 {
 
-    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<DynSyncStageEnum<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<DynSyncStageEnum2<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
@@ -192,11 +198,11 @@ where
 
             debug!("TestStage::new: rs={rs:?}");
 
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy2(TEST_ENDPOINT, 0, tho_device_idx)),
+            Ok(DynSyncStageEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
             })
         } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new_local(init))))
+            Ok(DynSyncStageEnum2::Local(Arc::new(TestStage::<u32, TestRunCtx>::new_local(init))))
         }
 
     }
