@@ -27,7 +27,7 @@ use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWith
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
 use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TestStageInit {
@@ -88,6 +88,19 @@ impl BorrowRef for TestInput {
 
 
 impl WorkerStageInput for TestInput {
+    fn clone_refs(&self) -> Result<Self, ThoError> {
+        Ok(TestInput{
+            value: self.value.clone_refs()?,
+        })
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        Ok(TestInput{
+            value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value)?,
+        })
+    }
+
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let mut input = JsonIpcCodec::decode::<Self>(&input)?;
 
@@ -97,6 +110,8 @@ impl WorkerStageInput for TestInput {
 
         Ok(input)
     }
+
+
 }
 
 #[typetag::serde]
@@ -109,6 +124,9 @@ pub struct TestOutput{
     value: ThoTensor
 }
 impl Output for TestOutput{}
+
+#[typetag::serde]
+impl WorkerOutput for TestOutput{}
 
 impl WithId for TestOutput {
     type ID = ();
@@ -190,7 +208,7 @@ where
             let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
                 request_id: 0,
                 operation: Operation::InstallStage {
-                    key: TEST_ENDPOINT.to_string(),
+                    endpoint_name: TEST_ENDPOINT.to_string(),
                     stage_id: 1,
                     init_data: Box::new(init),
                 },
@@ -328,10 +346,7 @@ mod tests {
                     sock_path,
                     &ws,
                     HashMap::from([
-                        (
-                            TEST_ENDPOINT.to_string(),
-                            Box::new(test_simp_init) as InitFn,
-                        ),
+
                     ]),
                     HashMap::from([
                         (
@@ -362,13 +377,13 @@ mod tests {
         let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
 
         debug!("result={result:?}");
-        //
-        // let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
-        //
-        // let cpu_t = cpu_tensor.t();
-        // debug!("cpu_tensor={}", cpu_t);
-        //
-        // assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
+
+        let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
+
+        let cpu_t = cpu_tensor.t();
+        debug!("cpu_tensor={}", cpu_t);
+
+        assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
         Ok(())
     }
 }
