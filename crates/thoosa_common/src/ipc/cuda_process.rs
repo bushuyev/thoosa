@@ -1259,6 +1259,7 @@ impl CudaIPCActor {
                 tokio::spawn(async move {
 
                     let response = send_request_and_wait_msg(
+                        next_id,
                         self_tx,
                         pending,
                         OutgoingRequest {
@@ -1430,6 +1431,7 @@ impl CudaIPCActor {
 
         let setup_result = async {
             let response = send_request_and_wait_msg(
+                describe_id,
                 self_tx.clone(),
                 Arc::clone(&pending),
                 OutgoingRequest {
@@ -1495,11 +1497,42 @@ impl CudaIPCActor {
                             debug_assert!(old.is_none());
                         }
 
-                        let start_json = serde_json::to_string(&WorkerD2hStartPayload { transfer_id, tensor_key })
-                            .map_err(|e| ThoError::new(format!("failed to encode D2H start payload: {e}")))?;
-                        if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::Msg(format!("{D2H_START_PAYLOAD_PREFIX}{start_json}")), msg: None }).await.is_err() {
-                            return Err(ThoError::new("worker IPC writer task is closed"));
-                        }
+                        // let start_json = serde_json::to_string(&WorkerD2hStartPayload { transfer_id, tensor_key })
+                        //     .map_err(|e| ThoError::new(format!("failed to encode D2H start payload: {e}")))?;
+                        // if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::Msg(format!("{D2H_START_PAYLOAD_PREFIX}{start_json}")), msg: None }).await.is_err() {
+                        //     return Err(ThoError::new("worker IPC writer task is closed"));
+                        // }
+
+                        // let d2h_response = send_request_and_wait_msg(
+                        //     transfer_id,
+                        //     self_tx.clone(),
+                        //     Arc::clone(&pending),
+                        //     OutgoingRequest {
+                        //         id: transfer_id,
+                        //         payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                        //         msg: Some(
+                        //             CudaWorkerMsgIn {
+                        //                 request_id: transfer_id,
+                        //                 operation: Operation::D2HStart { tensor_key },
+                        //             }
+                        //         ),
+                        //     },
+                        // ).await?;
+                        self_tx.send(
+                            OutgoingRequest {
+                                id: transfer_id,
+                                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                msg: Some(
+                                    CudaWorkerMsgIn {
+                                        request_id: transfer_id,
+                                        operation: Operation::D2HStart { tensor_key },
+                                    }
+                                ),
+                            },
+                        ).await.map_err(|e|ThoError::new(e.to_string()))?;
+
+                        // debug!("CudaIPCActor::handle_ref_d2h_copy: d2h_response={d2h_response:?}");
+
 
                         let metadata = IpcTensorTransferMetadata {
                             transfer_id,
@@ -1521,14 +1554,28 @@ impl CudaIPCActor {
                         debug!("CudaIPCActor::Copy D2H: sending shared memfd chunk to worker: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
                         let fd = buf.try_clone_fd()?;
-                        if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata.clone(), fd }, msg: None }).await.is_err() {
-                            return Err(ThoError::new("worker IPC writer task is closed"));
-                        }
+                        // if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata.clone(), fd }, msg: None }).await.is_err() {
+                        //     return Err(ThoError::new("worker IPC writer task is closed"));
+                        // }
+
+                        self_tx.send(
+                            OutgoingRequest {
+                                id: transfer_id,
+                                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                msg: Some(
+                                    CudaWorkerMsgIn {
+                                        request_id: transfer_id,
+                                        operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
+                                    }
+                                ),
+                            },
+                        ).await.map_err(|e|ThoError::new(e.to_string()))?;
 
                         let reply = reply_rx
                             .await
                             .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??
                             .into_msg()?;
+
                         let done = parse_worker_copy_done_payload(&reply)?;
                         if done.transfer_id != transfer_id {
                             return Err(ThoError::new(format!("worker D2H response transfer_id={} but expected {transfer_id}", done.transfer_id)));
@@ -1653,25 +1700,50 @@ impl CudaIPCActor {
         tokio::spawn(async move {
             let result = async move {
 
-                let preflight_json = serde_json::to_string(&WorkerH2dStartPayload {
-                    transfer_id,
-                    worker_id: dst_worker_id,//TODO use device
-                    kind: src_kind.into(),
-                    shape: src_shape.clone(),
-                    tensor_byte_len: tensor_mem_size,
-                    chunk_count,
-                }).map_err(|e| ThoError::new(format!("failed to encode H2D start payload: {e}")))?;
+                // let preflight_json = serde_json::to_string(&WorkerH2dStartPayload {
+                //     transfer_id,
+                //     worker_id: dst_worker_id,//TODO use device
+                //     kind: src_kind.into(),
+                //     shape: src_shape.clone(),
+                //     tensor_byte_len: tensor_mem_size,
+                //     chunk_count,
+                // }).map_err(|e| ThoError::new(format!("failed to encode H2D start payload: {e}")))?;
+                //
+                // let preflight_reply = send_request_and_wait(
+                //     self_tx.clone(),
+                //     Arc::clone(&pending),
+                //     OutgoingRequest {
+                //         id: preflight_id,
+                //         payload: OutgoingRequestPayload::Msg(format!("{H2D_START_PAYLOAD_PREFIX}{preflight_json}")),
+                //         msg: None,
+                //     },
+                // ).await?;
+                // parse_worker_h2d_start_preflight_reply(&preflight_reply)?;
 
-                let preflight_reply = send_request_and_wait(
+
+                let response = send_request_and_wait_msg(
+                    transfer_id,
                     self_tx.clone(),
                     Arc::clone(&pending),
                     OutgoingRequest {
-                        id: preflight_id,
-                        payload: OutgoingRequestPayload::Msg(format!("{H2D_START_PAYLOAD_PREFIX}{preflight_json}")),
-                        msg: None,
+                        id: transfer_id,
+                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                        msg: Some(
+                            CudaWorkerMsgIn {
+                                request_id: transfer_id,
+                                operation: Operation::H2dStart {
+                                    worker_id: dst_worker_id,
+                                    kind: src_kind.into(),
+                                    shape: src_shape.clone(),
+                                    tensor_byte_len: tensor_mem_size,
+                                    chunk_count,
+                                },
+                            }
+                        ),
                     },
                 ).await?;
-                parse_worker_h2d_start_preflight_reply(&preflight_reply)?;
+
+                debug!("CudaIPCActor::handle_h2d_copy: response={response:?}");
 
                 {
                     let mut pending = pending.lock().await;
@@ -1711,9 +1783,21 @@ impl CudaIPCActor {
                         debug!("CudaIPCActor::handle_h2d_copy:, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
                         let fd = buf.try_clone_fd()?;
-                        if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd }, msg: None }).await.is_err() {
-                            return Err(ThoError::new("worker IPC writer task is closed"));
-                        }
+                        // if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd }, msg: None }).await.is_err() {
+                        //     return Err(ThoError::new("worker IPC writer task is closed"));
+                        // }
+                        self_tx.send(
+                            OutgoingRequest {
+                                id: transfer_id,
+                                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                msg: Some(
+                                    CudaWorkerMsgIn {
+                                        request_id: transfer_id,
+                                        operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
+                                    }
+                                ),
+                            },
+                        ).await.map_err(|e|ThoError::new(e.to_string()))?;
                         held_buffers.push(buf);
 
                     }
@@ -1796,6 +1880,15 @@ async fn writer_loop<W>(
 
                 fail_all_pending(&pending, format!("worker IPC writer stopped: {e}")).await;
                 break;
+            }
+            if let Operation::SharedMemfd {fd:Some(fd), ..} = msg.operation {
+                debug!("writer_loop: fd={fd:?}");
+                if let Err(e) = send_fd(writer.as_ref(), fd.as_fd()).await.map_err(|e|ThoError::new(e.to_string())) {
+                    error!("worker IPC fd send failed: {e}");
+                    fail_one_pending(&pending, req.id, format!("failed to send request {} fd: {e}", req.id)).await;
+                    fail_all_pending(&pending, format!("worker IPC writer stopped while sending fd: {e}")).await;
+                    break;
+                }
             }
 
             continue
@@ -2082,12 +2175,12 @@ async fn send_request_and_wait_payload(
         .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))?
 }
 
-async fn send_request_and_wait_msg(
-    tx: mpsc::Sender<OutgoingRequest>,
+async fn send_request_and_wait_msg<R>(
+    id:u64,
+    tx: mpsc::Sender<R>,
     pending: PendingResponses,
-    request: OutgoingRequest,
+    request: R,
 ) -> Result<CudaWorkerMsgOut, ThoError> {
-    let id = request.id;
     let (reply_tx, reply_rx) = oneshot::channel();
     {
         let mut pending = pending.lock().await;
