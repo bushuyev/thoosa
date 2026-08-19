@@ -18,6 +18,7 @@ use thoosa_shared::traits::{Stage, SyncStage};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::MutexGuard;
 use tracing::debug;
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 
 pub struct SyncStageIpcStreamResponse {
     write: Option<Box<dyn FnOnce(&mut dyn Write) -> Result<(), ThoError> + Send>>,
@@ -76,6 +77,11 @@ pub trait SyncStageIpcWrapper:Sync + Debug {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::consume_response"))]
     fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         Err(ThoError::new("IPC endpoint does not support consume"))
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
+    fn do_run_2(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+        todo!()
     }
 
     fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>

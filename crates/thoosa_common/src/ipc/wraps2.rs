@@ -12,7 +12,7 @@ use thoosa_shared::traits::{Adjustable, ConsumeResult, RunCtx, Stage, StageWithS
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::ProxyStage;
 use crate::runner::global_ctx::GlobalCtx;
 
@@ -21,7 +21,7 @@ pub struct ProxyStage2<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
     pd:PhantomData<St>,
     endpoint_name:&'static str,
@@ -30,14 +30,13 @@ where
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
 
-    is_2: bool
 }
 
 impl <St> Stage for ProxyStage2<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned  + 'static
 {
     type Ctx = St::Ctx;
     type In<'a> = St::In<'a>;
@@ -50,7 +49,7 @@ impl <St>SyncStage for ProxyStage2<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage2::do_run"))]
@@ -58,33 +57,52 @@ where
     where
         Self: Sized,
     {
-        let is_2 = self.is_2;
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                if is_2{
-                    let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
-                    let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+                let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
+                let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
 
-                    let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
-                        request_id: 0,
-                        operation: Operation::InvokeStage {
-                            stage_id: 1,
-                            input: Box::new(input.clone_refs()?),//clones refs
-                            consume: false,
-                        },
-                    }).await?;
+                let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
+                    request_id: 0,
+                    operation: Operation::InvokeStage {
+                        endpoint_name: self.endpoint_name.to_string(),
+                        stage_id: 1,
+                        input: Box::new(input.clone_refs()?),//clones refs
+                        consume: false,
+                    },
+                }).await?;
 
-                    debug!("ProxyStage2::do_run: rs={rs:?}");
+                debug!("ProxyStage2::do_run: rs={rs:?}");
 
 
+                match rs {
+                    CudaWorkerMsgOut { request_id, status } => {
+                        match status {
+                            OpResult::Ok(r) => {
+                                match r {
+                                    None => {
+                                        Err(ThoError::new("no response".to_string()))
+                                    }
+                                    Some(v) => {
+                                        let r:Box<dyn Any> = v as Box<dyn Any>;
+                                        Ok(*r.downcast::<St::Out>().unwrap())
+                                    }
+                                }
+
+                            }
+                            OpResult::Failed(msg) => {
+                                Err(ThoError::new(msg))
+                            }
+                        }
+                    }
                 }
-                Ok::<_, ThoError>(())
+
 
             })
-        })?;
-        todo!()
+        })
     }
 
 
@@ -127,20 +145,10 @@ where
             endpoint_name,
             stage_id,
             tho_device_idx,
-            is_2: false,
             pd:PhantomData
         }
     }
 
-    pub fn proxy2(endpoint_name:&'static str, stage_id: u32, tho_device_idx: usize) -> Self {
-        Self {
-            endpoint_name,
-            stage_id,
-            tho_device_idx,
-            is_2: true,
-            pd:PhantomData
-        }
-    }
 
 
 
@@ -174,7 +182,7 @@ pub enum DynSyncStageEnum2<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
     Local(Arc<St>),
     Proxy {

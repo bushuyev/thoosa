@@ -29,6 +29,8 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::Mutex;
+use crate::ipc::worker_msg::WorkerOutput;
+use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
 
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -301,6 +303,9 @@ impl SyncStage for SyncTestTensorLoader {
         Ok(tensor)
     }
 }
+
+#[typetag::serde(name = "ThoTensor_LoadedTensor")]
+impl WorkerOutput for ThoTensor<LoadedTensor, SynKey> {}
 
 pub(crate) fn sync_test_tensor_loader_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;

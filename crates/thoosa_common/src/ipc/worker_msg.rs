@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use serde::{Deserialize, Serialize};
+use crate::ipc::cuda_wokrer::WorkerStageOutput;
 use crate::runner::common::cachable::ThoDataRef;
 
 #[typetag::serde(tag = "type")]
@@ -8,10 +9,16 @@ pub trait WorkerInput:Any + Send + Sync + Debug{
 
 }
 
+#[typetag::serde(tag = "type")]
+pub trait WorkerOutput:Any + Send + Sync + Debug{
+
+}
+
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
-    InstallStage{key:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
-    InvokeStage{stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
+    InstallStage{ endpoint_name:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
+    InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,7 +38,7 @@ impl CudaWorkerMsgIn {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum OpResult {
-    Ok(Option<Box<dyn WorkerInput>>),
+    Ok(Option<Box<dyn WorkerOutput>>),
     Failed(String)
 }
 

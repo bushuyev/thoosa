@@ -10,5 +10,5 @@ pub mod json_ser;
 pub mod wraps;
 mod proxy_tests;
 mod proxy_tests_with_state;
-mod worker_msg;
-mod wraps2;
+pub mod worker_msg;
+pub mod wraps2;
