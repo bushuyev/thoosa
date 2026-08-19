@@ -1,21 +1,23 @@
 use std::any::Any;
 use std::fmt::Debug;
 use serde::{Deserialize, Serialize};
+use crate::runner::common::cachable::ThoDataRef;
 
 #[typetag::serde(tag = "type")]
 pub trait WorkerInput:Any + Send + Sync + Debug{
+
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
     InstallStage{key:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
-    InvokeStage
+    InvokeStage{stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgIn {
     pub request_id:u64,
-    pub operation:Operation
+    pub operation: Operation
 }
 
 impl CudaWorkerMsgIn {
