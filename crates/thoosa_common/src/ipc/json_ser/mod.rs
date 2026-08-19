@@ -12,6 +12,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use parking_lot::Mutex;
 use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Stage, SyncStage};
@@ -83,6 +84,10 @@ pub trait SyncStageIpcWrapper:Sync + Debug {
     fn do_run_2(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         todo!()
     }
+    fn consume_2(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
+        todo!()
+    }
+
 
     fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
     {

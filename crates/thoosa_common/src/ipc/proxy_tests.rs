@@ -94,9 +94,9 @@ impl WorkerStageInput for TestInput {
         })
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
         Ok(TestInput{
-            value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value)?,
+            value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
         })
     }
 
