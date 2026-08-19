@@ -55,7 +55,7 @@ use tracing::Instrument;
 use tracing::field::debug;
 use tub::{Guard, Pool};
 use crate::ipc::cuda_wokrer::insert_worker_tensor;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerOutput};
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
@@ -230,6 +230,12 @@ pub(crate) struct WorkerTensorInfoPayload {
     tensor_byte_len: usize,
 }
 
+impl WorkerTensorInfoPayload {
+    pub fn new(tensor_key: u64, kind: IpcTensorKind, shape: Vec<i64>, tensor_byte_len: usize) -> Self {
+        Self { tensor_key, kind, shape, tensor_byte_len }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct WorkerH2dStartPayload {
     pub(crate) transfer_id: u64,
@@ -248,6 +254,11 @@ pub(crate) struct WorkerD2hStartPayload {
 
 pub(crate) struct WorkerCudaResources {
     stream_pool: Arc<Pool<ThoCudaStream>>,
+}
+
+#[typetag::serde]
+impl WorkerOutput for WorkerTensorInfoPayload {
+
 }
 
 
@@ -1416,22 +1427,32 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} buf_size={buf_size}");
 
+
         let setup_result = async {
-            let info_reply = send_request_and_wait(
+            let response = send_request_and_wait_msg(
                 self_tx.clone(),
                 Arc::clone(&pending),
                 OutgoingRequest {
                     id: describe_id,
-                    payload: OutgoingRequestPayload::Msg(format!("{DESCRIBE_REF_PAYLOAD_PREFIX}{tensor_key}")),
-                    msg: None,
+                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                    msg: Some(
+                        CudaWorkerMsgIn {
+                            request_id: describe_id,
+                            operation: Operation::DescribeRef { tensor_key },
+                        }
+                    ),
                 },
             ).await?;
 
-            debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} info_reply={info_reply:?}");
+            debug!("handle_ref_d2h_copy: response={response:?}");
 
-            let info = parse_worker_tensor_info_payload(&info_reply)?;
+            let CudaWorkerMsgOut{status: OpResult::Ok(Some(info)), ..} = response else {
+                panic!("todo");
+            };
+            let info : Box<dyn Any> = info;
+            let info = info.downcast::<WorkerTensorInfoPayload>().unwrap();//TODO unwrap
+            debug!("handle_ref_d2h_copy: info={info:?}");
 
-            debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} info={info:?}");
 
             if info.tensor_key != tensor_key {
                 return Err(ThoError::new(format!("worker described tensor key={} but requested key={tensor_key}", info.tensor_key)));

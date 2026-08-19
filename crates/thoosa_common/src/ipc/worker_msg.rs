@@ -17,6 +17,10 @@ pub trait WorkerOutput:Any + Send + Sync + Debug{
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
+    DescribeRef {
+        tensor_key:u64
+    },
+    H2dStart,
     InstallStage{ endpoint_name:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
     InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
 }
