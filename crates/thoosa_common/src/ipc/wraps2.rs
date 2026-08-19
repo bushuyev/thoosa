@@ -1,0 +1,261 @@
+use std::any::Any;
+use std::marker::PhantomData;
+use std::sync::Arc;
+use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
+use log::{debug, error};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use tokio::sync::MutexGuard;
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::{Adjustable, ConsumeResult, RunCtx, Stage, StageWithState, SyncStage};
+use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
+use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
+use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
+use crate::ipc::wraps::ProxyStage;
+use crate::runner::global_ctx::GlobalCtx;
+
+#[derive(Debug)]
+pub struct ProxyStage2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    pd:PhantomData<St>,
+    endpoint_name:&'static str,
+    // Each proxy keeps the id used at installation so invocations reach its own worker-side state.
+    stage_id: u32,
+    // Drop has no run context, so retain the worker index that owns the installed endpoint.
+    tho_device_idx: usize,
+
+    is_2: bool
+}
+
+impl <St> Stage for ProxyStage2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    type Ctx = St::Ctx;
+    type In<'a> = St::In<'a>;
+    type Out = St::Out;
+}
+
+
+
+impl <St>SyncStage for ProxyStage2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage2::do_run"))]
+    fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
+    where
+        Self: Sized,
+    {
+        let is_2 = self.is_2;
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                if is_2{
+                    let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
+                    let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+
+                    let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
+                        request_id: 0,
+                        operation: Operation::InvokeStage {
+                            stage_id: 1,
+                            input: Box::new(input.clone_refs()?),//clones refs
+                            consume: false,
+                        },
+                    }).await?;
+
+                    debug!("ProxyStage2::do_run: rs={rs:?}");
+
+
+                }
+                Ok::<_, ThoError>(())
+
+            })
+        })?;
+        todo!()
+    }
+
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage2::consume"))]
+    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out>
+    where
+        Self: Sized,
+    {
+
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+
+
+                let encoded = JsonIpcCodec::encode(&input)?;
+                let request = IpcSyncStageRunInput::new(encoded);
+                let encoded = JsonIpcCodec::encode(&request)?;
+                let actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
+                let response = actor.consume_endpoint_bytes(
+                    self.stage_id,
+                    encode_endpoint_payload_bytes(self.endpoint_name, &encoded).into_bytes(),
+                ).await?;
+                JsonIpcCodec::decode(&response)
+            })
+        });
+        match result {
+            Ok(output) => ConsumeResult::Ok(output),
+            Err(error) => ConsumeResult::Failed { input, error },
+        }
+    }
+}
+
+impl <St> ProxyStage2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    pub fn proxy(endpoint_name:&'static str, stage_id: u32, tho_device_idx: usize) -> Self {
+        Self {
+            endpoint_name,
+            stage_id,
+            tho_device_idx,
+            is_2: false,
+            pd:PhantomData
+        }
+    }
+
+    pub fn proxy2(endpoint_name:&'static str, stage_id: u32, tho_device_idx: usize) -> Self {
+        Self {
+            endpoint_name,
+            stage_id,
+            tho_device_idx,
+            is_2: true,
+            pd:PhantomData
+        }
+    }
+
+
+
+}
+
+impl <St> Drop for ProxyStage2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    fn drop(&mut self) {
+        let endpoint_name = self.endpoint_name;
+        let stage_id = self.stage_id;
+        let tho_device_idx = self.tho_device_idx;
+
+        debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}");
+
+        tokio::spawn(async move {
+            if let Err(error) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_endpoint(stage_id, endpoint_name).await {
+                error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
+            }
+        });
+    }
+}
+
+
+///
+#[derive(Debug)]
+pub enum DynSyncStageEnum2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    Local(Arc<St>),
+    Proxy {
+        stage: Arc<ProxyStage2<St>>,
+    }
+
+}
+
+impl <St> Stage for DynSyncStageEnum2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    type Ctx = St::Ctx;
+    type In<'a> = St::In<'a>;
+    type Out = St::Out;
+}
+
+impl<St> Adjustable for DynSyncStageEnum2<St>
+where
+    St: SyncStage + Adjustable,
+    for<'a> <St as Stage>::In<'a>: WorkerStageInput + WorkerInput+ Serialize,
+    <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
+{
+    // Preserve the local stage's adjustment marker across local/proxy dispatch.
+}
+
+impl <St> SyncStage for DynSyncStageEnum2<St>
+where
+    St:SyncStage,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
+    where
+        Self: Sized,
+    {
+        match self.as_ref() {
+            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),//TODO TestRunCtx
+        }
+    }
+
+
+    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out>
+    where
+        Self: Sized,
+    {
+        match self.as_ref() {
+            Self::Local(stage) => Arc::clone(stage).consume(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).consume(input, ctx),
+        }
+    }
+
+
+}
+
+impl <St> StageWithState for DynSyncStageEnum2<St>
+where
+    St:SyncStage+StageWithState+Send+Sync,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+{
+    type S = <St as StageWithState>::S;
+
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        match self {
+            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
+            Self::Proxy { .. } => async {
+                Err(ThoError::new("proxy ApplyStage2 does not have local state"))
+            }.boxed(),
+        }
+    }
+
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+        }
+    }
+}
+
