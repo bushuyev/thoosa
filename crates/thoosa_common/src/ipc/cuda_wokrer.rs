@@ -243,7 +243,6 @@ impl CudaWorker {
                                     // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
                                     // panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx)).map(|response| (response, Vec::new()))
                                     todo!()
-
                                 }
                                 None => {
                                     debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
@@ -252,8 +251,7 @@ impl CudaWorker {
                                         let _guard = ThoStreamGuard::new(&stream)?;
 
                                         let response = if consume {
-                                            todo!()
-                                            // endpoint.consume_response(&input, &all_cuda_tensors, &tho_device, &run_ctx).map(|response| (response.response, response.consumed_tensor_keys))
+                                           endpoint.consume_2(input, &all_cuda_tensors, &tho_device, &run_ctx)?
                                         } else {
                                             endpoint.do_run_2(&input, &all_cuda_tensors, &tho_device, &run_ctx)?
                                         };
@@ -673,7 +671,7 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
         todo!()
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>)-> Result<Self, ThoError> {//on worker side
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {//on worker side
         error!("WorkerStageInput::ref_to_tensor: self={self:?}");
         todo!()
     }
@@ -760,40 +758,50 @@ where
     Id: Clone + Debug + Named,
 {
     pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
-        Self::ref_to_tensor_(all_cuda_tensors, &input_ref)
+        Self::ref_to_tensor_(all_cuda_tensors, &input_ref, false)
     }
-    pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
+    pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
-        let tensors = all_cuda_tensors.lock();
+        let mut tensors = all_cuda_tensors.lock();
 
         debug!("ThoTensor::ref_to_tensor: input_key={input_key:?}");
         trace!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
 
-        let source = tensors
-            .get(&input_key)
-            .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
-        let mut tensor = source.f_alias()?;
+        if remove {
+            let tensor  = tensors
+                .remove(&input_key)
+                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
 
-        if let Some(selector) = input_ref.selector() {
-            let ranges = selector.tensor_ranges()?;
-            if ranges.len() > tensor.dim() {
-                return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
-            }
-            for (dim, range) in ranges.into_iter().enumerate() {
-                let dim_size = tensor.size()[dim];
-                if range.start < 0 || range.end < range.start {
-                    return Err(ThoError::new(format!("selector {selector:?} has invalid range {range:?} for dimension {dim}")));
+            ThoTensor::new(input_ref.id().clone(), tensor)
+        } else {
+            let source = tensors
+                .get(&input_key)
+                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
+
+            let mut tensor = source.f_alias()?;
+
+            if let Some(selector) = input_ref.selector() {
+                let ranges = selector.tensor_ranges()?;
+                if ranges.len() > tensor.dim() {
+                    return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
                 }
-                let end = range.end.min(dim_size);
-                if range.start > end {
-                    return Err(ThoError::new(format!("selector {selector:?} starts outside dimension {dim} with size {dim_size}")));
+                for (dim, range) in ranges.into_iter().enumerate() {
+                    let dim_size = tensor.size()[dim];
+                    if range.start < 0 || range.end < range.start {
+                        return Err(ThoError::new(format!("selector {selector:?} has invalid range {range:?} for dimension {dim}")));
+                    }
+                    let end = range.end.min(dim_size);
+                    if range.start > end {
+                        return Err(ThoError::new(format!("selector {selector:?} starts outside dimension {dim} with size {dim_size}")));
+                    }
+                    tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
                 }
-                tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
             }
+
+            ThoTensor::new(input_ref.id().clone(), tensor)
         }
 
-        ThoTensor::new(input_ref.id().clone(), tensor)
     }
 }
 
