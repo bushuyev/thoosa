@@ -1,7 +1,9 @@
 use std::any::Any;
 use std::fmt::Debug;
+use std::os::fd::OwnedFd;
 use serde::{Deserialize, Serialize};
 use crate::ipc::cuda_wokrer::WorkerStageOutput;
+use crate::ipc::ipc_cuda_utils::{IpcTensorKind, IpcTensorTransferMetadata};
 use crate::runner::common::cachable::ThoDataRef;
 
 #[typetag::serde(tag = "type")]
@@ -20,7 +22,21 @@ pub enum Operation {
     DescribeRef {
         tensor_key:u64
     },
-    H2dStart,
+    D2HStart {
+        tensor_key:u64
+    },
+    H2dStart {
+        worker_id: u64,
+        kind: IpcTensorKind,
+        shape: Vec<i64>,
+        tensor_byte_len: usize,
+        chunk_count: usize,
+    },
+    SharedMemfd {
+        metadata: IpcTensorTransferMetadata,
+        #[serde(skip)]
+        fd:Option<OwnedFd>
+    },
     InstallStage{ endpoint_name:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
     InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
 }
