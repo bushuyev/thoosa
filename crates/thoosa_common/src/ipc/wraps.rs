@@ -486,8 +486,6 @@ where
 
     }
 
-
-
     fn consume_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         let (input, max_other_parallel) = JsonIpcCodec::decode::<IpcSyncStageRunInput>(input)?.into_parts();
         let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<JsonIpcCodec>(&input, all_cuda_tensors)?;
@@ -498,6 +496,25 @@ where
             ConsumeResult::Failed { error, .. } => Err(error),
         }
     }
+
+    fn consume_2(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+        debug!("SyncStageIpcWrapper::do_run_2: input={input:?}");
+
+        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx(), 0);//TODO fixit
+        let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
+
+        let a: &dyn WorkerInput = input.as_ref();
+        let a: &dyn Any = a;
+
+        let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
+        let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors, true)?, &stage_ctx)?;
+
+        debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
+
+        Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
+    }
+
+
 
     fn do_run_2(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
 
@@ -511,7 +528,7 @@ where
         let a: &dyn Any = a;
 
         let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
-        let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors)?, &stage_ctx)?;
+        let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
 
         debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
 
