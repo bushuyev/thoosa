@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use log::{debug, error};
+use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tch::Tensor;
@@ -19,7 +20,7 @@ use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcConsumeResponse, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 use crate::runner::common::cachable::ThoDataRef;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
@@ -171,7 +172,7 @@ where
     Proxy {
         stage: Arc<ProxyStage<St>>,
     }
-    
+
 }
 
 impl <St> Stage for DynSyncStageEnum<St>
@@ -467,7 +468,7 @@ where
     S: Stage<In<'static> = I, Out = O>,
     S::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput+ 'static,
 {
     fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
         debug!("SimpWrapper::do_run: 0. input={_input:?}");
@@ -486,6 +487,7 @@ where
     }
 
 
+
     fn consume_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         let (input, max_other_parallel) = JsonIpcCodec::decode::<IpcSyncStageRunInput>(input)?.into_parts();
         let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<JsonIpcCodec>(&input, all_cuda_tensors)?;
@@ -496,6 +498,26 @@ where
             ConsumeResult::Failed { error, .. } => Err(error),
         }
     }
+
+    fn do_run_2(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
+
+    {
+        debug!("SyncStageIpcWrapper::do_run_2: input={input:?}");
+
+        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx(), 0);//TODO fixit
+        let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
+
+        let a: &dyn WorkerInput = input.as_ref();
+        let a: &dyn Any = a;
+
+        let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
+        let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors)?, &stage_ctx)?;
+
+        debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
+
+        Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
+    }
+
 }
 ///
 #[derive(Debug)]

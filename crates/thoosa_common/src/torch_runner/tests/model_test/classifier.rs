@@ -17,6 +17,7 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::worker_msg::WorkerOutput;
 use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 
 use super::common::{ABData, ClsOut, ModelTestId};
@@ -231,6 +232,9 @@ impl SyncStage for SyncClassifierStage {
         })?)?)
     }
 }
+
+#[typetag::serde(name = "ThoTensor_ClsOut")]
+impl WorkerOutput for ThoTensor<ClsOut, ModelTestId> {}
 
 pub(crate) fn sync_classifier_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;

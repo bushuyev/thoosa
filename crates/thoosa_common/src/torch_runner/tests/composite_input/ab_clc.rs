@@ -33,6 +33,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use tracing::debug;
+use crate::ipc::worker_msg::WorkerOutput;
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
@@ -81,6 +82,9 @@ impl WithId for ABClcStageOutput {
 
 
 impl Output for ABClcStageOutput {}
+
+#[typetag::serde]
+impl WorkerOutput for ABClcStageOutput {}
 
 #[async_trait]
 impl thoosa_shared::CopyToDevice for ABClcStageOutput {

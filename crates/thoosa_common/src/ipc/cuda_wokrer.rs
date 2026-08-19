@@ -32,13 +32,13 @@ use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
-use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
+use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::ipc::proxy_tests::TestOutput;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
-use crate::tho_tensor::ThoTensor;
+use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::ws::{WsConfigs, FsWorkspace, Workspace};
 
 const WORKER_EXEC_STREAMS: usize = 32;
@@ -197,7 +197,7 @@ impl CudaWorker {
                     debug!("run_worker: postcard: ok={v:?}");
 
                     match v.operation{
-                        Operation::InstallStage { key, stage_id, init_data } => {
+                        Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
                             let Some(init_fn) = endpoint_inits2.get(&key) else {
                                 //TODO send error
                                 panic!("todo")
@@ -227,8 +227,57 @@ impl CudaWorker {
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
                             continue
                         }
-                        Operation::InvokeStage{stage_id, input, consume } => {
+                        Operation::InvokeStage{ endpoint_name, stage_id, input, consume } => {
+                            let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
                             debug!("run_worker: Operation::InvokeStage");
+                            let guard = installed_endpoints.read();
+                            let Some(endpoint) = guard.get(&endpoint_key) else {
+                                //TODO send error
+                                panic!("todo")
+                            };
+                            let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx(), 0);
+                            let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
+                            let r= match endpoint.as_with_state() {
+                                Some(with_state) => {
+                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
+                                    // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
+                                    // panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx)).map(|response| (response, Vec::new()))
+                                    todo!()
+
+                                }
+                                None => {
+                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
+
+                                    panic_to_err!({
+                                        let _guard = ThoStreamGuard::new(&stream)?;
+
+                                        let response = if consume {
+                                            todo!()
+                                            // endpoint.consume_response(&input, &all_cuda_tensors, &tho_device, &run_ctx).map(|response| (response.response, response.consumed_tensor_keys))
+                                        } else {
+                                            endpoint.do_run_2(&input, &all_cuda_tensors, &tho_device, &run_ctx)?
+                                        };
+                                        stream.synchronize()?;
+
+                                        Ok::<_, ThoError>(response)
+                                    })
+                                }
+                            }?;
+
+                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={r:?}");
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(Some(r)),
+                                    }),
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                            continue
                         }
                     }
 
@@ -618,13 +667,18 @@ impl CudaWorker {
 
 }
 
-pub trait WorkerStageInput: Debug + Sized {
+pub trait WorkerStageInput: Debug + Sized + Debug {
 
-    fn clone_refs(&self) -> Result<Self, ThoError> {
+    fn clone_refs(&self) -> Result<Self, ThoError> {//on main side
         todo!()
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>)-> Result<Self, ThoError> {//on worker side
+        error!("WorkerStageInput::ref_to_tensor: self={self:?}");
+        todo!()
+    }
+
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;//on worker side
 
     fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
         Ok((Self::decode_for_worker::<C>(input, all_cuda_tensors)?, Vec::new()))
@@ -640,6 +694,22 @@ where
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
+    fn clone_refs(&self) -> Result<Self, ThoError> {
+        match &self.inner {
+            ThoTensorInner::Val { .. } => {
+                panic!("can't clone val")
+            }
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+                Ok(
+                    ThoTensor::new_ref(self.id.clone(), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx)
+                )
+            }
+        }
+    }
+
+
+
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         debug!("ThoTensor::decode_for_worker: input={input:?}");
         let input_ref = C::decode::<Self>(input)?;
@@ -653,7 +723,23 @@ where
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker consuming sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
         Ok((Self::ref_to_tensor(all_cuda_tensors, input_ref)?, vec![input_key]))
     }
+
+
 }
+
+// impl<D, Id> WorkerOutput for ThoTensor<D, Id>
+// where
+//     D: Dims + 'static,
+//     Id: Send + Named + Debug + Clone + DeserializeOwned + Serialize + 'static,
+// {
+//     fn typetag_name(&self) -> &'static str {
+//         todo!()
+//     }
+//
+//     fn typetag_deserialize(&self) {
+//         todo!()
+//     }
+// }
 
 
 impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
@@ -674,6 +760,9 @@ where
     Id: Clone + Debug + Named,
 {
     pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
+        Self::ref_to_tensor_(all_cuda_tensors, &input_ref)
+    }
+    pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
         let tensors = all_cuda_tensors.lock();

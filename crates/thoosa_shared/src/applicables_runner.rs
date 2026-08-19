@@ -16,6 +16,7 @@ pub trait Output:  Debug {
 }
 
 impl <O> Output for Arc<O> where O: Output {}
+impl <O> Output for Box<O> where O: Output {}
 
 impl <O> WithId for Arc<O>  where O:WithId + Debug {
     type ID = <O as WithId>::ID;
