@@ -26,11 +26,11 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::perf_logging::init_tracing;
-use crate::cuda_utils::cuda_mem_for_device;
+use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
+use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::ipc::proxy_tests::TestOutput;
@@ -197,6 +197,32 @@ impl CudaWorker {
                     debug!("run_worker: postcard: ok={v:?}");
 
                     match v.operation{
+                        Operation::DescribeRef { tensor_key }=> {
+
+                            let tensors = all_cuda_tensors.lock();
+                            let tensor:&Tensor = tensors
+                                .get(&tensor_key)
+                                .ok_or_else(|| ThoError::new(format!("worker tensor key={tensor_key} not found")))?;
+
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(
+                                            tensor_key,
+                                             tensor.kind().into(),
+                                            tensor.size(),
+                                            tensor_mem_size(tensor.kind(), &tensor.size()),
+                                        )) as Box<dyn WorkerOutput>)),
+                                    }),
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                            continue
+                        }
                         Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
                             let Some(init_fn) = endpoint_inits2.get(&key) else {
                                 //TODO send error
