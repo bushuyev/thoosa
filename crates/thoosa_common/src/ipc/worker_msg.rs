@@ -39,7 +39,10 @@ pub enum Operation {
     },
     DropThoTensor {tensor_key:u64},
     InstallStage{ endpoint_name:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
-    InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
+    InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool},
+    PurgeStage{endpoint_name:String, stage_id:u32},
+    DropStage{endpoint_name:String, stage_id:u32},
+    Shutdown
 }
 
 #[derive(Debug, Serialize, Deserialize)]

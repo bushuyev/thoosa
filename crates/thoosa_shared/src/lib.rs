@@ -390,6 +390,8 @@ pub struct ThoError {
     pub what: Cause,
 }
 
+
+
 pub type ThoosaError = ThoError;//TODO used in macros, remove
 
 impl Clone for ThoError {
@@ -440,6 +442,24 @@ impl ThoError {
             msg: msg.into(),
             backtrace: Arc::new(backtrace),
             what,
+        }
+    }
+
+    pub fn new_worker(msg: String) -> ThoError {
+        debug!("ThoosaError::new: msg={msg}");
+
+        let backtrace = Backtrace::capture();
+        trace!("msg={msg} {}", backtrace.to_string());
+
+        Self {
+            msg: msg.into(),
+            backtrace: Arc::new(backtrace),
+            what: Cause::CudaWorker {
+                msg:"Worker".to_string(),
+                is_oom: false,
+                is_retryable_oom: false,
+                needs_cuda_ctx_reset: false,
+            },
         }
     }
 
