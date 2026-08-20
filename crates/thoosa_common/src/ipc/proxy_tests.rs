@@ -55,7 +55,8 @@ impl WorkerInput for TestStageInit {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestInput{
-    value: ThoTensor
+    value: ThoTensor,
+    fail_with_oom:bool
 }
 impl Input for TestInput{}
 
@@ -80,6 +81,7 @@ impl BorrowRef for TestInput {
             } else {
                 Ok(ThoDataRef::Owned(TestInput {
                     value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
+                    fail_with_oom: self.fail_with_oom
                 }))
             }
         }
@@ -91,12 +93,14 @@ impl WorkerStageInput for TestInput {
     fn clone_refs(&self) -> Result<Self, ThoError> {
         Ok(TestInput{
             value: self.value.clone_refs()?,
+            fail_with_oom: self.fail_with_oom,
         })
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
         Ok(TestInput{
             value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
+            fail_with_oom: self.fail_with_oom
         })
     }
 
@@ -248,6 +252,9 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TestStage::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        if input.fail_with_oom {
+            return Err(ThoError::oom())
+        }
         debug("TestStage::do_run: input={input:?}");
         Ok(TestOutput{
             value: (input.value.as_ref() * self.k).into(),
@@ -312,7 +319,7 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_simp_local() -> Result<(), ThoError>{
+    async fn test_simp_local() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -322,8 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simp_ipc() -> Result<(), ThoError>{
-
+    fn test_simp_ipc() -> Result<(), ThoError> {
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
@@ -372,6 +378,7 @@ mod tests {
 
         let input = TestInput {
             value: cuda_tensor,
+            fail_with_oom: false,
         };
         let ctx = TestRunCtx;
 
@@ -386,5 +393,63 @@ mod tests {
 
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
         Ok(())
+    }
+
+    #[test]
+    fn test_oom_error_ipc() -> Result<(), ThoError> {
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+
+        run_ipc_test(
+            async {
+                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+                let test_name = format!("{module}::test_simp_ipc");
+                GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+
+                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+                let test_stage = Arc::new(TestStage::<u32, TestRunCtx>::new(1, TestStageInit::new(2)).await?);
+
+                let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
+
+                debug!("test_simp_target: cuda_tensor={cuda_tensor:?}");
+
+                let input = TestInput {
+                    value: cuda_tensor,
+                    fail_with_oom: true,
+                };
+                let ctx = TestRunCtx;
+
+                let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await;
+                debug!("result={result:?}");
+                let Err(e) = result else {
+                    panic!("not an error");
+                };
+
+                assert!(e.is_oom());
+
+
+                Ok(())
+            },
+
+            async |sock_path| {
+
+                CudaWorker::run_worker2(
+                    sock_path,
+                    &ws,
+                    HashMap::from([
+
+                    ]),
+                    HashMap::from([
+                        (
+                            TEST_ENDPOINT.to_string(),
+                            Box::new(test_simp_init_2) as InitFn2,
+                        ),
+                    ]),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            }
+        )
     }
 }

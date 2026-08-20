@@ -208,7 +208,7 @@ impl CudaWorker {
                                             payload: OutgoingRequestPayload::Msg("dummy".to_string()),
                                             msg: Some(CudaWorkerMsgOut{
                                                 request_id: v.request_id,
-                                                status: OpResult::Failed(format!("worker tensor tensor_key={tensor_key} not found")),
+                                                status: OpResult::failed(format!("worker tensor tensor_key={tensor_key} not found")),
                                             }),
                                         })
                                         .await
@@ -361,7 +361,7 @@ impl CudaWorker {
                                     msg: Some(CudaWorkerMsgOut{
                                         request_id: v.request_id,
                                         status: if r.is_none(){
-                                            OpResult::Failed("Not found".to_string())
+                                            OpResult::failed("Not found".to_string())
                                         } else {
                                             OpResult::Ok(None)
                                         },
@@ -531,7 +531,7 @@ impl CudaWorker {
                                     payload: OutgoingRequestPayload::Msg("dummy".to_string()),
                                     msg: Some(CudaWorkerMsgOut{
                                         request_id: v.request_id,
-                                        status: OpResult::Failed(e.msg),
+                                        status: e.into(),
                                     })
 
                                 })

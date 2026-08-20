@@ -383,7 +383,7 @@ pub enum Cause {
 }
 
 pub struct ThoError {
-    //TODO enum
+
     pub msg: String,
     #[allow(dead_code)]
     backtrace: Arc<Backtrace>,
@@ -445,20 +445,21 @@ impl ThoError {
         }
     }
 
-    pub fn new_worker(msg: String) -> ThoError {
+    pub fn from_worker(msg: String, is_oom: bool, needs_cuda_ctx_reset: bool) -> ThoError {
         debug!("ThoosaError::new: msg={msg}");
 
         let backtrace = Backtrace::capture();
         trace!("msg={msg} {}", backtrace.to_string());
+
 
         Self {
             msg: msg.into(),
             backtrace: Arc::new(backtrace),
             what: Cause::CudaWorker {
                 msg:"Worker".to_string(),
-                is_oom: false,
+                is_oom,
                 is_retryable_oom: false,
-                needs_cuda_ctx_reset: false,
+                needs_cuda_ctx_reset,
             },
         }
     }
@@ -1244,18 +1245,12 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 
 impl Debug for ThoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_oom() {
-            let mut debug_struct = f.debug_struct("ThoosaError");
-            debug_struct.field("msg", &self.msg).field("cause", &self.what);
-            if let Some(backtrace_last) = self.oom_backtrace_last_line() {
-                debug_struct.field("backtrace_last", &backtrace_last);
-            }
-            return debug_struct.finish();
-        }
+
 
         writeln!(f, "ThoosaError")?;
         writeln!(f, "  message: {}", self.msg)?;
-        writeln!(f, "  cause: {}", self.cause_summary())?;
+        writeln!(f, "  what: {:?}", self.what)?;
+
         let mut source = Error::source(self);
         let mut index = 0usize;
         while let Some(err) = source {
