@@ -1373,6 +1373,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tch::Device::Cuda;
     use tch::{Device, Tensor};
+    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
@@ -1390,7 +1391,6 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
     use thoosa_shared::run_configs::{RunConfig, RunConfigId};
     use thoosa_shared::test_utils::{MotifKind, gen_motif};

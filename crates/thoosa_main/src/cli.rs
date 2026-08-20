@@ -66,6 +66,7 @@ use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput, new_tr
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::copy_ctx::CudaActorHandle;
+use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsMotifsDists;
 use thoosa_common::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
 use thoosa_common::my_tch::ThoModule;
@@ -85,7 +86,6 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId, run_id};
@@ -2154,6 +2154,7 @@ mod cli_tests {
     use tch::display::{PrinterOptions, set_print_options};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Device, IndexOp, Tensor, nn};
+    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::MotifSlices;
@@ -2186,7 +2187,6 @@ mod cli_tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::perf_logging::{PERF, format_perf_map, set_panic_hook};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
