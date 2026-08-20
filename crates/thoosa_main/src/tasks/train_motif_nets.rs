@@ -1,8 +1,8 @@
 #![allow(unexpected_cfgs)]
 
 use async_trait::async_trait;
-use futures_util::stream::BoxStream;
 use futures_util::future::BoxFuture;
+use futures_util::stream::BoxStream;
 use futures_util::{FutureExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::collections::{HashMap, HashSet};
@@ -26,10 +26,10 @@ use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, Wor
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_shared::traits::MaxParallelCtx;
 
 use mockall_double::double;
 #[double]
@@ -44,6 +44,7 @@ use crate::tasks::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch
 use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use crate::tasks::train_step::{TrainStep, TrainStepXFn};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::{Batch, MotifProbability, MotifSlices, Slice, ThoBatch};
@@ -63,7 +64,6 @@ use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
@@ -1424,14 +1424,16 @@ mod tests {
     use crate::tasks::train_motif_nets::{SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT, TrainMotifNetInput, TrainMotifNets, split_motif_into_train_valid_endpoint_init, sync_motif_bastch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits};
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
     use async_trait::async_trait;
+    use futures_util::FutureExt;
+    use futures_util::future::BoxFuture;
     use log::LevelFilter::{Debug, Trace};
     use log::debug;
     use parking_lot::{Mutex, RwLock};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
+    use std::marker::PhantomData;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::marker::PhantomData;
     use std::sync::Arc;
     use tch::Device::Cuda;
     use tch::Kind::Float;
@@ -1440,17 +1442,18 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Reduction, Tensor};
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::builder::{Node, SeqBuilder};
+    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+    use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
     use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-    use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
+    use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
@@ -1458,24 +1461,21 @@ mod tests {
     use thoosa_common::runner::purge::FuturesRunnerMapPurger;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tch_test_utils;
-    use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-    use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
-    use futures_util::future::BoxFuture;
-    use futures_util::FutureExt;
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
+    use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifsNetsResult, final_net};
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::traits::{AsyncStage, DynSyncStage, DynSyncStageBox, MonoMetrics, Named, RunCtx, SimpleId, SyncStage};
+    use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key, simple_id};
     use thoosa_store::{MockStoreBuilder, RunConfigRow};

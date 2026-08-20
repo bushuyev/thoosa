@@ -19,10 +19,12 @@ use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::{IndexOp, Tensor};
 use thoosa_common::copy_ctx;
+use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
@@ -43,7 +45,6 @@ use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
@@ -53,7 +54,6 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, O
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_store::Store;
 use tracing::error;
-use thoosa_common::ipc::worker_msg::WorkerOutput;
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
 
@@ -1195,9 +1195,6 @@ where
         Arc::clone(stage).consume(input, proxy_ctx)
     }
 }
-
-#[typetag::serde]
-impl WorkerOutput for MotifStatsOutput {}
 
 pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;

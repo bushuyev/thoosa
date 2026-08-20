@@ -37,6 +37,7 @@ pub enum Operation {
         #[serde(skip)]
         fd:Option<OwnedFd>
     },
+    DropThoTensor {tensor_key:u64},
     InstallStage{ endpoint_name:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
     InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool}
 }

@@ -1,3 +1,26 @@
+use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
+use crate::data_with_extra::DataWithExtra;
+use crate::dims::Dims;
+use crate::ipc::codec::IpcCodec;
+use crate::ipc::cuda_process;
+use crate::ipc::cuda_process::{CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, DeviceInfo, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, IpcChunkWriter, OutgoingRequestPayload, PURGE_ENDPOINT_PREFIX, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, WorkerTensorInfoPayload};
+use crate::ipc::ipc_cuda_utils::{IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd};
+use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper};
+use crate::ipc::proxy_tests::TestOutput;
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
+use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::tho_device::ThoDevice;
+use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use crate::ws::{FsWorkspace, Workspace, WsConfigs};
+use clap::Parser;
+use dashmap::DashMap;
+use futures_util::future::BoxFuture;
+use log::{LevelFilter, debug, error, trace};
+use parking_lot::{Mutex, RwLock};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Serializer;
 use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
@@ -6,40 +29,17 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use clap::Parser;
-use dashmap::DashMap;
-use futures_util::future::BoxFuture;
-use log::{debug, error, LevelFilter, trace};
-use parking_lot::{Mutex, RwLock};
-use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError, CopyToDevice};
-use tokio::net::UnixStream;
-use tokio::sync::mpsc;
 use tch::{Device, Tensor};
-use tokio::task::JoinHandle;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Serializer;
-use tracing::field::debug;
+use thoosa_shared::perf_logging::init_tracing;
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
+use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
+use tokio::net::UnixStream;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tracing::field::debug;
 use tub::Pool;
-use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::perf_logging::init_tracing;
-use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
-use crate::dims::Dims;
-use crate::ipc::codec::IpcCodec;
-use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX, WorkerTensorInfoPayload};
-use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
-use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper};
-use crate::ipc::proxy_tests::TestOutput;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
-use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::run_ctx_2::RunCtxImpl;
-use crate::tho_device::ThoDevice;
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
-use crate::ws::{WsConfigs, FsWorkspace, Workspace};
 
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
@@ -313,6 +313,7 @@ impl CudaWorker {
                                 tensor_byte_len,
                                 chunk_count,
                             }, &mut cuda_resources)?;
+
                             reply_tx
                                 .send(WorkerReply {
                                     id: v.request_id,
@@ -342,17 +343,6 @@ impl CudaWorker {
                                 return Err(ThoError::new(format!("duplicate D2H transfer start for transfer_id={}", v.request_id)));
                             }
 
-                            // reply_tx
-                            //     .send(WorkerReply {
-                            //         id: v.request_id,
-                            //         payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                            //         msg: Some(CudaWorkerMsgOut{
-                            //             request_id: v.request_id,
-                            //             status: OpResult::Ok(None),
-                            //         }),
-                            //     })
-                            //     .await
-                            //     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
                             debug!("run_worker: Operation::D2HStart done");
 
@@ -413,6 +403,31 @@ impl CudaWorker {
                                 }
                             }
                             continue
+                        },
+                        Operation::DropThoTensor {tensor_key} => {
+                            debug!("run_worker: Operation::DropThoTensor: v.request_id={} tensor_key={tensor_key}", v.request_id);
+                            let r =  all_cuda_tensors.lock().remove(&tensor_key)/*match {
+                                None => "Not found",
+                                Some(_) => "Ok"
+                            }*/;
+
+                            debug!("run_worker: Operation::DropThoTensor: r={r:?}");
+
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: if r.is_none(){
+                                            OpResult::Failed("Not found".to_string())
+                                        } else {
+                                            OpResult::Ok(None)
+                                        },
+                                    })
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
                         }
                     }
 

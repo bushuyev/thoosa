@@ -31,6 +31,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{Device, Kind, Tensor};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
+use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsMotifsDists;
 use thoosa_common::dims::{ChannelsData, MotifSlices};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -44,7 +45,6 @@ use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQua
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
@@ -637,6 +637,7 @@ mod tests {
     use tch::display::set_print_options_full;
     use tch::kind::INT64_CPU;
     use tch::{Device, IndexOp, Tensor};
+    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::Cached;
@@ -656,7 +657,6 @@ mod tests {
     use thoosa_shared::ResourceType::Group;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::MotifKind;

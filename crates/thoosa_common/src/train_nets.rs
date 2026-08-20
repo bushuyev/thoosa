@@ -1,16 +1,16 @@
 #![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
 
-use crate::builder::{Node, SeqBuilder};
 use crate::batches::BatchLengths;
+use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::{BinaryHeadPool, MotifInitMode, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
-use crate::utils::{plot_series, ListenerResponse, TrainListener};
+use crate::utils::{ListenerResponse, TrainListener, plot_series};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
-use thoosa_shared::{mono_key, panic_to_err, panic_to_err_async, CopyToDevice};
+use thoosa_shared::{CopyToDevice, mono_key, panic_to_err, panic_to_err_async};
 
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
@@ -18,46 +18,46 @@ use plotters::prelude::BLACK;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::{fmt, fs};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
+use std::{fmt, fs};
 
-use tch::nn::{init, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore};
 use tch::Device::Cpu;
-use tch::{nn, Device, Kind, TchError, Tensor};
-use thoosa_shared::val::{NamedRange, NamedVal, Val};
+use tch::nn::{ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore, init};
+use tch::{Device, Kind, TchError, Tensor, nn};
 use thoosa_shared::ThoError;
+use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
 use async_trait::async_trait;
 use std::sync::Arc;
 use tch::Kind::Float;
-use torch_sys::at_grad_set_enabled;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
+use torch_sys::at_grad_set_enabled;
 
+use crate::data_with_extra::DataWithExtra;
 use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice, Spectorgram};
+use crate::my_tch::MotifInitModeBuilder;
+use crate::my_tch::MotifInitModeFields;
+use crate::my_tch::MotifInitModeRangeOrValue;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use crate::tho_varstore::clone_var_store_to;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
+use thoosa_shared::tmp_file::TmpFile;
+use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::inference_mode::InferenceModeGuard;
-use crate::runner::global_ctx::GlobalCtx;
-use crate::my_tch::MotifInitModeRangeOrValue;
-use crate::my_tch::MotifInitModeFields;
-use crate::my_tch::MotifInitModeBuilder;
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::tmp_file::TmpFile;
-use crate::tho_varstore::clone_var_store_to;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -2514,17 +2514,18 @@ mod train_tests {
     };
     use crate::my_tch::{InitDummy, MotifInitMode, ThoModule};
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetJoint, ConvNetParams, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinLenNetParams, LinNetArgs, LoadMotifNetOutput, MotifCosine2dNetParams, MotifCosineNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
+    use crate::train_nets::ConvNetArgsFields::Joint;
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
+    use crate::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetJoint, ConvNetParams, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinLenNetParams, LinNetArgs, LoadMotifNetOutput, MotifCosine2dNetParams, MotifCosineNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
-    use crate::utils::{debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
+    use crate::utils::{TrainListener, debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, vs_mem_size};
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };
-    use crate::ws::{mock_ws_simp, WsConfigs};
-    use crate::ws::{FsWorkspace, Workspace, WsMockBuilder, NET_WEIGHTS_FILE};
+    use crate::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace, WsMockBuilder};
+    use crate::ws::{WsConfigs, mock_ws_simp};
     use crate::{train_nets, utils};
     use async_trait::async_trait;
     use futures::executor::block_on;
@@ -2534,7 +2535,8 @@ mod train_tests {
     use mockall::automock;
     use mockall_double::double;
     use parking_lot::{Mutex, RwLock};
-    use rand::{random_range, Rng, RngExt, SeedableRng};
+    use rand::prelude::SliceRandom;
+    use rand::{Rng, RngExt, SeedableRng, random_range};
     use rayon::iter::IntoParallelRefMutIterator;
     use std::collections::HashMap;
     use std::ops::{Deref, RangeInclusive};
@@ -2543,34 +2545,32 @@ mod train_tests {
     use std::rc::Rc;
     use std::sync::Arc;
     use std::{fs, mem};
-    use rand::prelude::SliceRandom;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::nn::{init, AdamW, LinearConfig, Module, OptimizerConfig, VarStore};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Float, Half};
-    use tch::{nn, Device, Tensor};
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::nn::{AdamW, LinearConfig, Module, OptimizerConfig, VarStore, init};
     use tch::{IndexOp, Kind, Reduction};
+    use tch::{Device, Tensor, nn};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
     use thoosa_shared::perf_logging::set_panic_hook;
-    use thoosa_shared::val::Val;
-    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len, CopyToDevice, ThoError};
-    use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore, TrainedNet, TrainedNetsBy};
-    use torch_sys::at_autocast_clear_cache;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId};
     use thoosa_shared::traits::SimpleId;
-    use crate::train_nets::ConvNetArgsFields::Joint;
+    use thoosa_shared::val::Val;
+    use thoosa_shared::{CopyToDevice, ThoError, batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len};
+    use thoosa_store::{MockStore, SqlStore, TrainedNet, TrainedNetsBy, mock_store_with_find_motifs_run_config};
+    use torch_sys::at_autocast_clear_cache;
 
 
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::tch_test_utils::motifs_tensor;
+    use crate::train_nets::LabelNetTypeParams::LinNetParams;
     use rand::rngs::StdRng;
     use rand_distr::{Distribution, Normal};
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shims::inference_mode::InferenceModeGuard;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tch_test_utils::motifs_tensor;
-    use crate::train_nets::LabelNetTypeParams::LinNetParams;
 
     #[ctor::ctor]
     fn test_init() {
