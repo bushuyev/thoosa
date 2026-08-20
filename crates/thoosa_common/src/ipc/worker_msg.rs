@@ -20,10 +20,10 @@ pub trait WorkerOutput:Any + Send + Sync + Debug{
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
     DescribeRef {
-        tensor_key:u64
+        tensor_key: u64
     },
     D2HStart {
-        tensor_key:u64
+        tensor_key: u64
     },
     H2dStart {
         worker_id: u64,
@@ -35,14 +35,14 @@ pub enum Operation {
     SharedMemfd {
         metadata: IpcTensorTransferMetadata,
         #[serde(skip)]
-        fd:Option<OwnedFd>
+        fd: Option<OwnedFd>,
     },
-    DropThoTensor {tensor_key:u64},
-    InstallStage{ endpoint_name:String, stage_id: u32, init_data:Box<dyn WorkerInput>},
-    InvokeStage{ endpoint_name:String, stage_id: u32, input:Box<dyn WorkerInput>, consume:bool},
-    PurgeStage{endpoint_name:String, stage_id:u32},
-    DropStage{endpoint_name:String, stage_id:u32},
-    Shutdown
+    DropThoTensor { tensor_key: u64 },
+    InstallStage { endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput> },
+    InvokeStage { endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume: bool },
+    PurgeStage { endpoint_name: String, stage_id: u32 },
+    DropStage { endpoint_name: String, stage_id: u32 },
+    Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?
 }
 
 #[derive(Debug, Serialize, Deserialize)]

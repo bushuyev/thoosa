@@ -161,6 +161,7 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     fn drop(&mut self) {
+
         let endpoint_name = self.endpoint_name;
         let stage_id = self.stage_id;
         let tho_device_idx = self.tho_device_idx;

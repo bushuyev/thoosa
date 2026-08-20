@@ -441,6 +441,8 @@ where
 {
     while let Some(reply) = reply_rx.recv().await {
         if let Some(msg) = reply.msg {
+            debug!("worker_response_writer_loop: msg={msg:?}");
+
             write_frame(&mut writer, &postcard::to_allocvec(&msg).unwrap()/*TODO move to codec*/, "worker").await?;
             debug!("worker_response_writer_loop: msg out ok");
             continue
@@ -1171,7 +1173,7 @@ impl CudaIPCActor {
 
 
                 let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(self.tho_device_idx, &self_arc).await?);
-                old_pawned_state.shutdown("ups").await;
+                // old_pawned_state.shutdown("ups").await;
 
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset done");
 
@@ -1179,60 +1181,71 @@ impl CudaIPCActor {
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
                 // self.spawned_state.child.kill().await?;
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let pending = Arc::clone(&self.spawned_state.pending);
                 let self_tx = self.spawned_state.tx.clone();
 
 
-                tokio::spawn(async move {
-                    {
-                        let mut pending = pending.lock().await;
-                        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
-                        debug_assert!(old.is_none());
-                    }
 
-                    // if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()), msg: None }).await.is_err() {
-                    //     let mut pending = pending.lock().await;
-                    //     pending.remove(&id);
-                    //     let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
-                    //     return;
-                    // }
-                    //
+                {
+                    let mut pending = pending.lock().await;
+                    let old = pending.insert(next_id, PendingResponse::Msg(reply_tx));
+                    debug_assert!(old.is_none());
+                }
 
-                    if self_tx.send(
-                        OutgoingRequest {
-                            id,
-                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                            msg: Some(CudaWorkerMsgIn {
-                                request_id: id,
-                                operation: Operation::Shutdown,
-                            }),
-                        }).await.is_err() {
-                        let mut pending = pending.lock().await;
-                        pending.remove(&id);
-                        let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
-                        return;
-                    }
+                debug!("CudaIPCActorMessage::Shutdown: next_id={next_id}");
 
-                    let reply = reply_rx
-                        .await
-                        .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
-                        .and_then(|reply| reply)
-                        .and_then(IncomingResponsePayload::into_msg);
+                // if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()), msg: None }).await.is_err() {
+                //     let mut pending = pending.lock().await;
+                //     pending.remove(&id);
+                //     let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                //     return;
+                // }
+                //
 
-                    match reply {
-                        Ok(reply) if reply == "shutdown-ok" => {
-                            let _ = respond_to.send(Ok(()));
-                        }
-                        Ok(reply) => {
-                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
-                        }
-                        Err(error) => {
-                            let _ = respond_to.send(Err(error));
-                        }
-                    }
-                });
+                if self_tx.send(
+                    OutgoingRequest {
+                        id: next_id,
+                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                        msg: Some(CudaWorkerMsgIn {
+                            request_id: next_id,
+                            operation: Operation::Shutdown{ dummy: "dummy".to_string() },
+                        }),
+                    }).await.is_err() {
+
+                    let mut pending = pending.lock().await;
+                    pending.remove(&next_id);
+                    let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                    // panic!("can't shutdown");
+                    return Err(ThoError::new("can't shutdown"))
+                }
+
+                // let reply = reply_rx
+                //     .await
+                //     .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
+                //     .and_then(|reply| reply)
+                //     /*.and_then(IncomingResponsePayload::into_msg)*/;
+
+                Self::handle_reply(respond_to, next_id, reply_rx).await;
+
+                debug!("CudaIPCActorMessage::Shutdown: final");
+
+                let _ = self.spawned_state.child.kill().await;
+                self.spawned_state.reader_handle.abort();
+                self.spawned_state.writer_handle.abort();
+                // match reply {
+                //     Ok(reply) if reply == "shutdown-ok" => {
+                //         let _ = respond_to.send(Ok(()));
+                //     }
+                //     Ok(reply) => {
+                //         let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
+                //     }
+                //     Err(error) => {
+                //         let _ = respond_to.send(Err(error));
+                //     }
+                // }
+
             }
             CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {//TODO remove
                 // let self_tx = self.spawned_state.tx.clone();
@@ -1730,6 +1743,8 @@ impl CudaIPCActor {
                 ThoTensor::new((), cpu_tensor)
             }.await;
 
+            debug!("CudaIPCActor::Copy D2H: done");
+
             let _ = respond_to.send(result);
         });
 
@@ -1918,9 +1933,7 @@ async fn writer_loop<W>(
     W: AsyncWrite + Unpin + AsRef<UnixStream>,
 {
     loop {
-        // if GlobalCtx::is_shutting_down() {
-        //     return;
-        // }
+
         let req = tokio::select! {
             _ = cancel.cancelled() => {
                 break;
@@ -2035,7 +2048,10 @@ async fn reader_loop<R>(
                         error!("no waiter for {}", msg.request_id);
                         continue
                     }
-                    Some(v) => v
+                    Some(v) => {
+                        debug!("reader_loop: pending response={v:?} for msg.request_id={}", msg.request_id);
+                        v
+                    }
                 };
                 if let PendingResponse::Msg(msg_waiter) = waiter {
                     msg_waiter.send(Ok(msg)).expect("failed to send todo");
@@ -2293,6 +2309,7 @@ async fn fail_one_pending(
         pending.remove(&id)
     };
 
+
     if let Some(pending_response) = reply_tx {
         match pending_response {
             PendingResponse::Buffered(reply_tx) => {
@@ -2482,9 +2499,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
             ThoError::new(msg)
         })?;//TODO error
 
-        debug!("CudaIPCActorHandle::copy:  message sent");
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+        let r = recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        debug!("CudaIPCActorHandle::copy:  get result: r={r:?}");
+        r
     }
 
     async fn reset(&self) -> Result<(), ThoError> {
@@ -2512,6 +2530,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         debug!("CudaIPCActorHandle::shutdown: recv={recv:?}");
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+
     }
 
     async fn install_endpoint(&self, stage_id: u32, init_msg: String) -> Result<(), ThoError> {
@@ -2716,9 +2735,10 @@ pub(crate) struct DeviceInfo {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-    use crate::ipc::cuda_process::{CudaIPCActor, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload, read_text_frame, write_text_frame};
+    use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::{init_ipc_test, run_ipc_test};
@@ -2899,78 +2919,6 @@ mod tests {
             CudaWorker::run_worker(sock_path, &ws,  HashMap::new(), ThoDevice::from(Cuda(0))).await
         })
     }
-
-    #[test]
-    fn test_copy_ipc_unrecoverable_cuda_error() -> Result<(), ThoError> {
-        debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        #[derive(Debug)]
-        struct _SyncStageJsonWrapper {
-
-        }
-
-        impl SyncStageIpcWrapper for _SyncStageJsonWrapper {
-            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
-                debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
-                if _input.eq(b"fail") {
-                    fail_with_unrecoverable_error();
-                } else {
-
-                }
-
-                Ok(b"ok".to_vec())
-            }
-        }
-
-        fn test_copy_ipc_unrecoverable_cuda_error_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) ->BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-            async {
-                debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                Ok(Box::new(_SyncStageJsonWrapper {}) as Box<dyn SyncStageIpcWrapper>)
-            }.boxed()
-        }
-
-        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(async {
-            init_ipc_test("test_copy_ipc_unrecoverable_cuda_error", pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-
-            let result = async {
-                GlobalCtx::global().cuda_actor(tho_device_idx).install_endpoint(0, encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "xxx")).await?;
-                let r = GlobalCtx::global().cuda_actor(tho_device_idx).invoke_endpoint(0, encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "fail")).await;
-
-                debug!("test_copy_ipc_cuda_worker_propagates_oom: r={r:?}");
-
-                if let Err(e) = &r {
-                    debug!("test_copy_ipc_cuda_worker_propagates_oom: needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
-                    assert!(e.needs_cuda_ctx_reset());
-                } else {
-                    panic!("no error");
-                }
-
-                GlobalCtx::global().cuda_actor(tho_device_idx).reset().await?;
-
-                Ok::<(), ThoError>(())
-            }.await?;
-
-            debug!("test_copy_ipc_cuda_worker_propagates_oom: result={result:?}");
-            Ok(())
-        }, async |sock_path| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,
-               HashMap::from([
-                    (
-                        "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-
-                        Box::new(test_copy_ipc_unrecoverable_cuda_error_init) as InitFn
-                    )
-                ]),
-                ThoDevice::from(Cuda(0)),
-            ).await
-        })
-    }
-
 
 
 

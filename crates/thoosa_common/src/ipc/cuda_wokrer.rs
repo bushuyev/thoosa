@@ -497,7 +497,7 @@ impl CudaWorker {
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
                             Ok(true)
                         }
-                        Operation::Shutdown => {
+                        Operation::Shutdown{dummy} => {
                             debug!("run_worker: worker got shutdown command");
                             reply_tx
                                 .send(WorkerReply {
@@ -512,7 +512,7 @@ impl CudaWorker {
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
-                            debug!("run_worker: worker sent shutdown rs");
+                            debug!("run_worker: worker sent shutdown rs for {}", v.request_id);
                             Ok(false) //<-- does shutdown
                         }
                     })().await;

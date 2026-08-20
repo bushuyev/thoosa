@@ -65,7 +65,7 @@ pub fn init_test_logging() {
         }
     }
 
-    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
+    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S%.3f".to_string());
     let include_log_fields = false;
 
     let stdout_layer = fmt::layer()
