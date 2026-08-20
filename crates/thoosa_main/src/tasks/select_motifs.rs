@@ -40,6 +40,7 @@ use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoade
 use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
+use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -55,7 +56,6 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
@@ -510,6 +510,7 @@ pub mod tests {
     use tch::Kind::Bool;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
+    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
     use thoosa_common::runner::adjusters::splits::OutputBuilder;
@@ -532,7 +533,6 @@ pub mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;

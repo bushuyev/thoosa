@@ -11,13 +11,21 @@ extern crate self as thoosa_shared;
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::resource::ResourceId;
 use crate::val::{GridValueSet, NamedRange, NamedVal, PendingOptField, Val};
+use ambassador::delegatable_trait;
+use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
+use mockall::automock;
 use num_traits::PrimInt;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+#[cfg(test)]
+use rand::SeedableRng;
+#[cfg(test)]
+use rand::rngs::StdRng;
+use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, RngExt};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -34,16 +42,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::{fmt, fs};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use async_trait::async_trait;
-use ambassador::delegatable_trait;
-use mockall::automock;
-use rand::seq::{IndexedRandom, SliceRandom};
-#[cfg(test)]
-use rand::rngs::StdRng;
-#[cfg(test)]
-use rand::SeedableRng;
+use std::{fmt, fs};
 
 
 pub mod resource;
@@ -57,7 +57,6 @@ pub mod opt_rng;
 pub mod run_configs;
 pub mod test_utils;
 pub mod traits;
-pub mod data_with_extra;
 pub mod perf_logging;
 pub mod copy_mode;
 pub mod comp_id;
@@ -2375,18 +2374,18 @@ mod shared_tests {
     use crate::hyperparameter::FieldName;
     use crate::pulse_v;
     use crate::val::NamedVal;
-    use crate::{
-        add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
-        make_combos, parse_range_str, snake_to_camel, test_utils, Cause,
-        RangeOrValue, ResourceType, FuturesOrdering, ThoError,
+    use crate::{Cause, FuturesOrdering,
+                RangeOrValue, ResourceType, ThoError,
+                add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
+                make_combos, parse_range_str, snake_to_camel, test_utils,
     };
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
     use clap::{Args, Parser};
     use log::debug;
     use std::collections::HashSet;
     use std::fmt::{Display, Formatter};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     #[ctor::ctor]
     fn init() {

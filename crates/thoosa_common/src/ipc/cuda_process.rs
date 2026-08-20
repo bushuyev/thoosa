@@ -1126,6 +1126,7 @@ impl CudaIPCActor {
 
                     self.handle_h2d_copy(src, dst_device, respond_to)
                 }
+
             }
 
             CudaIPCActorMessage::DropThoTensor { key, respond_to } => {
@@ -1134,37 +1135,58 @@ impl CudaIPCActor {
                 let pending = Arc::clone(&self.spawned_state.pending);
                 let self_tx = self.spawned_state.tx.clone();
 
+                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?}");
+
                 tokio::spawn(async move {
                     {
                         let mut pending = pending.lock().await;
-                        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
+                        let old = pending.insert(id, PendingResponse::Msg(reply_tx));
                         debug_assert!(old.is_none());
                     }
 
-                    if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg(encode_endpoint_payload(DROP_THO_TENSOR, &key.to_string())), msg: None }).await.is_err() {
+                    // if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg(encode_endpoint_payload(DROP_THO_TENSOR, &key.to_string())), msg: None }).await.is_err() {
+                    if self_tx.send(
+                        OutgoingRequest {
+                        id,
+                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                        msg: Some(CudaWorkerMsgIn {
+                            request_id: id,
+                            operation: Operation::DropThoTensor {tensor_key: key},
+                        }),
+                    }).await.is_err() {
                         let mut pending = pending.lock().await;
                         pending.remove(&id);
                         let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
                         return;
                     }
 
-                    let reply = reply_rx
-                        .await
-                        .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped")))
-                        .and_then(|reply| reply)
-                        .and_then(IncomingResponsePayload::into_msg);
 
-                    match reply {
-                        Ok(reply) if reply == "Ok" => {
-                            let _ = respond_to.send(Ok(()));
+                    match reply_rx
+                        .await
+                        .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped"))) {
+                        Ok(Ok(reply)) => {
+                            match reply.status {
+                                OpResult::Ok(_) => {
+                                    debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send ok");
+
+                                    let _ = respond_to.send(Ok(()));
+
+                                }
+                                OpResult::Failed(error) => {
+                                    debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {error:?}");
+
+                                    let _ = respond_to.send(Err(ThoError::new(error)));
+                                }
+                            }
+
                         }
-                        Ok(reply) => {
-                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {reply:?}"))));
-                        }
-                        Err(error) => {
-                            let _ = respond_to.send(Err(error));
+                        e => {
+                            debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {e:?}");
+
+                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {e:?}"))));
                         }
                     }
+
                 });
             }
             CudaIPCActorMessage::Reset { respond_to } => {
@@ -1220,34 +1242,35 @@ impl CudaIPCActor {
                     }
                 });
             }
-            CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {
-                let self_tx = self.spawned_state.tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.spawned_state.pending);
-
-                tokio::spawn(async move {
-
-                    let response = send_request_and_wait(
-                        self_tx,
-                        pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{INSTALL_ENDPOINT_PREFIX}{init_msg}")),
-                            msg: None,
-                        },
-                    ).await.and_then(|response| {
-                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                            Err(parse_worker_copy_error_payload(error))
-                        } else if response == ENDPOINT_OK_PAYLOAD {
-                            Ok(())
-                        } else {
-                            Err(ThoError::new(format!("unexpected endpoint install response: {response:?}")))
-                        }
-                    });
-                    let _ = respond_to.send(response);
-
-                    Ok::<_, ThoError>(())
-                });
+            CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {//TODO remove
+                // let self_tx = self.spawned_state.tx.clone();
+                // let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                // let pending = Arc::clone(&self.spawned_state.pending);
+                //
+                // tokio::spawn(async move {
+                //
+                //     let response = send_request_and_wait(
+                //         self_tx,
+                //         pending,
+                //         OutgoingRequest {
+                //             id: next_id,
+                //             payload: OutgoingRequestPayload::Msg(format!("{INSTALL_ENDPOINT_PREFIX}{init_msg}")),
+                //             msg: None,
+                //         },
+                //     ).await.and_then(|response| {
+                //         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                //             Err(parse_worker_copy_error_payload(error))
+                //         } else if response == ENDPOINT_OK_PAYLOAD {
+                //             Ok(())
+                //         } else {
+                //             Err(ThoError::new(format!("unexpected endpoint install response: {response:?}")))
+                //         }
+                //     });
+                //     let _ = respond_to.send(response);
+                //
+                //     Ok::<_, ThoError>(())
+                // });
+                todo!()
             }
             CudaIPCActorMessage::SendMsg { mut input, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -1274,32 +1297,33 @@ impl CudaIPCActor {
                 });
             }
 
-            CudaIPCActorMessage::InvokeEndpoint { input, respond_to } => {
+            CudaIPCActorMessage::InvokeEndpoint { input, respond_to } => {//TODO remove
 
-                let self_tx = self.spawned_state.tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.spawned_state.pending);
-
-                _= tokio::spawn(async move {
-
-                    let response = send_request_and_wait(
-                        self_tx,
-                        pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
-                            msg: None,
-                        },
-                    ).await.and_then(|response| {
-                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                            Err(parse_worker_copy_error_payload(error))
-                        } else {
-                            Ok(response)
-                        }
-                    });
-                    let _ = respond_to.send(response);
-                    Ok::<_, ThoError>(())
-                });
+                // let self_tx = self.spawned_state.tx.clone();
+                // let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                // let pending = Arc::clone(&self.spawned_state.pending);
+                //
+                // _= tokio::spawn(async move {
+                //
+                //     let response = send_request_and_wait(
+                //         self_tx,
+                //         pending,
+                //         OutgoingRequest {
+                //             id: next_id,
+                //             payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
+                //             msg: None,
+                //         },
+                //     ).await.and_then(|response| {
+                //         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                //             Err(parse_worker_copy_error_payload(error))
+                //         } else {
+                //             Ok(response)
+                //         }
+                //     });
+                //     let _ = respond_to.send(response);
+                //     Ok::<_, ThoError>(())
+                // });
+                todo!()
             }
             CudaIPCActorMessage::ConsumeEndpoint { input, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -1966,6 +1990,8 @@ async fn reader_loop<R>(
                 if let PendingResponse::Msg(msg_waiter) = waiter {
                     msg_waiter.send(Ok(msg)).expect("failed to send todo");
                     debug!("reader_loop: send ok");
+                } else {
+                    error!("Unexpected waiter for msg: waiter={waiter:?}")
                 }
             };
             continue
@@ -2922,7 +2948,7 @@ mod tests {
 
             let tho_device_idx = 1;
 
-            let main_process_cpu_tensor = Tensor::rand(&[50_000, 10_000], FLOAT_CPU);
+            let main_process_cpu_tensor = Tensor::rand(&[5_000, 1_000], FLOAT_CPU);
             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
 
 
