@@ -873,8 +873,8 @@ pub enum CudaIPCActorMessage {
         output: std::fs::File,
         respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
     },
-    PurgeEndpoint {
-        input: String,
+    PurgeEndpoint {//
+        stage_id: u32, endpoint_name:String,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
     DropEndpoint {
@@ -1135,7 +1135,7 @@ impl CudaIPCActor {
                 let pending = Arc::clone(&self.spawned_state.pending);
                 let self_tx = self.spawned_state.tx.clone();
 
-                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?}");
+                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} key={key}");
 
                 tokio::spawn(async move {
                     {
@@ -1326,30 +1326,31 @@ impl CudaIPCActor {
                 todo!()
             }
             CudaIPCActorMessage::ConsumeEndpoint { input, respond_to } => {
-                let self_tx = self.spawned_state.tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.spawned_state.pending);
-
-                _= tokio::spawn(async move {
-                    let response = send_request_and_wait(
-                        self_tx,
-                        pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{CONSUME_ENDPOINT_PREFIX}{input}")),
-                            msg: None,
-                        },
-                    ).await.and_then(|response| {
-                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                            Err(parse_worker_copy_error_payload(error))
-                        } else {
-                            Ok(response)
-                        }
-                    });
-                    let _ = respond_to.send(response);
-
-                    Ok::<_, ThoError>(())
-                });
+                // let self_tx = self.spawned_state.tx.clone();
+                // let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                // let pending = Arc::clone(&self.spawned_state.pending);
+                //
+                // _= tokio::spawn(async move {
+                //     let response = send_request_and_wait(
+                //         self_tx,
+                //         pending,
+                //         OutgoingRequest {
+                //             id: next_id,
+                //             payload: OutgoingRequestPayload::Msg(format!("{CONSUME_ENDPOINT_PREFIX}{input}")),
+                //             msg: None,
+                //         },
+                //     ).await.and_then(|response| {
+                //         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                //             Err(parse_worker_copy_error_payload(error))
+                //         } else {
+                //             Ok(response)
+                //         }
+                //     });
+                //     let _ = respond_to.send(response);
+                //
+                //     Ok::<_, ThoError>(())
+                // });
+                todo!()
             }
             CudaIPCActorMessage::InvokeEndpointToFile { input, output, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -1367,29 +1368,45 @@ impl CudaIPCActor {
 
 
 
-            CudaIPCActorMessage::PurgeEndpoint { input, respond_to } => {
-                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: input={}", &input);
+            CudaIPCActorMessage::PurgeEndpoint { stage_id, endpoint_name, respond_to } => {
+                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: endpoint_name={endpoint_name} stage_id={stage_id}");
                 let self_tx = self.spawned_state.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
 
                 _= tokio::spawn(async move {
 
-                    let response = send_request_and_wait(
+                    // let response = send_request_and_wait(
+                    //     self_tx,
+                    //     pending,
+                    //     OutgoingRequest {
+                    //         id: next_id,
+                    //         payload: OutgoingRequestPayload::Msg(format!("{PURGE_ENDPOINT_PREFIX}{input}")),
+                    //         msg: None,
+                    //     },
+                    // ).await.and_then(|response| {
+                    //     if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                    //         Err(parse_worker_copy_error_payload(error))
+                    //     } else {
+                    //         Ok(response)
+                    //     }
+                    // })?;
+                    let response = send_request_and_wait_msg(
+                        next_id,
                         self_tx,
                         pending,
                         OutgoingRequest {
                             id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{PURGE_ENDPOINT_PREFIX}{input}")),
-                            msg: None,
+                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                            msg: Some(CudaWorkerMsgIn {
+                                request_id: next_id,
+                                operation: Operation::PurgeStage {
+                                    endpoint_name,
+                                    stage_id,
+                                },
+                            }),
                         },
-                    ).await.and_then(|response| {
-                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                            Err(parse_worker_copy_error_payload(error))
-                        } else {
-                            Ok(response)
-                        }
-                    })?;
+                    ).await?;//TODO handle error
 
                     debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: response={response:?}");
 
@@ -1452,9 +1469,8 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} buf_size={buf_size}");
 
-
         let setup_result = async {
-            let response = send_request_and_wait_msg(
+            let response = match send_request_and_wait_msg(
                 describe_id,
                 self_tx.clone(),
                 Arc::clone(&pending),
@@ -1468,12 +1484,19 @@ impl CudaIPCActor {
                         }
                     ),
                 },
-            ).await?;
+            ).await {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("CudaIPCActor::handle_ref_d2h_copy: got e={e:?}");
+                    return Err(e);
+                }
+            };
 
             debug!("handle_ref_d2h_copy: response={response:?}");
 
             let CudaWorkerMsgOut{status: OpResult::Ok(Some(info)), ..} = response else {
-                panic!("todo");
+                let msg = format!("worker tensor tensor_key={tensor_key} not found");
+                return Err(ThoError::new_worker(msg));
             };
             let info : Box<dyn Any> = info;
             let info = info.downcast::<WorkerTensorInfoPayload>().unwrap();//TODO unwrap
@@ -1986,7 +2009,13 @@ async fn reader_loop<R>(
             debug!("reader_loop: msg={msg:?}");
             let pending_response = {
                 let mut pending = pending.lock().await;
-                let waiter = pending.remove(&msg.request_id).expect(&format!("no waiter for {}", msg.request_id));
+                let waiter = match pending.remove(&msg.request_id) {
+                    None => {
+                        error!("no waiter for {}", msg.request_id);
+                        continue
+                    }
+                    Some(v) => v
+                };
                 if let PendingResponse::Msg(msg_waiter) = waiter {
                     msg_waiter.send(Ok(msg)).expect("failed to send todo");
                     debug!("reader_loop: send ok");
@@ -2515,11 +2544,12 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_endpoint_bytes(&self, stage_id: u32, input: String) -> Result<(), ThoError> {
+    async fn purge_endpoint_bytes(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::PurgeEndpoint {
-                input: encode_stage_payload(stage_id, &input),
+                stage_id,
+                endpoint_name,
                 respond_to,
             }
         ).instrument(tracing::debug_span!(
@@ -2906,11 +2936,11 @@ mod tests {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
             CudaWorker::run_worker(sock_path, &ws,
                HashMap::from([
-                            (
-                                "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                                
-                                Box::new(test_copy_ipc_unrecoverable_cuda_error_init) as InitFn
-                            )
+                    (
+                        "test_copy_ipc_unrecoverable_cuda_error".to_string(),
+
+                        Box::new(test_copy_ipc_unrecoverable_cuda_error_init) as InitFn
+                    )
                 ]),
                 ThoDevice::from(Cuda(0)),
             ).await
@@ -2948,7 +2978,7 @@ mod tests {
 
             let tho_device_idx = 1;
 
-            let main_process_cpu_tensor = Tensor::rand(&[5_000, 1_000], FLOAT_CPU);
+            let main_process_cpu_tensor = Tensor::rand(&[50_000, 10_000], FLOAT_CPU);
             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
 
 
@@ -2983,12 +3013,14 @@ mod tests {
                 0.into(), //Cpu
             )).await;
 
+            debug!("run_main: copy r={r:?}");
+
             let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
                 panic!("Got r={r:?}, expected CudaWorker error");
             } ;
 
-            assert_eq!("ThoError: Unknown error, cause=worker tensor key=1 not found", what_msg);//TODO err code
-
+            assert_eq!("Worker", what_msg);//TODO err code
+            assert_eq!("worker tensor tensor_key=1 not found", msg);//TODO err code
 
 
             info!("main: \n{}", format_perf_map(&PERF));

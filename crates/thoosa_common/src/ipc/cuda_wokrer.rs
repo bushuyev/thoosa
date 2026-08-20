@@ -200,9 +200,27 @@ impl CudaWorker {
                         Operation::DescribeRef { tensor_key }=> {
 
                             let tensors = all_cuda_tensors.lock();
-                            let tensor:&Tensor = tensors
-                                .get(&tensor_key)
-                                .ok_or_else(|| ThoError::new(format!("worker tensor key={tensor_key} not found")))?;
+                            let tensor:&Tensor = match tensors.get(&tensor_key) {
+                                None => {
+                                    let _ = reply_tx
+                                        .send(WorkerReply {
+                                            id: v.request_id,
+                                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                            msg: Some(CudaWorkerMsgOut{
+                                                request_id: v.request_id,
+                                                status: OpResult::Failed(format!("worker tensor tensor_key={tensor_key} not found")),
+                                            }),
+                                        })
+                                        .await
+                                        .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                                    debug!("run_worker: DescribeRef fail response {} sent", v.request_id);
+
+                                    continue
+                                }
+                                Some(v) => v
+                            };
+                                // .ok_or_else(|| ThoError::new(format!("worker tensor key={tensor_key} not found")))?;
 
                             reply_tx
                                 .send(WorkerReply {
@@ -220,6 +238,8 @@ impl CudaWorker {
                                 })
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                            debug!("run_worker: DescribeRef ok response {} sent", v.request_id);
 
                             continue
                         }
@@ -428,23 +448,83 @@ impl CudaWorker {
                                 })
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                            continue
+                        }
+                        Operation::PurgeStage { endpoint_name, stage_id } => {
+                            let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
+                            debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?}");
+                            match installed_endpoints.read().get(&endpoint_key) {
+                                Some(endpoint) => {
+                                    endpoint.purge(tho_device.clone()).await?;
+                                }
+                                None => {
+                                    error!("no endpoint found"); //TODO handle
+                                }
+                            };
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(None),
+                                    })
+
+                                }
+                                )
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                            continue;
+                        }
+                        Operation::DropStage { endpoint_name, stage_id } => {
+                            let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
+                            debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?}");
+
+                            let removed = installed_endpoints.write().remove(&endpoint_key).is_some();
+                            debug!("run_worker: drop endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} removed={removed}");
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),                                     msg: Some(CudaWorkerMsgOut{
+                                    request_id: v.request_id,
+                                    status: OpResult::Ok(None),
+                                })
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                        }
+                        Operation::Shutdown => {
+                            debug!("run_worker: worker got shutdown command");
+                            reply_tx
+                                .send(WorkerReply {
+                                    id:v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("shutdown-ok".to_string()),
+                                    msg: None,
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                            debug!("run_worker: worker sent shutdown rs");
+                            break; //<-- does shutdown
                         }
                     }
 
-                    reply_tx
-                        .send(WorkerReply {
-                            id: v.request_id,
-                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                            msg: Some(CudaWorkerMsgOut{
-                                request_id: v.request_id,
-                                status: OpResult::Failed("todo".to_string()),
-                            }),
-                        })
-                        .await
-                        .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                    // reply_tx
+                    //     .send(WorkerReply {
+                    //         id: v.request_id,
+                    //         payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                    //         msg: Some(CudaWorkerMsgOut{
+                    //             request_id: v.request_id,
+                    //             status: OpResult::Failed("todo".to_string()),
+                    //         }),
+                    //     })
+                    //     .await
+                    //     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
 
-                    continue
+                    // continue
                 },
                 Err(e)=>{
                     debug!("postcard: e={e:?}");
@@ -471,21 +551,21 @@ impl CudaWorker {
 
             debug!("run_worker: worker received: id={id}, payload={:?}", payload.get(..1000));
 
-            if payload == "shutdown" {
-                debug!("run_worker: worker got shutdown command");
-                reply_tx
-                    .send(WorkerReply {
-                        id,
-                        payload: OutgoingRequestPayload::Msg("shutdown-ok".to_string()),
-                        msg: None,
-                    })
-                    .await
-                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
-
-                debug!("run_worker: worker sent shutdown rs");
-                break;
-            }
-           
+            // if payload == "shutdown" {
+            //     debug!("run_worker: worker got shutdown command");
+            //     reply_tx
+            //         .send(WorkerReply {
+            //             id,
+            //             payload: OutgoingRequestPayload::Msg("shutdown-ok".to_string()),
+            //             msg: None,
+            //         })
+            //         .await
+            //         .map_err(|_| ThoError::new("worker response writer is closed"))?;
+            //
+            //     debug!("run_worker: worker sent shutdown rs");
+            //     break;
+            // }
+            //
 
             // if let Some(tensor_key) = payload.strip_prefix(DESCRIBE_REF_PAYLOAD_PREFIX) {
             //
@@ -754,54 +834,54 @@ impl CudaWorker {
             //     continue;
             // }
 
-            if let Some(input) = payload.strip_prefix(PURGE_ENDPOINT_PREFIX) {
-                let (stage_id, input) = cuda_process::split_stage_payload(input)?;
-                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
-                let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
-                debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} input={input:?}");
-                match installed_endpoints.read().get(&endpoint_key) {
-                    Some(endpoint) => {
-                        endpoint.purge(tho_device.clone()).await?;
-                    }
-                    None => {
-                        error!("no endpoint found"); //TODO handle
-                    }
-                };
-                reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg("ok".to_string()), msg: None })
-                    .await
-                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+            // if let Some(input) = payload.strip_prefix(PURGE_ENDPOINT_PREFIX) {
+            //     let (stage_id, input) = cuda_process::split_stage_payload(input)?;
+            //     let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
+            //     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+            //     debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} input={input:?}");
+            //     match installed_endpoints.read().get(&endpoint_key) {
+            //         Some(endpoint) => {
+            //             endpoint.purge(tho_device.clone()).await?;
+            //         }
+            //         None => {
+            //             error!("no endpoint found"); //TODO handle
+            //         }
+            //     };
+            //     reply_tx
+            //         .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg("ok".to_string()), msg: None })
+            //         .await
+            //         .map_err(|_| ThoError::new("worker response writer is closed"))?;
+            //
+            //     continue;
+            // }
 
-                continue;
-            }
+            // if let Some(input) = payload.strip_prefix(DROP_ENDPOINT_PREFIX) {
+            //     let (stage_id, input) = cuda_process::split_stage_payload(input)?;
+            //     let (endpoint_name, _) = cuda_process::split_endpoint_payload(input)?;
+            //     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+            //     // Removing the wrapper drops its worker-side stage state and makes the composite key available for reuse.
+            //     let removed = installed_endpoints.write().remove(&endpoint_key).is_some();
+            //     debug!("run_worker: drop endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} removed={removed}");
+            //     reply_tx
+            //         .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(ENDPOINT_OK_PAYLOAD.to_string()), msg: None })
+            //         .await
+            //         .map_err(|_| ThoError::new("worker response writer is closed"))?;
+            //
+            //     continue;
+            // }
 
-            if let Some(input) = payload.strip_prefix(DROP_ENDPOINT_PREFIX) {
-                let (stage_id, input) = cuda_process::split_stage_payload(input)?;
-                let (endpoint_name, _) = cuda_process::split_endpoint_payload(input)?;
-                let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
-                // Removing the wrapper drops its worker-side stage state and makes the composite key available for reuse.
-                let removed = installed_endpoints.write().remove(&endpoint_key).is_some();
-                debug!("run_worker: drop endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} removed={removed}");
-                reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(ENDPOINT_OK_PAYLOAD.to_string()), msg: None })
-                    .await
-                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
-
-                continue;
-            }
-
-            let reply_tx = reply_tx.clone();
-
-            //TODO remove
-            tokio::spawn(async move {
-                let reply = cuda_process::handle_worker_request(payload).await;
-
-                debug!("run_worker: reply={reply}");
-
-                let _ = reply_tx
-                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(reply), msg: None })
-                    .await;
-            });
+            // let reply_tx = reply_tx.clone();
+            //
+            // //TODO remove
+            // tokio::spawn(async move {
+            //     let reply = cuda_process::handle_worker_request(payload).await;
+            //
+            //     debug!("run_worker: reply={reply}");
+            //
+            //     let _ = reply_tx
+            //         .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(reply), msg: None })
+            //         .await;
+            // });
         }
 
         drop(reply_tx);

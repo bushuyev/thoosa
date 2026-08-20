@@ -96,7 +96,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(self.invoke_endpoint(stage_id, String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?.into_bytes())
     }
 
-    async fn purge_endpoint_bytes(&self, _stage_id: u32, input: String)-> Result<(), ThoError> {
+    async fn purge_endpoint_bytes(&self, stage_id: u32, endpoint_name: String)-> Result<(), ThoError> {
         todo!()//TODO it should be in IPC endpoint only
     }
 
