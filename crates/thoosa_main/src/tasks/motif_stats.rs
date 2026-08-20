@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, Metrics};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta, load_random_slices};
 use crate::tasks::slices_stats::{metric_quantiles_for_motif, metric_scalar_for_motif};
@@ -20,7 +19,7 @@ use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::{IndexOp, Tensor};
 use thoosa_common::copy_ctx;
-use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
+use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
@@ -28,7 +27,6 @@ use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
@@ -50,10 +48,12 @@ use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
+use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_store::Store;
 use tracing::error;
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
 
@@ -1012,6 +1012,9 @@ where
     }
 }
 
+#[typetag::serde]
+impl WorkerOutput for MotifStatsOutput{}
+
 pub fn motif_stats_sync_stage_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
@@ -1192,6 +1195,9 @@ where
         Arc::clone(stage).consume(input, proxy_ctx)
     }
 }
+
+#[typetag::serde]
+impl WorkerOutput for MotifStatsOutput {}
 
 pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;

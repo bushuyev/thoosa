@@ -52,7 +52,6 @@ use thoosa_shared::traits::Stage;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
-use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
@@ -67,6 +66,7 @@ use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput, new_tr
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::copy_ctx::CudaActorHandle;
+use thoosa_common::dims::ChannelsMotifsDists;
 use thoosa_common::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::cache_areas::CacheArea;

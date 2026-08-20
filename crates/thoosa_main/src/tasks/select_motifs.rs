@@ -27,7 +27,7 @@ use mockall_double::double;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::cross_batch_clc::{CrossInput, UnfoldParams, unfold_and_cat};
-use crate::tasks::cross_dims::{ChannelsDataSelector, ChannelsMotifsDists, ChannelsMotifsSlices};
+use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::find_motifs::config_to_stage;
@@ -40,7 +40,7 @@ use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoade
 use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_common::dims::{ChannelsData, MotifSlices};
+use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;

@@ -1,14 +1,14 @@
+use log::{debug, trace};
 use std::cmp::min;
 use std::ops::Range;
-use log::{debug, trace};
-use tch::{IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
+use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Batch, ChannelsData, Dims, LocalSelect};
-use thoosa_shared::{mono_key, ThoError};
-use thoosa_shared::traits::{Adjustable, DataId, Select, ThoSelector};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::traits::MonoMetrics;
+use thoosa_shared::traits::{Adjustable, DataId, Select, ThoSelector};
+use thoosa_shared::{ThoError, mono_key};
 
 
 #[derive(Clone, Debug, Default)]
@@ -90,19 +90,3 @@ impl From<Range<MonoMetrics<1, 2>>> for ChannelsDataSelector {
 }
 
 
-#[derive(Clone, Debug)]
-pub struct ChannelsMotifsSlices;
-
-impl Dims for ChannelsMotifsSlices {
-    type Metrics = MonoMetrics<1, 3>; //[i64;3]; // [i64; 3];//channels x slices x window
-
-}
-
-
-#[derive(Clone, Debug)]
-pub struct ChannelsMotifsDists;
-
-impl Dims for ChannelsMotifsDists {
-    type Metrics = MonoMetrics<1, 2>; //[i64;3]; // [i64; 3];//channels x dists
-
-}

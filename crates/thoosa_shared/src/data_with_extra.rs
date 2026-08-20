@@ -164,3 +164,6 @@ where
     E:Debug + Send + Sync,
 {}
 
+
+#[typetag::serde()]
+impl WorkerOutput for DataWithExtra<ThoTensor<MotifProbability, SynKey>, std::vec::Vec<i64>> {}

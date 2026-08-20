@@ -47,6 +47,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::debug_plot;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::{Batch, MotifProbability, MotifSlices, Slice, ThoBatch};
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
@@ -1000,6 +1001,9 @@ where
     }
 }
 
+#[typetag::serde]
+impl WorkerOutput for SyncMotifBatchOutput{}
+
 pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
@@ -1243,6 +1247,9 @@ where
         Arc::clone(&self.stage).do_run(input, &stage_ctx)
     }
 }
+
+#[typetag::serde]
+impl WorkerOutput for SplitMotifIntoTrainValidOutput{}
 
 pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {

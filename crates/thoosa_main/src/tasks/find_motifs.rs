@@ -20,7 +20,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, FinderKind, MaxSlices, SlicesFilter};
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
@@ -32,6 +31,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{Device, Kind, Tensor};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
+use thoosa_common::dims::ChannelsMotifsDists;
 use thoosa_common::dims::{ChannelsData, MotifSlices};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};

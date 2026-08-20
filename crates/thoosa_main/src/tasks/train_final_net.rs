@@ -32,6 +32,7 @@ use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
@@ -429,6 +430,9 @@ where
     }
 
 }
+
+#[typetag::serde]
+impl WorkerOutput for SyncLogitsBatchOutput{}
 
 pub fn sync_logits_batch_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {

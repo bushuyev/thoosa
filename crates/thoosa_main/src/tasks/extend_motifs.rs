@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::{ChannelsDataSelector, ChannelsMotifsDists};
+use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::find_motifs::config_to_stage;
@@ -21,8 +21,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::MotifSlices;
+use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
