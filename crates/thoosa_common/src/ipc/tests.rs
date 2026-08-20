@@ -25,13 +25,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{Device, Tensor};
+use tokio::task;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::test_utils::init_test_logging;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{mono_key, panic_to_err_async, ThoError};
-use tokio::task::JoinSet;
+use tokio::task::{coop, JoinSet};
 
 // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 // use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
@@ -109,13 +110,11 @@ where
 
         main_rt.block_on(async {
             let r = main_f.await;
-            GlobalCtx::global().shutdown().await;
-
-
-            info!("main perf:\n{}", format_perf_map(&PERF));
             info!("main done: r={r:?}");
 
+            GlobalCtx::global().shutdown().await;
 
+            info!("main perf:\n{}", format_perf_map(&PERF));
 
             // Preserve the original tests' behavior by propagating main-process assertion failures.
             r

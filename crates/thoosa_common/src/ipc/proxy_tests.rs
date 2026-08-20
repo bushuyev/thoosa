@@ -336,6 +336,7 @@ mod tests {
 
                 do_test_simp().await?;
 
+                debug!("test_simp_ipc ok");
 
                 Ok(())
             },
