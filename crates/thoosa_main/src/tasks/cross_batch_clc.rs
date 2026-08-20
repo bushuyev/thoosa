@@ -20,6 +20,7 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
@@ -547,6 +548,9 @@ where
         }
     }
 }
+
+#[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
+impl WorkerOutput for CrossUnfoldClcOutput<DistsMask>{}
 
 pub fn sync_cross_unfold_clc_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {

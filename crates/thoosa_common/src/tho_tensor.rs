@@ -1,5 +1,5 @@
 use std::backtrace::Backtrace;
-use crate::dims::{AnyDims, Dims};
+use crate::dims::{AnyDims, ChannelsData, ChannelsMotifsSlices, Dims, LabelProbability, MotifSlices};
 use crate::runner::common::cachable::ThoDataRef;
 use thoosa_shared::traits::RunCtx;
 #[double]
@@ -24,6 +24,8 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, 
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::{panic_to_err, simple_id};
 use torch_sys::IntList;
+use thoosa_shared::comp_id::SynKey;
+use crate::ipc::worker_msg::WorkerOutput;
 
 //TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
@@ -531,3 +533,16 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
         let _ = self.t.resize_(new_shape);
     }
 }
+
+
+#[typetag::serde(name = "ThoTensor_ChannelsData")]
+impl WorkerOutput for ThoTensor<ChannelsData, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_ChannelsMotifsSlices")]
+impl WorkerOutput for ThoTensor<ChannelsMotifsSlices, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_MotifSlices")]
+impl WorkerOutput for ThoTensor<MotifSlices, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_LabelProbability")]
+impl WorkerOutput for ThoTensor<LabelProbability, SynKey> {}
