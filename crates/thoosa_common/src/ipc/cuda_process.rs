@@ -1465,10 +1465,10 @@ impl CudaIPCActor {
 
                         let _ = respond_to.send(Ok(()));
                     }
-                    OpResult::Failed(error) => {
-                        debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {error:?}");
+                    OpResult::Failed { msg, is_oom, needs_reset } => {
+                        debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {msg:?}");
 
-                        let _ = respond_to.send(Err(ThoError::new(error)));
+                        let _ = respond_to.send(Err(ThoError::from_worker(msg, is_oom, needs_reset)));
                     }
                 }
             }
@@ -1527,7 +1527,7 @@ impl CudaIPCActor {
 
             let CudaWorkerMsgOut{status: OpResult::Ok(Some(info)), ..} = response else {
                 let msg = format!("worker tensor tensor_key={tensor_key} not found");
-                return Err(ThoError::new_worker(msg));
+                return Err(ThoError::from_worker(msg, false, false));
             };
             let info : Box<dyn Any> = info;
             let info = info.downcast::<WorkerTensorInfoPayload>().unwrap();//TODO unwrap

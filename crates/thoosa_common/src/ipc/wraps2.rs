@@ -93,8 +93,8 @@ where
                                 }
 
                             }
-                            OpResult::Failed(msg) => {
-                                Err(ThoError::new(msg))
+                            OpResult::Failed{ msg, is_oom, needs_reset } => {
+                                Err(ThoError::from_worker(msg, is_oom, needs_reset))
                             }
                         }
                     }

@@ -2,6 +2,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::os::fd::OwnedFd;
 use serde::{Deserialize, Serialize};
+use thoosa_shared::ThoError;
 use crate::ipc::cuda_wokrer::WorkerStageOutput;
 use crate::ipc::ipc_cuda_utils::{IpcTensorKind, IpcTensorTransferMetadata};
 use crate::runner::common::cachable::ThoDataRef;
@@ -63,7 +64,7 @@ impl CudaWorkerMsgIn {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum OpResult {
     Ok(Option<Box<dyn WorkerOutput>>),
-    Failed(String)
+    Failed{msg:String, is_oom:bool, needs_reset:bool}
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,4 +72,22 @@ pub struct CudaWorkerMsgOut {
     pub request_id:u64,
     pub status:OpResult
 
+}
+
+impl OpResult {
+    pub fn failed(msg:String)-> Self {
+        OpResult::Failed {msg, is_oom:false, needs_reset:false}
+    }
+}
+
+impl From<ThoError> for OpResult {
+    fn from(e: ThoError) -> Self {
+        let is_oom = e.is_oom();
+        let needs_reset = e.needs_cuda_ctx_reset();
+        OpResult::Failed {
+            msg: e.msg,
+            is_oom,
+            needs_reset,
+        }
+    }
 }
