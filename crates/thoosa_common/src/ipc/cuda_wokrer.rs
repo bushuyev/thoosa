@@ -196,7 +196,7 @@ impl CudaWorker {
                 Ok(v) => {
                     debug!("run_worker: postcard: ok={v:?}");
 
-                    match v.operation {
+                    let op_r:Result<bool, ThoError> = (async ||match v.operation {//TODO change closure to try_blocks
                         Operation::DescribeRef { tensor_key }=> {
 
                             let tensors = all_cuda_tensors.lock();
@@ -216,7 +216,7 @@ impl CudaWorker {
 
                                     debug!("run_worker: DescribeRef fail response {} sent", v.request_id);
 
-                                    continue
+                                    return Ok(true);
                                 }
                                 Some(v) => v
                             };
@@ -241,98 +241,19 @@ impl CudaWorker {
 
                             debug!("run_worker: DescribeRef ok response {} sent", v.request_id);
 
-                            continue
-                        }
-                        Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
-                            let Some(init_fn) = endpoint_inits2.get(&key) else {
-                                //TODO send error
-                                panic!("todo")
-                            };
-
-                            let Ok(endpoint_wrapper) = init_fn(init_data, Arc::clone(&ws), &all_cuda_tensors).await else {
-                                //TODO send error
-                                panic!("todo")
-                            };
-
-
-                            let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
-                            debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
-                            installed_endpoints.write().insert(endpoint_key, endpoint_wrapper);
-
-
-                            reply_tx
-                                .send(WorkerReply {
-                                    id: v.request_id,
-                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                                    msg: Some(CudaWorkerMsgOut{
-                                        request_id: v.request_id,
-                                        status: OpResult::Ok(None),
-                                    }),
-                                })
-                                .await
-                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
-                            continue
-                        }
-                        Operation::InvokeStage{ endpoint_name, stage_id, input, consume } => {
-                            let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
-                            debug!("run_worker: Operation::InvokeStage");
-                            let guard = installed_endpoints.read();
-                            let Some(endpoint) = guard.get(&endpoint_key) else {
-                                //TODO send error
-                                panic!("todo")
-                            };
-                            let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx(), 0);
-                            let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
-                            let r= match endpoint.as_with_state() {
-                                Some(with_state) => {
-                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
-                                    // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
-                                    panic_to_err_async!(with_state.do_run_with_state_2(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx))
-                                }
-                                None => {
-                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
-
-                                    panic_to_err!({
-                                        let _guard = ThoStreamGuard::new(&stream)?;
-
-                                        let response = if consume {
-                                           endpoint.consume_2(input, &all_cuda_tensors, &tho_device, &run_ctx)?
-                                        } else {
-                                            endpoint.do_run_2(&input, &all_cuda_tensors, &tho_device, &run_ctx)?
-                                        };
-                                        stream.synchronize()?;
-
-                                        Ok::<_, ThoError>(response)
-                                    })
-                                }
-                            }?;
-
-                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={r:?}");
-                            reply_tx
-                                .send(WorkerReply {
-                                    id: v.request_id,
-                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                                    msg: Some(CudaWorkerMsgOut{
-                                        request_id: v.request_id,
-                                        status: OpResult::Ok(Some(r)),
-                                    }),
-                                })
-                                .await
-                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
-
-                            continue
+                            return Ok(true);
                         }
                         Operation::H2dStart{ worker_id, kind, shape, tensor_byte_len, chunk_count } => {
                             debug!("run_worker: Operation::H2dStart worker_id={worker_id:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} chunk_count={chunk_count}");
 
-                            cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload{
+                            panic_to_err!(cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload{
                                 transfer_id: 0,
                                 worker_id,
                                 kind,
                                 shape,
                                 tensor_byte_len,
                                 chunk_count,
-                            }, &mut cuda_resources)?;
+                            }, &mut cuda_resources))?;
 
                             reply_tx
                                 .send(WorkerReply {
@@ -348,7 +269,7 @@ impl CudaWorker {
 
                             debug!("run_worker: Operation::H2dStart done");
 
-                            continue
+                            Ok(true)
                         }
 
                         Operation::D2HStart{ tensor_key } => {
@@ -366,7 +287,7 @@ impl CudaWorker {
 
                             debug!("run_worker: Operation::D2HStart done");
 
-                            continue
+                            Ok(true)
                         }
 
                         Operation::SharedMemfd { metadata, fd } => {
@@ -422,7 +343,7 @@ impl CudaWorker {
                                     return Err(ThoError::new("worker IPC actor does not handle combined GPU-to-GPU chunks directly"));
                                 }
                             }
-                            continue
+                            Ok(true)
                         },
                         Operation::DropThoTensor {tensor_key} => {
                             debug!("run_worker: Operation::DropThoTensor: v.request_id={} tensor_key={tensor_key}", v.request_id);
@@ -448,7 +369,87 @@ impl CudaWorker {
                                 })
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
-                            continue
+                            Ok(true)
+                        }
+
+                        Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
+                            let Some(init_fn) = endpoint_inits2.get(&key) else {
+                                //TODO send error
+                                panic!("todo")
+                            };
+
+                            let Ok(endpoint_wrapper) = init_fn(init_data, Arc::clone(&ws), &all_cuda_tensors).await else {
+                                //TODO send error
+                                panic!("todo")
+                            };
+
+
+                            let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
+                            debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
+                            installed_endpoints.write().insert(endpoint_key, endpoint_wrapper);
+
+
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(None),
+                                    }),
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                            Ok(true)
+                        }
+                        Operation::InvokeStage{ endpoint_name, stage_id, input, consume } => {
+                            let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
+                            debug!("run_worker: Operation::InvokeStage");
+                            let guard = installed_endpoints.read();
+                            let Some(endpoint) = guard.get(&endpoint_key) else {
+                                //TODO send error
+                                panic!("todo")
+                            };
+                            let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx(), 0);
+                            let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
+                            let r= match endpoint.as_with_state() {
+                                Some(with_state) => {
+                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
+                                    // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
+                                    panic_to_err_async!(with_state.do_run_with_state_2(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx))
+                                }
+                                None => {
+                                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
+
+                                    panic_to_err!({
+                                        let _guard = ThoStreamGuard::new(&stream)?;
+
+                                        let response = if consume {
+                                           endpoint.consume_2(input, &all_cuda_tensors, &tho_device, &run_ctx)?
+                                        } else {
+                                            endpoint.do_run_2(&input, &all_cuda_tensors, &tho_device, &run_ctx)?
+                                        };
+                                        stream.synchronize()?;
+
+                                        Ok::<_, ThoError>(response)
+                                    })
+                                }
+                            }?;
+
+                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={r:?}");
+                            reply_tx
+                                .send(WorkerReply {
+                                    id: v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(Some(r)),
+                                    }),
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                            Ok(true)
                         }
                         Operation::PurgeStage { endpoint_name, stage_id } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
@@ -475,7 +476,7 @@ impl CudaWorker {
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
-                            continue;
+                            Ok(true)
                         }
                         Operation::DropStage { endpoint_name, stage_id } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
@@ -486,30 +487,59 @@ impl CudaWorker {
                             reply_tx
                                 .send(WorkerReply {
                                     id: v.request_id,
-                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),                                     msg: Some(CudaWorkerMsgOut{
-                                    request_id: v.request_id,
-                                    status: OpResult::Ok(None),
-                                })
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(None),
+                                    })
                                 })
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
-
+                            Ok(true)
                         }
                         Operation::Shutdown => {
                             debug!("run_worker: worker got shutdown command");
                             reply_tx
                                 .send(WorkerReply {
                                     id:v.request_id,
-                                    payload: OutgoingRequestPayload::Msg("shutdown-ok".to_string()),
-                                    msg: None,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Ok(None),
+                                    })
+
                                 })
                                 .await
                                 .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
                             debug!("run_worker: worker sent shutdown rs");
-                            break; //<-- does shutdown
+                            Ok(false) //<-- does shutdown
+                        }
+                    })().await;
+
+                    match op_r {
+                        Ok(run_next) => {
+                            if !run_next {
+                                break
+                            }
+                        }
+                        Err(e) => {
+                            error!("run_worker: e={e:?}");
+                            reply_tx
+                                .send(WorkerReply {
+                                    id:v.request_id,
+                                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                    msg: Some(CudaWorkerMsgOut{
+                                        request_id: v.request_id,
+                                        status: OpResult::Failed(e.msg),
+                                    })
+
+                                })
+                                .await
+                                .map_err(|_| ThoError::new("worker response writer is closed"))?;
                         }
                     }
+
 
                     // reply_tx
                     //     .send(WorkerReply {
@@ -530,26 +560,26 @@ impl CudaWorker {
                     debug!("postcard: e={e:?}");
                 }
             };
-
-            let frame = String::from_utf8(payload)
-                .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")));
-
-            let frame = match frame {
-                Ok(frame) => frame,
-                Err(error) => {
-                    if Error::source(&error)
-                        .and_then(|source| source.downcast_ref::<std::io::Error>())
-                        .is_some_and(|source| source.kind() == ErrorKind::UnexpectedEof)
-                    {
-                        debug!("run_worker: parent IPC stream closed");
-                        break;
-                    }
-                    return Err(error);
-                }
-            };
-            let (id, payload) = cuda_process::parse_wire_msg(&frame)?;
-
-            debug!("run_worker: worker received: id={id}, payload={:?}", payload.get(..1000));
+            //
+            // let frame = String::from_utf8(payload)
+            //     .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")));
+            //
+            // let frame = match frame {
+            //     Ok(frame) => frame,
+            //     Err(error) => {
+            //         if Error::source(&error)
+            //             .and_then(|source| source.downcast_ref::<std::io::Error>())
+            //             .is_some_and(|source| source.kind() == ErrorKind::UnexpectedEof)
+            //         {
+            //             debug!("run_worker: parent IPC stream closed");
+            //             break;
+            //         }
+            //         return Err(error);
+            //     }
+            // };
+            // let (id, payload) = cuda_process::parse_wire_msg(&frame)?;
+            //
+            // debug!("run_worker: worker received: id={id}, payload={:?}", payload.get(..1000));
 
             // if payload == "shutdown" {
             //     debug!("run_worker: worker got shutdown command");
