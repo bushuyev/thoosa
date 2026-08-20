@@ -1161,31 +1161,7 @@ impl CudaIPCActor {
                     }
 
 
-                    match reply_rx
-                        .await
-                        .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped"))) {
-                        Ok(Ok(reply)) => {
-                            match reply.status {
-                                OpResult::Ok(_) => {
-                                    debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send ok");
-
-                                    let _ = respond_to.send(Ok(()));
-
-                                }
-                                OpResult::Failed(error) => {
-                                    debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {error:?}");
-
-                                    let _ = respond_to.send(Err(ThoError::new(error)));
-                                }
-                            }
-
-                        }
-                        e => {
-                            debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {e:?}");
-
-                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {e:?}"))));
-                        }
-                    }
+                    Self::handle_reply(respond_to, id, reply_rx).await;
 
                 });
             }
@@ -1216,7 +1192,23 @@ impl CudaIPCActor {
                         debug_assert!(old.is_none());
                     }
 
-                    if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()), msg: None }).await.is_err() {
+                    // if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()), msg: None }).await.is_err() {
+                    //     let mut pending = pending.lock().await;
+                    //     pending.remove(&id);
+                    //     let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                    //     return;
+                    // }
+                    //
+
+                    if self_tx.send(
+                        OutgoingRequest {
+                            id,
+                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                            msg: Some(CudaWorkerMsgIn {
+                                request_id: id,
+                                operation: Operation::Shutdown,
+                            }),
+                        }).await.is_err() {
                         let mut pending = pending.lock().await;
                         pending.remove(&id);
                         let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
@@ -1447,6 +1439,32 @@ impl CudaIPCActor {
         }
 
         Ok(())
+    }
+
+    async fn handle_reply(respond_to: oneshot::Sender<Result<(), ThoError>>, id: u64, reply_rx: tokio::sync::oneshot::Receiver<Result<CudaWorkerMsgOut, ThoError>>) {
+        match reply_rx
+            .await
+            .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped"))) {
+            Ok(Ok(reply)) => {
+                match reply.status {
+                    OpResult::Ok(_) => {
+                        debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send ok");
+
+                        let _ = respond_to.send(Ok(()));
+                    }
+                    OpResult::Failed(error) => {
+                        debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {error:?}");
+
+                        let _ = respond_to.send(Err(ThoError::new(error)));
+                    }
+                }
+            }
+            e => {
+                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {e:?}");
+
+                let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {e:?}"))));
+            }
+        }
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_ref_d2h_copy"))]
@@ -2978,7 +2996,7 @@ mod tests {
 
             let tho_device_idx = 1;
 
-            let main_process_cpu_tensor = Tensor::rand(&[50_000, 10_000], FLOAT_CPU);
+            let main_process_cpu_tensor = Tensor::rand(&[5_000, 10_000], FLOAT_CPU);
             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
 
 
@@ -3018,6 +3036,10 @@ mod tests {
             let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
                 panic!("Got r={r:?}, expected CudaWorker error");
             } ;
+
+            debug!("run_main: what_msg={what_msg:?}");
+            debug!("run_main: msg={msg:?}");
+
 
             assert_eq!("Worker", what_msg);//TODO err code
             assert_eq!("worker tensor tensor_key=1 not found", msg);//TODO err code

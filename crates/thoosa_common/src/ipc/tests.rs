@@ -950,9 +950,12 @@ mod tests {
             let x = (0..100).map(|i| {
                 async move {
                     let t_cpu_0 = ThoTensor::new((), Tensor::rand(&[n, 10000], FLOAT_CPU))?;
+                    let t_cpu_0_t = t_cpu_0.as_ref().as_ref().shallow_clone();
                     let t_cuda = GlobalCtx::global().cuda_actor(1).copy(t_cpu_0, 1.into()).await?;
                     let t_cpu_1 = GlobalCtx::global().cuda_actor(1).copy(t_cuda, 0.into()).await?;
                     debug!("i={i} os_thread_id={}",os_thread_id());
+
+                    assert!(t_cpu_0_t.allclose(t_cpu_1.as_ref(), 0.01, 0.01, false));
 
                     Ok::<_, ThoError>(())
                 }
