@@ -1918,6 +1918,9 @@ async fn writer_loop<W>(
     W: AsyncWrite + Unpin + AsRef<UnixStream>,
 {
     loop {
+        // if GlobalCtx::is_shutting_down() {
+        //     return;
+        // }
         let req = tokio::select! {
             _ = cancel.cancelled() => {
                 break;
@@ -2890,8 +2893,11 @@ mod tests {
             debug!("All ok");
 
             Ok(())
-        }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  HashMap::new(), ThoDevice::from(Cuda(0))).await })
+        },
+       async |sock_path| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws,  HashMap::new(), ThoDevice::from(Cuda(0))).await
+        })
     }
 
     #[test]
