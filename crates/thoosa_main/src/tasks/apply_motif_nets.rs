@@ -776,6 +776,8 @@ where
 
 }
 
+
+
 pub fn stack_applied_motif_nets(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = JsonIpcCodec::decode(&init_msg)?;

@@ -1,31 +1,31 @@
 #![allow(unexpected_cfgs)]
 
-use std::any::{Any, TypeId};
 use async_trait::async_trait;
 use cached_derive::Cached;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, Serializer};
+use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter, format};
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
-use thoosa_common::runner::common::{DropIf};
+use thoosa_common::runner::common::DropIf;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::{ConsumeResult, MaxParallelCtx};
 
-use crate::tasks::cross_dims::{ChannelsDataVec, ChannelsMotifsSlices};
+use crate::tasks::cross_dims::ChannelsDataVec;
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
-use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
-use thoosa_common::ipc::codec::{install_ipc_endpoint, IpcCodec, JsonIpcCodec};
+use thoosa_common::dims::{ChannelsData, ChannelsMotifsSlices, Dims, MotifSlices};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec, install_ipc_endpoint};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
@@ -40,12 +40,14 @@ use thoosa_shared::traits::{CachableIdTr, Data, DataId, OutId, RunCtx, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_store::Store;
 
+use crate::tasks::apply_motif_nets::{STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets};
 use crate::tasks::find_motifs::{FilteredLoaderStage, LoaderStageChoice, config_to_stage};
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
 use crate::tasks::stft::SyncStftSelector;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -63,7 +65,6 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Adjustable;
-use crate::tasks::apply_motif_nets::{StackAppliedMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
@@ -611,6 +612,9 @@ where
         })
     }
 }
+
+#[typetag::serde]
+impl WorkerOutput for SyncMotifLoaderOutput{}
 
 pub fn sync_motif_loader_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
@@ -1191,6 +1195,7 @@ where
         Arc::clone(&self.stage).do_run(input, &stage_ctx)
     }
 }
+
 
 pub fn sync_load_motif_resources_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;

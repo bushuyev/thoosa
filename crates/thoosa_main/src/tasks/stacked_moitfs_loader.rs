@@ -1,4 +1,3 @@
-use crate::tasks::cross_dims::ChannelsMotifsSlices;
 use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::stft::SyncStftSelector;
@@ -13,6 +12,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
+use thoosa_common::dims::ChannelsMotifsSlices;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::tho_device::ThoDevice;

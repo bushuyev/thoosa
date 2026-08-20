@@ -67,6 +67,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
 use thoosa_store::Store;
 use tokio::{join, try_join};
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
 pub(crate) const TRAIN_LABEL_STEP_ENDPOINT: &str = "TrainLabelStep";
@@ -338,6 +339,8 @@ where
     }
 }
 
+#[typetag::serde]
+impl WorkerOutput for SyncLabelBatchOutput{}
 
 
 pub fn sync_label_batch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {

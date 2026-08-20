@@ -1,5 +1,4 @@
 use crate::tasks::cross_batch_clc::{UnfoldParams, unfold_and_cat};
-use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
@@ -17,10 +16,11 @@ use std::sync::Arc;
 use tch::Device::Cpu;
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::dims::ChannelsMotifsDists;
 use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::common::{DropIf};
+use thoosa_common::runner::common::DropIf;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};

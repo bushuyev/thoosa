@@ -1,14 +1,14 @@
-use std::cmp::min;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use async_trait::async_trait;
+use log::{debug, trace};
+use std::cmp::min;
 use std::fmt::Debug;
 use std::ops::Range;
 use tch::{IndexOp, Tensor};
-use log::{debug, trace};
-use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, SimpleId, ThoSelector};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, SimpleId, ThoSelector};
+use thoosa_shared::{CopyToDevice, ThoError};
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
@@ -178,5 +178,21 @@ pub struct Spectorgram;
 
 impl Dims for Spectorgram {
     type Metrics = MonoMetrics<0, 2>; // [i64; 2];//time x frequencies -
+
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelsMotifsSlices;
+
+impl Dims for ChannelsMotifsSlices {
+    type Metrics = MonoMetrics<1, 3>; //[i64;3]; // [i64; 3];//channels x slices x window
+
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelsMotifsDists;
+
+impl Dims for ChannelsMotifsDists {
+    type Metrics = MonoMetrics<1, 2>; //[i64;3]; // [i64; 3];//channels x dists
 
 }
