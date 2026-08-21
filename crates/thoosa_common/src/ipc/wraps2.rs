@@ -10,8 +10,10 @@ use log::{debug, error};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::MutexGuard;
+use with_id::WithId;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, RunCtx, Stage, StageWithState, SyncStage};
+use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
@@ -75,7 +77,7 @@ where
                     request_id: 0,
                     operation: Operation::InvokeStage {
                         endpoint_name: self.endpoint_name.to_string(),
-                        stage_id: 1,
+                        stage_id: self.stage_id,
                         input: Box::new(input.clone_refs()?),//clones refs
                         consume: false,
                     },
@@ -172,10 +174,16 @@ where
 
         debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}");
 
+        let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
+        let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+
         tokio::spawn(async move {
-            if let Err(error) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_endpoint(stage_id, endpoint_name).await {
+
+            if let Err(error) = ipc_actor.drop_endpoint(stage_id, endpoint_name.to_string()).await {
                 error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
             }
+            Ok::<_, ThoError>(())
         });
     }
 }

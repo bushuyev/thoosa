@@ -880,7 +880,7 @@ pub enum CudaIPCActorMessage {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
     DropEndpoint {
-        input: String,
+        stage_id: u32, endpoint_name: String,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
 
@@ -1419,32 +1419,31 @@ impl CudaIPCActor {
                     Ok::<_, ThoError>(())
                 });
             }
-            CudaIPCActorMessage::DropEndpoint { input, respond_to } => {
-                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::DropEndpoint: input={input}");
+            CudaIPCActorMessage::DropEndpoint { stage_id, endpoint_name, respond_to } => {
+                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::DropEndpoint: stage_id={stage_id} endpoint_name={endpoint_name}");
                 let self_tx = self.spawned_state.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
 
                 // Endpoint destruction is acknowledged so callers know the worker processed the removal before reusing the key.
                 tokio::spawn(async move {
-                    let response = send_request_and_wait(
+                    let response = send_request_and_wait_msg(
+                        next_id,
                         self_tx,
                         pending,
                         OutgoingRequest {
                             id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{DROP_ENDPOINT_PREFIX}{input}")),
-                            msg: None,
+                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                            msg: Some(CudaWorkerMsgIn {
+                                request_id: next_id,
+                                operation: Operation::DropStage {
+                                    endpoint_name,
+                                    stage_id,
+                                },
+                            }),
                         },
-                    ).await.and_then(|response| {
-                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                            Err(parse_worker_copy_error_payload(error))
-                        } else if response == ENDPOINT_OK_PAYLOAD {
-                            Ok(())
-                        } else {
-                            Err(ThoError::new(format!("unexpected endpoint drop response: {response:?}")))
-                        }
-                    });
-                    let _ = respond_to.send(response);
+                    ).await?;
+                    let _ = respond_to.send(Ok(()));
                     Ok::<_, ThoError>(())
                 });
             }
@@ -2550,11 +2549,12 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: &str) -> Result<(), ThoError> {
+    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::DropEndpoint {
-                input: encode_stage_payload(stage_id, &encode_endpoint_payload(endpoint_name, "drop")),
+                stage_id,
+                endpoint_name,
                 respond_to,
             }
         ).instrument(tracing::debug_span!(
