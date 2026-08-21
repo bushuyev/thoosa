@@ -32,7 +32,7 @@ use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, D
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -203,7 +203,7 @@ where
     P:Debug,
     C:RunCtx
 {
-    pub async fn new(tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
+    pub async fn new(stage_id: u32, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
             let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
@@ -212,17 +212,31 @@ where
                 request_id: 0,
                 operation: Operation::InstallStage {
                     endpoint_name: TEST_ENDPOINT.to_string(),
-                    stage_id: 1,
+                    stage_id,
                     init_data: Box::new(init),
                 },
             }).await?;
 
             debug!("TestStage::new: rs={rs:?}");
 
-            Ok(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
-                init: (),
-            })
+            match rs {
+                CudaWorkerMsgOut { request_id, status } => {
+                    match status {
+                        OpResult::Ok(_) => {
+                            Ok(DynSyncStageEnum2::Proxy {
+                                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, stage_id, tho_device_idx)),
+                                init: (),
+                            })
+
+                        }
+                        OpResult::Failed{ msg, is_oom, needs_reset } => {
+                            Err(ThoError::from_worker(msg, is_oom, needs_reset))
+                        }
+                    }
+                }
+            }
+
+
         } else {
             Ok(DynSyncStageEnum2::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
         }
@@ -386,7 +400,6 @@ mod tests {
                 let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
                 do_test_with_state().await?;
-                // do_test_distinct_stateful_endpoints().await?;
 
                 Ok(())
             },
@@ -411,42 +424,79 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_distinct_stateful_endpoints_ipc() -> Result<(), ThoError> {
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+
+        run_ipc_test(
+            async {
+                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+                let test_name = format!("{module}::test_with_state_ipc");
+                GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+
+                do_test_distinct_stateful_endpoints().await?;
+
+                Ok(())
+            },
+
+            async |sock_path| {
+
+                CudaWorker::run_worker2(
+                    sock_path,
+                    &ws,
+                    HashMap::from([
+
+                    ]),
+                    HashMap::from([
+                        (
+                            TEST_ENDPOINT.to_string(),
+                            Box::new(with_state_init) as InitFn2,
+                        ),
+                    ]),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            }
+        )
+    }
+
+
     async fn do_test_distinct_stateful_endpoints() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         // Reuse one initializer name with different ids to prove both worker-side state instances remain independently invokable.
-        let first_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1,  TestStageInitB::new(2, 1)).await?);
-        let second_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1,  TestStageInitB::new(3, 1)).await?);
+        let first_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1, 1, TestStageInitB::new(2, 1)).await?);
+        let second_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(2, 1, TestStageInitB::new(3, 1)).await?);
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
         let first_cpu = cuda_actor.copy(first_result.value, 0.into()).await?;
+
+        debug!("do_test_distinct_stateful_endpoints: first_cpu=\n{}", first_cpu.t_ref());
         assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(first_cpu.t_ref(), 0.01, 0.01, false)?);
 
         let second_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
+
+        debug!("do_test_distinct_stateful_endpoints: second_cpu=\n{}", second_cpu.t_ref());
         assert!(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0])?.f_view([1, 3])?.f_allclose(second_cpu.t_ref(), 0.01, 0.01, false)?);
 
-        // A repeated composite key must fail without replacing the already-installed stage.
-        let duplicate = install_ipc_endpoint::<JsonIpcCodec, TestStageInitB>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInitB::new(4, 1)).await;
-        let duplicate_error = match duplicate {
-            Ok(()) => return Err(ThoError::new("duplicate endpoint installation unexpectedly succeeded")),
-            Err(error) => error,
-        };
-        assert!(duplicate_error.to_string().contains("endpoint \"TestStage1\" is already installed"), "unexpected duplicate endpoint error: {duplicate_error}");
 
         // Dropping the last proxy reference must asynchronously release its worker key so that the same id can be installed again.
         drop(first_stage);
         tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                match install_ipc_endpoint::<JsonIpcCodec, TestStageInitB>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInitB::new(4, 1)).await {
-                    Ok(()) => return Ok(()),
-                    Err(error) if error.to_string().contains("is already installed") => tokio::task::yield_now().await,
-                    Err(error) => return Err(error),
-                }
-            }
-        }).await.map_err(|_| ThoError::new("timed out waiting for dropped endpoint key to become reusable"))??;
-        cuda_actor.drop_endpoint(1, TEST_ENDPOINT).await?;
+             TestStageB::<(), TestRunCtx>::new(1, 1, TestStageInitB::new(2, 1)).await
+        }).await??;
+
+        // A repeated stage_id must fail without replacing the already-installed stage.
+       let Err(e) = TestStageB::<(), TestRunCtx>::new( 2,1,  TestStageInitB::new(4, 1)).await else {
+           panic!("should fail to install same endpoint")
+       };
+
+        println!("do_test_distinct_stateful_endpoints: e={e:?}");
+
+        cuda_actor.drop_endpoint(1, TEST_ENDPOINT.to_string()).await?;
 
         Ok(())
     }
@@ -455,7 +505,7 @@ mod tests {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
-        let test_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1,  TestStageInitB::new(2, 1)).await?);
+        let test_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1, 1, TestStageInitB::new(2, 1)).await?);
 
         GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 

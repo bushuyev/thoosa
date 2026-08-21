@@ -100,7 +100,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         todo!()//TODO it should be in IPC endpoint only
     }
 
-    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: &str) -> Result<(), ThoError> {
+    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String) -> Result<(), ThoError> {
         Ok(())
     }
 
