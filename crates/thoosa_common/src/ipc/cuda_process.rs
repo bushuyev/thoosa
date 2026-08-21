@@ -61,7 +61,6 @@ pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' f
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 pub  const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 pub(crate) const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
-const COPY_DONE_PAYLOAD_PREFIX: &str = "copy-done:";
 const COPY_ERROR_PAYLOAD_PREFIX: &str = "copy-error:";
 pub(crate) const DESCRIBE_REF_PAYLOAD_PREFIX: &str = "describe-ref:";
 pub(super) const TENSOR_INFO_PAYLOAD_PREFIX: &str = "tensor-info:";
@@ -171,6 +170,9 @@ struct WorkerCopyDonePayload {
     tensor_ref:u64,
     tensor_digest_hex: Option<String>,
 }
+
+#[typetag::serde]
+impl WorkerOutput for WorkerCopyDonePayload {}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerCopyErrorPayload {
@@ -680,25 +682,24 @@ pub(crate) fn spawn_worker_h2d_copy_task(
         let request_id = transfer.request_id;
         let copy_result = copy_worker_h2d_transfer_to_cuda(transfer, resources, with_digest).await;
 
-        let payload = match copy_result {
+        // Copy completion uses the same postcard response envelope as the other worker operations.
+        let status = match copy_result {
             Ok((transfer_id, tensor, tensor_digest_hex)) => {
                 //TODO should tensors have their own id generator?
                 // all_cuda_tensors.lock().insert(transfer_id, tensor);
                 match insert_worker_tensor(&all_cuda_tensors, tensor) {
-                    Ok(tensor_ref) => {
-                        let done = WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex };
-                        match serde_json::to_string(&done) {
-                            Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
-                            Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("failed to encode worker copy result for request {request_id}: {e}")))),
-                        }
-                    }
-                    Err(e) => {OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("can't insert worker tensor {request_id}: {e}"))))}
+                    Ok(tensor_ref) => OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex }) as Box<dyn WorkerOutput>)),
+                    Err(e) => ThoError::new(format!("can't insert worker tensor {request_id}: {e}")).into(),
                 }
             }
-            Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&e)),
+            Err(e) => e.into(),
         };
 
-        let _ = reply_tx.send(WorkerReply { id: request_id, payload, msg: None }).await;
+        let _ = reply_tx.send(WorkerReply {
+            id: request_id,
+            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+            msg: Some(CudaWorkerMsgOut { request_id, status }),
+        }).await;
     });
 }
 
@@ -810,18 +811,17 @@ pub(crate) fn spawn_worker_d2h_copy_task(
             None => Err(ThoError::new(format!("worker tensor key={tensor_ref} not found"))),
         };
 
-        let payload = match copy_result {
-            Ok((transfer_id, tensor_digest_hex)) => {
-                let done = WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex };
-                match serde_json::to_string(&done) {
-                    Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
-                    Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("failed to encode worker D2H result for request {request_id}: {e}")))),
-                }
-            }
-            Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&e)),
+        // Copy completion uses a typed WorkerOutput so the parent does not parse JSON prefixes.
+        let status = match copy_result {
+            Ok((transfer_id, tensor_digest_hex)) => OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex }) as Box<dyn WorkerOutput>)),
+            Err(e) => e.into(),
         };
 
-        let _ = reply_tx.send(WorkerReply { id: request_id, payload, msg: None }).await;
+        let _ = reply_tx.send(WorkerReply {
+            id: request_id,
+            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+            msg: Some(CudaWorkerMsgOut { request_id, status }),
+        }).await;
     });
 }
 
@@ -1480,6 +1480,20 @@ impl CudaIPCActor {
         }
     }
 
+    fn copy_result(response: CudaWorkerMsgOut) -> Result<WorkerCopyDonePayload, ThoError> {
+        match response.status {
+            OpResult::Ok(Some(output)) => {
+                // The copy protocol has exactly one typed success payload; reject unrelated worker outputs explicitly.
+                let output: Box<dyn Any> = output;
+                output.downcast::<WorkerCopyDonePayload>()
+                    .map(|output| *output)
+                    .map_err(|_| ThoError::new(format!("worker copy request {} returned an unexpected output type", response.request_id)))
+            }
+            OpResult::Ok(None) => Err(ThoError::new(format!("worker copy request {} returned no output", response.request_id))),
+            OpResult::Failed { msg, is_oom, needs_reset } => Err(ThoError::from_worker(msg, is_oom, needs_reset)),
+        }
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_ref_d2h_copy"))]
     async fn handle_ref_d2h_copy(
         &mut self,
@@ -1571,7 +1585,8 @@ impl CudaIPCActor {
                         let (reply_tx, reply_rx) = oneshot::channel();
                         {
                             let mut pending = pending.lock().await;
-                            let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
+                            // The final copy acknowledgement is a postcard CudaWorkerMsgOut.
+                            let old = pending.insert(transfer_id, PendingResponse::Msg(reply_tx));
                             debug_assert!(old.is_none());
                         }
 
@@ -1651,10 +1666,9 @@ impl CudaIPCActor {
 
                         let reply = reply_rx
                             .await
-                            .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??
-                            .into_msg()?;
+                            .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??;
 
-                        let done = parse_worker_copy_done_payload(&reply)?;
+                        let done = Self::copy_result(reply)?;
                         if done.transfer_id != transfer_id {
                             return Err(ThoError::new(format!("worker D2H response transfer_id={} but expected {transfer_id}", done.transfer_id)));
                         }
@@ -1827,7 +1841,8 @@ impl CudaIPCActor {
 
                 {
                     let mut pending = pending.lock().await;
-                    let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
+                    // H2D preflight has completed; wait for the typed final copy acknowledgement.
+                    let old = pending.insert(transfer_id, PendingResponse::Msg(reply_tx));
                     debug_assert!(old.is_none());
                 }
 
@@ -1882,12 +1897,11 @@ impl CudaIPCActor {
 
                     }
 
-                    let id = reply_rx
+                    let reply = reply_rx
                         .await
-                        .map_err(|_| ThoError::new(format!("response channel for request {transfer_id} was dropped")))??
-                        .into_msg()?;
+                        .map_err(|_| ThoError::new(format!("response channel for request {transfer_id} was dropped")))??;
 
-                    let done = parse_worker_copy_done_payload(&id)?;
+                    let done = Self::copy_result(reply)?;
 
                     if let Some(hex) = done.tensor_digest_hex.as_ref() {
                         let source_digest = tensor_digest(src.t_ref())?;
@@ -2068,63 +2082,6 @@ async fn reader_loop<R>(
             }
         }
 
-
-        let (id, payload) = match parse_wire_response(frame) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                error!("bad worker response frame: {e}");
-                continue;
-            }
-        };
-
-        let pending_response = {
-            let mut pending = pending.lock().await;
-            pending.remove(&id)
-        };
-
-        match pending_response {
-            Some(PendingResponse::Buffered(reply_tx)) => {
-                debug!("PendingResponse::Buffered: payload={payload:?}");
-                let _ = reply_tx.send(Ok(payload));
-            }
-            Some(PendingResponse::File { mut output, respond_to, mut error }) => {
-                match payload {
-                    // IncomingResponsePayload::BinaryChunk(chunk) => {
-                    //     if error.is_none()
-                    //         && let Err(write_error) = output.write_all(&chunk).await
-                    //     {
-                    //         error = Some(ThoError::from(write_error));
-                    //     }
-                    //     let mut pending = pending.lock().await;
-                    //     let old = pending.insert(id, PendingResponse::File { output, respond_to, error });
-                    //     debug_assert!(old.is_none());
-                    // }
-                    // IncomingResponsePayload::BinaryEnd => {
-                    //     let result = async {
-                    //         if let Some(error) = error {
-                    //             return Err(error);
-                    //         }
-                    //         output.flush().await?;
-                    //         output.seek(std::io::SeekFrom::Start(0)).await?;
-                    //         Ok(output.into_std().await)
-                    //     }.await;
-                    //     let _ = respond_to.send(result);
-                    // }
-                    IncomingResponsePayload::Msg(response) => {
-                        let error = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX)
-                            .map(parse_worker_copy_error_payload)
-                            .unwrap_or_else(|| ThoError::new(format!("expected streaming endpoint response, got {response:?}")));
-                        let _ = respond_to.send(Err(error));
-                    }
-                }
-            }
-            None => {
-                error!("received response for unknown request id={id}");
-            }
-            Some(PendingResponse::Msg(payload)) => {
-
-            }
-        }
     }
 
     debug!("worker IPC reader loop finished");
@@ -2165,19 +2122,6 @@ fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload),
             .map_err(|e| ThoError::new(format!("received non-utf8 message response: {e}")))?;
         Ok((id, IncomingResponsePayload::Msg(payload)))
     // }
-}
-
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_copy_done_payload"))]
-
-fn parse_worker_copy_done_payload(payload: &str) -> Result<WorkerCopyDonePayload, ThoError> {
-    if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-        return Err(parse_worker_copy_error_payload(error));
-    }
-    let done_json = payload.strip_prefix(COPY_DONE_PAYLOAD_PREFIX)
-        .ok_or_else(|| ThoError::new(format!("worker copy response did not start with {COPY_DONE_PAYLOAD_PREFIX:?}: {payload:?}")))?;
-    serde_json::from_str(done_json)
-        .map_err(|e| ThoError::new(format!("failed to parse worker copy response: {e}")))
 }
 
 
