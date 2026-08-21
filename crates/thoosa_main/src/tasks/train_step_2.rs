@@ -605,6 +605,7 @@ mod tests {
     use tokio::sync::MutexGuard;
     use tokio::task::coop::cooperative;
     use tracing::field::debug;
+    use thoosa_common::ipc::worker_msg::WorkerOutput;
 
     ////
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1076,6 +1077,9 @@ mod tests {
         }
     }
 
+    #[typetag::serde]
+    impl WorkerOutput for TrainStep2Output{}
+
     fn train_test_step_2_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
         async move {
             let init = TrainTestStep2Init::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
@@ -1347,6 +1351,9 @@ mod tests {
             })
         }
     }
+
+    #[typetag::serde(name = "ApplyNetStage2Output_OutDimsX")]
+    impl WorkerOutput for ApplyNetStage2Output<OutDimsX>{}
 
 
     impl <DI, DO, C> Stage for ApplyNetStage2<DI, DO, C>

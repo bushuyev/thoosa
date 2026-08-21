@@ -20,6 +20,8 @@ where
     where
         D: Deserializer<'de>,
     {
+        debug!("Deserialize for ThoTensor::deserialize:");
+
         #[derive(Debug, Deserialize)]
         struct Helper<Id> {
             id: Id,
@@ -32,7 +34,7 @@ where
 
         let helper = Helper::deserialize(deserializer)?;
 
-        debug!("Deserialize<'de> for ThoTensor: helper={helper:?}");
+        debug!("Deserialize for ThoTensor::deserialize: helper={helper:?}");
 
         Ok(ThoTensor::new_ref(
             helper.id,
@@ -143,6 +145,7 @@ where
     where
         S: Serializer
     {
+        debug!("Serialize for ThoTensor::serialize: self={self:?}");
         match &self.inner {
             ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
 

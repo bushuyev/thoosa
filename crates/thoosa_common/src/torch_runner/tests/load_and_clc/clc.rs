@@ -27,6 +27,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, simple_id};
 use tokio::sync::{Mutex, MutexGuard};
+use crate::ipc::worker_msg::WorkerOutput;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -187,12 +188,20 @@ impl OutId for ClcDynSyncStage {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClcStageOutput;
 
 impl Dims for ClcStageOutput {
     type Metrics = MonoMetrics<1, 2>;
 }
+
+#[typetag::serde]
+impl WorkerOutput for ClcStageOutput {
+
+}
+
+#[typetag::serde(name = "ThoTensor_ClcStageOutput")]
+impl WorkerOutput for ThoTensor<ClcStageOutput, SynKey> {}
 
 impl Stage for ClcStage {
     type In<'a> = Arc<DevicesWrap<ThoTensor<LoadedTensor, SynKey>>>;

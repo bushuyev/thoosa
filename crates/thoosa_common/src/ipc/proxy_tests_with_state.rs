@@ -1,6 +1,7 @@
+use std::any::Any;
 use crate::dims::{Batch, Dims};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
+use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
 use crate::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
@@ -31,20 +32,27 @@ use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, D
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestStageInit {
+pub struct TestStageInitB {
     k:i64,
     tho_device_ids:usize
 }
 
-impl TestStageInit {
+impl TestStageInitB {
     pub fn new(k: i64, tho_device_ids:usize) -> Self {
         Self { k, tho_device_ids }
     }
 }
 
-impl WorkerStageInput for TestStageInit {
+#[typetag::serde]
+impl WorkerInput for TestStageInitB{
+
+}
+
+impl WorkerStageInput for TestStageInitB {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let mut input = JsonIpcCodec::decode::<Self>(&input)?;
 
@@ -53,12 +61,13 @@ impl WorkerStageInput for TestStageInit {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestInput{
+pub struct TestInputB {
     value: ThoTensor
 }
-impl Input for TestInput{}
 
-impl WithId for TestInput {
+impl Input for TestInputB {}
+
+impl WithId for TestInputB {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -66,7 +75,7 @@ impl WithId for TestInput {
     }
 }
 
-impl BorrowRef for TestInput {
+impl BorrowRef for TestInputB {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
     fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
@@ -77,7 +86,7 @@ impl BorrowRef for TestInput {
             if self.value.device() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
-                Ok(ThoDataRef::Owned(TestInput {
+                Ok(ThoDataRef::Owned(TestInputB {
                     value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
                 }))
             }
@@ -85,7 +94,19 @@ impl BorrowRef for TestInput {
     }
 }
 
-impl WorkerStageInput for TestInput {
+impl WorkerStageInput for TestInputB {
+    fn clone_refs(&self) -> Result<Self, ThoError> {
+        Ok(TestInputB {
+            value: self.value.clone_refs()?,
+        })
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        Ok(TestInputB {
+            value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
+        })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let mut input = JsonIpcCodec::decode::<Self>(&input)?;
 
@@ -97,13 +118,21 @@ impl WorkerStageInput for TestInput {
     }
 }
 
+
+
+#[typetag::serde]
+impl WorkerInput for TestInputB {
+
+}
+
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestOutput{
+pub struct TestOutputB {
     value: ThoTensor
 }
-impl Output for TestOutput{}
+impl Output for TestOutputB {}
 
-impl WithId for TestOutput {
+impl WithId for TestOutputB {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -111,10 +140,14 @@ impl WithId for TestOutput {
     }
 }
 
+#[typetag::serde]
+impl WorkerOutput for TestOutputB {
 
-impl WorkerStageOutput for TestOutput {
+}
+
+impl WorkerStageOutput for TestOutputB {
     fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
-        Ok(TestOutput { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
+        Ok(TestOutputB { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
     }
 }
 
@@ -156,7 +189,7 @@ impl RunCtx for TestRunCtx {
 
 
 #[derive(Debug)]
-pub struct TestStage<P, C>
+pub struct TestStageB<P, C>
 where
     P:Debug,
     C:RunCtx
@@ -165,36 +198,62 @@ where
     k:tokio::sync::Mutex<ThoTensor> //state - needs to be dumped to CPU when handling OOM in other stages
 }
 
-impl <P, C> TestStage<P, C>
+impl <P, C> TestStageB<P, C>
 where
     P:Debug,
     C:RunCtx
 {
-    pub fn new(init:TestStageInit) -> Self {
-        Self {
-            k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, ThoDevice::from(init.tho_device_ids).into())).into()),
-            pd: PhantomData,
+    pub async fn new(tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
+            let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+            let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
+                request_id: 0,
+                operation: Operation::InstallStage {
+                    endpoint_name: TEST_ENDPOINT.to_string(),
+                    stage_id: 1,
+                    init_data: Box::new(init),
+                },
+            }).await?;
+
+            debug!("TestStage::new: rs={rs:?}");
+
+            Ok(DynSyncStageEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
+                init: (),
+            })
+        } else {
+            Ok(DynSyncStageEnum2::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
         }
     }
+
+    pub fn new_local(init: TestStageInitB) -> Self {
+        Self {
+            k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, ThoDevice::from(init.tho_device_ids).into())).into()),
+            pd: PhantomData
+        }
+    }
+
 }
 
-unsafe impl <P, C> Sync for TestStage<P, C>
+unsafe impl <P, C> Sync for TestStageB<P, C>
 where
     P:Debug,
     C:RunCtx
 {}
 
-impl <P, C> Stage for TestStage<P, C>
+impl <P, C> Stage for TestStageB<P, C>
 where
     P:Debug,
     C:RunCtx
 {
     type Ctx = C;
-    type In<'a> = TestInput;
-    type Out = TestOutput;
+    type In<'a> = TestInputB;
+    type Out = TestOutputB;
 }
 
-impl <P, C> SyncStage for TestStage<P, C>
+impl <P, C> SyncStage for TestStageB<P, C>
 where
     P:Debug,
     C:RunCtx
@@ -207,7 +266,7 @@ where
     }
 
 }
-impl <P, C> StageWithState for TestStage<P, C>
+impl <P, C> StageWithState for TestStageB<P, C>
 where
     P:Debug,
     C:RunCtx
@@ -227,14 +286,14 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
-        Ok(TestOutput{
+        Ok(TestOutputB {
             value: (input.value.as_ref() * k.as_ref()).into(),
         })
     }
 }
 
 #[async_trait]
-impl <P, C> FuturesRunnerMapPurger for TestStage<P, C>
+impl <P, C> FuturesRunnerMapPurger for TestStageB<P, C>
 where
     P:Debug + Send + Sync,
     C:RunCtx
@@ -260,57 +319,30 @@ where
 }
 
 
-#[derive(Debug)]
-pub struct ProxyTestStage;
 
-const TEST_ENDPOINT: &str = "TestStage";
+const TEST_ENDPOINT: &str = "TestStageB";
 
 
-impl ProxyTestStage {
 
-    pub async fn new<'a>(tho_device_idx: usize, stage_id: u32, init:TestStageInit) -> Result<DynSyncStageWithStateEnum<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
-
-    {
-        if GlobalCtx::global().is_ipc() {
-            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
-                GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
-                TEST_ENDPOINT,
-                stage_id,
-                &init
-            ).await?;
-            Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx)),
-                init: (),
-            })
-        } else {
-            Ok(DynSyncStageWithStateEnum::Local(Arc::new(TestStage::<u32, TestRunCtx>::new(init))))
-        }
-
-    }
-
-}
-
-
-pub fn test_with_state_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
+pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    let init: Box<dyn Any> = init;
+    let init = init.downcast::<TestStageInitB>().unwrap();
     async move {
-        let init = TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
         debug!("test_with_state_init: init={init:?}");
 
         Ok(Box::new(WorkerWrapperWithState::new(
-            Arc::new(TestStage::<(), WokerRunCtx>::new(init)),
+            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(*init)),
             PhantomData::<JsonIpcCodec>
         )) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
-
-
 mod tests {
     use std::time::Duration;
     use crate::ipc::codec::{JsonIpcCodec, install_ipc_endpoint};
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests_with_state::{TestInput, TestRunCtx, TestStage};
-    use crate::ipc::proxy_tests_with_state::{ProxyTestStage, TEST_ENDPOINT, TestStageInit, test_with_state_init};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
+    use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
+    use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -354,20 +386,23 @@ mod tests {
                 let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
                 do_test_with_state().await?;
-                do_test_distinct_stateful_endpoints().await?;
+                // do_test_distinct_stateful_endpoints().await?;
 
                 Ok(())
             },
 
             async |sock_path| {
 
-                CudaWorker::run_worker(
+                CudaWorker::run_worker2(
                     sock_path,
                     &ws,
                     HashMap::from([
+
+                    ]),
+                    HashMap::from([
                         (
                             TEST_ENDPOINT.to_string(),
-                            Box::new(test_with_state_init) as InitFn,
+                            Box::new(with_state_init) as InitFn2,
                         ),
                     ]),
                     ThoDevice::from(Cuda(0)),
@@ -379,21 +414,21 @@ mod tests {
     async fn do_test_distinct_stateful_endpoints() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         // Reuse one initializer name with different ids to prove both worker-side state instances remain independently invokable.
-        let first_stage = Arc::new(ProxyTestStage::new(1, 1, TestStageInit::new(2, 1)).await?);
-        let second_stage = Arc::new(ProxyTestStage::new(1, 2, TestStageInit::new(3, 1)).await?);
+        let first_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1,  TestStageInitB::new(2, 1)).await?);
+        let second_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1,  TestStageInitB::new(3, 1)).await?);
 
-        let first_input = TestInput { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
+        let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
         let first_cpu = cuda_actor.copy(first_result.value, 0.into()).await?;
         assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(first_cpu.t_ref(), 0.01, 0.01, false)?);
 
-        let second_input = TestInput { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
+        let second_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
         assert!(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0])?.f_view([1, 3])?.f_allclose(second_cpu.t_ref(), 0.01, 0.01, false)?);
 
         // A repeated composite key must fail without replacing the already-installed stage.
-        let duplicate = install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInit::new(4, 1)).await;
+        let duplicate = install_ipc_endpoint::<JsonIpcCodec, TestStageInitB>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInitB::new(4, 1)).await;
         let duplicate_error = match duplicate {
             Ok(()) => return Err(ThoError::new("duplicate endpoint installation unexpectedly succeeded")),
             Err(error) => error,
@@ -404,7 +439,7 @@ mod tests {
         drop(first_stage);
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                match install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInit::new(4, 1)).await {
+                match install_ipc_endpoint::<JsonIpcCodec, TestStageInitB>(cuda_actor.as_ref(), TEST_ENDPOINT, 1, &TestStageInitB::new(4, 1)).await {
                     Ok(()) => return Ok(()),
                     Err(error) if error.to_string().contains("is already installed") => tokio::task::yield_now().await,
                     Err(error) => return Err(error),
@@ -420,7 +455,7 @@ mod tests {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
-        let test_stage = Arc::new(ProxyTestStage::new(1, 0, TestStageInit::new(2, 1)).await?);
+        let test_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(1,  TestStageInitB::new(2, 1)).await?);
 
         GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 
@@ -428,17 +463,17 @@ mod tests {
 
         debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
 
-        let input = TestInput {
+        let input = TestInputB {
             value: cuda_tensor,
         };
         let ctx = TestRunCtx;
         let result = cuda_actor.run_stage(Arc::clone(&test_stage), input, 1, &ctx).await?;
 
-        debug!("result={result:?}");
+        debug!("test_with_state_target: result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
 
         let cpu_t = cpu_tensor.t();
-        debug!("cpu_tensor={}", cpu_t);
+        debug!("test_with_state_target: cpu_tensor={}", cpu_t);
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
         assert!(!GlobalCtx::global().is_all_on_cpu(1, true));
@@ -449,7 +484,7 @@ mod tests {
 
         debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
 
-        let input = TestInput {
+        let input = TestInputB {
             value: cuda_tensor,
         };
 

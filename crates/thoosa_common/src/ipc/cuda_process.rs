@@ -2039,28 +2039,33 @@ async fn reader_loop<R>(
             }
         };
 
-        if let Ok(msg) =  postcard::from_bytes::<CudaWorkerMsgOut>(&frame) {
-            debug!("reader_loop: msg={msg:?}");
-            let pending_response = {
-                let mut pending = pending.lock().await;
-                let waiter = match pending.remove(&msg.request_id) {
-                    None => {
-                        error!("no waiter for {}", msg.request_id);
-                        continue
-                    }
-                    Some(v) => {
-                        debug!("reader_loop: pending response={v:?} for msg.request_id={}", msg.request_id);
-                        v
+        match postcard::from_bytes::<CudaWorkerMsgOut>(&frame) {
+            Ok(msg) => {
+                debug!("reader_loop: msg={msg:?}");
+                let pending_response = {
+                    let mut pending = pending.lock().await;
+                    let waiter = match pending.remove(&msg.request_id) {
+                        None => {
+                            error!("no waiter for {}", msg.request_id);
+                            continue
+                        }
+                        Some(v) => {
+                            debug!("reader_loop: pending response={v:?} for msg.request_id={}", msg.request_id);
+                            v
+                        }
+                    };
+                    if let PendingResponse::Msg(msg_waiter) = waiter {
+                        msg_waiter.send(Ok(msg)).expect("failed to send todo");
+                        debug!("reader_loop: send ok");
+                    } else {
+                        error!("Unexpected waiter for msg: waiter={waiter:?}")
                     }
                 };
-                if let PendingResponse::Msg(msg_waiter) = waiter {
-                    msg_waiter.send(Ok(msg)).expect("failed to send todo");
-                    debug!("reader_loop: send ok");
-                } else {
-                    error!("Unexpected waiter for msg: waiter={waiter:?}")
-                }
-            };
-            continue
+                continue
+            }
+            Err(e) => {
+                error!("bad worker response frame: {e}");
+            }
         }
 
 
@@ -2079,6 +2084,7 @@ async fn reader_loop<R>(
 
         match pending_response {
             Some(PendingResponse::Buffered(reply_tx)) => {
+                debug!("PendingResponse::Buffered: payload={payload:?}");
                 let _ = reply_tx.send(Ok(payload));
             }
             Some(PendingResponse::File { mut output, respond_to, mut error }) => {
