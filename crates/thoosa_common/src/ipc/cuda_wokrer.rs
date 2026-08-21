@@ -6,7 +6,7 @@ use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, DeviceInfo, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, IpcChunkWriter, OutgoingRequestPayload, PURGE_ENDPOINT_PREFIX, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper};
-use crate::ipc::proxy_tests::TestOutput;
+use crate::ipc::proxy_tests::TestOutputA;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -375,12 +375,12 @@ impl CudaWorker {
                         Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
                             let Some(init_fn) = endpoint_inits2.get(&key) else {
                                 //TODO send error
-                                panic!("todo")
+                                panic!("No init function for key={key} stage_id={stage_id}");
                             };
 
                             let Ok(endpoint_wrapper) = init_fn(init_data, Arc::clone(&ws), &all_cuda_tensors).await else {
                                 //TODO send error
-                                panic!("todo")
+                                panic!("Init function failed for key={key} stage_id={stage_id}");
                             };
 
 
@@ -557,7 +557,7 @@ impl CudaWorker {
                     // continue
                 },
                 Err(e)=>{
-                    debug!("postcard: e={e:?}");
+                    error!("postcard: e={e:?}");
                 }
             };
             //
