@@ -374,7 +374,6 @@ impl CudaWorker {
 
                         Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
                             let Some(init_fn) = endpoint_inits2.get(&key) else {
-                                //TODO send error
                                 panic!("No init function for key={key} stage_id={stage_id}");
                             };
 
@@ -383,8 +382,23 @@ impl CudaWorker {
                                 panic!("Init function failed for key={key} stage_id={stage_id}");
                             };
 
-
                             let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
+                            debug!("run_worker: install endpoint key={endpoint_key} installed_endpoints keys={:?}", installed_endpoints.read().keys().collect::<Vec<_>>());
+                            if installed_endpoints.read().contains_key(&endpoint_key) {
+                                reply_tx
+                                    .send(WorkerReply {
+                                        id: v.request_id,
+                                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
+                                        msg: Some(CudaWorkerMsgOut{
+                                            request_id: v.request_id,
+                                            status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")),
+                                        }),
+                                    })
+                                    .await
+                                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                                return Ok(true);
+                            }
                             debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
                             installed_endpoints.write().insert(endpoint_key, endpoint_wrapper);
 
@@ -408,7 +422,7 @@ impl CudaWorker {
                             let guard = installed_endpoints.read();
                             let Some(endpoint) = guard.get(&endpoint_key) else {
                                 //TODO send error
-                                panic!("todo")
+                                panic!("no endpoint for endpoint_key={endpoint_key}")
                             };
                             let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx(), 0);
                             let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
