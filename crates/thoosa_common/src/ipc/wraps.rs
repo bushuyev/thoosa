@@ -576,7 +576,7 @@ where
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput + 'static,
 {
     fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
         // Keep this endpoint's concrete training-module state behind the erased worker capability.
@@ -603,7 +603,7 @@ where
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput +WorkerOutput + 'static,
 {
     type S = <St as StageWithState>::S;
 
@@ -631,5 +631,20 @@ where
         }).map(SyncStageIpcResponse::Encoded)
     }
 
+    fn do_run_with_state_2<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+        debug!("SyncStageIpcWrapper::do_run_2: input={input:?}");
 
+        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx(), 0);//TODO fixit
+        let stage_ctx = St::Ctx::from_worker_ctx(&worker_ctx);
+
+        let a: &dyn WorkerInput = input.as_ref();
+        let a: &dyn Any = a;
+
+        let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
+        let out = Arc::clone(&self.base).do_run_with_state(&a.ref_to_tensor(all_cuda_tensors, false)?, state, &stage_ctx)?;
+
+        debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
+
+        Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
+    }
 }

@@ -29,6 +29,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
+use thoosa_common::ipc::worker_msg::WorkerOutput;
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
@@ -419,6 +420,12 @@ impl WithId for TrainStepOutput {
 }
 
 impl Output for TrainStepOutput {}
+
+#[typetag::serde]
+impl WorkerOutput for TrainStepOutput {
+
+}
+
 
 impl<DI, DO> WorkerStageInput for TrainStepInput<DI, DO>
 where

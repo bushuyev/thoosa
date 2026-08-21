@@ -30,17 +30,17 @@ use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TestStageInit {
+struct TestStageInitA {
     k:i64
 }
 
-impl TestStageInit {
+impl TestStageInitA {
     pub fn new(k: i64) -> Self {
         Self { k }
     }
 }
 
-impl WorkerStageInput for TestStageInit {
+impl WorkerStageInput for TestStageInitA {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let mut input = JsonIpcCodec::decode::<Self>(&input)?;
 
@@ -49,18 +49,18 @@ impl WorkerStageInput for TestStageInit {
 }
 
 #[typetag::serde]
-impl WorkerInput for TestStageInit {
-
+impl WorkerInput for TestStageInitA {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestInput{
+pub struct TestInputA {
     value: ThoTensor,
-    fail_with_oom:bool
+    fail_with_oom: bool
 }
-impl Input for TestInput{}
 
-impl WithId for TestInput {
+impl Input for TestInputA {}
+
+impl WithId for TestInputA {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -68,7 +68,7 @@ impl WithId for TestInput {
     }
 }
 
-impl BorrowRef for TestInput {
+impl BorrowRef for TestInputA {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
     fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
@@ -79,7 +79,7 @@ impl BorrowRef for TestInput {
             if self.value.device() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
-                Ok(ThoDataRef::Owned(TestInput {
+                Ok(ThoDataRef::Owned(TestInputA {
                     value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
                     fail_with_oom: self.fail_with_oom
                 }))
@@ -89,16 +89,16 @@ impl BorrowRef for TestInput {
 }
 
 
-impl WorkerStageInput for TestInput {
+impl WorkerStageInput for TestInputA {
     fn clone_refs(&self) -> Result<Self, ThoError> {
-        Ok(TestInput{
+        Ok(TestInputA {
             value: self.value.clone_refs()?,
             fail_with_oom: self.fail_with_oom,
         })
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
-        Ok(TestInput{
+        Ok(TestInputA {
             value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
             fail_with_oom: self.fail_with_oom
         })
@@ -119,20 +119,20 @@ impl WorkerStageInput for TestInput {
 }
 
 #[typetag::serde]
-impl WorkerInput for TestInput {
+impl WorkerInput for TestInputA {
 
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestOutput{
+pub struct TestOutputA {
     value: ThoTensor
 }
-impl Output for TestOutput{}
+impl Output for TestOutputA {}
 
 #[typetag::serde]
-impl WorkerOutput for TestOutput{}
+impl WorkerOutput for TestOutputA {}
 
-impl WithId for TestOutput {
+impl WithId for TestOutputA {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -141,9 +141,9 @@ impl WithId for TestOutput {
 }
 
 
-impl WorkerStageOutput for TestOutput {
+impl WorkerStageOutput for TestOutputA {
     fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
-        Ok(TestOutput { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
+        Ok(TestOutputA { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
     }
 }
 
@@ -185,7 +185,7 @@ impl RunCtx for TestRunCtx {
 
 
 #[derive(Debug)]
-pub struct TestStage<P, C>
+pub struct TestStageA<P, C>
 where
     P:Debug,
     C:RunCtx
@@ -196,13 +196,13 @@ where
 
 
 
-impl <P, C> TestStage<P, C>
+impl <P, C> TestStageA<P, C>
 where
     P:Debug,
     C:RunCtx
 {
 
-    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInit) -> Result<DynSyncStageEnum2<TestStage<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInitA) -> Result<DynSyncStageEnum2<TestStageA<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
@@ -222,30 +222,31 @@ where
 
             Ok(DynSyncStageEnum2::Proxy {
                 stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
+                init: (),
             })
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(TestStage::<u32, TestRunCtx>::new_local(init))))
+            Ok(DynSyncStageEnum2::Local(Arc::new(TestStageA::<u32, TestRunCtx>::new_local(init))))
         }
 
     }
 
-    pub fn new_local(init:TestStageInit) -> Self {
+    pub fn new_local(init: TestStageInitA) -> Self {
         Self { k: init.k, pd: PhantomData }
     }
 }
 
 
-impl <P, C> Stage for TestStage<P, C>
+impl <P, C> Stage for TestStageA<P, C>
 where
     P:Debug,
     C:RunCtx
 {
     type Ctx = C;
-    type In<'a> = TestInput;
-    type Out = TestOutput;
+    type In<'a> = TestInputA;
+    type Out = TestOutputA;
 }
 
-impl <P, C> SyncStage for TestStage<P, C>
+impl <P, C> SyncStage for TestStageA<P, C>
 where
     P:Debug,
     C:RunCtx
@@ -256,7 +257,7 @@ where
             return Err(ThoError::oom())
         }
         debug("TestStage::do_run: input={input:?}");
-        Ok(TestOutput{
+        Ok(TestOutputA {
             value: (input.value.as_ref() * self.k).into(),
         })
     }
@@ -266,27 +267,27 @@ where
 const TEST_ENDPOINT: &str = "TestStage";
 
 
-pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
+pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
 
     async move {
         Ok(Box::new(WorkerWrapper::new(
-            Arc::new(TestStage::<(), WokerRunCtx>::new_local(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
+            Arc::new(TestStageA::<(), WokerRunCtx>::new_local(TestStageInitA::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
             PhantomData::<JsonIpcCodec>
         )) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
-pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError>> {
+pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     debug!("test_simp_init_2: 0");
     let init: Box<dyn Any> = init;
 
-    let init = init.downcast::<TestStageInit>().unwrap();
+    let init = init.downcast::<TestStageInitA>().unwrap();
 
     async move {
         debug!("test_simp_init_2: 1");
 
         Ok(Box::new(WorkerWrapper::new(
-            Arc::new(TestStage::<(), WokerRunCtx>::new_local(*init)),
+            Arc::new(TestStageA::<(), WokerRunCtx>::new_local(*init)),
             PhantomData::<JsonIpcCodec>
         )) as Box<dyn SyncStageIpcWrapper>)
 
@@ -297,8 +298,8 @@ pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<B
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
-    use crate::ipc::proxy_tests::{test_simp_init, test_simp_init_2, TestOutput, TestStageInit, TEST_ENDPOINT};
-    use crate::ipc::proxy_tests::{TestInput, TestRunCtx, TestStage};
+    use crate::ipc::proxy_tests::{test_simp_init, test_simp_init_2, TestOutputA, TestStageInitA, TEST_ENDPOINT};
+    use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -368,15 +369,18 @@ mod tests {
     }
 
     async fn do_test_simp() -> Result<(), ThoError> {
+        debug!("do_test_simp");
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-        let test_stage = Arc::new(TestStage::<u32, TestRunCtx>::new(1, TestStageInit::new(2)).await?);
+        let test_stage = Arc::new(TestStageA::<u32, TestRunCtx>::new(1, TestStageInitA::new(2)).await?);
+
+        debug!("do_test_simp: test_stage={test_stage:?}");
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
-        debug!("test_simp_target: cuda_tensor={cuda_tensor:?}");
+        debug!("do_test_simp: cuda_tensor={cuda_tensor:?}");
 
-        let input = TestInput {
+        let input = TestInputA {
             value: cuda_tensor,
             fail_with_oom: false,
         };
@@ -384,12 +388,12 @@ mod tests {
 
         let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
 
-        debug!("result={result:?}");
+        debug!("do_test_simp: result={result:?}");
 
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
 
         let cpu_t = cpu_tensor.t();
-        debug!("cpu_tensor={}", cpu_t);
+        debug!("do_test_simp: cpu_tensor={}", cpu_t);
 
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
         Ok(())
@@ -409,13 +413,13 @@ mod tests {
 
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-                let test_stage = Arc::new(TestStage::<u32, TestRunCtx>::new(1, TestStageInit::new(2)).await?);
+                let test_stage = Arc::new(TestStageA::<u32, TestRunCtx>::new(1, TestStageInitA::new(2)).await?);
 
                 let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
                 debug!("test_simp_target: cuda_tensor={cuda_tensor:?}");
 
-                let input = TestInput {
+                let input = TestInputA {
                     value: cuda_tensor,
                     fail_with_oom: true,
                 };
