@@ -21,12 +21,13 @@ use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operat
 use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::tho_tensor::ThoTensor;
 
 #[derive(Debug)]
 pub struct ProxyStage2<St>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
     pd:PhantomData<St>,
@@ -41,7 +42,7 @@ where
 impl <St> Stage for ProxyStage2<St>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned  + 'static
 {
     type Ctx = St::Ctx;
@@ -54,7 +55,7 @@ where
 impl <St>SyncStage for ProxyStage2<St>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
 
@@ -76,7 +77,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.endpoint_name.to_string(),
                     self.stage_id,
-                    Box::new(input.clone_refs()?),//clones refs
+                    input.clone_refs()?,//clones refs
                     false,
                 ).await?;
 
@@ -108,7 +109,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.endpoint_name.to_string(),
                     self.stage_id,
-                    Box::new(input.clone_refs()?),//clones refs
+                    input.clone_refs()?,//clones refs
                     false,
                 ).await?;
 
@@ -126,16 +127,44 @@ where
 impl <St> ProxyStage2<St>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
-    pub fn proxy(endpoint_name:&'static str, stage_id: u32, tho_device_idx: usize) -> Self {
-        Self {
-            endpoint_name,
+    pub async fn proxy(
+        endpoint_name:&'static str,
+        stage_id: u32, tho_device_idx: usize,
+        init_data: Box<dyn WorkerInput>
+    ) -> Result<Self, ThoError> {
+
+        let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
+        let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+        let rs = ipc_actor.install_stage_2(
+            endpoint_name.to_string(),
             stage_id,
-            tho_device_idx,
-            pd:PhantomData
+            init_data,
+        ).await?;
+
+        match rs {
+            CudaWorkerMsgOut { request_id, status } => {
+                match status {
+                    OpResult::Ok(_) => {
+                        Ok(Self {
+                            endpoint_name,
+                            stage_id,
+                            tho_device_idx,
+                            pd:PhantomData
+                        })
+
+                    }
+                    OpResult::Failed{ msg, is_oom, needs_reset } => {
+                        Err(ThoError::from_worker(msg, is_oom, needs_reset))
+                    }
+                }
+            }
         }
+
+
     }
 
     fn handle_rs(rs: CudaWorkerMsgOut) -> Result<<St as Stage>::Out, ThoError> {
@@ -168,7 +197,7 @@ where
 impl <St> Drop for ProxyStage2<St>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput+ Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     fn drop(&mut self) {
@@ -185,6 +214,8 @@ where
 
         tokio::spawn(async move {
 
+            debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx} spawned");
+
             if let Err(error) = ipc_actor.drop_endpoint(stage_id, endpoint_name.to_string()).await {
                 error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
             }
@@ -199,7 +230,7 @@ where
 pub enum DynSyncStageEnum2<St, Init=()>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -214,7 +245,7 @@ where
 impl <St, Init> Stage for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -226,7 +257,7 @@ where
 impl<St, Init> Adjustable for DynSyncStageEnum2<St, Init>
 where
     St: SyncStage + Adjustable,
-    for<'a> <St as Stage>::In<'a>: WorkerStageInput + WorkerInput+ Serialize,
+    for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
     Init:Debug + Send + Sync + 'static
 {
@@ -236,7 +267,7 @@ where
 impl <St, Init> SyncStage for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {

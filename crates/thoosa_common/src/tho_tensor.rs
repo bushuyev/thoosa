@@ -62,6 +62,7 @@ impl<D: Dims> ThoTensor<D, SimpleId> {
     pub fn drop(self) {
         drop(self.inner);
     }
+
 }
 
 impl<D, Id> ThoTensor<D, Id>
@@ -93,6 +94,20 @@ where
             pd: Default::default(),
         }
     }
+
+    pub fn clone_ref(&self) -> Result<Self, ThoError> {
+        match &self.inner {
+            ThoTensorInner::Val { .. } => {
+                panic!("can't clone val")
+            }
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+                Ok(
+                    ThoTensor::new_ref(self.id.clone(), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx)
+                )
+            }
+        }
+    }
+
 }
 
 impl<D: Dims> Display for ThoTensor<D, SimpleId> {

@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::borrow::Cow;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
@@ -18,6 +19,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
 use mockall::PredicateBoxExt;
 use tch::Tensor;
@@ -53,14 +55,15 @@ impl WorkerInput for TestStageInitA {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestInputA {
+pub struct TestInputA<'a> {
     value: ThoTensor,
-    fail_with_oom: bool
+    fail_with_oom: bool,
+    name:Cow<'a, str>
 }
 
-impl Input for TestInputA {}
+impl<'a> Input for TestInputA<'a> {}
 
-impl WithId for TestInputA {
+impl<'a> WithId for TestInputA<'a> {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -68,8 +71,12 @@ impl WithId for TestInputA {
     }
 }
 
-impl BorrowRef for TestInputA {
-    type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
+#[typetag::serde]
+impl WorkerInput for TestInputA<'static> {}
+
+impl<'a> BorrowRef for TestInputA<'a> {
+    // Rebind the input's borrowed field to the output borrow so it matches Stage::In<'o> for every caller lifetime.
+    type Out<'o> = ThoDataRef<'o, TestInputA<'o>> where Self: 'o;
 
     fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
@@ -81,7 +88,9 @@ impl BorrowRef for TestInputA {
             } else {
                 Ok(ThoDataRef::Owned(TestInputA {
                     value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
-                    fail_with_oom: self.fail_with_oom
+                    fail_with_oom: self.fail_with_oom,
+                    // Own the copied field so the returned value does not borrow from this temporary operation.
+                    name: Cow::Owned(self.name.to_string()),
                 }))
             }
         }
@@ -89,37 +98,30 @@ impl BorrowRef for TestInputA {
 }
 
 
-impl WorkerStageInput for TestInputA {
-    fn clone_refs(&self) -> Result<Self, ThoError> {
-        Ok(TestInputA {
-            value: self.value.clone_refs()?,
+impl <'a> WorkerStageInput for TestInputA<'a> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        Ok(Box::new(TestInputA {
+            value: self.value.clone_ref()?,
             fail_with_oom: self.fail_with_oom,
-        })
+            // typetag requires a 'static value, so only the IPC copy owns fields that were borrowed by the caller.
+            name: Cow::Owned(self.name.to_string()),
+        }))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
         Ok(TestInputA {
             value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
-            fail_with_oom: self.fail_with_oom
+            fail_with_oom: self.fail_with_oom,
+            name: self.name.clone(),
         })
     }
 
 
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let mut input = JsonIpcCodec::decode::<Self>(&input)?;
-
-        debug!("SimpWrapper::do_run: 1. input={input:?}");
-
-        input.value = ThoTensor::ref_to_tensor(all_cuda_tensors, input.value)?;
-
-        Ok(input)
+        let input = C::decode::<Self>(input)?;
+        input.ref_to_tensor(all_cuda_tensors, false)
     }
 
-
-}
-
-#[typetag::serde]
-impl WorkerInput for TestInputA {
 
 }
 
@@ -206,19 +208,9 @@ where
 
     {
         if GlobalCtx::global().is_ipc() {
-            let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
-            let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
-
-            let rs = ipc_actor.install_stage_2(
-                TEST_ENDPOINT.to_string(),
-                0,
-                Box::new(init),
-            ).await?;
-
-            debug!("TestStage::new: rs={rs:?}");
 
             Ok(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx)),
+                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx, Box::new(init)).await?),
                 init: (),
             })
         } else {
@@ -239,7 +231,7 @@ where
     C:RunCtx
 {
     type Ctx = C;
-    type In<'a> = TestInputA;
+    type In<'a> = TestInputA<'a>;
     type Out = TestOutputA;
 }
 
@@ -380,6 +372,7 @@ mod tests {
         let input = TestInputA {
             value: cuda_tensor,
             fail_with_oom: false,
+            name: "ref".into(),
         };
         let ctx = TestRunCtx;
 
@@ -419,6 +412,7 @@ mod tests {
                 let input = TestInputA {
                     value: cuda_tensor,
                     fail_with_oom: true,
+                    name: "ref".into(),
                 };
                 let ctx = TestRunCtx;
 
