@@ -153,8 +153,9 @@ pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl GlobalC
 #[cfg(test)]
 mod tests {
     use super::run_ipc_test;
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
+    use crate::ipc::worker_msg::WorkerInput;
     use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
     use crate::runner::global_ctx::GlobalCtx;
@@ -170,7 +171,7 @@ mod tests {
     use crate::tho_tensor::{ThoTensor, ThoTensorInner};
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use futures_util::future::join_all;
-    use log::{LevelFilter, debug, info, warn};
+    use log::{LevelFilter, debug, info};
     use parking_lot::RwLock;
     use serde::de::Unexpected::Option;
     use std::collections::HashMap;
@@ -218,15 +219,15 @@ mod tests {
         assert!(ok);
     }
 
-    fn sync_clc_endpoint_inits() -> HashMap<String, InitFn> {
+    fn sync_clc_endpoint_inits() -> HashMap<String, InitFn2> {
         HashMap::from([
             (
                 SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
-                Box::new(sync_test_tensor_loader_endpoint_init) as InitFn
+                Box::new(sync_test_tensor_loader_endpoint_init) as InitFn2
             ),
             (
                 SYNC_CLC_ENDPOINT.to_string(),
-                Box::new(sync_clc_endpoint_init) as InitFn
+                Box::new(sync_clc_endpoint_init) as InitFn2
             )
         ])
     }
@@ -274,17 +275,24 @@ mod tests {
         }
     }
 
-    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::wraps::DynSyncStageEnum<SyncConsumeTestStage>, ThoError> {
-        // The shared proxy carries consume requests and releases worker inputs only after success.
-        crate::ipc::codec::install_ipc_endpoint::<crate::ipc::codec::JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CONSUME_TEST_ENDPOINT, 0, &()).await?;
-        Ok(crate::ipc::wraps::DynSyncStageEnum::Proxy {
-            stage: Arc::new(crate::ipc::wraps::ProxyStage::proxy(SYNC_CONSUME_TEST_ENDPOINT, 0, tho_device_idx)),
+    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::wraps2::DynSyncStageEnum2<SyncConsumeTestStage>, ThoError> {
+        // ProxyStage2 carries typed consume requests and releases worker inputs only after success.
+        Ok(crate::ipc::wraps2::DynSyncStageEnum2::Proxy {
+            stage: Arc::new(crate::ipc::wraps2::ProxyStage2::proxy_with_input_cloner(
+                SYNC_CONSUME_TEST_ENDPOINT,
+                0,
+                tho_device_idx,
+                Box::new(()),
+                Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+            ).await?),
+            init: (),
         })
     }
 
-    fn sync_consume_test_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    fn sync_consume_test_endpoint_init(_init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
         use futures_util::FutureExt;
         async move {
+            // This stage has no initializer fields, but still uses the typed install message.
             Ok(Box::new(crate::ipc::wraps::WorkerWrapper::<crate::ipc::codec::JsonIpcCodec, _, _, _>::new(Arc::new(SyncConsumeTestStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
         }.boxed()
     }
@@ -324,10 +332,10 @@ mod tests {
         }
     }
 
-    fn sync_consume_endpoint_inits() -> HashMap<String, InitFn> {
+    fn sync_consume_endpoint_inits() -> HashMap<String, InitFn2> {
         HashMap::from([(
             SYNC_CONSUME_TEST_ENDPOINT.to_string(),
-            Box::new(sync_consume_test_endpoint_init) as InitFn,
+            Box::new(sync_consume_test_endpoint_init) as InitFn2,
         )])
     }
 
@@ -366,7 +374,7 @@ mod tests {
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws,  sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+                CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
             }
         )
     }
@@ -394,6 +402,8 @@ mod tests {
         let size = [3, 10];
         const MUL_K: f64 = 2.;
         let clc_dim = if use_matmul { size[0] } else { size[1] };
+        // All resource tasks use the same CLC operation, so share one proxy and its typed worker endpoint identity.
+        let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
 
         // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
 
@@ -405,6 +415,7 @@ mod tests {
 
             let cuda_actor = cuda_actor;
             let counter = Arc::clone(&counter);
+            let clc_task = Arc::clone(&clc_task);
             tasks.spawn(async move {
                 debug!("run_load_and_clc_ipc_cuda_worker: spawned resource={resource:?}");
 
@@ -420,8 +431,6 @@ mod tests {
                 counter.fetch_add(1, Acquire);
                 debug!("run_load_and_clc_ipc_cuda_worker: loaded={loaded:?} counter={}", counter.load(Acquire));
 
-
-                let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
                 let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_clc");
                 let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
                 let output_ref = BorrowRef::borrow_to(&output_ref, ctx.tho_device_idx()).await?;
@@ -458,11 +467,8 @@ mod tests {
 
         debug!("run_load_and_clc_ipc_cuda_worker: counter={:?}", counter.load(Acquire));
 
-        if let Err(e) = cuda_actor.shutdown().await {
-            warn!("shutdown failed: e={e:?}");
-        }
-
-        Ok(())
+        // run_ipc_test owns actor shutdown; returning the task result avoids a second shutdown request to a stopped actor.
+        result
     }
 
     async fn run_model_test_ipc_cuda_worker<F, Fut>(test_name: &str, run: F) -> Result<(), ThoError>
@@ -471,14 +477,9 @@ mod tests {
         Fut: std::future::Future<Output=Result<(), ThoError>>,
     {
         let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
-        let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-        let result = run().await;
-        if let Err(e) = cuda_actor.shutdown().await {
-            warn!("shutdown failed: e={e:?}");
-        }
-
-        Ok(())
+        // run_ipc_test owns actor shutdown and propagates this pipeline result after cleanup.
+        run().await
     }
 
 
@@ -488,7 +489,7 @@ mod tests {
         run_ipc_test(async {
             run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
 
@@ -498,7 +499,7 @@ mod tests {
         run_ipc_test(async {
             run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -538,7 +539,7 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -578,7 +579,7 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -599,7 +600,7 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
 
@@ -653,7 +654,7 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -709,7 +710,7 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -750,7 +751,7 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -773,7 +774,7 @@ mod tests {
             }).await
         }, async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws, sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
         })
     }
 
@@ -802,7 +803,7 @@ mod tests {
             }).await
         }, async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws, sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
         })
     }
 
@@ -835,13 +836,12 @@ mod tests {
             }).await
         }, async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
         })
     }
 
     mod composite_input {
-        use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
-        use crate::ipc::json_ser::SyncStageIpcWrapper;
+        use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
         use crate::runner::global_ctx::GlobalCtx;
         use crate::tho_device::ThoDevice;
         use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ProxyABClcSyncStage, SYNC_AB_CLC_ENDPOINT, sync_ab_clc_endpoint_init};
@@ -947,7 +947,7 @@ mod tests {
             async |sock_path| {
                 // set_max_level(Debug);
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws,  HashMap::new(), ThoDevice::from(Device::Cuda(0))).await
+                CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Device::Cuda(0))).await
             }
         )
     }

@@ -989,6 +989,11 @@ where
     //     }
     // }
 
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        // Typed worker wrappers receive the tensor reference as a trait object and materialize it only inside the worker.
+        Self::ref_to_tensor_(all_cuda_tensors, self, remove)
+    }
+
 
 
 

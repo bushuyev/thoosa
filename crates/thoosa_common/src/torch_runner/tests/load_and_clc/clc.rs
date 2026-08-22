@@ -9,9 +9,10 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::load_and_clc::loader::{LoadedRange, LoadedTensor};
 use crate::torch_runner::tests::load_and_clc::SYNC_CLC_ENDPOINT;
-use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
+use crate::ipc::codec::JsonIpcCodec;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use crate::ipc::wraps::WorkerWrapperWithState;
+use crate::ipc::wraps2::{DynSyncStageWithStateEnum2, ProxyStage2};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::debug;
@@ -27,7 +28,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, simple_id};
 use tokio::sync::{Mutex, MutexGuard};
-use crate::ipc::worker_msg::WorkerOutput;
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -57,13 +58,17 @@ pub struct SyncClcStage {
 pub(crate) struct ClcDynSyncStage {
     id: SynKey,
     fail_until_dump_to_cpu: bool,
-    stage: Arc<DynSyncStageWithStateEnum<SyncClcStage>>,
+    stage: Arc<DynSyncStageWithStateEnum2<SyncClcStage>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncClcTaskInit {
     id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>, use_matmul: bool
 }
+
+// Register the CLC configuration for postcard's typed install message.
+#[typetag::serde]
+impl WorkerInput for SyncClcTaskInit {}
 
 impl SyncClcTaskInit {
     pub fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>, use_matmul: bool) ->Self {
@@ -82,17 +87,26 @@ impl SyncClcStage {
             let k = k.to_f64().expect("SyncClcTask::new: IPC task multiplier must convert to f64");
             let (dumped, fail_until): (Vec<_>, Vec<_>) = fail_until.into_iter().partition(|value| *value == FailUntil::DumpedToCpu);
             let init = SyncClcTaskInit::new(id.clone(), k, dim, fail_until, use_matmul);
-            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_CLC_ENDPOINT, 0, &init).await.expect("SyncClcStage::new: install endpoint");
             ClcDynSyncStage {
                 id,
                 fail_until_dump_to_cpu: !dumped.is_empty(),
-                stage: Arc::new(DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_CLC_ENDPOINT, 0, device.tho_device_idx())), init: () }),
+                // ProxyStage2 installs the typed initializer and retains the existing endpoint stage id.
+                stage: Arc::new(DynSyncStageWithStateEnum2::Proxy {
+                    stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                        SYNC_CLC_ENDPOINT,
+                        0,
+                        device.tho_device_idx(),
+                        Box::new(init),
+                        Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+                    ).await.expect("SyncClcStage::new: install endpoint")),
+                    init: (),
+                }),
             }
         } else {
             ClcDynSyncStage {
                 id: id.clone(),
                 fail_until_dump_to_cpu: false,
-                stage: Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))),
+                stage: Arc::new(DynSyncStageWithStateEnum2::Local(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))),
             }
         }
     }
@@ -293,8 +307,8 @@ impl Stage for ClcDynSyncStage {
 impl SyncStage for ClcDynSyncStage {
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         match self.stage.as_ref() {
-            DynSyncStageWithStateEnum::Local(_) => Some(self),
-            DynSyncStageWithStateEnum::Proxy { .. } => None,
+            DynSyncStageWithStateEnum2::Local(_) => Some(self),
+            DynSyncStageWithStateEnum2::Proxy { .. } => None,
         }
     }
 
@@ -318,11 +332,12 @@ impl StageWithState for ClcDynSyncStage {
     }
 }
 
-pub(crate) fn sync_clc_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    let init: Box<dyn std::any::Any> = init;
+    let init = init.downcast::<SyncClcTaskInit>().expect("SyncClcStage endpoint received an unexpected initializer type");
     async move {
-        let init = JsonIpcCodec::decode::<SyncClcTaskInit>(&init_msg)?;
         // WorkerWrapperWithState keeps the multiplier on the worker across calls.
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClcStage::init(init)), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClcStage::init(*init)), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
