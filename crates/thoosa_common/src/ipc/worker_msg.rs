@@ -68,7 +68,8 @@ impl CudaWorkerMsgIn {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum OpResult {
     Ok(Option<Box<dyn WorkerOutput>>),
-    Failed{msg:String, is_oom:bool, needs_reset:bool}
+    // Preserve retryability separately because not every worker OOM can be handled by an input/run-context adjuster.
+    Failed{msg:String, is_oom:bool, is_retryable_oom: bool, needs_reset:bool}
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,17 +81,19 @@ pub struct CudaWorkerMsgOut {
 
 impl OpResult {
     pub fn failed(msg:String)-> Self {
-        OpResult::Failed {msg, is_oom:false, needs_reset:false}
+        OpResult::Failed {msg, is_oom:false, is_retryable_oom: false, needs_reset:false}
     }
 }
 
 impl From<ThoError> for OpResult {
     fn from(e: ThoError) -> Self {
         let is_oom = e.is_oom();
+        let is_retryable_oom = e.is_retryable_oom();
         let needs_reset = e.needs_cuda_ctx_reset();
         OpResult::Failed {
             msg: e.msg,
             is_oom,
+            is_retryable_oom,
             needs_reset,
         }
     }

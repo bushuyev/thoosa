@@ -22,7 +22,7 @@ pub(crate) mod join_and_classify;
 pub(crate) mod loader;
 
 
-use crate::ipc::cuda_wokrer::InitFn;
+use crate::ipc::cuda_wokrer::InitFn2;
 use classifier::{Classifier, SYNC_CLASSIFIER_ENDPOINT, sync_classifier_endpoint_init};
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyTask;
@@ -40,10 +40,10 @@ fn init_devices_once() {
     });
 }
 
-pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, InitFn> {
+pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, InitFn2> {
     HashMap::from([(
         SYNC_CLASSIFIER_ENDPOINT.to_string(),
-        Box::new(sync_classifier_endpoint_init) as InitFn,
+        Box::new(sync_classifier_endpoint_init) as InitFn2,
     )])
 }
 
