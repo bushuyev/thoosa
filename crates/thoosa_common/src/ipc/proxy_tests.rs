@@ -209,14 +209,11 @@ where
             let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
             let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
-            let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
-                request_id: 0,
-                operation: Operation::InstallStage {
-                    endpoint_name: TEST_ENDPOINT.to_string(),
-                    stage_id: 1,
-                    init_data: Box::new(init),
-                },
-            }).await?;
+            let rs = ipc_actor.install_stage_2(
+                TEST_ENDPOINT.to_string(),
+                0,
+                Box::new(init),
+            ).await?;
 
             debug!("TestStage::new: rs={rs:?}");
 
