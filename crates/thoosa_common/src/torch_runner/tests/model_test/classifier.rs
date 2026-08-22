@@ -15,16 +15,17 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
+use crate::ipc::codec::JsonIpcCodec;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::worker_msg::WorkerOutput;
-use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::wraps::WorkerWrapper;
+use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 
 use super::common::{ABData, ClsOut, ModelTestId};
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
 
-type ClassifierDynSyncStage = DynSyncStageEnum<SyncClassifierStage>;
+type ClassifierDynSyncStage = DynSyncStageEnum2<SyncClassifierStage>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SyncClassifierStageInit {
@@ -34,6 +35,10 @@ pub(crate) struct SyncClassifierStageInit {
     lr: f64,
     fail_until: Vec<FailUntil>,
 }
+
+// Register the classifier configuration for postcard's typed install message.
+#[typetag::serde]
+impl WorkerInput for SyncClassifierStageInit {}
 
 impl SyncClassifierStageInit {
     fn new(id: ModelTestId, in_dim: i64, epochs: i64, lr: f64, fail_until: Vec<FailUntil>) -> Self {
@@ -65,16 +70,25 @@ impl Classifier {
     {
         if GlobalCtx::global().is_ipc() {
             let init = SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until);
-            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_CLASSIFIER_ENDPOINT, 0, &init).await?;
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_CLASSIFIER_ENDPOINT, 0, device.tho_device_idx())) }),
+                // ProxyStage2 installs the typed initializer and keeps the existing endpoint stage id.
+                sync_classifier: Arc::new(DynSyncStageEnum2::Proxy {
+                    stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                        SYNC_CLASSIFIER_ENDPOINT,
+                        0,
+                        device.tho_device_idx(),
+                        Box::new(init),
+                        Arc::new(|input: &ThoTensor<ABData, ModelTestId>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+                    ).await?),
+                    init: (),
+                }),
             })
         } else {
             let local = SyncClassifierStage::new(id.clone(), in_dim, epochs, lr, fail_until);
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(DynSyncStageEnum::Local(Arc::new(local))),
+                sync_classifier: Arc::new(DynSyncStageEnum2::Local(Arc::new(local))),
             })
         }
     }
@@ -236,11 +250,16 @@ impl SyncStage for SyncClassifierStage {
 #[typetag::serde(name = "ThoTensor_ClsOut")]
 impl WorkerOutput for ThoTensor<ClsOut, ModelTestId> {}
 
-pub(crate) fn sync_classifier_endpoint_init(init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+// The typed classifier proxy sends this concrete tensor reference through WorkerInput.
+#[typetag::serde(name = "ThoTensor_ABData_ModelTestId_Input")]
+impl WorkerInput for ThoTensor<ABData, ModelTestId> {}
+
+pub(crate) fn sync_classifier_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
+    let init: Box<dyn std::any::Any> = init;
+    let init = init.downcast::<SyncClassifierStageInit>().expect("SyncClassifierStage endpoint received an unexpected initializer type");
     async move {
-        let init = JsonIpcCodec::decode::<SyncClassifierStageInit>(&init_msg)?;
         // The worker reconstructs the stateless classifier configuration once per endpoint.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClassifierStage::init(init)), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClassifierStage::init(*init)), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }

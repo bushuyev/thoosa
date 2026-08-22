@@ -1464,10 +1464,10 @@ impl CudaIPCActor {
 
                         let _ = respond_to.send(Ok(()));
                     }
-                    OpResult::Failed { msg, is_oom, needs_reset } => {
+                    OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
                         debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {msg:?}");
 
-                        let _ = respond_to.send(Err(ThoError::from_worker(msg, is_oom, needs_reset)));
+                        let _ = respond_to.send(Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset)));
                     }
                 }
             }
@@ -1489,7 +1489,7 @@ impl CudaIPCActor {
                     .map_err(|_| ThoError::new(format!("worker copy request {} returned an unexpected output type", response.request_id)))
             }
             OpResult::Ok(None) => Err(ThoError::new(format!("worker copy request {} returned no output", response.request_id))),
-            OpResult::Failed { msg, is_oom, needs_reset } => Err(ThoError::from_worker(msg, is_oom, needs_reset)),
+            OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset)),
         }
     }
 
@@ -1540,7 +1540,7 @@ impl CudaIPCActor {
 
             let CudaWorkerMsgOut{status: OpResult::Ok(Some(info)), ..} = response else {
                 let msg = format!("worker tensor tensor_key={tensor_key} not found");
-                return Err(ThoError::from_worker(msg, false, false));
+                return Err(ThoError::from_worker(msg, false, false, false));
             };
             let info : Box<dyn Any> = info;
             let info = info.downcast::<WorkerTensorInfoPayload>().unwrap();//TODO unwrap

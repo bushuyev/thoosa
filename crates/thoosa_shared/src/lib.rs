@@ -445,8 +445,8 @@ impl ThoError {
         }
     }
 
-    //TODO pass cuda/torch error id/msg from worker and decide in main if it's oom/needs reset
-    pub fn from_worker(msg: String, is_oom: bool, needs_cuda_ctx_reset: bool) -> ThoError {
+    // Keep the worker's OOM classification intact so main-process adjusters can retry only recoverable failures.
+    pub fn from_worker(msg: String, is_oom: bool, is_retryable_oom: bool, needs_cuda_ctx_reset: bool) -> ThoError {
         debug!("ThoosaError::new: msg={msg}");
 
         let backtrace = Backtrace::capture();
@@ -459,7 +459,7 @@ impl ThoError {
             what: Cause::CudaWorker {
                 msg:"Worker".to_string(),
                 is_oom,
-                is_retryable_oom: false,
+                is_retryable_oom,
                 needs_cuda_ctx_reset,
             },
         }

@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -23,7 +23,6 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;
 
-#[derive(Debug)]
 pub struct ProxyStage2<St>
 where
     St:SyncStage,
@@ -36,7 +35,24 @@ where
     stage_id: u32,
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
+    // Generic inputs can supply the concrete typetag conversion that a blanket WorkerStageInput implementation cannot express.
+    clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
 
+}
+
+impl<St> Debug for ProxyStage2<St>
+where
+    St: SyncStage,
+    for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
+    <St as Stage>::Out: WorkerStageOutput + DeserializeOwned + 'static,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyStage2")
+            .field("endpoint_name", &self.endpoint_name)
+            .field("stage_id", &self.stage_id)
+            .field("tho_device_idx", &self.tho_device_idx)
+            .finish_non_exhaustive()
+    }
 }
 
 impl <St> Stage for ProxyStage2<St>
@@ -77,7 +93,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.endpoint_name.to_string(),
                     self.stage_id,
-                    input.clone_refs()?,//clones refs
+                    self.clone_input(input)?,//clones refs
                     false,
                 ).await?;
 
@@ -109,8 +125,8 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.endpoint_name.to_string(),
                     self.stage_id,
-                    input.clone_refs()?,//clones refs
-                    false,
+                    self.clone_input(&input)?,//clones refs
+                    true,
                 ).await?;
 
                 debug!("ProxyStage2::consume: rs={rs:?}");
@@ -136,6 +152,27 @@ where
         tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>
     ) -> Result<Self, ThoError> {
+        Self::proxy_inner(endpoint_name, stage_id, tho_device_idx, init_data, None).await
+    }
+
+    pub async fn proxy_with_input_cloner(
+        endpoint_name: &'static str,
+        stage_id: u32,
+        tho_device_idx: usize,
+        init_data: Box<dyn WorkerInput>,
+        clone_refs: Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>,
+    ) -> Result<Self, ThoError> {
+        // Direct generic inputs such as ThoTensor still need to enter the concrete WorkerInput registry.
+        Self::proxy_inner(endpoint_name, stage_id, tho_device_idx, init_data, Some(clone_refs)).await
+    }
+
+    async fn proxy_inner(
+        endpoint_name: &'static str,
+        stage_id: u32,
+        tho_device_idx: usize,
+        init_data: Box<dyn WorkerInput>,
+        clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
+    ) -> Result<Self, ThoError> {
 
         let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
         let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
@@ -154,18 +191,26 @@ where
                             endpoint_name,
                             stage_id,
                             tho_device_idx,
-                            pd:PhantomData
+                            pd:PhantomData,
+                            clone_refs,
                         })
 
                     }
-                    OpResult::Failed{ msg, is_oom, needs_reset } => {
-                        Err(ThoError::from_worker(msg, is_oom, needs_reset))
+                    OpResult::Failed{ msg, is_oom, is_retryable_oom, needs_reset } => {
+                        Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset))
                     }
                 }
             }
         }
 
 
+    }
+
+    fn clone_input<'a>(&self, input: &<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> {
+        match &self.clone_refs {
+            Some(clone_refs) => clone_refs(input),
+            None => input.clone_refs(),
+        }
     }
 
     fn handle_rs(rs: CudaWorkerMsgOut) -> Result<<St as Stage>::Out, ThoError> {
@@ -183,8 +228,8 @@ where
                             }
                         }
                     }
-                    OpResult::Failed { msg, is_oom, needs_reset } => {
-                        Err(ThoError::from_worker(msg, is_oom, needs_reset))
+                    OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
+                        Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset))
                     }
                 }
             }
