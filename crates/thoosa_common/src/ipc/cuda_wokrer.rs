@@ -47,6 +47,7 @@ static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
 //1 cuda device per worker
 pub struct CudaWorker;
 
+#[deprecated]//use InitFn2
 pub type InitFn = Box<dyn Fn(Vec<u8>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>>  >;
 pub type InitFn2 = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>>  >;
 
@@ -957,8 +958,10 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
         todo!()
     }
 
+    #[deprecated]
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;//on worker side
 
+    #[deprecated]
     fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
         Ok((Self::decode_for_worker::<C>(input, all_cuda_tensors)?, Vec::new()))
     }

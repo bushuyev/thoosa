@@ -840,7 +840,7 @@ mod tests {
     }
 
     mod composite_input {
-        use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+        use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
         use crate::ipc::json_ser::SyncStageIpcWrapper;
         use crate::runner::global_ctx::GlobalCtx;
         use crate::tho_device::ThoDevice;
@@ -854,11 +854,11 @@ mod tests {
         use tch::Device::Cuda;
         use thoosa_shared::ThoError;
 
-        fn sync_ab_clc_endpoint_inits() -> HashMap<String, InitFn> {
+        fn sync_ab_clc_endpoint_inits() -> HashMap<String, InitFn2> {
             HashMap::from([
                 (
                     SYNC_AB_CLC_ENDPOINT.to_string(),
-                    Box::new(sync_ab_clc_endpoint_init) as InitFn,
+                    Box::new(sync_ab_clc_endpoint_init) as InitFn2,
                 )
             ])
         }
@@ -877,7 +877,12 @@ mod tests {
                 run_ab_clc_with_stage(ab_stage, move || sync_stage_calls.num_calls()).await
 
             }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws,  sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+                CudaWorker::run_worker2(
+                    sock_path, &ws,
+                    HashMap::new(),
+                    sync_ab_clc_endpoint_inits(),
+                    ThoDevice::from(Cuda(0))
+                ).await })
         }
 
         #[test]
@@ -893,7 +898,13 @@ mod tests {
                 ab_clc_sync_with_selector(ab_stage).await
 
             }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws,  sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+                CudaWorker::run_worker2(
+                    sock_path,
+                    &ws,
+                    HashMap::new(),
+                    sync_ab_clc_endpoint_inits(),
+                    ThoDevice::from(Cuda(0))
+                ).await })
         }
 
     }

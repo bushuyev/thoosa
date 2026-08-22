@@ -19,10 +19,12 @@ use async_trait::async_trait;
 use cached_derive::Cached;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
+use parking_lot::Mutex;
 use tch::{Kind, Tensor};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
@@ -33,7 +35,8 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use tracing::debug;
-use crate::ipc::worker_msg::WorkerOutput;
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
@@ -283,16 +286,17 @@ where
 #[derive(Debug, Serialize)]
 struct ABClcSyncStageIpcInputRef<'a> {
     id: &'a SynKey,
-    from_a: &'a ThoTensor<AStageOutputDims, ()>,
-    from_b: &'a ThoTensor<BStageOutputDims, ()>,
+    from_a: &'a AStageOutput,
+    from_b: &'a BStageOutput,
 }
 
 impl<'a> ABClcSyncStageIpcInputRef<'a> {
     fn new(input: &'a ABClcSyncStageInput<'_>) -> Self {
         Self {
             id: input.id(),
-            from_a: input.from_a_value(),
-            from_b: input.from_b_value(),
+            // Serialize the complete nested values so postcard matches ThoDataRef's owned deserializer layout.
+            from_a: input.from_a.as_ref(),
+            from_b: input.from_b.as_ref(),
         }
     }
 }
@@ -300,8 +304,8 @@ impl<'a> ABClcSyncStageIpcInputRef<'a> {
 #[derive(Deserialize)]
 struct ABClcSyncStageIpcInput {
     id: SynKey,
-    from_a: ThoTensor<AStageOutputDims, ()>,
-    from_b: ThoTensor<BStageOutputDims, ()>,
+    from_a: AStageOutput,
+    from_b: BStageOutput,
 }
 
 #[derive(Debug, Named)]
@@ -314,16 +318,19 @@ pub struct ABClcSyncStage {
 pub struct ProxyABClcSyncStage {
     id: MonoKey,
     num_calls: AtomicUsize,
-    stage: Arc<DynSyncStageEnum<ABClcSyncStage>>,
+    stage: Arc<DynSyncStageEnum2<ABClcSyncStage>>,
 }
 
 impl ProxyABClcSyncStage {
     pub async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
-        crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_AB_CLC_ENDPOINT, 0, &()).await?;
+        // crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_AB_CLC_ENDPOINT, 0, &()).await?;
         Ok(Self {
             id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
             num_calls: AtomicUsize::default(),
-            stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx)) }),
+            stage: Arc::new(DynSyncStageEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?),
+                init: ()
+            }),
         })
     }
 
@@ -373,12 +380,15 @@ impl WithId for ABClcSyncStageInput<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct ABClcSyncStageInput<'a> {
     id:SynKey,
     from_a:ThoDataRef<'a, AStageOutput>,
     from_b:ThoDataRef<'a, BStageOutput>,
 }
+
+#[typetag::serde]
+impl WorkerInput for ABClcSyncStageInput<'static> {}
 
 impl <'a> ABClcSyncStageInput<'a> {
     pub(super) fn new(from_a: &'a AStageOutput, from_b: &'a BStageOutput) -> Self {
@@ -394,13 +404,6 @@ impl <'a> ABClcSyncStageInput<'a> {
         Self { id: from_a.as_ref().id() + from_b.as_ref().id(), from_a, from_b }
     }
 
-    pub(crate) fn from_a_value(&self) -> &ThoTensor<AStageOutputDims, ()> {
-        &self.from_a.as_ref().value
-    }
-
-    pub(crate) fn from_b_value(&self) -> &ThoTensor<BStageOutputDims, ()> {
-        &self.from_b.as_ref().value
-    }
 }
 
 impl Serialize for ABClcSyncStageInput<'_> {
@@ -413,14 +416,41 @@ impl Serialize for ABClcSyncStageInput<'_> {
 }
 
 impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // typetag can only erase 'static values; both ThoDataRef fields are owned in the IPC copy.
+        Ok(Box::new(ABClcSyncStageInput::<'static> {
+            id: self.id.clone(),
+            from_a: ThoDataRef::Owned(
+                AStageOutput{
+                    id: self.from_a.as_ref().id.clone(),
+                    value: self.from_a.as_ref().value.clone_ref()?,
+                }
+            ),
+            from_b: ThoDataRef::Owned(
+                BStageOutput{
+                    id: self.from_b.as_ref().id.clone(),
+                    value: self.from_b.as_ref().value.clone_ref()?,
+                }
+            ),
+        }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        // Rebuild owned stage inputs so no worker tensor reference escapes this conversion.
+        Ok(Self {
+            id: self.id.clone(),
+            from_a: ThoDataRef::Owned(self.from_a.as_ref().ref_to_tensor(all_cuda_tensors, remove)?),
+            from_b: ThoDataRef::Owned(self.from_b.as_ref().ref_to_tensor(all_cuda_tensors, remove)?),
+        })
+    }
+
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<ABClcSyncStageIpcInput>(input)?;
-        let from_a = ThoTensor::ref_to_tensor(all_cuda_tensors, input.from_a)?;
-        let from_b = ThoTensor::ref_to_tensor(all_cuda_tensors, input.from_b)?;
         Ok(Self {
-            id: input.id.clone(),
-            from_a: ThoDataRef::Owned(AStageOutput::from_value(input.id.clone(), from_a)),
-            from_b: ThoDataRef::Owned(BStageOutput::from_value(input.id, from_b)),
+            id: input.id,
+            from_a: ThoDataRef::Owned(input.from_a.ref_to_tensor(all_cuda_tensors, false)?),
+            from_b: ThoDataRef::Owned(input.from_b.ref_to_tensor(all_cuda_tensors, false)?),
         })
     }
 }
@@ -491,10 +521,10 @@ impl SyncStage for ProxyABClcSyncStage {
     }
 }
 
-pub fn sync_ab_clc_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_ab_clc_endpoint_init(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(ABClcSyncStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::new(Arc::new(ABClcSyncStage::new()), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
