@@ -210,7 +210,7 @@ impl <St, Init> Stage for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
     type Ctx = St::Ctx;
@@ -232,7 +232,7 @@ impl <St, Init> SyncStage for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
     // fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
@@ -273,7 +273,7 @@ impl <St, Init> StageWithState for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage+StageWithState+Send+Sync,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
     type S = <St as StageWithState>::S;
@@ -304,7 +304,7 @@ impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput+ WorkerInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
@@ -355,6 +355,163 @@ where
                 local.purge_cpu(purge_until).await
             }
             DynSyncStageEnum2::Proxy { .. } => {
+                0
+            }
+        }
+    }
+}
+
+///////
+///
+#[derive(Debug)]
+pub enum DynSyncStageWithStateEnum2<St, Init=()>
+where
+    St:SyncStage+StageWithState,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    Local(Arc<St>),
+    Proxy {
+        stage: Arc<ProxyStage2<St>>,
+        init: Init
+    }
+}
+
+impl <St, Init> Stage for DynSyncStageWithStateEnum2<St, Init>
+where
+    St:SyncStage+StageWithState,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    type Ctx = St::Ctx;
+    type In<'a> = St::In<'a>;
+    type Out = St::Out;
+}
+
+impl <St, Init> Adjustable for DynSyncStageWithStateEnum2<St, Init>
+where
+    St: SyncStage + StageWithState + Adjustable,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
+    Init:Debug + Send + Sync + 'static
+{
+    // Preserve the wrapped stage's adjustment capability across local/proxy dispatch.
+}
+
+impl <St, Init> SyncStage for DynSyncStageWithStateEnum2<St, Init>
+where
+    St: SyncStage + StageWithState + Send + Sync,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
+    where
+        Self: Sized,
+    {
+        match self.as_ref() {
+            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),//TODO TestRunCtx
+        }
+    }
+
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        // Advertise typed state execution without exposing ThoTrainModule to the common runner.
+        match self {
+            Self::Local(_) => Some(self),
+            Self::Proxy { .. } => None,
+        }
+    }
+}
+
+
+///
+impl <St, Init> StageWithState for DynSyncStageWithStateEnum2<St, Init>
+where
+    St:SyncStage+StageWithState+Send+Sync,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    type S = <St as StageWithState>::S;
+
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        match self {
+            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
+            Self::Proxy { .. } => async {
+                Err(ThoError::new("proxy ApplyStage2 does not have local state"))
+            }.boxed(),
+        }
+    }
+
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+        }
+    }
+}
+///
+///
+#[async_trait]
+impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum2<St, Init>
+where
+    St:SyncStage+StageWithState + FuturesRunnerMapPurger,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        match self {
+            DynSyncStageWithStateEnum2::Local(stage) => {
+                stage.has_gpu_data(device_idx).await
+            }
+            DynSyncStageWithStateEnum2::Proxy { .. } => {
+                true
+            }
+        }
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self {
+            DynSyncStageWithStateEnum2::Local(local) => {
+                local.purge_gpu(ids_to_keep, device_idx, name).await
+            }
+            DynSyncStageWithStateEnum2::Proxy { stage,  .. } => {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
+                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
+                            stage.endpoint_name,
+                            stage.stage_id,
+                        ).await
+                    })
+                })?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self {
+            DynSyncStageWithStateEnum2::Local(local) => {
+                local.drop_gpu(device_idx, name).await
+            }
+            DynSyncStageWithStateEnum2::Proxy { .. } => {
+                Ok(())
+            }
+        }
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        match self {
+            DynSyncStageWithStateEnum2::Local(local) => {
+                local.purge_cpu(purge_until).await
+            }
+            DynSyncStageWithStateEnum2::Proxy { .. } => {
                 0
             }
         }
