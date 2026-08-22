@@ -869,7 +869,7 @@ mod tests {
             // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
             super::run_ipc_test(async {
                 let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
-                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
                 let sync_stage = Arc::new(ProxyABClcSyncStage::new(1).await?);
                 let sync_stage_calls = Arc::clone(&sync_stage);
                 let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
@@ -885,7 +885,7 @@ mod tests {
             // Use this test's exact name so the harness starts its worker branch, not the sibling test.
             super::run_ipc_test(async {
                 let _ctx = super::init_ipc_test("test_ipc_ab_clc_sync_with_selector", pure_module_path!()).await?;
-                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
                 let sync_stage = Arc::new(ProxyABClcSyncStage::new(1).await?);
                 let sync_stage_calls = Arc::clone(&sync_stage);
                 let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));

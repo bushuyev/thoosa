@@ -445,6 +445,7 @@ impl ThoError {
         }
     }
 
+    //TODO pass cuda/torch error id/msg from worker and decide in main if it's oom/needs reset
     pub fn from_worker(msg: String, is_oom: bool, needs_cuda_ctx_reset: bool) -> ThoError {
         debug!("ThoosaError::new: msg={msg}");
 
