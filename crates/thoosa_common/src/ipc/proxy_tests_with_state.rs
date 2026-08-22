@@ -33,7 +33,7 @@ use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
-use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
@@ -203,7 +203,7 @@ where
     P:Debug,
     C:RunCtx
 {
-    pub async fn new(stage_id: u32, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
+    pub async fn new(stage_id: u32, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageWithStateEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
             let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
@@ -223,7 +223,7 @@ where
                 CudaWorkerMsgOut { request_id, status } => {
                     match status {
                         OpResult::Ok(_) => {
-                            Ok(DynSyncStageEnum2::Proxy {
+                            Ok(DynSyncStageWithStateEnum2::Proxy {
                                 stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, stage_id, tho_device_idx)),
                                 init: (),
                             })
@@ -238,7 +238,7 @@ where
 
 
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
+            Ok(DynSyncStageWithStateEnum2::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
         }
     }
 
@@ -332,10 +332,7 @@ where
     }
 }
 
-
-
 const TEST_ENDPOINT: &str = "TestStageB";
-
 
 
 pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
