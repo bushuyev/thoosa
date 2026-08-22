@@ -811,9 +811,6 @@ where
     }
 }
 
-static INSTANCES: LazyLock<
-    Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>
-> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub trait SyncStage: Stage + Debug {
     type Init = ();
@@ -1004,7 +1001,6 @@ pub trait ErasedStageWithState<S>
 where
     S: SyncStage,
 {
-    //TODO add device param
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
 }
 
