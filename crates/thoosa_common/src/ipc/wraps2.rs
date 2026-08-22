@@ -12,7 +12,7 @@ use serde::Serialize;
 use tokio::sync::MutexGuard;
 use with_id::WithId;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
 use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
@@ -235,6 +235,16 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned,
     Init:Debug + Send + Sync + 'static
 {
+    // fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
+    // where
+    //     Self: Sized
+    // {
+    //     match self {
+    //         Self::Local(stage) => stage.as_with_state(),
+    //         Self::Proxy { stage, .. } => None,
+    //     }
+    // }
+
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
         Self: Sized,
