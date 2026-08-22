@@ -430,6 +430,7 @@ impl CudaWorker {
                                 Some(with_state) => {
                                     debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
                                     // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
+                                    
                                     panic_to_err_async!(with_state.do_run_with_state_2(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx))
                                 }
                                 None => {
