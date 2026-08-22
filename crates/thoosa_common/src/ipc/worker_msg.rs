@@ -12,6 +12,10 @@ pub trait WorkerInput:Any + Send + Sync + Debug{
 
 }
 
+#[typetag::serde(name = "void")]
+impl WorkerInput for (){
+
+}
 #[typetag::serde(tag = "type")]
 pub trait WorkerOutput:Any + Send + Sync + Debug{
 

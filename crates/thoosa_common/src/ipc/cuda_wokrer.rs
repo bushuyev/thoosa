@@ -385,6 +385,8 @@ impl CudaWorker {
                             let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
                             debug!("run_worker: install endpoint key={endpoint_key} installed_endpoints keys={:?}", installed_endpoints.read().keys().collect::<Vec<_>>());
                             if installed_endpoints.read().contains_key(&endpoint_key) {
+                                debug!("run_worker: endpoint {endpoint_key:?} is already installed");
+
                                 reply_tx
                                     .send(WorkerReply {
                                         id: v.request_id,
@@ -418,9 +420,10 @@ impl CudaWorker {
                         }
                         Operation::InvokeStage{ endpoint_name, stage_id, input, consume } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
-                            debug!("run_worker: Operation::InvokeStage");
+                            debug!("run_worker: Operation::InvokeStage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?} consume={consume}");
                             let guard = installed_endpoints.read();
                             let Some(endpoint) = guard.get(&endpoint_key) else {
+                                debug!("run_worker: no endpoint for endpoint_key={endpoint_key} guard.keys={:?}", guard.keys());
                                 //TODO send error
                                 panic!("no endpoint for endpoint_key={endpoint_key}")
                             };
@@ -430,7 +433,7 @@ impl CudaWorker {
                                 Some(with_state) => {
                                     debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
                                     // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
-                                    
+
                                     panic_to_err_async!(with_state.do_run_with_state_2(&input, &all_cuda_tensors, &tho_device, &stream, &run_ctx))
                                 }
                                 None => {
@@ -498,7 +501,7 @@ impl CudaWorker {
                             debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?}");
 
                             let removed = installed_endpoints.write().remove(&endpoint_key).is_some();
-                            debug!("run_worker: drop endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?} removed={removed}");
+                            debug!("run_worker: drop endpoint: endpoint key={endpoint_key} installed_endpoints keys={:?}", installed_endpoints.read().keys().collect::<Vec<_>>());
                             reply_tx
                                 .send(WorkerReply {
                                     id: v.request_id,
@@ -944,7 +947,8 @@ impl CudaWorker {
 
 pub trait WorkerStageInput: Debug + Sized + Debug {
 
-    fn clone_refs(&self) -> Result<Self, ThoError> {//on main side
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {//on main side
+        error!("clone_refs: self={self:?}");
         todo!()
     }
 
@@ -969,18 +973,18 @@ where
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
-    fn clone_refs(&self) -> Result<Self, ThoError> {
-        match &self.inner {
-            ThoTensorInner::Val { .. } => {
-                panic!("can't clone val")
-            }
-            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
-                Ok(
-                    ThoTensor::new_ref(self.id.clone(), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx)
-                )
-            }
-        }
-    }
+    // fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+    //     match &self.inner {
+    //         ThoTensorInner::Val { .. } => {
+    //             panic!("can't clone val")
+    //         }
+    //         ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+    //             Ok(
+    //                 Box::new(ThoTensor::new_ref(self.id.clone(), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx))
+    //             )
+    //         }
+    //     }
+    // }
 
 
 
@@ -1037,7 +1041,7 @@ where
     pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         Self::ref_to_tensor_(all_cuda_tensors, &input_ref, false)
     }
-    pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {
+    pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
         let mut tensors = all_cuda_tensors.lock();

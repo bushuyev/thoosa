@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -427,8 +427,8 @@ impl WorkerWrapperCtx for crate::runner::run_ctx_2::RunCtxImpl {
 }
 
 
+pub type InpF<I>= Box<dyn for<'a> Fn(&'a dyn WorkerInput)->Box<&I> + Sync + Send>;
 
-#[derive(Debug)]
 pub struct WorkerWrapper<Co, S, I, O>
 where
     Co: IpcCodec,
@@ -441,7 +441,27 @@ where
     O: WorkerStageOutput + 'static,
 {
     base:Arc<S>,
-    pd:PhantomData<Co>
+    pd:PhantomData<Co>,
+    inpf:InpF<I>
+}
+
+impl <Co, S, I, O> Debug for WorkerWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    S: Stage<In<'static> = I, Out = O>,
+    S::Ctx: WorkerWrapperCtx,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerWrapper")
+            .field("base", &self.base)
+            .finish()
+    }
 }
 
 impl <Co, S, I, O> WorkerWrapper<Co, S, I, O>
@@ -456,7 +476,19 @@ where
     O: WorkerStageOutput + 'static,
 {
     pub fn new(base: Arc<S>, pd: PhantomData<Co>) -> Self {
-        Self { base, pd }
+        Self {
+            base, pd,
+            inpf: Box::new(|i| {
+                let a: &dyn WorkerInput = i;
+                let a: &dyn Any = a;
+
+                Box::new(a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={i:?}")))
+            })
+        }
+    }
+
+    pub fn new_i(base: Arc<S>, pd: PhantomData<Co>, inpf:InpF<I>) -> Self {
+        Self { base, pd, inpf }
     }
 }
 impl <Co, S, I, O>SyncStageIpcWrapper for WorkerWrapper<Co, S, I, O>
@@ -503,10 +535,8 @@ where
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx(), 0);//TODO fixit
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
 
-        let a: &dyn WorkerInput = input.as_ref();
-        let a: &dyn Any = a;
 
-        let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
+        let a = (self.inpf)(input.as_ref());
         let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors, true)?, &stage_ctx)?;
 
         debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
@@ -524,10 +554,7 @@ where
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx(), 0);//TODO fixit
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
 
-        let a: &dyn WorkerInput = input.as_ref();
-        let a: &dyn Any = a;
-
-        let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
+        let a = (self.inpf)(input.as_ref());
         let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
 
         debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");

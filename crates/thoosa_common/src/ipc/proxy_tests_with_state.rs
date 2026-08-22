@@ -95,10 +95,10 @@ impl BorrowRef for TestInputB {
 }
 
 impl WorkerStageInput for TestInputB {
-    fn clone_refs(&self) -> Result<Self, ThoError> {
-        Ok(TestInputB {
-            value: self.value.clone_refs()?,
-        })
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        Ok(Box::new(TestInputB {
+            value: self.value.clone_ref()?,
+        }))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
@@ -205,33 +205,12 @@ where
 {
     pub async fn new(stage_id: u32, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageWithStateEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
-            let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
-            let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
-            let rs = ipc_actor.install_stage_2(
-                TEST_ENDPOINT.to_string(),
-                stage_id,
-                Box::new(init),
-           ).await?;
+            Ok(DynSyncStageWithStateEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+                init: (),
+            })
 
-            debug!("TestStage::new: rs={rs:?}");
-
-            match rs {
-                CudaWorkerMsgOut { request_id, status } => {
-                    match status {
-                        OpResult::Ok(_) => {
-                            Ok(DynSyncStageWithStateEnum2::Proxy {
-                                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, stage_id, tho_device_idx)),
-                                init: (),
-                            })
-
-                        }
-                        OpResult::Failed{ msg, is_oom, needs_reset } => {
-                            Err(ThoError::from_worker(msg, is_oom, needs_reset))
-                        }
-                    }
-                }
-            }
 
 
         } else {
@@ -479,6 +458,7 @@ mod tests {
 
         // Dropping the last proxy reference must asynchronously release its worker key so that the same id can be installed again.
         drop(first_stage);
+        tokio::task::yield_now().await;
         tokio::time::timeout(Duration::from_secs(5), async {
              TestStageB::<(), TestRunCtx>::new(1, 1, TestStageInitB::new(2, 1)).await
         }).await??;
