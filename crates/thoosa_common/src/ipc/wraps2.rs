@@ -132,7 +132,8 @@ where
 {
     pub async fn proxy(
         endpoint_name:&'static str,
-        stage_id: u32, tho_device_idx: usize,
+        stage_id: u32,
+        tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>
     ) -> Result<Self, ThoError> {
 

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate as thoosa_common;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -7,6 +8,8 @@ use crate::torch_runner::tests::composite_input::dims::AStageOutputDims;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use std::sync::Arc;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::LocalSelect;
@@ -18,6 +21,9 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
+use crate::ipc::codec::IpcCodec;
+use crate::ipc::cuda_wokrer::WorkerStageInput;
+use crate::ipc::worker_msg::WorkerInput;
 
 #[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
 #[dummy_data(clone)]
@@ -56,9 +62,9 @@ impl WithId for AStageInput {
 impl Input for AStageInput{}
 
 
-#[derive(Debug, Named)]
+#[derive(Debug, Named, Serialize, Deserialize)]
 pub(super) struct AStageOutput {
-    id: SynKey,
+    pub id: SynKey,
     pub(super) value:ThoTensor<AStageOutputDims, ()>,
 }
 
@@ -76,6 +82,30 @@ impl AStageOutput {
             }
         )))
     }
+}
+
+#[typetag::serde]
+impl WorkerInput for AStageOutput {}
+
+impl WorkerStageInput for AStageOutput {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        Ok(Box::new(AStageOutput{
+            id: self.id.clone(),
+            value: self.value.clone_ref()?,
+        }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+      Ok(AStageOutput{
+          id: self.id.clone(),
+          value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
+      })
+    }
+
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        todo!()
+    }
+
 }
 
 impl Select<RangeSelector> for AStageOutput {
