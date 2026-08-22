@@ -55,7 +55,7 @@ use tracing::Instrument;
 use tracing::field::debug;
 use tub::{Guard, Pool};
 use crate::ipc::cuda_wokrer::insert_worker_tensor;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
@@ -2335,6 +2335,7 @@ impl CudaIPCActorHandle {
         })
     }
 
+    #[deprecated]//use install_stage_2
     async fn install_endpoint_raw(&self, init_msg: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -2350,11 +2351,19 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    pub async fn send_msg(&self, init_msg: CudaWorkerMsgIn) -> Result<CudaWorkerMsgOut, ThoError> {
+    pub async fn invoke_stage(&self, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> Result<CudaWorkerMsgOut, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
-                input: init_msg,
+                input: CudaWorkerMsgIn {
+                    request_id: 0,
+                    operation: Operation::InvokeStage {
+                        endpoint_name,
+                        stage_id,
+                        input,//clones refs
+                        consume,
+                    },
+                },
                 respond_to,
             }
         ).instrument(tracing::debug_span!(
@@ -2365,6 +2374,30 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
+    pub async fn install_stage_2(&self, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> Result<CudaWorkerMsgOut, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::SendMsg {
+                input: CudaWorkerMsgIn {
+                    request_id: 0,
+                    operation: Operation::InstallStage {
+                        endpoint_name,
+                        stage_id,
+                        init_data,
+                    },
+                },
+                respond_to,
+            }
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::send_msg",
+            agg_perf="CudaIPCActorHandle::send_msg",
+        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
+
+    #[deprecated]//use invoke_stage
     async fn invoke_endpoint_raw(&self, input: String) -> Result<String, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -2380,6 +2413,7 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
+    #[deprecated]//use invoke_stage
     async fn consume_endpoint_raw(&self, input: String) -> Result<String, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
