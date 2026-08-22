@@ -73,40 +73,17 @@ where
                 let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
 
-                let rs = ipc_actor.send_msg(CudaWorkerMsgIn {
-                    request_id: 0,
-                    operation: Operation::InvokeStage {
-                        endpoint_name: self.endpoint_name.to_string(),
-                        stage_id: self.stage_id,
-                        input: Box::new(input.clone_refs()?),//clones refs
-                        consume: false,
-                    },
-                }).await?;
+                let rs = ipc_actor.invoke_stage(
+                    self.endpoint_name.to_string(),
+                    self.stage_id,
+                    Box::new(input.clone_refs()?),//clones refs
+                    false,
+                ).await?;
 
                 debug!("ProxyStage2::do_run: rs={rs:?}");
 
 
-                match rs {
-                    CudaWorkerMsgOut { request_id, status } => {
-                        match status {
-                            OpResult::Ok(r) => {
-                                match r {
-                                    None => {
-                                        Err(ThoError::new("no response".to_string()))
-                                    }
-                                    Some(v) => {
-                                        let r:Box<dyn Any> = v as Box<dyn Any>;
-                                        Ok(*r.downcast::<St::Out>().unwrap())
-                                    }
-                                }
-
-                            }
-                            OpResult::Failed{ msg, is_oom, needs_reset } => {
-                                Err(ThoError::from_worker(msg, is_oom, needs_reset))
-                            }
-                        }
-                    }
-                }
+                Self::handle_rs(rs)
 
 
             })
@@ -124,15 +101,19 @@ where
             tokio::runtime::Handle::current().block_on(async {
 
 
-                let encoded = JsonIpcCodec::encode(&input)?;
-                let request = IpcSyncStageRunInput::new(encoded);
-                let encoded = JsonIpcCodec::encode(&request)?;
-                let actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
-                let response = actor.consume_endpoint_bytes(
+                let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
+                let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+
+                let rs = ipc_actor.invoke_stage(
+                    self.endpoint_name.to_string(),
                     self.stage_id,
-                    encode_endpoint_payload_bytes(self.endpoint_name, &encoded).into_bytes(),
+                    Box::new(input.clone_refs()?),//clones refs
+                    false,
                 ).await?;
-                JsonIpcCodec::decode(&response)
+
+                debug!("ProxyStage2::consume: rs={rs:?}");
+                Self::handle_rs(rs)
             })
         });
         match result {
@@ -156,6 +137,30 @@ where
             pd:PhantomData
         }
     }
+
+    fn handle_rs(rs: CudaWorkerMsgOut) -> Result<<St as Stage>::Out, ThoError> {
+        match rs {
+            CudaWorkerMsgOut { request_id, status } => {
+                match status {
+                    OpResult::Ok(r) => {
+                        match r {
+                            None => {
+                                Err(ThoError::new("no response".to_string()))
+                            }
+                            Some(v) => {
+                                let r: Box<dyn Any> = v as Box<dyn Any>;
+                                Ok(*r.downcast::<St::Out>().unwrap())
+                            }
+                        }
+                    }
+                    OpResult::Failed { msg, is_oom, needs_reset } => {
+                        Err(ThoError::from_worker(msg, is_oom, needs_reset))
+                    }
+                }
+            }
+        }
+    }
+
 }
 
 
