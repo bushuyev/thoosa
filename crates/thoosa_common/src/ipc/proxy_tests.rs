@@ -4,7 +4,7 @@ use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -256,16 +256,6 @@ where
 const TEST_ENDPOINT: &str = "TestStage";
 
 
-pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-
-    async move {
-        Ok(Box::new(WorkerWrapper::new(
-            Arc::new(TestStageA::<(), WokerRunCtx>::new_local(TestStageInitA::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
-            PhantomData::<JsonIpcCodec>
-        )) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
-
 pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     debug!("test_simp_init_2: 0");
     let init: Box<dyn Any> = init;
@@ -286,8 +276,8 @@ pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<B
 
 
 mod tests {
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
-    use crate::ipc::proxy_tests::{test_simp_init, test_simp_init_2, TestOutputA, TestStageInitA, TEST_ENDPOINT};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
+    use crate::ipc::proxy_tests::{test_simp_init_2, TestOutputA, TestStageInitA, TEST_ENDPOINT};
     use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;

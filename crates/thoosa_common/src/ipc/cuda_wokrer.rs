@@ -74,7 +74,7 @@ pub struct WorkerCli {
 
 impl CudaWorker {
 
-    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn>) -> Result<(), ThoError>{
+    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn2>) -> Result<(), ThoError>{
 
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
@@ -125,7 +125,8 @@ impl CudaWorker {
                     app_configs.clone(),
                 )?));
 
-                CudaWorker::run_worker(sock_path, &ws, init_map, ThoDevice::from(Device::Cuda(0))).await//TODO Cuda(0)
+                // Application workers use only postcard/typetag endpoint initializers after the proxy migration.
+                CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), init_map, ThoDevice::from(Device::Cuda(0))).await//TODO Cuda(0)
             })?;
 
             std::process::exit(0);

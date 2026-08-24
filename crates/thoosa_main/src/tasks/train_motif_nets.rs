@@ -15,16 +15,17 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use plotters::style::RED;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
@@ -48,7 +49,7 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::{Batch, MotifProbability, MotifSlices, Slice, ThoBatch};
-use thoosa_common::ipc::worker_msg::WorkerOutput;
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
@@ -122,9 +123,15 @@ impl WorkerStageInput for TrainMotifStepIpcInit {
     }
 }
 
-fn train_motif_step_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+#[typetag::serde(name = "TrainMotifStepIpcInit")]
+impl WorkerInput for TrainMotifStepIpcInit {}
+
+#[typetag::serde(name = "TrainMotifStepInput")]
+impl WorkerInput for crate::tasks::train_step::TrainStepInput<Slice, MotifProbability> {}
+
+fn train_motif_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = TrainMotifStepIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainMotifStepIpcInit>().map_err(|_| ThoError::new("TrainMotifStep endpoint received invalid initializer"))?;
         let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, init.motif)?;
         let cosine_motif = match &init.params.net_type {
             MotifNetTypeParams::CosineNetParams(_) => Some(Arc::new(copy_motif(&motif)?)),
@@ -180,7 +187,7 @@ impl<C> TrainStepFactory<Slice, MotifProbability, C, MotifNetParams, TrainMotifN
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
+    async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
         let (node_params, stft_config) = train_motif_step_params(&run_config, self.motif_width)?;
         if GlobalCtx::global().is_ipc() {
             let motif = track_await(self.motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
@@ -196,8 +203,8 @@ where
             static TRAIN_MOTIF_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainMotifStepIpcInit>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_MOTIF_STEP_ENDPOINT, stage_id, &init).await?;
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())), init: () }, node_params))
+            let input_cloner = Arc::new(|input: &crate::tasks::train_step::TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            Ok((DynSyncStageWithStateEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
@@ -238,40 +245,40 @@ where
                 run_config,
                 vs_path,
             ).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
+            Ok((DynSyncStageWithStateEnum2::Local(Arc::new(train_step)), node_params))
         }
     }
 }
 
-pub fn train_motif_step_endpoint_inits() -> HashMap<String, InitFn> {
+pub fn train_motif_step_endpoint_inits() -> HashMap<String, InitFn2> {
     HashMap::from([
         (
             TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
-            Box::new(train_motif_step_endpoint_init) as InitFn,
+            Box::new(train_motif_step_endpoint_init) as InitFn2,
         ),
         (
             SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
-            Box::new(sync_motif_bastch_endpoint_init) as InitFn,
+            Box::new(sync_motif_bastch_endpoint_init) as InitFn2,
         ),
         (
             SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT.to_string(),
-            Box::new(split_motif_into_train_valid_endpoint_init) as InitFn,
+            Box::new(split_motif_into_train_valid_endpoint_init) as InitFn2,
         ),
         (
             SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT.to_string(),
-            Box::new(sync_load_motif_resources_endpoint_init) as InitFn,
+            Box::new(sync_load_motif_resources_endpoint_init) as InitFn2,
         ),
         (
             SYNC_LOAD_RANDOM_SLICES_ENDPOINT.to_string(),
-            Box::new(sync_load_random_slices_endpoint_init) as InitFn,
+            Box::new(sync_load_random_slices_endpoint_init) as InitFn2,
         ),
         (
             SYNC_MOTIF_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_motif_loader_endpoint_init) as InitFn,
+            Box::new(sync_motif_loader_endpoint_init) as InitFn2,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as InitFn,
+            Box::new(sync_label_batch_endpoint_init) as InitFn2,
         ),
     ])
 }
@@ -878,7 +885,41 @@ impl Serialize for SyncMotifBatchInput<'_> {
     }
 }
 
+impl<'de> Deserialize<'de> for SyncMotifBatchInput<'static> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = SyncMotifBatchIpcInput::deserialize(deserializer)?;
+        Ok(Self { id: input.id, motifs: ThoDataRef::Owned(input.motifs), random_slices: ThoDataRef::Owned(input.random_slices), num_slices: input.num_slices, descr: input.descr })
+    }
+}
+
+#[typetag::serde(name = "SyncMotifBatchInput")]
+impl WorkerInput for SyncMotifBatchInput<'static> {}
+
 impl WorkerStageInput for SyncMotifBatchInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Own cloned worker references so no borrowed batch lifetime crosses IPC.
+        Ok(Box::new(SyncMotifBatchInput {
+            id: self.id.clone(),
+            motifs: ThoDataRef::Owned(self.motifs.as_ref().clone_ref()?),
+            random_slices: ThoDataRef::Owned(self.random_slices.as_ref().clone_ref()?),
+            num_slices: self.num_slices,
+            descr: self.descr.clone(),
+        }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        Ok(Self {
+            id: self.id.clone(),
+            motifs: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.motifs.as_ref(), all_cuda_tensors, remove)?),
+            random_slices: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.random_slices.as_ref(), all_cuda_tensors, remove)?),
+            num_slices: self.num_slices,
+            descr: self.descr.clone(),
+        })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<SyncMotifBatchIpcInput>(input)?;
         Ok(Self {
@@ -948,7 +989,7 @@ impl SyncStage for SyncMotifBatch {
 
 #[derive(Debug)]
 struct SyncMotifBatchDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncMotifBatch>>,
+    stage: Arc<DynSyncStageEnum2<SyncMotifBatch>>,
     pd: PhantomData<C>,
 }
 
@@ -960,11 +1001,10 @@ where
         let stage = if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Install one shared-wrapper endpoint per proxy so worker tensor ownership stays isolated.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx)) }
+            // Install one typed-wrapper endpoint per proxy so worker tensor ownership stays isolated.
+            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncMotifBatch::new()))
+            DynSyncStageEnum2::Local(Arc::new(SyncMotifBatch::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1004,7 +1044,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifBatchOutput{}
 
-pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1133,7 +1173,29 @@ impl Serialize for SplitMotifIntoTrainValidInput<'_> {
     }
 }
 
+impl<'de> Deserialize<'de> for SplitMotifIntoTrainValidInput<'static> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = SplitMotifIntoTrainValidIpcInput::deserialize(deserializer)?;
+        Ok(Self { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(input.motif)) })
+    }
+}
+
+#[typetag::serde(name = "SplitMotifIntoTrainValidInput")]
+impl WorkerInput for SplitMotifIntoTrainValidInput<'static> {}
+
 impl WorkerStageInput for SplitMotifIntoTrainValidInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Flatten the metadata wrapper because this stage consumes only the motif tensor.
+        Ok(Box::new(SplitMotifIntoTrainValidInput { id: self.id.clone(), motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(self.motif.motif().clone_ref()?)) }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        Ok(Self { id: self.id.clone(), motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.motif.motif(), all_cuda_tensors, remove)?)) })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<SplitMotifIntoTrainValidIpcInput>(input)?;
         Ok(Self { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.motif)?)) })
@@ -1195,7 +1257,7 @@ impl SyncStage for SplitMotifIntoTrainValid {
 
 #[derive(Debug)]
 struct SplitMotifIntoTrainValidDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SplitMotifIntoTrainValid>>,
+    stage: Arc<DynSyncStageEnum2<SplitMotifIntoTrainValid>>,
     pd: PhantomData<C>,
 }
 
@@ -1207,11 +1269,10 @@ where
         let stage = if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // The shared proxy carries throttling separately from the borrowed tensor payload.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx)) }
+            // The typed proxy carries throttling separately from the borrowed tensor payload.
+            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
+            DynSyncStageEnum2::Local(Arc::new(SplitMotifIntoTrainValid::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1251,7 +1312,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SplitMotifIntoTrainValidOutput{}
 
-pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Decode borrowed motif input into worker-owned storage before running the shared stage.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SplitMotifIntoTrainValid::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1448,10 +1509,12 @@ mod tests {
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn2, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::tests::run_ipc_test;
-    use thoosa_common::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+    use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+    use thoosa_common::ipc::wraps::WorkerWrapperWithState;
+    use thoosa_common::ipc::wraps2::{DynSyncStageWithStateEnum2, ProxyStage2};
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -1647,7 +1710,7 @@ mod tests {
             Ok(())
 
         }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -1666,6 +1729,9 @@ mod tests {
             }
         }
 
+        #[typetag::serde(name = "TrainTestStepInit")]
+        impl WorkerInput for TrainTestStepInit {}
+
         #[derive(Debug, Clone)]
         struct InDims;
         impl Dims for InDims { type Metrics = MonoMetrics<0, 1>; }
@@ -1673,6 +1739,9 @@ mod tests {
         #[derive(Debug, Clone)]
         struct OutDims;
         impl Dims for OutDims { type Metrics = MonoMetrics<0, 1>; }
+
+        #[typetag::serde(name = "TrainTestStepInput")]
+        impl WorkerInput for TrainStepInput<InDims, OutDims> {}
 
         #[derive(Clone, Debug)]
         struct TestNetParams {
@@ -1692,9 +1761,9 @@ mod tests {
             net.linear_s(1, "final_net_last_layer")?.end_seq()
         }
 
-        fn train_test_step_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        fn train_test_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
             async move {
-                let init = TrainTestStepInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+                let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainTestStepInit>().map_err(|_| ThoError::new("TrainTestStep endpoint received invalid initializer"))?;
                 let params = TestNetParams { in_features: 100, layers: 2 };
                 let params_for_module = params.clone();
                 let x_f: Arc<TrainStepXFn<InDims>> = Arc::new(Box::new(|batch| batch));
@@ -1725,9 +1794,9 @@ mod tests {
             let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, true);
             let stage_id = 0;
             let init = TrainTestStepInit { lr: 0.001, vs_path: PathBuf::from("/tmp/thoosa_train_step_ipc.safetensors") };
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainTestStepInit>(GlobalCtx::global().cuda_actor(1).as_ref(), TRAIN_TEST_STEP_ENDPOINT, stage_id, &init).await?;
-            let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1)),
+            let input_cloner = Arc::new(|input: &TrainStepInput<InDims, OutDims>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            let train_step: DynSyncStageWithStateEnum2<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1, Box::new(init), input_cloner).await?),
                 init: (),
             };
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
@@ -1743,7 +1812,7 @@ mod tests {
             Ok(())
         }, async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws, HashMap::from([(TRAIN_TEST_STEP_ENDPOINT.to_string(), Box::new(train_test_step_endpoint_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::from([(TRAIN_TEST_STEP_ENDPOINT.to_string(), Box::new(train_test_step_endpoint_init) as InitFn2)]), ThoDevice::from(Cuda(0))).await
         })
     }
 

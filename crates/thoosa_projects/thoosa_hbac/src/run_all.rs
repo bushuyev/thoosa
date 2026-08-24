@@ -786,7 +786,8 @@ mod tests {
                         test_dir.clone(),
                         WsConfigs::new(1, 0, 100)
                     )?));
-                    CudaWorker::run_worker(sock_path, &ws,  crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await
+                    // Heavy IPC tests use the same typed worker protocol as the application entry point.
+                    CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await
                 }
             }
         )

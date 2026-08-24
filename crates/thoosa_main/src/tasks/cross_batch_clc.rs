@@ -5,7 +5,7 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -20,8 +20,9 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::worker_msg::WorkerOutput;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::wraps::WorkerWrapper;
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
@@ -161,7 +162,44 @@ impl Serialize for CrossInput<'_, Arc<Resource>> {
     }
 }
 
+impl<'de> Deserialize<'de> for CrossInput<'static, Arc<Resource>> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = CrossInputFindMotifsIpcInput::deserialize(deserializer)?;
+        Ok(CrossInput::from_decoded_parts(
+            input.tensors.into_iter().map(ThoDataRef::Owned).collect(),
+            input.resources_0.into_iter().map(|resource| Arc::new(resource.into_resource())).collect(),
+            input.resources_1.into_iter().map(|resource| Arc::new(resource.into_resource())).collect(),
+            input.id,
+        ))
+    }
+}
+
+#[typetag::serde]
+impl WorkerInput for CrossInput<'static, Arc<Resource>> {}
+
 impl WorkerStageInput for CrossInput<'_, Arc<Resource>> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Typetag requires an owned value, so clone worker references and resource metadata into a static input.
+        Ok(Box::new(CrossInput::<'static, Arc<Resource>>::from_decoded_parts(
+            self.tensors.iter().map(|tensor| Ok(ThoDataRef::Owned(tensor.as_ref().clone_ref()?))).collect::<Result<Vec<_>, ThoError>>()?,
+            self.resources_0.clone(),
+            self.resources_1.clone(),
+            self.id.clone(),
+        )))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        Ok(CrossInput::from_decoded_parts(
+            self.tensors.iter().map(|tensor| Ok(ThoDataRef::Owned(tensor.as_ref().ref_to_tensor(all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?,
+            self.resources_0.clone(),
+            self.resources_1.clone(),
+            self.id.clone(),
+        ))
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<CrossInputFindMotifsIpcInput>(input)?;
         let tensors = input.tensors.into_iter().map(|tensor| Ok(ThoDataRef::Owned(ThoTensor::<ChannelsData, SynKey>::ref_to_tensor(all_cuda_tensors, tensor)?))).collect::<Result<Vec<_>, ThoError>>()?;
@@ -487,11 +525,11 @@ where
 }
 
 #[derive(Debug)]
-struct CrossUnfoldClcProxyCtx<C>//TODO replace with DynSyncStageEnum
+struct CrossUnfoldClcProxyCtx<C>//TODO remove the context adapter once the shared run context can be used directly
 where
     C: RunCtx + 'static,
 {
-    proxy: Arc<DynSyncStageEnum<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>>,
+    proxy: Arc<DynSyncStageEnum2<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>>,
     _pd: PhantomData<C>,
 }
 
@@ -537,10 +575,12 @@ where
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Install the configured find-motifs stage once, then use shared proxy dispatch.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, &init).await?;
+            // Install the configured find-motifs stage once, then use shared typed proxy dispatch.
             Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(CrossUnfoldClcProxyCtx::<C> {
-                proxy: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx)) }),
+                proxy: Arc::new(DynSyncStageEnum2::Proxy {
+                    stage: Arc::new(ProxyStage2::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+                    init: (),
+                }),
                 _pd: PhantomData,
             })))
         } else {
@@ -552,9 +592,10 @@ where
 #[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
 impl WorkerOutput for CrossUnfoldClcOutput<DistsMask>{}
 
-pub fn sync_cross_unfold_clc_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_cross_unfold_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = JsonIpcCodec::decode::<crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit>(&init_msg)?;
+        let init: Box<dyn Any> = init;
+        let init = *init.downcast::<crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit>().map_err(|_| ThoError::new("CrossUnfoldClc endpoint received an unexpected initializer type"))?;
         let stage = CrossUnfoldClc::<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>::new_for_find_motifs(init)?;
         // WorkerStageInput owns the decoded resource lists and tensor references for this run.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(stage), PhantomData)) as Box<dyn SyncStageIpcWrapper>)

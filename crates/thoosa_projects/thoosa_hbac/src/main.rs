@@ -15,7 +15,7 @@ use std::time::Instant;
 use tch::Device;
 use tch::Device::{Cpu, Cuda};
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
-use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
+use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn2, WorkerCli};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -40,7 +40,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
 
-fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
+fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn2> {
     let mut endpoints = train_motif_step_endpoint_inits();
     // Label and final training now execute through the same worker-owned proxy lifecycle as motif training.
     endpoints.extend(train_label_step_endpoint_inits());
@@ -48,47 +48,47 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
     endpoints.extend([
         (
             CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
-            Box::new(sync_cross_unfold_clc_endpoint_init) as InitFn,
+            Box::new(sync_cross_unfold_clc_endpoint_init) as InitFn2,
         ),
         (
             MOTIF_STATS_SYNC_ENDPOINT.to_string(),
-            Box::new(motif_stats_sync_stage_endpoint_init) as InitFn,
+            Box::new(motif_stats_sync_stage_endpoint_init) as InitFn2,
         ),
         (
             MOTIF_STATS_CONSUME_ENDPOINT.to_string(),
-            Box::new(motif_stats_consume_stage_endpoint_init) as InitFn,
+            Box::new(motif_stats_consume_stage_endpoint_init) as InitFn2,
         ),
         (
             SYNC_FREQ_FILTER_ENDPOINT.to_string(),
-            Box::new(sync_freq_filter_endpoint_init) as InitFn,
+            Box::new(sync_freq_filter_endpoint_init) as InitFn2,
         ),
         (
             SYNC_RAW_TENSOR_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_raw_tensor_loader_endpoint_init) as InitFn,
+            Box::new(sync_raw_tensor_loader_endpoint_init) as InitFn2,
         ),
         (
             APPLY_MOTIF_NET_ENDPOINT.to_string(),
-            Box::new(apply_motif_net_endpoint_init) as InitFn,
+            Box::new(apply_motif_net_endpoint_init) as InitFn2,
         ),
         (
             APPLY_LABEL_NET_ENDPOINT.to_string(),
-            Box::new(apply_label_net_endpoint_init) as InitFn,
+            Box::new(apply_label_net_endpoint_init) as InitFn2,
         ),
         (
             STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_motif_nets) as InitFn,
+            Box::new(stack_applied_motif_nets) as InitFn2,
         ),
         (
             STACK_APPLIED_LABEL_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_label_nets) as InitFn,
+            Box::new(stack_applied_label_nets) as InitFn2,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as InitFn,
+            Box::new(sync_label_batch_endpoint_init) as InitFn2,
         ),
         (
             SYNC_LOGITS_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_logits_batch_init) as InitFn,
+            Box::new(sync_logits_batch_init) as InitFn2,
         ),
     ]);
     endpoints

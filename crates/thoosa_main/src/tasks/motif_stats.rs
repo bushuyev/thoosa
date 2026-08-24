@@ -24,8 +24,9 @@ use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlice
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::worker_msg::WorkerOutput;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::wraps::WorkerWrapper;
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -865,6 +866,25 @@ impl Serialize for MotifStatsCalcInput<'_> {
     }
 }
 
+impl<'de> Deserialize<'de> for MotifStatsCalcInput<'static> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = MotifStatsSyncStageIpcInput::deserialize(deserializer)?;
+        let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>().map_err(serde::de::Error::custom)?;
+        // The worker owns the deserialized tensors, so borrowed main-process inputs become owned data refs.
+        let data = match input.data {
+            MotifStatsIpcData::Managed(motif) => MotifStatsCalcInputData::Managed(ThoDataRef::Owned(DataWithExtra::new(motif.tensor, motif.meta))),
+            MotifStatsIpcData::Motifs(motifs) => MotifStatsCalcInputData::Motifs(motifs.into_iter().map(|motif| ThoDataRef::Owned(DataWithExtra::new(motif.tensor, motif.meta))).collect()),
+        };
+        Ok(Self::from_data_refs(input.id, data, metrics, input.quantiles))
+    }
+}
+
+#[typetag::serde(name = "MotifStatsCalcInput")]
+impl WorkerInput for MotifStatsCalcInput<'static> {}
+
 impl MotifStatsCalcInput<'_> {
     fn decode_motif(motif: MotifStatsIpcMotif, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<LoadedMotif, ThoError> {
         Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, motif.tensor)?, motif.meta))
@@ -872,6 +892,27 @@ impl MotifStatsCalcInput<'_> {
 }
 
 impl WorkerStageInput for MotifStatsCalcInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        let clone_motif = |motif: &LoadedMotif| -> Result<LoadedMotif, ThoError> { Ok(DataWithExtra::new(motif.data().clone_ref()?, motif.extra().clone())) };
+        // Remove input lifetimes before typetag serializes the request.
+        let data = match self.data() {
+            MotifStatsCalcInputData::Managed(motif) => MotifStatsCalcInputData::Managed(ThoDataRef::Owned(clone_motif(motif.as_ref())?)),
+            MotifStatsCalcInputData::Motifs(motifs) => MotifStatsCalcInputData::Motifs(motifs.iter().map(|motif| Ok(ThoDataRef::Owned(clone_motif(motif.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?),
+        };
+        Ok(Box::new(MotifStatsCalcInput::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone())))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let materialize = |motif: &LoadedMotif| -> Result<LoadedMotif, ThoError> {
+            Ok(DataWithExtra::new(WorkerStageInput::ref_to_tensor(motif.data(), all_cuda_tensors, remove)?, motif.extra().clone()))
+        };
+        let data = match self.data() {
+            MotifStatsCalcInputData::Managed(motif) => MotifStatsCalcInputData::Managed(ThoDataRef::Owned(materialize(motif.as_ref())?)),
+            MotifStatsCalcInputData::Motifs(motifs) => MotifStatsCalcInputData::Motifs(motifs.iter().map(|motif| Ok(ThoDataRef::Owned(materialize(motif.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?),
+        };
+        Ok(Self::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone()))
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<MotifStatsSyncStageIpcInput>(input)?;
         let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>()?;
@@ -899,7 +940,7 @@ enum MotifStatsDynSyncStage<C>//TODO remove
 where
     C: RunCtx + Adjustable + 'static,
 {
-    Shared(Arc<DynSyncStageEnum<MotifStatsSyncStage<RunCtxImpl>>>, PhantomData<C>),
+    Shared(Arc<DynSyncStageEnum2<MotifStatsSyncStage<RunCtxImpl>>>, PhantomData<C>),
 }
 
 #[derive(Debug, Named)]
@@ -920,10 +961,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Shared proxy dispatch separates the run context throttle from the motif payload.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), MOTIF_STATS_SYNC_ENDPOINT, stage_id, &()).await?;
-            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx)) }), PhantomData))
+            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
         } else {
-            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<RunCtxImpl>::new_local()))), PhantomData))
+            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum2::Local(Arc::new(MotifStatsSyncStage::<RunCtxImpl>::new_local()))), PhantomData))
         }
     }
 
@@ -1015,7 +1055,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for MotifStatsOutput{}
 
-pub fn motif_stats_sync_stage_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_sync_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput owns decoded motifs while the generic shared wrapper runs the calculation.
@@ -1061,6 +1101,20 @@ impl Serialize for MotifStatsLoadedChannelsInput {
     }
 }
 
+impl<'de> Deserialize<'de> for MotifStatsLoadedChannelsInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = MotifStatsConsumeStageIpcInput::deserialize(deserializer)?;
+        let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>().map_err(serde::de::Error::custom)?;
+        Ok(Self::new(input.id, input.channels_motifs_slices, metrics, input.quantiles))
+    }
+}
+
+#[typetag::serde(name = "MotifStatsLoadedChannelsInput")]
+impl WorkerInput for MotifStatsLoadedChannelsInput {}
+
 impl MotifStatsLoadedChannelsInput {
     fn decode_for_worker_inner<C: IpcCodec>(encoded: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
         let input = C::decode::<MotifStatsConsumeStageIpcInput>(encoded)?;
@@ -1072,6 +1126,17 @@ impl MotifStatsLoadedChannelsInput {
 }
 
 impl WorkerStageInput for MotifStatsLoadedChannelsInput {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Clone only worker tensor references; the metrics remain ordinary owned metadata.
+        let tensors = self.channels_motifs_slices.iter().map(ThoTensor::clone_ref).collect::<Result<Vec<_>, _>>()?;
+        Ok(Box::new(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone())))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let tensors = self.channels_motifs_slices.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone()))
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         Ok(Self::decode_for_worker_inner::<C>(input, all_cuda_tensors)?.0)
     }
@@ -1086,7 +1151,7 @@ enum MotifStatsDynConsumeStage<C>//TODO remove
 where
     C: RunCtx + 'static,
 {
-    Shared(Arc<DynSyncStageEnum<MotifStatsConsumeStage<RunCtxImpl>>>, PhantomData<C>),
+    Shared(Arc<DynSyncStageEnum2<MotifStatsConsumeStage<RunCtxImpl>>>, PhantomData<C>),
 }
 
 #[derive(Debug, Named)]
@@ -1107,10 +1172,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Use shared consuming dispatch so tensor references are deleted only after success.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), MOTIF_STATS_CONSUME_ENDPOINT, stage_id, &()).await?;
-            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx)) }), PhantomData))
+            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
         } else {
-            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()))), PhantomData))
+            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum2::Local(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()))), PhantomData))
         }
     }
 
@@ -1196,7 +1260,7 @@ where
     }
 }
 
-pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.

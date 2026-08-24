@@ -7,7 +7,7 @@ use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::ready;
@@ -20,10 +20,11 @@ use tch::nn::{Optimizer, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec, install_ipc_endpoint};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
@@ -46,7 +47,7 @@ use rand::rng;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream, preload_one};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
-use thoosa_common::ipc::worker_msg::WorkerOutput;
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
@@ -231,7 +232,40 @@ impl Serialize for SyncLabelBatchInput<'_> {
     }
 }
 
+impl<'de> Deserialize<'de> for SyncLabelBatchInput<'static> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = SyncLabelBatchIpcInput::deserialize(deserializer)?;
+        if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
+            return Err(serde::de::Error::custom("SyncLabelBatch tensor and length metadata counts differ"));
+        }
+        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| ThoDataRef::Owned(DataWithExtra::new(tensor, lengths))).collect();
+        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| ThoDataRef::Owned(DataWithExtra::new(tensor, lengths))).collect();
+        Ok(Self { id: input.id, x_1, x_0, num_nets: input.num_nets, label: input.label })
+    }
+}
+
+#[typetag::serde(name = "SyncLabelBatchInput")]
+impl WorkerInput for SyncLabelBatchInput<'static> {}
+
 impl WorkerStageInput for SyncLabelBatchInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        let clone_value = |value: &AppliedMotifOutput| -> Result<AppliedMotifOutput, ThoError> { Ok(DataWithExtra::new(value.data().clone_ref()?, value.extra().clone())) };
+        // Convert every borrowed cached value into an owned worker-reference payload.
+        let x_1 = self.x_1.iter().map(|value| Ok(ThoDataRef::Owned(clone_value(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_0 = self.x_0.iter().map(|value| Ok(ThoDataRef::Owned(clone_value(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Box::new(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let materialize = |value: &AppliedMotifOutput| -> Result<AppliedMotifOutput, ThoError> { Ok(DataWithExtra::new(WorkerStageInput::ref_to_tensor(value.data(), all_cuda_tensors, remove)?, value.extra().clone())) };
+        let x_1 = self.x_1.iter().map(|value| Ok(ThoDataRef::Owned(materialize(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_0 = self.x_0.iter().map(|value| Ok(ThoDataRef::Owned(materialize(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Self { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<SyncLabelBatchIpcInput>(input)?;
         if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
@@ -261,20 +295,15 @@ impl <C> SyncLabelBatch<C>
 where
     C: RunCtx + 'static
 {
-    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLabelBatch<C>>, ThoError> {
+    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum2<SyncLabelBatch<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
-            install_ipc_endpoint::<JsonIpcCodec, ()>(
-                thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(),
-                SYNC_LABEL_BATCH_ENDPOINT,
-                stage_id,
-                &()
-            ).await?;
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, stage_id, device.tho_device_idx())),
+            Ok(DynSyncStageEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(SYNC_LABEL_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                init: (),
             })
         } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?)))
+            Ok(DynSyncStageEnum2::Local(Arc::new(Self::new_local().await?)))
         }
     }
 
@@ -343,7 +372,7 @@ where
 impl WorkerOutput for SyncLabelBatchOutput{}
 
 
-pub fn sync_label_batch_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_label_batch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // WorkerStageInput reconstructs owned tensor-plus-length values for the borrowed stage API.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::<WokerRunCtx>::new_local().await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -372,7 +401,7 @@ where
     store: Arc<Box<dyn Store>>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
-    sync_label_batch:Arc<DynSyncStageEnum<SyncLabelBatch<C>>>
+    sync_label_batch:Arc<DynSyncStageEnum2<SyncLabelBatch<C>>>
 
 }
 
@@ -1021,9 +1050,15 @@ impl WorkerStageInput for TrainLabelStepIpcInit {
     }
 }
 
-fn train_label_step_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+#[typetag::serde(name = "TrainLabelStepIpcInit")]
+impl WorkerInput for TrainLabelStepIpcInit {}
+
+#[typetag::serde(name = "TrainLabelStepInput")]
+impl WorkerInput for crate::tasks::train_step::TrainStepInput<MotifProbability, LabelProbability> {}
+
+fn train_label_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = TrainLabelStepIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>().map_err(|_| ThoError::new("TrainLabelStep endpoint received invalid initializer"))?;
         let params = init.params.clone();
         let params_for_module = params.clone();
         let training_config = init.training_config.clone();
@@ -1063,14 +1098,14 @@ impl<C> TrainStepFactory<MotifProbability, LabelProbability, C, LabelNetParams, 
 where
     C: RunCtx + 'static,
 {
-    async fn new(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
+    async fn new(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
         let node_params = train_label_step_params(&run_config, self.num_nets);
         if GlobalCtx::global().is_ipc() {
             static TRAIN_LABEL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_LABEL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainLabelStepIpcInit>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_LABEL_STEP_ENDPOINT, stage_id, &init).await?;
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())), init: () }, node_params))
+            let input_cloner = Arc::new(|input: &crate::tasks::train_step::TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            Ok((DynSyncStageWithStateEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
             let training_config = run_config.common_training_args.clone();
@@ -1089,15 +1124,15 @@ where
                 run_config,
                 vs_path,
             ).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
+            Ok((DynSyncStageWithStateEnum2::Local(Arc::new(train_step)), node_params))
         }
     }
 }
 
-pub fn train_label_step_endpoint_inits() -> HashMap<String, InitFn> {
+pub fn train_label_step_endpoint_inits() -> HashMap<String, InitFn2> {
     HashMap::from([(
         TRAIN_LABEL_STEP_ENDPOINT.to_string(),
-        Box::new(train_label_step_endpoint_init) as InitFn,
+        Box::new(train_label_step_endpoint_init) as InitFn2,
     )])
 }
 
