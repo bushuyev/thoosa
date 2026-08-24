@@ -743,7 +743,7 @@ pub const STACK_APPLIED_MOTIF_NETS_ENDPOINT: &str = "STACK_APPLIED_MOTIF_NETS_EN
 #[derive(Debug, Named)]
 pub struct StackAppliedMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
     pd: PhantomData<C>,
@@ -751,7 +751,7 @@ where
 
 impl<C> StackAppliedMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedMotifNets<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
@@ -787,13 +787,13 @@ pub fn stack_applied_motif_nets(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Worksp
 
 impl<C> Adjustable for StackAppliedMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
 }
 
 impl<C> OutId for StackAppliedMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -802,7 +802,7 @@ where
 
 impl<C> Stage for StackAppliedMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = StackAppliedMotifNetsInput;
@@ -811,7 +811,7 @@ where
 
 impl<C> SyncStage for StackAppliedMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedMotifNets::consume"))]
     fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {

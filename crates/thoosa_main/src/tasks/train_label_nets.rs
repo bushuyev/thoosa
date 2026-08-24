@@ -252,14 +252,14 @@ impl WorkerStageInput for SyncLabelBatchInput<'_> {
 #[derive(Debug)]
 pub struct SyncLabelBatch<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     pd:PhantomData<C>
 }
 
 impl <C> SyncLabelBatch<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLabelBatch<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
@@ -288,12 +288,12 @@ where
 
 impl <C> Adjustable for SyncLabelBatch<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {}
 
 impl <C> OutId for SyncLabelBatch<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
@@ -302,7 +302,7 @@ where
 
 impl <C> Stage for SyncLabelBatch<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     type Ctx = C;
     type In<'a> = SyncLabelBatchInput<'a>;
@@ -311,7 +311,7 @@ where
 
 impl <C> SyncStage for SyncLabelBatch<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("SyncLabelBatch::do_run: input={input:?}");

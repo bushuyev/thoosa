@@ -1117,9 +1117,6 @@ pub struct WokerRunCtx {
     tho_device_idx: usize,
 }
 
-impl Adjustable for WokerRunCtx {//TODO, remove Adjustable bounds in stages + run_cached
-
-}
 
 impl WokerRunCtx {
     pub fn new(tho_device_idx: usize) -> Self {
