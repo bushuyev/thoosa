@@ -407,7 +407,7 @@ impl BorrowRef for SelectBucketsSyncInputWrapper {
 #[derive(Debug)]
 struct SyncSelectBucketsStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx  + 'static,
 {
     find_motifs_run_config_ids: Vec<RunConfigId>,
     bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
@@ -418,7 +418,7 @@ where
 
 impl<C> SyncSelectBucketsStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn new(
         find_motifs_run_config_ids: Vec<RunConfigId>,
@@ -489,7 +489,7 @@ impl<C> Adjustable for SyncSelectBucketsStage<C> where C: RunCtx + Adjustable + 
 
 impl<C> OutId for SyncSelectBucketsStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id(&self, _input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         ()
@@ -498,7 +498,7 @@ where
 
 impl<C> Stage for SyncSelectBucketsStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = SelectBucketsSyncInput<'a>;
@@ -507,7 +507,7 @@ where
 
 impl<C> SyncStage for SyncSelectBucketsStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SyncSelectBucketsStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
