@@ -1082,9 +1082,9 @@ impl WorkerStageInput for MotifStatsLoadedChannelsInput {
 }
 
 #[derive(Debug)]
-enum MotifStatsDynConsumeStage<C>
+enum MotifStatsDynConsumeStage<C>//TODO remove
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     Shared(Arc<DynSyncStageEnum<MotifStatsConsumeStage<RunCtxImpl>>>, PhantomData<C>),
 }
@@ -1092,7 +1092,7 @@ where
 #[derive(Debug, Named)]
 pub struct MotifStatsConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
     _ctx: PhantomData<C>,
@@ -1100,7 +1100,7 @@ where
 
 impl<C> MotifStatsConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<MotifStatsDynConsumeStage<C>, ThoError> {
         if GlobalCtx::global().is_ipc() {
@@ -1126,7 +1126,7 @@ where
 
 impl<C> Adjustable for MotifStatsDynConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx  + 'static,
 {
 }
 
@@ -1134,7 +1134,7 @@ impl<C> Adjustable for MotifStatsConsumeStage<C> where C: RunCtx + Adjustable + 
 
 impl<C> OutId for MotifStatsDynConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &motif_stats_stage_id() + input_id
@@ -1143,7 +1143,7 @@ where
 
 impl<C> OutId for MotifStatsConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx  + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -1152,7 +1152,7 @@ where
 
 impl<C> Stage for MotifStatsConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = MotifStatsLoadedChannelsInput;
@@ -1161,7 +1161,7 @@ where
 
 impl<C> Stage for MotifStatsDynConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = MotifStatsLoadedChannelsInput;
@@ -1170,7 +1170,7 @@ where
 
 impl<C> SyncStage for MotifStatsConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx  + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsConsumeStage::consume"))]
     fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {

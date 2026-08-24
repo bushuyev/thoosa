@@ -1041,7 +1041,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
 #[derive(Debug)]
 pub struct ApplyMotifNet<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     id: SynKey,
     // Keep the module and motif metadata under one state lock for device moves.
@@ -1058,7 +1058,7 @@ where
 
 //properties needed when running stage
 pub trait ApplyMotifNetProps {
-    type C: RunCtx + MaxParallelCtx + Adjustable + 'static;
+    type C: RunCtx + 'static;
 
     fn motif_width(&self)->u32;
     fn motif_id(&self)->u32;
@@ -1068,7 +1068,7 @@ pub trait ApplyMotifNetProps {
 
 impl <C> ApplyMotifNetProps for DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     type C = C;
 
@@ -1108,7 +1108,7 @@ where
 
 impl <C> ApplyMotifNet<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     async fn new(
         slice_step:u32,
@@ -1224,14 +1224,14 @@ pub fn apply_motif_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn W
 
 impl <C> Adjustable for ApplyMotifNet<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx  + 'static
 {
 
 }
 
 impl <C> OutId for ApplyMotifNet<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx  + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.motif_id + input_id//it's assumed that there can be only one net for a motif
@@ -1241,14 +1241,14 @@ where
 
 impl <C>  Stage for ApplyMotifNet<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static{
+    C: RunCtx + 'static{
     type Ctx = C;
     type In<'a> = ApplyMotifNetInput<'a>;
     type Out = ThoTensor<MotifProbability, SynKey>;
 }
 
 impl <C> SyncStage for ApplyMotifNet<C> where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
+    C: RunCtx + 'static
 {
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         Some(self)
@@ -1257,7 +1257,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
 impl<C> StageWithState for ApplyMotifNet<C>
 where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    C: RunCtx  + 'static,
 {
     type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
 
