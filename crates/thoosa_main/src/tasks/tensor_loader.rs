@@ -18,8 +18,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tch::{Device, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::worker_msg::WorkerOutput;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::wraps::WorkerWrapper;
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -93,7 +94,7 @@ where
 {
     Local(Arc<SyncRawTensorLoader<C>>),
     Proxy {
-        stage: Arc<DynSyncStageEnum<SyncRawTensorLoaderProxyTarget>>,
+        stage: Arc<DynSyncStageEnum2<SyncRawTensorLoaderProxyTarget>>,
         loader_fn: DebugLoadFn,
         device: ThoDevice,
     },
@@ -145,9 +146,17 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // The closure runs in the main process; only its copied tensor crosses the shared endpoint.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, &()).await?;
             Ok(RawTensorLoaderDynSyncStage::Proxy {
-                stage: Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_RAW_TENSOR_LOADER_ENDPOINT, stage_id, tho_device_idx)) }),
+                stage: Arc::new(DynSyncStageEnum2::Proxy {
+                    stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                        SYNC_RAW_TENSOR_LOADER_ENDPOINT,
+                        stage_id,
+                        tho_device_idx,
+                        Box::new(()),
+                        Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+                    ).await?),
+                    init: (),
+                }),
                 loader_fn: DebugLoadFn(loader_fn),
                 device,
             })
@@ -210,7 +219,7 @@ where
 }
 
 
-pub fn sync_raw_tensor_loader_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_raw_tensor_loader_endpoint_init(_init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The worker-side target is intentionally a stateless tensor pass-through.

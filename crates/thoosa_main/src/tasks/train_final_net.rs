@@ -30,10 +30,11 @@ use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::worker_msg::WorkerOutput;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -276,6 +277,17 @@ struct SyncLogitsBatchInput<'a> {
 }
 
 impl WorkerStageInput for SyncLogitsBatchInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Own cloned worker references so the borrowed batch cannot escape into typetag.
+        let outputs = self.outputs.iter().map(|output| Ok(ThoDataRef::Owned(output.as_ref().clone_ref()?))).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Box::new(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let outputs = self.outputs.iter().map(|output| Ok(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(output.as_ref(), all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Self { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<Self>(input)?;
 
@@ -295,6 +307,9 @@ impl WorkerStageInput for SyncLogitsBatchInput<'_> {
         )
     }
 }
+
+#[typetag::serde(name = "SyncLogitsBatchInput")]
+impl WorkerInput for SyncLogitsBatchInput<'static> {}
 
 impl Data for SyncLogitsBatchInput<'_> {
     type Metrics = i64;
@@ -408,17 +423,17 @@ impl<C> SyncLogitsBatch<C>
 where
     C: RunCtx  + 'static
 {
-    async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLogitsBatch<C>>, ThoError> {
+    async fn new(device: ThoDevice) -> Result<DynSyncStageEnum2<SyncLogitsBatch<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_LOGITS_BATCH_ENDPOINT, stage_id, &()).await?;
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, stage_id, device.tho_device_idx())),
+            Ok(DynSyncStageEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(SYNC_LOGITS_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                init: (),
             })
         } else {
             Ok(
-                DynSyncStageEnum::Local(Arc::new(SyncLogitsBatch::new_local().await?))
+                DynSyncStageEnum2::Local(Arc::new(SyncLogitsBatch::new_local().await?))
             )
         }
     }
@@ -434,7 +449,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncLogitsBatchOutput{}
 
-pub fn sync_logits_batch_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_logits_batch_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
 
@@ -622,9 +637,15 @@ impl WorkerStageInput for TrainFinalStepIpcInit {
     }
 }
 
-fn train_final_step_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+#[typetag::serde(name = "TrainFinalStepIpcInit")]
+impl WorkerInput for TrainFinalStepIpcInit {}
+
+#[typetag::serde(name = "TrainFinalStepInput")]
+impl WorkerInput for crate::tasks::train_step::TrainStepInput<LabelProbability, LabelsProbabilities> {}
+
+fn train_final_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = TrainFinalStepIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>().map_err(|_| ThoError::new("TrainFinalStep endpoint received invalid initializer"))?;
         let params = init.params.clone();
         let params_for_module = params.clone();
         let training_config = init.training_config.clone();
@@ -665,14 +686,14 @@ impl<C> TrainStepFactory<LabelProbability, LabelsProbabilities, C, FinalNetParam
 where
     C: RunCtx + 'static,
 {
-    async fn new(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
+    async fn new(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
         let node_params = FinalNetParams::new(self.num_label_nets, self.labels_len, run_config.net.num_layers);
         if GlobalCtx::global().is_ipc() {
             static TRAIN_FINAL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_FINAL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TrainFinalStepIpcInit>(GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(), TRAIN_FINAL_STEP_ENDPOINT, stage_id, &init).await?;
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy(TRAIN_FINAL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx())), init: () }, node_params))
+            let input_cloner = Arc::new(|input: &crate::tasks::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            Ok((DynSyncStageWithStateEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
             let training_config = run_config.common_training_args.clone();
@@ -691,15 +712,15 @@ where
                 run_config,
                 vs_path,
             ).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
+            Ok((DynSyncStageWithStateEnum2::Local(Arc::new(train_step)), node_params))
         }
     }
 }
 
-pub fn train_final_step_endpoint_inits() -> HashMap<String, InitFn> {
+pub fn train_final_step_endpoint_inits() -> HashMap<String, InitFn2> {
     HashMap::from([(
         TRAIN_FINAL_STEP_ENDPOINT.to_string(),
-        Box::new(train_final_step_endpoint_init) as InitFn
+        Box::new(train_final_step_endpoint_init) as InitFn2
     )])
 }
 

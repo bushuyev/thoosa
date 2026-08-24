@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use cached_derive::Cached;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter, format};
@@ -25,10 +25,11 @@ use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsSlices, Dims, MotifSlices};
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec, install_ipc_endpoint};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, ProxyStage, WorkerWrapper};
+use thoosa_common::ipc::wraps::WorkerWrapper;
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -48,7 +49,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::ipc::worker_msg::WorkerOutput;
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -525,7 +526,47 @@ impl Serialize for SyncMotifLoaderInput {
     }
 }
 
+impl<'de> Deserialize<'de> for SyncMotifLoaderInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = SyncMotifLoaderIpcInput::deserialize(deserializer)?;
+        let loaded_resources = input.loaded_resources.into_iter().map(|resource| LoadedMotifResource {
+            id: LoadedMotifResourceId::new(resource.resource_id),
+            resource_id: resource.resource_id,
+            slices: resource.slices,
+            raw_tensor: resource.raw_tensor,
+        }).collect();
+        Ok(Self::new(input.id, input.motif_id.into(), input.select_motifs_run_config_id, input.find_motifs_run_config_id, input.channel, input.window, loaded_resources, input.descr))
+    }
+}
+
+#[typetag::serde(name = "SyncMotifLoaderInput")]
+impl WorkerInput for SyncMotifLoaderInput {}
+
 impl WorkerStageInput for SyncMotifLoaderInput {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Keep only worker tensor references in the Postcard request.
+        let loaded_resources = self.loaded_resources.iter().map(|resource| Ok(LoadedMotifResource {
+            id: resource.id.clone(),
+            resource_id: resource.resource_id,
+            slices: resource.slices.clone(),
+            raw_tensor: resource.raw_tensor.clone_ref()?,
+        })).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Box::new(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone())))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let loaded_resources = self.loaded_resources.iter().map(|resource| Ok(LoadedMotifResource {
+            id: resource.id.clone(),
+            resource_id: resource.resource_id,
+            slices: resource.slices.clone(),
+            raw_tensor: WorkerStageInput::ref_to_tensor(&resource.raw_tensor, all_cuda_tensors, remove)?,
+        })).collect::<Result<Vec<_>, ThoError>>()?;
+        Ok(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone()))
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<SyncMotifLoaderIpcInput>(input)?;
         let loaded_resources = input.loaded_resources.into_iter().map(|resource| {
@@ -571,7 +612,7 @@ impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
+    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum2<SyncMotifLoader<C>>>, ThoError> {
         let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
         let mut instances = INSTANCES.lock().await;
 
@@ -579,9 +620,9 @@ where
         let cache = instances
             .entry(TypeId::of::<C>())
             .or_insert_with(|| {
-                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>::new())
+                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum2<SyncMotifLoader<C>>>>::new())
             })
-            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>>()
+            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum2<SyncMotifLoader<C>>>>>()
             .unwrap();
 
         if let Some(v) = cache.get(&id) {
@@ -592,12 +633,13 @@ where
 
         let v = if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
-            install_ipc_endpoint::<JsonIpcCodec, SynKey>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), SYNC_MOTIF_LOADER_ENDPOINT, stage_id, &id).await?;
-            Arc::new(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx())),
+            Arc::new(DynSyncStageEnum2::Proxy {
+                // The local id is deterministic, so the typed initializer does not need a serializable SynKey wrapper.
+                stage: Arc::new(ProxyStage2::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                init: (),
             })
         } else {
-            Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id.clone()).await?)))
+            Arc::new(DynSyncStageEnum2::Local(Arc::new(Self::new_local(id.clone()).await?)))
         };
 
         cache.insert(id, Arc::clone(&v));
@@ -616,11 +658,11 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifLoaderOutput{}
 
-pub fn sync_motif_loader_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_motif_loader_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
-        let init = JsonIpcCodec::decode(&init_msg)?;
-        Ok(Box::new(WorkerWrapper::new(Arc::new(SyncMotifLoader::<RunCtxImpl>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
+        Ok(Box::new(WorkerWrapper::new(Arc::new(SyncMotifLoader::<RunCtxImpl>::new_local(id).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1072,7 +1114,59 @@ impl Serialize for SyncLoadMotifResourcesInput<'_> {
     }
 }
 
+impl<'de> Deserialize<'de> for SyncLoadMotifResourcesInput<'static> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = SyncLoadMotifResourcesIpcInput::deserialize(deserializer)?;
+        Ok(Self {
+            id: input.id,
+            raw_tensor: ThoDataRef::Owned(input.raw_tensor),
+            motif_id: input.motif_id.into(),
+            resource_id: input.resource_id,
+            find_motifs_run_config_id: input.find_motifs_run_config_id,
+            channel: input.channel,
+            window: input.window,
+            slices: input.slices,
+            descr: input.descr,
+        })
+    }
+}
+
+#[typetag::serde(name = "SyncLoadMotifResourcesInput")]
+impl WorkerInput for SyncLoadMotifResourcesInput<'static> {}
+
 impl WorkerStageInput for SyncLoadMotifResourcesInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Erase the borrowed input lifetime by owning the cloned worker reference.
+        Ok(Box::new(SyncLoadMotifResourcesInput {
+            id: self.id.clone(),
+            raw_tensor: ThoDataRef::Owned(self.raw_tensor.as_ref().clone_ref()?),
+            motif_id: self.motif_id.clone(),
+            resource_id: self.resource_id,
+            find_motifs_run_config_id: self.find_motifs_run_config_id,
+            channel: self.channel,
+            window: self.window,
+            slices: self.slices.clone(),
+            descr: self.descr.clone(),
+        }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        Ok(Self {
+            id: self.id.clone(),
+            raw_tensor: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.raw_tensor.as_ref(), all_cuda_tensors, remove)?),
+            motif_id: self.motif_id.clone(),
+            resource_id: self.resource_id,
+            find_motifs_run_config_id: self.find_motifs_run_config_id,
+            channel: self.channel,
+            window: self.window,
+            slices: self.slices.clone(),
+            descr: self.descr.clone(),
+        })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<SyncLoadMotifResourcesIpcInput>(input)?;
         Ok(Self {
@@ -1143,7 +1237,7 @@ impl SyncStage for SyncLoadMotifResources {
 
 #[derive(Debug)]
 struct SyncLoadMotifResourcesDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncLoadMotifResources>>,
+    stage: Arc<DynSyncStageEnum2<SyncLoadMotifResources>>,
     pd: PhantomData<C>,
 }
 
@@ -1155,11 +1249,10 @@ where
         let stage = if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Install the borrowed-input loader with the shared stateless worker wrapper.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx)) }
+            // Install the borrowed-input loader with the typed stateless worker wrapper.
+            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLoadMotifResources::new()))
+            DynSyncStageEnum2::Local(Arc::new(SyncLoadMotifResources::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1197,7 +1290,7 @@ where
 }
 
 
-pub fn sync_load_motif_resources_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_motif_resources_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput converts the tensor reference into an owned worker-side input.
@@ -1334,7 +1427,56 @@ impl Serialize for SyncLoadRandomSlicesInput<'_> {
     }
 }
 
+impl<'de> Deserialize<'de> for SyncLoadRandomSlicesInput<'static> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = SyncLoadRandomSlicesIpcInput::deserialize(deserializer)?;
+        Ok(Self {
+            id: input.id,
+            raw_tensor: ThoDataRef::Owned(input.raw_tensor),
+            resource_id: input.resource_id,
+            find_motifs_run_config_id: input.find_motifs_run_config_id,
+            channels: input.channels,
+            window: input.window,
+            slices: input.slices,
+            descr: input.descr,
+        })
+    }
+}
+
+#[typetag::serde(name = "SyncLoadRandomSlicesInput")]
+impl WorkerInput for SyncLoadRandomSlicesInput<'static> {}
+
 impl WorkerStageInput for SyncLoadRandomSlicesInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Erase the borrowed input lifetime by owning the cloned worker reference.
+        Ok(Box::new(SyncLoadRandomSlicesInput {
+            id: self.id.clone(),
+            raw_tensor: ThoDataRef::Owned(self.raw_tensor.as_ref().clone_ref()?),
+            resource_id: self.resource_id,
+            find_motifs_run_config_id: self.find_motifs_run_config_id,
+            channels: self.channels,
+            window: self.window,
+            slices: self.slices.clone(),
+            descr: self.descr.clone(),
+        }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        Ok(Self {
+            id: self.id.clone(),
+            raw_tensor: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.raw_tensor.as_ref(), all_cuda_tensors, remove)?),
+            resource_id: self.resource_id,
+            find_motifs_run_config_id: self.find_motifs_run_config_id,
+            channels: self.channels,
+            window: self.window,
+            slices: self.slices.clone(),
+            descr: self.descr.clone(),
+        })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<SyncLoadRandomSlicesIpcInput>(input)?;
         Ok(Self {
@@ -1406,7 +1548,7 @@ impl SyncStage for SyncLoadRandomSlices {
 
 #[derive(Debug)]
 struct SyncLoadRandomSlicesDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncLoadRandomSlices>>,
+    stage: Arc<DynSyncStageEnum2<SyncLoadRandomSlices>>,
     pd: PhantomData<C>,
 }
 
@@ -1418,11 +1560,10 @@ where
         let stage = if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Shared proxy dispatch keeps tensor-reference decoding consistent with other loaders.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ()>(GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, &()).await?;
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx)) }
+            // Shared typed dispatch keeps tensor-reference decoding consistent with other loaders.
+            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLoadRandomSlices::new()))
+            DynSyncStageEnum2::Local(Arc::new(SyncLoadRandomSlices::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1459,7 +1600,7 @@ where
     }
 }
 
-pub fn sync_load_random_slices_endpoint_init(_init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_random_slices_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared worker wrapper reconstructs the borrowed raw tensor as owned worker data.

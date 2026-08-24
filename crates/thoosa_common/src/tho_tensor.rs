@@ -25,7 +25,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::{panic_to_err, simple_id};
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
-use crate::ipc::worker_msg::WorkerOutput;
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 
 
 //TODO remove, it should be in DevicesWrap between async
@@ -569,3 +569,19 @@ impl WorkerOutput for ThoTensor<LabelProbability, SynKey> {}
 
 #[typetag::serde(name = "ThoTensor_MotifProbability")]
 impl WorkerOutput for ThoTensor<MotifProbability, SynKey>{}
+
+// Postcard stage calls need concrete typetag registrations for tensor inputs used across the main workflow.
+#[typetag::serde(name = "ThoTensor_ChannelsData_Input")]
+impl WorkerInput for ThoTensor<ChannelsData, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_ChannelsMotifsSlices_Input")]
+impl WorkerInput for ThoTensor<ChannelsMotifsSlices, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_MotifSlices_Input")]
+impl WorkerInput for ThoTensor<MotifSlices, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_LabelProbability_Input")]
+impl WorkerInput for ThoTensor<LabelProbability, SynKey> {}
+
+#[typetag::serde(name = "ThoTensor_MotifProbability_Input")]
+impl WorkerInput for ThoTensor<MotifProbability, SynKey> {}

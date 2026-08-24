@@ -34,6 +34,7 @@ use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsMotifsDists;
 use thoosa_common::dims::{ChannelsData, MotifSlices};
+use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runs::Simple;
@@ -211,6 +212,9 @@ pub(crate) struct FindMotifsCrossUnfoldClcInit {
     masks_ctx: FindMotifsMasksCtxInit,
     unfold_params: UnfoldParams,
 }
+
+#[typetag::serde]
+impl WorkerInput for FindMotifsCrossUnfoldClcInit {}
 
 impl FindMotifsCrossUnfoldClcInit {
     pub(crate) fn new(similarity_metric: thoosa_motifs::distance::SimilarityMetric, keep_slice_matches: bool, radius: u64, masks_ctx: FindMotifsMasksCtxInit, unfold_params: UnfoldParams) -> Self {

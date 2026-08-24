@@ -36,7 +36,9 @@ use thoosa_common::ws::Workspace;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcWrapper};
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use thoosa_common::ipc::worker_msg::WorkerInput;
+use thoosa_common::ipc::wraps::WorkerWrapperWithState;
+use thoosa_common::ipc::wraps2::{DynSyncStageWithStateEnum2, ProxyStage2};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
@@ -83,6 +85,9 @@ impl WorkerStageInput for SyncFreqFilterIpcInit {
     }
 }
 
+#[typetag::serde]
+impl WorkerInput for SyncFreqFilterIpcInit {}
+
 #[derive(Debug)]
 pub struct SyncFreqFilter<C>
 where
@@ -97,9 +102,10 @@ where
 
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-pub fn sync_freq_filter_endpoint_init(init_msg: Vec<u8>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_freq_filter_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = SyncFreqFilterIpcInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let init: Box<dyn Any> = init;
+        let init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"))?;
         let stage = SyncFreqFilter::<WokerRunCtx>::new_local(SyncFreqFilterIpcInit::new(
             init.filter_configs.clone(),
             init.num_channels,
@@ -119,7 +125,7 @@ where
     C: RunCtx + 'static,
 {
 
-    pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
+    pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum2<SyncFreqFilter<C>>>, ThoError> {
         let id = init.find_motifs_run_config_id;
         let mut instances = INSTANCES.lock().await;
 
@@ -127,9 +133,9 @@ where
         let cache = instances
             .entry(init.find_motifs_run_config_id)
             .or_insert_with(|| {
-                Box::new(HashMap::<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>::new())
+                Box::new(HashMap::<RunConfigId, Arc<DynSyncStageWithStateEnum2<SyncFreqFilter<C>>>>::new())
             })
-            .downcast_mut::<HashMap<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>>()
+            .downcast_mut::<HashMap<RunConfigId, Arc<DynSyncStageWithStateEnum2<SyncFreqFilter<C>>>>>()
             .unwrap();
 
         if let Some(v) = cache.get(&init.find_motifs_run_config_id) {
@@ -139,13 +145,18 @@ where
         let v = if GlobalCtx::global().is_ipc() {
 
             // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, SyncFreqFilterIpcInit>(GlobalCtx::global().cuda_actor(init.tho_device_idx).as_ref(), SYNC_FREQ_FILTER_ENDPOINT, init.find_motifs_run_config_id, &init).await?;
-            Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_FREQ_FILTER_ENDPOINT, init.find_motifs_run_config_id, init.tho_device_idx)),
+            Arc::new(DynSyncStageWithStateEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                    SYNC_FREQ_FILTER_ENDPOINT,
+                    init.find_motifs_run_config_id,
+                    init.tho_device_idx,
+                    Box::new(init.clone()),
+                    Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+                ).await?),
                 init: (),
             })
         } else {
-            Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
+            Arc::new(DynSyncStageWithStateEnum2::Local(Arc::new(Self::new_local(init)?)))
         };
 
         cache.insert(id, Arc::clone(&v));
@@ -442,7 +453,7 @@ where
     _ctx: PhantomData<C>,
     num_channels:i64,
     sample_rate:f64,
-    sync_freq_filter: Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>,
+    sync_freq_filter: Arc<DynSyncStageWithStateEnum2<SyncFreqFilter<C>>>,
     effective_output_stride:i64,
     min_input_split_len:i64
 }

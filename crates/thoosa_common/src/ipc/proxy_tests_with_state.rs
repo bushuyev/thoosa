@@ -4,7 +4,7 @@ use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
-use crate::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapperWithState};
+use crate::ipc::wraps::WorkerWrapperWithState;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
@@ -327,7 +327,7 @@ pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_
 mod tests {
     use std::time::Duration;
     use crate::ipc::codec::{JsonIpcCodec, install_ipc_endpoint};
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, InitFn2};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
     use crate::ipc::tests::run_ipc_test;
