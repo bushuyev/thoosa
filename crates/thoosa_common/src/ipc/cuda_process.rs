@@ -2724,7 +2724,7 @@ mod tests {
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV};
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
+    use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::{init_ipc_test, run_ipc_test};
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
@@ -2901,7 +2901,7 @@ mod tests {
         },
        async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws,  HashMap::new(), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Cuda(0))).await
         })
     }
 
@@ -2923,7 +2923,7 @@ mod tests {
             Ok(())
         }, async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws, HashMap::new(), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Cuda(0))).await
         })
     }
 
@@ -2989,7 +2989,7 @@ mod tests {
             Ok(())
         }, async |sock_path| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock_path, &ws, HashMap::new(), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Cuda(0))).await
         })
     }
 

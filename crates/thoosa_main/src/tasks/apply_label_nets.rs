@@ -45,10 +45,12 @@ use crate::tasks::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, Ap
 use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec, install_ipc_endpoint};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::worker_msg::WorkerInput;
+use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -64,7 +66,7 @@ where
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     apply_motif_nets: Arc<AMN>,
-    apply_label_net: Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>,ApplyLabelNetInit>>
+    apply_label_net: Arc<DynSyncStageWithStateEnum2<ApplyLabelNet<C>,ApplyLabelNetInit>>
 }
 
 /// Applies label nets and returns per-model probabilities. Output is a flat list of label-model
@@ -417,6 +419,17 @@ impl StackAppliedLabelNetsInput {
 }
 
 impl WorkerStageInput for StackAppliedLabelNetsInput {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // Preserve stack ordering while cloning only worker tensor references.
+        let outputs = self.label_outputs.iter().map(ThoTensor::clone_ref).collect::<Result<Vec<_>, _>>()?;
+        Ok(Box::new(Self::new(self.id.clone(), outputs, self.device_idx)))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let outputs = self.label_outputs.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::new(self.id.clone(), outputs, self.device_idx))
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<StackAppliedLabelNetsInput>(input)?;
         Ok(StackAppliedLabelNetsInput{
@@ -426,6 +439,9 @@ impl WorkerStageInput for StackAppliedLabelNetsInput {
         })
     }
 }
+
+#[typetag::serde(name = "StackAppliedLabelNetsInput")]
+impl WorkerInput for StackAppliedLabelNetsInput {}
 
 impl WithId for StackAppliedLabelNetsInput {
     type ID = SynKey;
@@ -527,6 +543,9 @@ impl StackAppliedLabelNetsInit {
     }
 }
 
+#[typetag::serde(name = "StackAppliedLabelNetsInit")]
+impl WorkerInput for StackAppliedLabelNetsInit {}
+
 #[derive(Debug, Named)]
 pub struct StackAppliedLabelNets<C>
 where
@@ -541,18 +560,19 @@ impl<C> StackAppliedLabelNets<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedLabelNets<C>>, ThoError> {
+    async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum2<StackAppliedLabelNets<C>>, ThoError> {
         let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
 
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            install_ipc_endpoint::<JsonIpcCodec, _>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, &StackAppliedLabelNetsInit::new(id, order)).await?;
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, device.tho_device_idx())),
+            let init = StackAppliedLabelNetsInit::new(id, order);
+            Ok(DynSyncStageEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
+                init: (),
             })
         } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(StackAppliedLabelNetsInit::new(id, order)).await?)))
+            Ok(DynSyncStageEnum2::Local(Arc::new(Self::new_local(StackAppliedLabelNetsInit::new(id, order)).await?)))
         }
     }
 
@@ -567,9 +587,9 @@ where
 
 }
 
-pub fn stack_applied_label_nets(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_label_nets(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = JsonIpcCodec::decode(&init_msg)?;
+        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>().map_err(|_| ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"))?;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
@@ -676,6 +696,17 @@ impl WithId for ApplyLabelNetInput<'_> {
 impl Input for ApplyLabelNetInput<'_> {}
 
 impl WorkerStageInput for ApplyLabelNetInput<'_> {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        let input = self.input.as_ref();
+        // Own the metadata and cloned tensor reference before erasing the borrowed lifetime.
+        Ok(Box::new(ApplyLabelNetInput { id: self.id.clone(), input: ThoDataRef::Owned(DataWithExtra::new(input.data().clone_ref()?, input.extra().clone())) }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        let input = self.input.as_ref();
+        Ok(Self { id: self.id.clone(), input: ThoDataRef::Owned(DataWithExtra::new(WorkerStageInput::ref_to_tensor(input.data(), all_cuda_tensors, remove)?, input.extra().clone())) })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<Self>(input)?;
         let ThoDataRef::Owned(input_ref) = input.input else {
@@ -693,6 +724,9 @@ impl WorkerStageInput for ApplyLabelNetInput<'_> {
         })
     }
 }
+
+#[typetag::serde(name = "ApplyLabelNetInput")]
+impl WorkerInput for ApplyLabelNetInput<'static> {}
 
 #[derive(Debug)]
 struct ApplyLabelNetInputWrapper {
@@ -728,7 +762,7 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyLabelNetInit {
     label: String,
     train_label_net_run_config_id: RunConfigId,
@@ -748,6 +782,9 @@ impl WorkerStageInput for ApplyLabelNetInit {
         C::decode(input)
     }
 }
+
+#[typetag::serde(name = "ApplyLabelNetInit")]
+impl WorkerInput for ApplyLabelNetInit {}
 
 
 #[derive(Debug)]
@@ -776,7 +813,7 @@ where
         batch_in_chunks: usize,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         quantize: bool,
-    ) -> Result<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>, ThoError> {
+    ) -> Result<DynSyncStageWithStateEnum2<ApplyLabelNet<C>, ApplyLabelNetInit>, ThoError> {
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
                &trained_net.net_path,
                &device,
@@ -794,14 +831,13 @@ where
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            thoosa_common::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, ApplyLabelNetInit>(GlobalCtx::global().cuda_actor(device.tho_device_idx()).as_ref(), APPLY_LABEL_NET_ENDPOINT, stage_id, &init).await?;
-            Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx())),
+            Ok(DynSyncStageWithStateEnum2::Proxy {
+                stage: Arc::new(ProxyStage2::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init.clone())).await?),
                 init,
             })
         } else {
             Ok(
-                DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
+                DynSyncStageWithStateEnum2::Local(Arc::new(ApplyLabelNet::new_local(
                     label,
                     train_label_net_run_config_id,
                     net,
@@ -828,9 +864,9 @@ where
     }
 }
 
-pub fn apply_label_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_label_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = ApplyLabelNetInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?;
+        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<ApplyLabelNetInit>().map_err(|_| ThoError::new("ApplyLabelNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module

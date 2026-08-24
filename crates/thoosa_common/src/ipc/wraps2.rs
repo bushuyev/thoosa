@@ -18,7 +18,6 @@ use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
-use crate::ipc::wraps::{DynSyncStageWithStateEnum, ProxyStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;
@@ -354,7 +353,7 @@ where
 impl <St, Init> StageWithState for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage+StageWithState+Send+Sync,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -385,7 +384,7 @@ where
 impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum2<St, Init>
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput+ WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -449,7 +448,7 @@ where
 pub enum DynSyncStageWithStateEnum2<St, Init=()>
 where
     St:SyncStage+StageWithState,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -463,7 +462,7 @@ where
 impl <St, Init> Stage for DynSyncStageWithStateEnum2<St, Init>
 where
     St:SyncStage+StageWithState,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -475,7 +474,7 @@ where
 impl <St, Init> Adjustable for DynSyncStageWithStateEnum2<St, Init>
 where
     St: SyncStage + StageWithState + Adjustable,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
     Init:Debug + Send + Sync + 'static
 {
@@ -485,7 +484,7 @@ where
 impl <St, Init> SyncStage for DynSyncStageWithStateEnum2<St, Init>
 where
     St: SyncStage + StageWithState + Send + Sync,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -513,7 +512,7 @@ where
 impl <St, Init> StageWithState for DynSyncStageWithStateEnum2<St, Init>
 where
     St:SyncStage+StageWithState+Send+Sync,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
@@ -542,7 +541,7 @@ where
 impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum2<St, Init>
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + WorkerInput + Serialize,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {

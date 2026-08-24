@@ -299,6 +299,18 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
     pub(crate) fn train(&self) -> bool {
         self.train
     }
+
+    pub(crate) fn clone_refs_for_worker(&self) -> Result<Self, ThoError> {
+        // Training requests keep only worker tensor references; the worker owns the materialized tensors.
+        Ok(Self {
+            id: self.id.clone(),
+            x: self.x.clone_ref()?,
+            lengths: self.lengths.clone(),
+            expected_y: self.expected_y.clone_ref()?,
+            train: self.train,
+            save_var_store: self.save_var_store,
+        })
+    }
 }
 
 impl<DI: Dims, DO: Dims> Input for TrainStepInput<DI, DO> {
@@ -433,6 +445,18 @@ where
     DO: Dims,
     Self: serde::de::DeserializeOwned,
 {
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        // Materialize both batch references together immediately before the worker-side run.
+        Ok(Self {
+            id: self.id.clone(),
+            x: WorkerStageInput::ref_to_tensor(&self.x, all_cuda_tensors, remove)?,
+            lengths: self.lengths.clone(),
+            expected_y: WorkerStageInput::ref_to_tensor(&self.expected_y, all_cuda_tensors, remove)?,
+            train: self.train,
+            save_var_store: self.save_var_store,
+        })
+    }
+
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input = C::decode::<Self>(input)?;
         // Shared wrappers decode worker references before the stateful stage runs.

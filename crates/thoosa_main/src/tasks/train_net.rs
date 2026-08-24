@@ -28,7 +28,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use thoosa_common::ipc::wraps::DynSyncStageWithStateEnum;
+use thoosa_common::ipc::wraps2::DynSyncStageWithStateEnum2;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -141,7 +141,7 @@ where
     NP: Debug + Send + Sync + 'static,
     RC: Debug + Send + Sync + 'static,
 {
-    async fn new(&self, run_config: RC, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, NP), ThoError>;
+    async fn new(&self, run_config: RC, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, NP), ThoError>;
 }
 
 pub struct TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
@@ -483,7 +483,7 @@ pub mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::train_nets::AdamWRangeOrValue;
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-    use thoosa_common::ipc::wraps::DynSyncStageWithStateEnum;
+    use thoosa_common::ipc::wraps2::DynSyncStageWithStateEnum2;
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -560,7 +560,7 @@ pub mod tests {
 
     #[async_trait]
     impl TrainStepFactory<DummyX, DummyY, MockRunCtx, (), DummyRunConfig> for DummyTrainStepFactory {
-        async fn new(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DummyX>, DummyX, DummyY, MockRunCtx>>, ()), ThoError> {
+        async fn new(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<TrainStep<TrainStepXFn<DummyX>, DummyX, DummyY, MockRunCtx>>, ()), ThoError> {
             let x_f: Arc<TrainStepXFn<DummyX>> = Arc::new(Box::new(dummy_x_f));
             let (stage, ()) = TrainStep::new_local(
                 ctx.tho_device_idx().into(),
@@ -577,7 +577,7 @@ pub mod tests {
                 run_config,
                 vs_path,
             ).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(stage)), ()))
+            Ok((DynSyncStageWithStateEnum2::Local(Arc::new(stage)), ()))
         }
     }
 
