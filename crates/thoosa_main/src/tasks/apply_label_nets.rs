@@ -530,7 +530,7 @@ impl StackAppliedLabelNetsInit {
 #[derive(Debug, Named)]
 pub struct StackAppliedLabelNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
     label_output_order: HashMap<SynKey, usize>,
@@ -539,7 +539,7 @@ where
 
 impl<C> StackAppliedLabelNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedLabelNets<C>>, ThoError> {
         let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
@@ -577,13 +577,13 @@ pub fn stack_applied_label_nets(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn Worksp
 
 impl<C> Adjustable for StackAppliedLabelNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
 }
 
 impl<C> OutId for StackAppliedLabelNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -592,7 +592,7 @@ where
 
 impl<C> Stage for StackAppliedLabelNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = StackAppliedLabelNetsInput;
@@ -601,7 +601,7 @@ where
 
 impl<C> SyncStage for StackAppliedLabelNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedLabelNets::consume"))]
     fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
@@ -753,7 +753,7 @@ impl WorkerStageInput for ApplyLabelNetInit {
 #[derive(Debug)]
 struct ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
     label: String,
@@ -766,7 +766,7 @@ where
 
 impl<C> ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     async fn new(
         label: String,
@@ -853,13 +853,13 @@ pub fn apply_label_net_endpoint_init(init_msg: Vec<u8>, ws: Arc<RwLock<Box<dyn W
 
 impl<C> Adjustable for ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx,
 {
 }
 
 impl<C> Stage for ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx,
 {
     type Ctx = C;
     type In<'a> = ApplyLabelNetInput<'a>;
@@ -868,7 +868,7 @@ where
 
 impl<C> SyncStage for ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         Some(self)
@@ -877,7 +877,7 @@ where
 
 impl<C> StageWithState for ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type S = ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>;
 
@@ -907,7 +907,7 @@ where
 
 impl<C> OutId for ApplyLabelNet<C>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
