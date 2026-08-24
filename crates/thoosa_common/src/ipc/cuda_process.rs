@@ -450,25 +450,25 @@ where
             debug!("worker_response_writer_loop: msg out ok");
             continue
         }
-        let write_result = match reply.payload {
-            // OutgoingRequestPayload::BinaryStream { chunks, completed } => {
-            //     let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
-            //     let completion = result.as_ref().map(|_| ()).map_err(|error| ThoError::new(error.to_string()));
-            //     let _ = completed.send(completion);
-            //     result
-            // }
-            payload => {
-                let frame = encode_wire_frame(reply.id, &payload)?;
-                write_frame(&mut writer, &frame, "worker").await
-            }
-        };
-        if let Err(error) = write_result {
-            if matches!(error.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof) {
-                debug!("worker_response_writer_loop: parent IPC stream closed");
-                break;
-            }
-            return Err(error.into());
-        }
+        // let write_result = match reply.payload {
+        //     // OutgoingRequestPayload::BinaryStream { chunks, completed } => {
+        //     //     let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
+        //     //     let completion = result.as_ref().map(|_| ()).map_err(|error| ThoError::new(error.to_string()));
+        //     //     let _ = completed.send(completion);
+        //     //     result
+        //     // }
+        //     payload => {
+        //         let frame = encode_wire_frame(reply.id, &payload)?;
+        //         write_frame(&mut writer, &frame, "worker").await
+        //     }
+        // };
+        // if let Err(error) = write_result {
+        //     if matches!(error.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof) {
+        //         debug!("worker_response_writer_loop: parent IPC stream closed");
+        //         break;
+        //     }
+        //     return Err(error.into());
+        // }
     }
 
     Ok(())
@@ -2636,6 +2636,7 @@ where
         .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")))
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="write_frame"))]
 async fn write_frame<W>(
     writer: &mut W,
     payload: &[u8],
@@ -2664,6 +2665,8 @@ where
     Ok(())
 }
 
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="read_frame"))]
 pub async fn read_frame<R>(
     reader: &mut R,
     descr: &str,

@@ -1,0 +1,200 @@
+//! Tensor-free IPC fixture for measuring the sync-stage invocation path without tensor transfer work.
+
+use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
+use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::tests::run_ipc_test;
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::wraps::WorkerWrapper;
+use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
+use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+use crate::tho_device::ThoDevice;
+use crate::ws::{mock_ws_simp, Workspace};
+use futures_util::future::{BoxFuture, FutureExt};
+use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::marker::PhantomData;
+use std::sync::Arc;
+use log::info;
+use tch::{Device, Tensor};
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::perf_logging::{format_perf_map, PERF};
+use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
+use thoosa_shared::ThoError;
+use crate::ipc::proxy_tests::{TestRunCtx, TestStageA};
+use crate::runner::run_ctx_2::RunCtxImpl;
+
+const SIMP_ENDPOINT: &str = "SimpStage";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SimpInput {
+    value: u32,
+}
+
+impl Input for SimpInput {}
+
+impl BorrowRef for SimpInput {
+    type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        // Scalar-only input is device-independent, so IPC invocation can borrow it without a tensor copy.
+        async move { Ok(ThoDataRef::Borrowed(self)) }
+    }
+}
+
+#[typetag::serde]
+impl WorkerInput for SimpInput {}
+
+impl WorkerStageInput for SimpInput {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        // There are no worker-owned tensor references to rewrite; clone only the scalar payload.
+        Ok(Box::new(self.clone()))
+    }
+
+    fn ref_to_tensor(&self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _remove: bool) -> Result<Self, ThoError> {
+        // Keep this conversion explicit so the test covers the normal worker wrapper without touching tensor storage.
+        Ok(self.clone())
+    }
+
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        C::decode(input)
+    }
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct SimpOutput {
+    value: u32,
+}
+
+impl Output for SimpOutput {}
+
+#[typetag::serde]
+impl WorkerOutput for SimpOutput {}
+
+impl WorkerStageOutput for SimpOutput {
+    fn encode_from_worker(self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        // Scalar-only output needs no conversion into a worker tensor reference.
+        Ok(self)
+    }
+}
+
+#[derive(Debug)]
+struct SimpStage<C>
+where
+    C:RunCtx
+{
+    pd:PhantomData<C>
+}
+
+impl <C> SimpStage<C>
+where
+    C:RunCtx
+{
+    pub async fn new() -> Result<DynSyncStageEnum2<SimpStage<RunCtxImpl>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            Ok(DynSyncStageEnum2::Proxy {
+                stage:Arc::new(ProxyStage2::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, 0, 1, Box::new(())).await?),
+                init:()
+            })
+
+        } else {
+            Ok(DynSyncStageEnum2::Local(Arc::new(SimpStage::<RunCtxImpl>::new_local())))
+        }
+
+    }
+
+    pub fn new_local() -> Self {
+        Self { pd:PhantomData }
+    }
+}
+
+impl<C> Stage for SimpStage<C>
+where
+    C:RunCtx
+{
+    type Ctx = C;
+    type In<'a> = SimpInput;
+    type Out = SimpOutput;
+}
+
+impl<C> SyncStage for SimpStage<C>
+where
+    C:RunCtx
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpStage::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        // Identity work isolates IPC and sync-stage dispatch overhead from tensor computation.
+        Ok(SimpOutput { value: input.value })
+    }
+}
+
+fn simp_stage_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init: Box<dyn Any> = init;
+        let _init = init.downcast::<()>().map_err(|_| ThoError::new("SimpStage expected unit initialization data"))?;
+
+        Ok(Box::new(WorkerWrapper::new(Arc::new(SimpStage::<WokerRunCtx>::new_local()), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_test_simp"))]
+async fn do_test_simp() -> Result<(), ThoError> {
+    let cuda_actor = GlobalCtx::global().cuda_actor(1);
+    let stage = Arc::new(SimpStage::<RunCtxImpl>::new().await?);
+
+    let ctx = RunCtxImpl::new(1, "test");
+
+    for _ in 0..30000 {
+        let input = SimpInput { value: 42 };
+        let output = cuda_actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
+        assert_eq!(output, SimpOutput { value: 42 });
+    }
+
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_simp_local() -> Result<(), ThoError> {
+    GlobalCtx::init_devices(2);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
+    do_test_simp().await?;
+
+    info!("local perf:\n{}", format_perf_map(&PERF));
+
+    Ok(())
+}
+
+#[test]
+fn test_simp_ipc() -> Result<(), ThoError> {
+    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+
+    run_ipc_test(
+        async {
+            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+            let test_name = format!("{module}::test_simp_ipc");
+            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+
+            do_test_simp().await
+        },
+        async |sock_path: OsString| {
+            CudaWorker::run_worker2(
+                sock_path,
+                &ws,
+                HashMap::new(),
+                HashMap::from([(SIMP_ENDPOINT.to_string(), Box::new(simp_stage_init) as InitFn2)]),
+                ThoDevice::from(Device::Cuda(0)),
+            ).await
+        },
+    )
+}

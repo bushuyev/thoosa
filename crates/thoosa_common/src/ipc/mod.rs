@@ -10,5 +10,7 @@ pub mod json_ser;
 pub mod wraps;
 mod proxy_tests;
 mod proxy_tests_with_state;
+#[cfg(test)]
+mod perf_test;
 pub mod worker_msg;
 pub mod wraps2;
