@@ -299,28 +299,28 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_simp_local() -> Result<(), ThoError> {
+    async fn test_simp_tensor_local() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        do_test_simp().await?;
+        do_test_tensor_simp().await?;
 
         Ok(())
     }
 
     #[test]
-    fn test_simp_ipc() -> Result<(), ThoError> {
+    fn test_simp_tensor_ipc() -> Result<(), ThoError> {
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         run_ipc_test(
             async {
                 let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_simp_ipc");
+                let test_name = format!("{module}::test_simp_tensor_ipc");
                 GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
                 let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
-                do_test_simp().await?;
+                do_test_tensor_simp().await?;
 
                 debug!("test_simp_ipc ok");
 
@@ -351,7 +351,7 @@ mod tests {
         )
     }
 
-    async fn do_test_simp() -> Result<(), ThoError> {
+    async fn do_test_tensor_simp() -> Result<(), ThoError> {
         debug!("do_test_simp");
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
