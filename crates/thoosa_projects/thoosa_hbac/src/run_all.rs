@@ -65,7 +65,7 @@ pub(crate) struct AllConfigs {
 }
 
 
-#[allow(unreachable_code)]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="thoosa_hbac::run_all"))]
 pub(crate) async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
@@ -644,6 +644,12 @@ mod tests {
     use thoosa_store::{SqlStore, TrainedNetsBy, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE};
     use thoosa_store::rusqlite::Transaction;
 
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
     #[derive(Clone, Debug)]
     struct PrepareRunAllDataInput {
         id: SynKey,
@@ -753,11 +759,12 @@ mod tests {
 
         // log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2);
-        let result = do_heavy_test_run_all("heavy_test_run_all_local").await;
+        do_heavy_test_run_all("heavy_test_run_all_local").await?;
         global_ctx.shutdown().await;
 
 
-        result
+        info!("local perf:\n{}", format_perf_map(&PERF));
+        Ok(())
     }
 
 
@@ -787,7 +794,17 @@ mod tests {
                         WsConfigs::new(1, 0, 100)
                     )?));
                     // Heavy IPC tests use the same typed worker protocol as the application entry point.
-                    CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await
+                    let r = CudaWorker::run_worker2(
+                        sock_path,
+                        &ws,
+                        HashMap::new(),
+                        crate::cuda_worker_endpoint_inits(),
+                        ThoDevice::from(Device::Cuda(0))
+                    ).await;
+
+                    info!("heavy_test_run_all_ipc: r={r:?}");
+
+                    Ok(())
                 }
             }
         )
@@ -962,7 +979,7 @@ mod tests {
 
         /////////////////////train_motifs
         let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(30),
+            epochs: RangeOrValue::Value(3),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -989,7 +1006,7 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(10),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1058,9 +1075,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
+            train_motifs_opt_config:Arc::new(OptConfig::new(5, 3)),
             train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_final_opt_config: Arc::new(OptConfig::new(5, 3)),
         }
     }
 

@@ -421,7 +421,7 @@ impl WorkerWrapperCtx for WokerRunCtx {
 impl WorkerWrapperCtx for crate::runner::run_ctx_2::RunCtxImpl {
     fn from_worker_ctx(ctx: &WokerRunCtx) -> Self {
         let mut stage_ctx = Self::new(ctx.tho_device_idx(), "WorkerWrapper");
-        
+
         stage_ctx
     }
 }
@@ -617,25 +617,6 @@ where
         StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
     }
 
-    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-
-                let (input, max_other_parallel) = JsonIpcCodec::decode::<IpcSyncStageRunInput>(input)?.into_parts();
-                let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(&input, all_cuda_tensors)?;
-                let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());
-                let stage_ctx = St::Ctx::from_worker_ctx(&worker_ctx);
-
-                debug!("TrainTestStep2IpcWrapper::do_run_with_state: input={:?}", input);
-                let stage = Arc::clone(&self.base);
-
-                let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &stage_ctx)?;
-                debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
-
-                Co::encode(&output.encode_from_worker(all_cuda_tensors, tho_device)?)
-            })
-        }).map(SyncStageIpcResponse::Encoded)
-    }
 
     fn do_run_with_state_2<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::do_run_2: input={input:?}");
