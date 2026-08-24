@@ -55,6 +55,7 @@ use tracing::Instrument;
 use tracing::field::debug;
 use tub::{Guard, Pool};
 use crate::ipc::cuda_wokrer::insert_worker_tensor;
+use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
@@ -445,7 +446,7 @@ where
         if let Some(msg) = reply.msg {
             debug!("worker_response_writer_loop: msg={msg:?}");
 
-            write_frame(&mut writer, &postcard::to_allocvec(&msg).unwrap()/*TODO move to codec*/, "worker").await?;
+            write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg)?/*TODO move to codec*/, "worker").await?;
             debug!("worker_response_writer_loop: msg out ok");
             continue
         }
@@ -1231,7 +1232,7 @@ impl CudaIPCActor {
 
                 debug!("CudaIPCActorMessage::Shutdown: final");
 
-                let _ = self.spawned_state.child.kill().await;
+                // let _ = self.spawned_state.child.kill().await;
                 self.spawned_state.reader_handle.abort();
                 self.spawned_state.writer_handle.abort();
                 // match reply {
@@ -1963,7 +1964,7 @@ async fn writer_loop<W>(
         if let Some(msg) = req.msg {
             debug!("writer_loop: msg={msg:?}");
 
-            if let Err(e) = write_frame(&mut writer, &postcard::to_allocvec(&msg).unwrap()/*TODO move to codec*/, "CudaWorkerMsg").await {
+            if let Err(e) = write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg).unwrap(), "CudaWorkerMsg").await {
                 error!("worker IPC writer failed: {e}");
 
                 fail_one_pending(
@@ -2052,7 +2053,7 @@ async fn reader_loop<R>(
             }
         };
 
-        match postcard::from_bytes::<CudaWorkerMsgOut>(&frame) {
+        match PostcardToFromBytes::from_bytes::<CudaWorkerMsgOut>(&frame) {
             Ok(msg) => {
                 debug!("reader_loop: msg={msg:?}");
                 let pending_response = {
@@ -2620,7 +2621,7 @@ where
 {
     let payload = read_frame(reader, descr, MAX_FRAME_LEN).await?;
 
-    match postcard::from_bytes::<CudaWorkerMsgIn>(&payload) {
+    match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
         Ok(v) => {
             debug!("postcard: ok={v:?}");
             return Ok("Ok".to_string())

@@ -1373,6 +1373,7 @@ where
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifsBatch::make_batch"))]
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoError> {
         let random_slices = track_await(self.current_random_slices(ctx.branch(false))).await?;
         let num_slices = (self.batch_size / 2) as i64;

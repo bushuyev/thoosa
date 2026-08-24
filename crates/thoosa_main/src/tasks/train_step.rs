@@ -152,6 +152,7 @@ where
 {
     type S = ThoTrainModule<DI, DO>;
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::pre_run"))]
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut guard = self.train_module.lock().await;

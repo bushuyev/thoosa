@@ -13,6 +13,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Stage, SyncStage};
@@ -93,33 +94,19 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>>;
 
-    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError>;
 
-    fn do_run_with_state_2<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
-        todo!()
-    }
+    fn do_run_with_state_2<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
 }
 
 pub trait ErasedWithState: Sync + Debug {
-    fn do_run_with_state<'a>(&'a self, input: &'a [u8], all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<SyncStageIpcResponse, ThoError>>;
 
-    fn do_run_with_state_2<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>{
-        todo!()
-    }
+    fn do_run_with_state_2<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
 }
 
 impl<T> ErasedWithState for T
 where
     T: SyncStageIpcWrapperWithState + 'static,
 {
-    fn do_run_with_state<'a>(&'a self, input: &'a [u8], all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<SyncStageIpcResponse, ThoError>> {
-        async move {
-            let state = SyncStageIpcWrapperWithState::pre_run(self, tho_device).await?;
-            // Create the thread-affine stream guard after pre_run so it is never held across an await.
-            let _guard = ThoStreamGuard::new(stream)?;
-            SyncStageIpcWrapperWithState::do_run_with_state(self, input, all_cuda_tensors, state, tho_device, run_ctx)
-        }.boxed()
-    }
 
     fn do_run_with_state_2<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
         async move {
@@ -128,5 +115,35 @@ where
             let _guard = ThoStreamGuard::new(stream)?;
             SyncStageIpcWrapperWithState::do_run_with_state_2(self, input, all_cuda_tensors, state, tho_device, run_ctx)
         }.boxed()
+    }
+}
+
+
+pub trait ToFromBytes {
+    fn to_bytes<T>(value:&T) -> Result<Vec<u8>, ThoError>
+    where
+        T: Serialize + ?Sized;
+    fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T, ThoError>
+    where
+        T: Deserialize<'a>;
+}
+
+pub struct PostcardToFromBytes;
+
+impl ToFromBytes for PostcardToFromBytes {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="PostcardToFromBytes::to_bytes"))]
+    fn to_bytes<T>(value: &T) -> Result<Vec<u8>, ThoError>
+    where
+        T: Serialize + ?Sized{
+        postcard::to_allocvec(&value).map_err(|e|ThoError::new(e.to_string()))
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="PostcardToFromBytes::from_bytes"))]
+    fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T, ThoError>
+    where
+        T: Deserialize<'a>
+    {
+        postcard::from_bytes::<T>(s).map_err(|e|ThoError::new(e.to_string()))
     }
 }
