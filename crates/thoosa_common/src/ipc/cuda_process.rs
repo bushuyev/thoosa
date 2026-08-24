@@ -860,14 +860,14 @@ pub enum CudaIPCActorMessage {
     Shutdown {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
-    InstallEndpoint {
+    InstallEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::InstallStage
         init_msg: String, respond_to: oneshot::Sender<Result<(), ThoError>>
     },
 
-    InvokeEndpoint {
+    InvokeEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::InvokeStage
         input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
     },
-    ConsumeEndpoint {
+    ConsumeEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::InvokeStage, consume:true
         input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
     },
     InvokeEndpointToFile {//TODO remove
@@ -875,11 +875,11 @@ pub enum CudaIPCActorMessage {
         output: std::fs::File,
         respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
     },
-    PurgeEndpoint {//
+    PurgeEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::PurgeStage
         stage_id: u32, endpoint_name:String,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
-    DropEndpoint {
+    DropEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::DropStage
         stage_id: u32, endpoint_name: String,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
@@ -2361,7 +2361,7 @@ impl CudaIPCActorHandle {
                     operation: Operation::InvokeStage {
                         endpoint_name,
                         stage_id,
-                        input,//clones refs
+                        input,//cloned refs
                         consume,
                     },
                 },
@@ -2886,13 +2886,13 @@ mod tests {
             match error.what() {
                 Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
                     assert!(*is_oom, "worker OOM flag was not propagated: {error:?}");
-                    // assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
+                    assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
                     assert!(!*needs_cuda_ctx_reset, "plain worker OOM should not request CUDA context reset: {error:?}");
                 }
                 other => return Err(ThoError::new(format!("expected Cause::CudaWoker, got {other:?}: {error:?}"))),
             }
             assert!(error.is_oom(), "ThoError::is_oom should delegate to Cause::CudaWoker: {error:?}");
-            // assert!(error.is_retryable_oom(), "ThoError::is_retryable_oom should delegate to Cause::CudaWoker: {error:?}");
+            assert!(error.is_retryable_oom(), "ThoError::is_retryable_oom should delegate to Cause::CudaWoker: {error:?}");
 
 
             debug!("All ok");
