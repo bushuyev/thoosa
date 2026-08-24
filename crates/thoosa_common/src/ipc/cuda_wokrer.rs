@@ -428,7 +428,7 @@ impl CudaWorker {
                                 //TODO send error
                                 panic!("no endpoint for endpoint_key={endpoint_key}")
                             };
-                            let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx(), 0);
+                            let run_ctx = WokerRunCtx::new(tho_device.tho_device_idx());
                             let stream = exec_stream_pool.acquire().await;//TODO pass pool to do_run_with_state
                             let r= match endpoint.as_with_state() {
                                 Some(with_state) => {
@@ -948,6 +948,7 @@ impl CudaWorker {
 
 pub trait WorkerStageInput: Debug + Sized + Debug {
 
+    //for cloning a on main-process-side ThoTensor/ThoModule  containing references to the data kept on  worker side
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {//on main side
         error!("clone_refs: self={self:?}");
         todo!()
@@ -958,10 +959,10 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
         todo!()
     }
 
-    #[deprecated]
+    #[deprecated]//the method is to be removed after migration to postcard is done
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;//on worker side
 
-    #[deprecated]
+    #[deprecated]//the method is to be removed after migration to postcard is done
     fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
         Ok((Self::decode_for_worker::<C>(input, all_cuda_tensors)?, Vec::new()))
     }
@@ -976,26 +977,12 @@ where
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
-    // fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-    //     match &self.inner {
-    //         ThoTensorInner::Val { .. } => {
-    //             panic!("can't clone val")
-    //         }
-    //         ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
-    //             Ok(
-    //                 Box::new(ThoTensor::new_ref(self.id.clone(), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx))
-    //             )
-    //         }
-    //     }
-    // }
+
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
         // Typed worker wrappers receive the tensor reference as a trait object and materialize it only inside the worker.
         Self::ref_to_tensor_(all_cuda_tensors, self, remove)
     }
-
-
-
 
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         debug!("ThoTensor::decode_for_worker: input={input:?}");
@@ -1014,19 +1001,6 @@ where
 
 }
 
-// impl<D, Id> WorkerOutput for ThoTensor<D, Id>
-// where
-//     D: Dims + 'static,
-//     Id: Send + Named + Debug + Clone + DeserializeOwned + Serialize + 'static,
-// {
-//     fn typetag_name(&self) -> &'static str {
-//         todo!()
-//     }
-//
-//     fn typetag_deserialize(&self) {
-//         todo!()
-//     }
-// }
 
 
 impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
@@ -1141,7 +1115,6 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
 #[derive(Debug)]
 pub struct WokerRunCtx {
     tho_device_idx: usize,
-    max_other_parallel: u8,
 }
 
 impl Adjustable for WokerRunCtx {//TODO, remove Adjustable bounds in stages + run_cached
@@ -1149,8 +1122,8 @@ impl Adjustable for WokerRunCtx {//TODO, remove Adjustable bounds in stages + ru
 }
 
 impl WokerRunCtx {
-    pub fn new(tho_device_idx: usize, max_other_parallel: u8) -> Self {
-        Self { tho_device_idx, max_other_parallel }
+    pub fn new(tho_device_idx: usize) -> Self {
+        Self { tho_device_idx }
     }
 }
 
@@ -1174,19 +1147,20 @@ impl RunCtx for WokerRunCtx {
     where
         Self: Sized
     {
-        WokerRunCtx::new(self.tho_device_idx, self.max_other_parallel)
+        WokerRunCtx::new(self.tho_device_idx)
     }
 
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }
 
+//DummyImpl
 impl MaxParallelCtx for WokerRunCtx {
     fn set_max_other_parallel(&mut self, permit: u8) {
-        self.max_other_parallel = permit;
+
     }
 
     fn max_other_parallel(&self) -> u8 {
-        self.max_other_parallel
+        0
     }
 }
