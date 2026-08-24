@@ -285,14 +285,14 @@ mod tests {
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
-    use log::debug;
+    use log::{debug, info};
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::Tensor;
-    use tch::kind::FLOAT_CPU;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::SyncStage;
     use tracing::field::debug;
@@ -329,20 +329,24 @@ mod tests {
 
             async |sock_path| {
 
-                CudaWorker::run_worker2(
-                    sock_path,
-                    &ws,
-                    HashMap::from([
+                return {
+                    let r= CudaWorker::run_worker2(
+                        sock_path,
+                        &ws,
+                        HashMap::from([]),
+                        HashMap::from([
+                            (
+                                TEST_ENDPOINT.to_string(),
+                                Box::new(test_simp_init_2) as InitFn2,
+                            ),
+                        ]),
+                        ThoDevice::from(Cuda(0)),
+                    ).await;
 
-                    ]),
-                    HashMap::from([
-                        (
-                            TEST_ENDPOINT.to_string(),
-                            Box::new(test_simp_init_2) as InitFn2,
-                        ),
-                    ]),
-                    ThoDevice::from(Cuda(0)),
-                ).await
+                    info!("test_simp_ipc: r={r:?}");
+
+                    Ok(())
+                }
             }
         )
     }

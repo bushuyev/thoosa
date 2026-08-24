@@ -1,9 +1,9 @@
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
+use log::debug;
 use parking_lot::RwLock;
 use tch::{Kind, TchError, Tensor};
 use tch::Kind::Float;
-use tracing::debug;
 use thoosa_common::utils::tensor_digest;
 
 type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync>;

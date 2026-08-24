@@ -145,6 +145,19 @@ where
     Snapshot{ cpu_snap: OptimizerSnapshot, vs:VarStore}
 }
 
+impl <DI, DO> OptSnapshot<DI, DO>
+where
+    DI: Dims, DO: Dims
+{
+    fn device(&self) -> ThoDevice {
+        match self {
+            OptSnapshot::Opt { vs,.. }| OptSnapshot::Snapshot { vs,.. } => {
+                vs.device().into()
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 enum OptimizerSnapshot {
     Adam(AdamOptimizerSnapshot),
@@ -256,7 +269,11 @@ where
     where
         Self:Sized
     {
-        debug!("ThoTrainModule::move_to_device: tho_dst_device={tho_dst_device}");
+        debug!("ThoTrainModule::move_to_device: tho_dst_device={tho_dst_device} opt_state.device={:?}", self.opt_state.device());
+        if tho_dst_device == self.opt_state.device().tho_device_idx() {
+            return Ok(())
+        }
+
         if tho_dst_device == 0 {
             /*
              * Finish reading the non-Sync Optimizer before awaiting tensor
