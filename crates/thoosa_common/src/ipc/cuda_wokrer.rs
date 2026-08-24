@@ -1153,14 +1153,3 @@ impl RunCtx for WokerRunCtx {
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }
-
-//DummyImpl
-impl MaxParallelCtx for WokerRunCtx {
-    fn set_max_other_parallel(&mut self, permit: u8) {
-
-    }
-
-    fn max_other_parallel(&self) -> u8 {
-        0
-    }
-}
