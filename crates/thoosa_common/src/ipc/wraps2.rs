@@ -93,7 +93,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.endpoint_name.to_string(),
                     self.stage_id,
-                    self.clone_input(input)?,//clones refs
+                    self.clone_refs(input)?, //clones refs
                     false,
                 ).await?;
 
@@ -125,7 +125,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.endpoint_name.to_string(),
                     self.stage_id,
-                    self.clone_input(&input)?,//clones refs
+                    self.clone_refs(&input)?, //clones refs
                     true,
                 ).await?;
 
@@ -206,7 +206,7 @@ where
 
     }
 
-    fn clone_input<'a>(&self, input: &<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> {
+    fn clone_refs<'a>(&self, input: &<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> {
         match &self.clone_refs {
             Some(clone_refs) => clone_refs(input),
             None => input.clone_refs(),
