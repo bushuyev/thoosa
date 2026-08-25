@@ -796,30 +796,6 @@ pub enum CudaIPCActorMessage {
     Shutdown {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
-    InstallEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::InstallStage
-        init_msg: String, respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
-
-    InvokeEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::InvokeStage
-        input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
-    },
-    ConsumeEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::InvokeStage, consume:true
-        input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
-    },
-    InvokeEndpointToFile {//TODO remove
-        input: String,
-        output: std::fs::File,
-        respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
-    },
-    PurgeEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::PurgeStage
-        stage_id: u32, endpoint_name:String,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
-    DropEndpoint {//to be replaced with SendMsg{CudaWorkerMsgIn::DropStage
-        stage_id: u32, endpoint_name: String,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
-
     SendMsg {
         input: CudaWorkerMsgIn,
         respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>
@@ -1082,7 +1058,6 @@ impl CudaIPCActor {
                         debug_assert!(old.is_none());
                     }
 
-                    // if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg(encode_endpoint_payload(DROP_THO_TENSOR, &key.to_string())), msg: None }).await.is_err() {
                     if self_tx.send(
                         OutgoingRequest {
                         id,
@@ -1132,14 +1107,6 @@ impl CudaIPCActor {
 
                 debug!("CudaIPCActorMessage::Shutdown: next_id={next_id}");
 
-                // if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()), msg: None }).await.is_err() {
-                //     let mut pending = pending.lock().await;
-                //     pending.remove(&id);
-                //     let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
-                //     return;
-                // }
-                //
-
                 if self_tx.send(
                     OutgoingRequest {
                         id: next_id,
@@ -1157,61 +1124,15 @@ impl CudaIPCActor {
                     return Err(ThoError::new("can't shutdown"))
                 }
 
-                // let reply = reply_rx
-                //     .await
-                //     .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
-                //     .and_then(|reply| reply)
-                //     /*.and_then(IncomingResponsePayload::into_msg)*/;
+
 
                 Self::handle_reply(respond_to, next_id, reply_rx).await;
 
                 debug!("CudaIPCActorMessage::Shutdown: final");
 
-                // let _ = self.spawned_state.child.kill().await;
                 self.spawned_state.reader_handle.abort();
                 self.spawned_state.writer_handle.abort();
-                // match reply {
-                //     Ok(reply) if reply == "shutdown-ok" => {
-                //         let _ = respond_to.send(Ok(()));
-                //     }
-                //     Ok(reply) => {
-                //         let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
-                //     }
-                //     Err(error) => {
-                //         let _ = respond_to.send(Err(error));
-                //     }
-                // }
 
-            }
-            CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {//TODO remove
-                // let self_tx = self.spawned_state.tx.clone();
-                // let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                // let pending = Arc::clone(&self.spawned_state.pending);
-                //
-                // tokio::spawn(async move {
-                //
-                //     let response = send_request_and_wait(
-                //         self_tx,
-                //         pending,
-                //         OutgoingRequest {
-                //             id: next_id,
-                //             payload: OutgoingRequestPayload::Msg(format!("{INSTALL_ENDPOINT_PREFIX}{init_msg}")),
-                //             msg: None,
-                //         },
-                //     ).await.and_then(|response| {
-                //         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                //             Err(parse_worker_copy_error_payload(error))
-                //         } else if response == ENDPOINT_OK_PAYLOAD {
-                //             Ok(())
-                //         } else {
-                //             Err(ThoError::new(format!("unexpected endpoint install response: {response:?}")))
-                //         }
-                //     });
-                //     let _ = respond_to.send(response);
-                //
-                //     Ok::<_, ThoError>(())
-                // });
-                todo!()
             }
             CudaIPCActorMessage::SendMsg { mut input, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -1238,151 +1159,6 @@ impl CudaIPCActor {
                 });
             }
 
-            CudaIPCActorMessage::InvokeEndpoint { input, respond_to } => {//TODO remove
-
-                // let self_tx = self.spawned_state.tx.clone();
-                // let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                // let pending = Arc::clone(&self.spawned_state.pending);
-                //
-                // _= tokio::spawn(async move {
-                //
-                //     let response = send_request_and_wait(
-                //         self_tx,
-                //         pending,
-                //         OutgoingRequest {
-                //             id: next_id,
-                //             payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
-                //             msg: None,
-                //         },
-                //     ).await.and_then(|response| {
-                //         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                //             Err(parse_worker_copy_error_payload(error))
-                //         } else {
-                //             Ok(response)
-                //         }
-                //     });
-                //     let _ = respond_to.send(response);
-                //     Ok::<_, ThoError>(())
-                // });
-                todo!()
-            }
-            CudaIPCActorMessage::ConsumeEndpoint { input, respond_to } => {
-                // let self_tx = self.spawned_state.tx.clone();
-                // let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                // let pending = Arc::clone(&self.spawned_state.pending);
-                //
-                // _= tokio::spawn(async move {
-                //     let response = send_request_and_wait(
-                //         self_tx,
-                //         pending,
-                //         OutgoingRequest {
-                //             id: next_id,
-                //             payload: OutgoingRequestPayload::Msg(format!("{CONSUME_ENDPOINT_PREFIX}{input}")),
-                //             msg: None,
-                //         },
-                //     ).await.and_then(|response| {
-                //         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                //             Err(parse_worker_copy_error_payload(error))
-                //         } else {
-                //             Ok(response)
-                //         }
-                //     });
-                //     let _ = respond_to.send(response);
-                //
-                //     Ok::<_, ThoError>(())
-                // });
-                todo!()
-            }
-            CudaIPCActorMessage::InvokeEndpointToFile { input, output, respond_to } => {
-                let self_tx = self.spawned_state.tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.spawned_state.pending);
-                {
-                    let mut pending = pending.lock().await;
-                    let old = pending.insert(next_id, PendingResponse::File { output: tokio::fs::File::from_std(output), respond_to, error: None });
-                    debug_assert!(old.is_none());
-                }
-                if self_tx.send(OutgoingRequest { id: next_id, payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")), msg: None }).await.is_err() {
-                    fail_one_pending(&pending, next_id, format!("failed to send streaming endpoint request {next_id}")).await;
-                }
-            }
-
-
-
-            CudaIPCActorMessage::PurgeEndpoint { stage_id, endpoint_name, respond_to } => {
-                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: endpoint_name={endpoint_name} stage_id={stage_id}");
-                let self_tx = self.spawned_state.tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.spawned_state.pending);
-
-                _= tokio::spawn(async move {
-
-                    // let response = send_request_and_wait(
-                    //     self_tx,
-                    //     pending,
-                    //     OutgoingRequest {
-                    //         id: next_id,
-                    //         payload: OutgoingRequestPayload::Msg(format!("{PURGE_ENDPOINT_PREFIX}{input}")),
-                    //         msg: None,
-                    //     },
-                    // ).await.and_then(|response| {
-                    //     if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                    //         Err(parse_worker_copy_error_payload(error))
-                    //     } else {
-                    //         Ok(response)
-                    //     }
-                    // })?;
-                    let response = send_request_and_wait_msg(
-                        next_id,
-                        self_tx,
-                        pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                            msg: Some(CudaWorkerMsgIn {
-                                request_id: next_id,
-                                operation: Operation::PurgeStage {
-                                    endpoint_name,
-                                    stage_id,
-                                },
-                            }),
-                        },
-                    ).await?;//TODO handle error
-
-                    debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: response={response:?}");
-
-                    let _ = respond_to.send(Ok(()));
-                    Ok::<_, ThoError>(())
-                });
-            }
-            CudaIPCActorMessage::DropEndpoint { stage_id, endpoint_name, respond_to } => {
-                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::DropEndpoint: stage_id={stage_id} endpoint_name={endpoint_name}");
-                let self_tx = self.spawned_state.tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.spawned_state.pending);
-
-                // Endpoint destruction is acknowledged so callers know the worker processed the removal before reusing the key.
-                tokio::spawn(async move {
-                    let response = send_request_and_wait_msg(
-                        next_id,
-                        self_tx,
-                        pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                            msg: Some(CudaWorkerMsgIn {
-                                request_id: next_id,
-                                operation: Operation::DropStage {
-                                    endpoint_name,
-                                    stage_id,
-                                },
-                            }),
-                        },
-                    ).await?;
-                    let _ = respond_to.send(Ok(()));
-                    Ok::<_, ThoError>(())
-                });
-            }
 
         }
 
@@ -2120,37 +1896,7 @@ fn copy_parent_d2h_chunk(
     Ok(())
 }
 
-async fn send_request_and_wait(
-    tx: mpsc::Sender<OutgoingRequest>,
-    pending: PendingResponses,
-    request: OutgoingRequest,
-) -> Result<String, ThoError> {
-    match send_request_and_wait_payload(tx, pending, request).await? {
-        IncomingResponsePayload::Msg(response) => Ok(response),
-    }
-}
 
-async fn send_request_and_wait_payload(
-    tx: mpsc::Sender<OutgoingRequest>,
-    pending: PendingResponses,
-    request: OutgoingRequest,
-) -> Result<IncomingResponsePayload, ThoError> {
-    let id = request.id;
-    let (reply_tx, reply_rx) = oneshot::channel();
-    {
-        let mut pending = pending.lock().await;
-        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
-        debug_assert!(old.is_none());
-    }
-    if tx.send(request).await.is_err() {
-        let mut pending = pending.lock().await;
-        pending.remove(&id);
-        return Err(ThoError::new("worker IPC writer task is closed"));
-    }
-    reply_rx
-        .await
-        .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))?
-}
 
 async fn send_request_and_wait_msg<R>(
     id:u64,
@@ -2270,8 +2016,6 @@ impl CudaIPCActorHandle {
             sender,
         })
     }
-
-
 
     pub async fn invoke_stage(&self, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> Result<CudaWorkerMsgOut, ThoError> {
         debug!("CudaIPCActorHandle::invoke_stage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
@@ -2425,12 +2169,17 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
+    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaIPCActorMessage::PurgeEndpoint {
-                stage_id,
-                endpoint_name,
+            CudaIPCActorMessage::SendMsg {
+                input: CudaWorkerMsgIn {
+                    request_id: 0,
+                    operation: Operation::PurgeStage {
+                        endpoint_name,
+                        stage_id,
+                    },
+                },
                 respond_to,
             }
         ).instrument(tracing::debug_span!(
@@ -2441,12 +2190,17 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
+    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaIPCActorMessage::DropEndpoint {
-                stage_id,
-                endpoint_name,
+            CudaIPCActorMessage::SendMsg {
+                input: CudaWorkerMsgIn {
+                    request_id: 0,
+                    operation: Operation::DropStage {
+                        endpoint_name,
+                        stage_id,
+                    },
+                },
                 respond_to,
             }
         ).instrument(tracing::debug_span!(

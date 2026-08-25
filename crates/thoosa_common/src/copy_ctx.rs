@@ -33,6 +33,7 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::error;
 use tub::{Guard, Pool};
+use crate::ipc::worker_msg::CudaWorkerMsgOut;
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -79,12 +80,12 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(())
     }
 
-    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
+    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
         todo!()//TODO purge local states too
     }
 
-    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String) -> Result<(), ThoError> {
-        Ok(())
+    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
+        todo!()
     }
 
     async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError>
