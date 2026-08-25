@@ -1399,7 +1399,7 @@ where
             }
         }
 
-        // TODO(perf): asynchronously prefetch the next random-slice epoch before this cache misses so RandomSlicesLoader latency is hidden behind TrainStep work.
+
         let random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = track_await(Arc::clone(&self.random_slices_loader)
             .run(
                 Arc::new(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit)),
