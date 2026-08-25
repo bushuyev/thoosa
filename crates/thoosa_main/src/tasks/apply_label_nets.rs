@@ -1251,11 +1251,15 @@ mod tests {
             .collect::<Vec<_>>();
 
         let mut label_ws_entries: HashMap<String, Vec<_>> = HashMap::new();
+        let mut single_label_ws_entries = Vec::new();
         for label in labels {
             let motif_nets = motif_nets_for_run_config_ids(motifs, &label.motif_run_config_ids);
             let (params, net) = weighted_label_net(motif_nets.len() as u32, slices_len, label.weights.clone(), device);
-                debug!("run_apply_label_case: label.label={:?} label.train_run_config_id={}", label.label, label.train_run_config_id);
+            debug!("run_apply_label_case: label.label={:?} label.train_run_config_id={}", label.label, label.train_run_config_id);
             label_ws_entries.entry(label.label.clone()).or_default().push((label.train_run_config_id, params, net));
+            // Register the exact checkpoint path used by ApplyLabelNet::new so each trained net receives its own mock module.
+            let (params, net) = weighted_label_net(motif_nets.len() as u32, slices_len, label.weights.clone(), device);
+            single_label_ws_entries.push((label.path.clone(), label.train_run_config_id, params, net));
         }
 
 
@@ -1263,6 +1267,7 @@ mod tests {
             WsMockBuilder::new(None, channels, 100, motif_width)
                 .with_load_motif_net(motif_ws_entries)
                 .with_load_label_nets(label_ws_entries)
+                .with_load_label_net(single_label_ws_entries)
                 .build(),
         ));
 
