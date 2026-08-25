@@ -3,7 +3,7 @@ use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, WorkerTensorInfoPayload};
+use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd};
 use crate::ipc::json_ser::{ErasedWithState, PostcardToFromBytes, SyncStageIpcResponse, SyncStageIpcWrapper, ToFromBytes};
 use crate::ipc::proxy_tests::TestOutputA;
@@ -64,7 +64,7 @@ struct WorkerRequestContext {
     pending_d2h_transfers: Arc<Mutex<HashMap<u64, PendingWorkerD2hTransfer>>>,
     cuda_resources: Arc<Mutex<HashMap<usize, Arc<WorkerCudaResources>>>>,
     installed_endpoints: InstalledEndpoints,
-    reply_tx: mpsc::Sender<WorkerReply>,
+    reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
     with_digest: bool,
 }
@@ -212,7 +212,7 @@ impl CudaWorker {
             "DeviceInfo/worker"
         ).await?;
 
-        let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
+        let (reply_tx, reply_rx) = mpsc::channel::<CudaWorkerMsgOut>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
         let all_cuda_tensors = Arc::new(parking_lot::Mutex::new(HashMap::new()));//TODO to RwLock?
@@ -284,11 +284,7 @@ impl CudaWorker {
 
         info!("worker finished");
         reply_tx
-            .send(WorkerReply {
-                id: shutdown_request_id,
-                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                msg: Some(CudaWorkerMsgOut { request_id: shutdown_request_id, status: OpResult::Ok(None) }),
-            })
+            .send(CudaWorkerMsgOut { request_id: shutdown_request_id, status: OpResult::Ok(None) })
             .await
             .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
@@ -340,7 +336,7 @@ impl CudaWorker {
                         Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key, tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
                     }
                 };
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 debug!("run_worker: DescribeRef response {request_id} sent");
                 Ok(WorkerRequestControl::Continue)
             }
@@ -350,7 +346,7 @@ impl CudaWorker {
                     let mut cuda_resources = context.cuda_resources.lock();
                     panic_to_err!(cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload { transfer_id: 0, worker_id, kind, shape, tensor_byte_len, chunk_count }, &mut cuda_resources))?;
                 }
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 debug!("run_worker: Operation::H2dStart done");
                 Ok(WorkerRequestControl::Continue)
             }
@@ -429,7 +425,7 @@ impl CudaWorker {
                 let removed = context.all_cuda_tensors.lock().remove(&tensor_key);
                 debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
                 let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
@@ -445,7 +441,7 @@ impl CudaWorker {
                     }
                 };
                 if is_duplicate {
-                    context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                     return Ok(WorkerRequestControl::Continue);
                 }
                 let endpoint_wrapper = match init_fn(init_data, Arc::clone(&context.ws), &context.all_cuda_tensors).await {
@@ -457,7 +453,7 @@ impl CudaWorker {
                 };
                 debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
                 context.installed_endpoints.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::InvokeStage { endpoint_name, stage_id, input, consume } => {
@@ -483,7 +479,7 @@ impl CudaWorker {
                     }
                 }?;
                 debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={result:?}");
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(result)) }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(result)) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::PurgeStage { endpoint_name, stage_id } => {
@@ -495,14 +491,14 @@ impl CudaWorker {
                 } else {
                     error!("no endpoint found");
                 }
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::DropStage { endpoint_name, stage_id } => {
                 let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
                 let removed = context.installed_endpoints.remove(&endpoint_key).is_some();
                 debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::Shutdown { dummy: _ } => {
@@ -515,7 +511,7 @@ impl CudaWorker {
             Ok(control) => Ok(control),
             Err(error) => {
                 error!("run_worker: e={error:?}");
-                context.reply_tx.send(WorkerReply { id: request_id, payload: OutgoingRequestPayload::Msg("dummy".to_string()), msg: Some(CudaWorkerMsgOut { request_id, status: error.into() }) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: error.into() }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 Ok(WorkerRequestControl::Continue)
             }
         }
