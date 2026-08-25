@@ -79,39 +79,13 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(())
     }
 
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
-    async fn install_endpoint(&self, _stage_id: u32, init_msg:String)-> Result<(), ThoError> {
-        Ok(())
+    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
+        todo!()//TODO purge local states too
     }
 
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
-    async fn install_endpoint_bytes(&self, stage_id: u32, init_msg: Vec<u8>)-> Result<(), ThoError> {
-        self.install_endpoint(stage_id, String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
-    }
-
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
-    async fn invoke_endpoint(&self, _stage_id: u32, _input:String)-> Result<String, ThoError> {
-       todo!()
-    }
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
-    async fn invoke_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
-        Ok(self.invoke_endpoint(stage_id, String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?.into_bytes())
-    }
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
-    async fn purge_endpoint_bytes(&self, stage_id: u32, endpoint_name: String)-> Result<(), ThoError> {
-        todo!()//TODO it should be in IPC endpoint only
-    }
-
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
     async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String) -> Result<(), ThoError> {
         Ok(())
     }
-
-    #[deprecated]//to be removed from common CudaActorHandle trait and used for IPC from proxy only
-    async fn consume_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
-        self.invoke_endpoint_bytes(stage_id, input).await
-    }
-
 
     async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError>
     {
