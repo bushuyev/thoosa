@@ -174,13 +174,13 @@ impl CudaWorker {
 
         let (free_mem, total_mem) = cuda_mem_for_device(cuda_device);
 
-        cuda_process::write_text_frame(
+        cuda_process::write_frame(
             &mut writer,
-            &serde_json5::to_string(&DeviceInfo {
+            &PostcardToFromBytes::to_bytes(&DeviceInfo {
                 free_mem,
                 total_mem
             })?,
-            "run_worker"
+            "DeviceInfo/worker"
         ).await?;
 
         let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
