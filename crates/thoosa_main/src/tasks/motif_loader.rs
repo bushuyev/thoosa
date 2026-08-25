@@ -920,7 +920,7 @@ where
 
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-        // TODO(perf): precompute or cache random-slice pools for (motif_id, limit, input_len_adjuster) so each batch does not wait on fresh SQL selection.
+
         let (channel, find_motifs_run_config_id, slices, resources_map) = track_await(self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize))).await?;
 
 

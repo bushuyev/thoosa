@@ -74,7 +74,7 @@ where
         let tho_cuda_context = ThoCudaContext::new(0)?;
 
         let worker_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(32)
+            .worker_threads(16)
             .enable_all()
             .on_thread_start(move || {
 
@@ -101,7 +101,7 @@ where
 
     } else {
         let main_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(8)
+            .worker_threads(16)
             .enable_all()
             .thread_name_fn(|| {
                 static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);

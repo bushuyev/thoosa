@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 use log::info;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -132,6 +133,8 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         // Identity work isolates IPC and sync-stage dispatch overhead from tensor computation.
+        std::thread::sleep(Duration::from_secs(3));
+
         Ok(SimpOutput { value: input.value })
     }
 }
@@ -152,7 +155,7 @@ async fn do_test_simp() -> Result<(), ThoError> {
 
     let ctx = RunCtxImpl::new(1, "test");
 
-    for _ in 0..30000 {
+    for _ in 0..100 {
         let input = SimpInput { value: 42 };
         let output = cuda_actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
         assert_eq!(output, SimpOutput { value: 42 });

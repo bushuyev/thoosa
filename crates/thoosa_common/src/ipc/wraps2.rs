@@ -262,7 +262,9 @@ where
             debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx} spawned");
 
             if let Err(error) = ipc_actor.drop_endpoint(stage_id, endpoint_name.to_string()).await {
-                error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
+                if !GlobalCtx::is_shutting_down() {
+                    error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
+                }
             }
             Ok::<_, ThoError>(())
         });
