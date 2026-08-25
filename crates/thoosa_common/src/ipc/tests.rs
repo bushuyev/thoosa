@@ -277,10 +277,10 @@ mod tests {
         }
     }
 
-    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::wraps2::DynSyncStageEnum2<SyncConsumeTestStage>, ThoError> {
+    async fn new_sync_consume_test_stage(tho_device_idx: usize) -> Result<crate::ipc::proxy::DynSyncStageEnum<SyncConsumeTestStage>, ThoError> {
         // ProxyStage2 carries typed consume requests and releases worker inputs only after success.
-        Ok(crate::ipc::wraps2::DynSyncStageEnum2::Proxy {
-            stage: Arc::new(crate::ipc::wraps2::ProxyStage2::proxy_with_input_cloner(
+        Ok(crate::ipc::proxy::DynSyncStageEnum::Proxy {
+            stage: Arc::new(crate::ipc::proxy::ProxyStage::proxy_with_input_cloner(
                 SYNC_CONSUME_TEST_ENDPOINT,
                 0,
                 tho_device_idx,

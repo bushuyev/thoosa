@@ -3,7 +3,7 @@ use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_ENDPOINT_PREFIX, DROP_THO_TENSOR, DeviceInfo, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, IpcChunkWriter, OutgoingRequestPayload, PURGE_ENDPOINT_PREFIX, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, WorkerTensorInfoPayload};
+use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd};
 use crate::ipc::json_ser::{ErasedWithState, PostcardToFromBytes, SyncStageIpcResponse, SyncStageIpcWrapper, ToFromBytes};
 use crate::ipc::proxy_tests::TestOutputA;
@@ -476,7 +476,7 @@ impl CudaWorker {
                         debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
                         panic_to_err!({
                             let _guard = ThoStreamGuard::new(&stream)?;
-                            let response = if consume { endpoint.consume_2(input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)? } else { endpoint.do_run_2(&input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)? };
+                            let response = if consume { endpoint.consume(input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)? } else { endpoint.do_run(&input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)? };
                             stream.synchronize()?;
                             Ok::<_, ThoError>(response)
                         })

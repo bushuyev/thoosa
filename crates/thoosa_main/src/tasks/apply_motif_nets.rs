@@ -34,7 +34,7 @@ use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
@@ -85,10 +85,10 @@ where
     id: SynKey,
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
-    apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum2<ApplyMotifNet<C>, MotifNetMeta>>)>,
+    apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>)>,
     pub slice_step: u32,//should be in the input
     // pub motif_width:u32,
-    stack_applied_motif_nets:Arc<DynSyncStageEnum2<StackAppliedMotifNets<C>>>
+    stack_applied_motif_nets:Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>
 
 }
 
@@ -184,7 +184,7 @@ impl ApplyMotifNetSplitsContext {
     }
 }
 
-impl<'a, C> InputContext<'a, DynSyncStageWithStateEnum2<ApplyMotifNet<C>, MotifNetMeta>> for ApplyMotifNetSplitsContext
+impl<'a, C> InputContext<'a, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>> for ApplyMotifNetSplitsContext
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
@@ -769,18 +769,18 @@ impl<C> StackAppliedMotifNets<C>
 where
     C: RunCtx + 'static,
 {
-    pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum2<StackAppliedMotifNets<C>>, ThoError> {
+    pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedMotifNets<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
             // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
             let init = StackAppliedMotifNetsInput::new(id.clone(), Vec::new(), device.tho_device_idx());
-            Ok(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
                 init: (),
             })
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(Self::new_local(id).await?)))
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?)))
         }
     }
 
@@ -1099,7 +1099,7 @@ pub trait ApplyMotifNetProps {
     fn out_id(&self, input:&<<ApplyMotifNet<<Self as ApplyMotifNetProps>::C> as Stage>::In<'_> as WithId>::ID) -> <<ApplyMotifNet<<Self as ApplyMotifNetProps>::C> as Stage>::Out as WithId>::ID;
 }
 
-impl <C> ApplyMotifNetProps for DynSyncStageWithStateEnum2<ApplyMotifNet<C>, MotifNetMeta>
+impl <C> ApplyMotifNetProps for DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>
 where
     C: RunCtx + 'static
 {
@@ -1107,10 +1107,10 @@ where
 
     fn motif_width(&self) -> u32 {
         match self {
-            DynSyncStageWithStateEnum2::Local(stage) => {
+            DynSyncStageWithStateEnum::Local(stage) => {
                 stage.motif_width()
             }
-            DynSyncStageWithStateEnum2::Proxy { init, .. } => {
+            DynSyncStageWithStateEnum::Proxy { init, .. } => {
                 init.motif_net_params().num_features()
             }
         }
@@ -1118,10 +1118,10 @@ where
 
     fn motif_id(&self) -> u32 {
         match self {
-            DynSyncStageWithStateEnum2::Local(stage) => {
+            DynSyncStageWithStateEnum::Local(stage) => {
                 stage.motif_id.to_data_id().0
             }
-            DynSyncStageWithStateEnum2::Proxy { init, .. } => {
+            DynSyncStageWithStateEnum::Proxy { init, .. } => {
                 init.motif_id()
             }
         }
@@ -1129,10 +1129,10 @@ where
 
     fn out_id(&self, input_id:&<<ApplyMotifNet<C> as Stage>::In<'_> as WithId>::ID) -> <<ApplyMotifNet<C> as Stage>::Out as WithId>::ID {
         match self {
-            DynSyncStageWithStateEnum2::Local(stage) => {
+            DynSyncStageWithStateEnum::Local(stage) => {
                 stage.out_id(input_id)
             }
-            DynSyncStageWithStateEnum2::Proxy { init, .. } => {
+            DynSyncStageWithStateEnum::Proxy { init, .. } => {
                 mono_key!(init.motif_id(), "MotifNetProxy") + input_id
             }
         }
@@ -1154,7 +1154,7 @@ where
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>,
 
-    ) -> Result<DynSyncStageWithStateEnum2<ApplyMotifNet<C>, MotifNetMeta>, ThoError> {
+    ) -> Result<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>, ThoError> {
 
         let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
                &trained_net.net_path,
@@ -1177,13 +1177,13 @@ where
             // Use the typed stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
             let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
             // The proxy must dispatch with the id used to install this particular apply stage.
-            Ok(DynSyncStageWithStateEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(init)).await?),
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(init)).await?),
                 init: MotifNetMeta::new(motif_id, channel, params),
             })
         } else {
 
-            Ok(DynSyncStageWithStateEnum2::Local(Arc::new(ApplyMotifNet::new_local(
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
                 slice_step,
                 params,
                 net,

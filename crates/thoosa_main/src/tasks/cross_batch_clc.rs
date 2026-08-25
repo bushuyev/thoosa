@@ -22,7 +22,7 @@ use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
@@ -529,7 +529,7 @@ struct CrossUnfoldClcProxyCtx<C>//TODO remove the context adapter once the share
 where
     C: RunCtx + 'static,
 {
-    proxy: Arc<DynSyncStageEnum2<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>>,
+    proxy: Arc<DynSyncStageEnum<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>>,
     _pd: PhantomData<C>,
 }
 
@@ -577,8 +577,8 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install the configured find-motifs stage once, then use shared typed proxy dispatch.
             Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(CrossUnfoldClcProxyCtx::<C> {
-                proxy: Arc::new(DynSyncStageEnum2::Proxy {
-                    stage: Arc::new(ProxyStage2::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+                proxy: Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
                     init: (),
                 }),
                 _pd: PhantomData,

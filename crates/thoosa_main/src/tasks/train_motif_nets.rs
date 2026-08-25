@@ -25,7 +25,7 @@ use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
@@ -187,7 +187,7 @@ impl<C> TrainStepFactory<Slice, MotifProbability, C, MotifNetParams, TrainMotifN
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
+    async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
         let (node_params, stft_config) = train_motif_step_params(&run_config, self.motif_width)?;
         if GlobalCtx::global().is_ipc() {
             let motif = track_await(self.motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
@@ -204,7 +204,7 @@ where
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &crate::tasks::train_step::TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
-            Ok((DynSyncStageWithStateEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
@@ -245,7 +245,7 @@ where
                 run_config,
                 vs_path,
             ).await?;
-            Ok((DynSyncStageWithStateEnum2::Local(Arc::new(train_step)), node_params))
+            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
         }
     }
 }
@@ -989,7 +989,7 @@ impl SyncStage for SyncMotifBatch {
 
 #[derive(Debug)]
 struct SyncMotifBatchDynStage<C> {
-    stage: Arc<DynSyncStageEnum2<SyncMotifBatch>>,
+    stage: Arc<DynSyncStageEnum<SyncMotifBatch>>,
     pd: PhantomData<C>,
 }
 
@@ -1002,9 +1002,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install one typed-wrapper endpoint per proxy so worker tensor ownership stays isolated.
-            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum2::Local(Arc::new(SyncMotifBatch::new()))
+            DynSyncStageEnum::Local(Arc::new(SyncMotifBatch::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1257,7 +1257,7 @@ impl SyncStage for SplitMotifIntoTrainValid {
 
 #[derive(Debug)]
 struct SplitMotifIntoTrainValidDynStage<C> {
-    stage: Arc<DynSyncStageEnum2<SplitMotifIntoTrainValid>>,
+    stage: Arc<DynSyncStageEnum<SplitMotifIntoTrainValid>>,
     pd: PhantomData<C>,
 }
 
@@ -1270,9 +1270,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // The typed proxy carries throttling separately from the borrowed tensor payload.
-            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum2::Local(Arc::new(SplitMotifIntoTrainValid::new()))
+            DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1515,7 +1515,7 @@ mod tests {
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
     use thoosa_common::ipc::wraps::WorkerWrapperWithState;
-    use thoosa_common::ipc::wraps2::{DynSyncStageWithStateEnum2, ProxyStage2};
+    use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -1796,8 +1796,8 @@ mod tests {
             let stage_id = 0;
             let init = TrainTestStepInit { lr: 0.001, vs_path: PathBuf::from("/tmp/thoosa_train_step_ipc.safetensors") };
             let input_cloner = Arc::new(|input: &TrainStepInput<InDims, OutDims>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
-            let train_step: DynSyncStageWithStateEnum2<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1, Box::new(init), input_cloner).await?),
+            let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1, Box::new(init), input_cloner).await?),
                 init: (),
             };
             let cuda_actor = GlobalCtx::global().cuda_actor(1);

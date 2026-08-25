@@ -15,14 +15,14 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
 use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
+use crate::ipc::cuda_process::{CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;
 
-pub struct ProxyStage2<St>
+pub struct ProxyStage<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -39,7 +39,7 @@ where
 
 }
 
-impl<St> Debug for ProxyStage2<St>
+impl<St> Debug for ProxyStage<St>
 where
     St: SyncStage,
     for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
@@ -54,7 +54,7 @@ where
     }
 }
 
-impl <St> Stage for ProxyStage2<St>
+impl <St> Stage for ProxyStage<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -67,7 +67,7 @@ where
 
 
 
-impl <St>SyncStage for ProxyStage2<St>
+impl <St>SyncStage for ProxyStage<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -139,7 +139,7 @@ where
     }
 }
 
-impl <St> ProxyStage2<St>
+impl <St> ProxyStage<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -239,7 +239,7 @@ where
 
 
 
-impl <St> Drop for ProxyStage2<St>
+impl <St> Drop for ProxyStage<St>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -274,7 +274,7 @@ where
 
 ///
 #[derive(Debug)]
-pub enum DynSyncStageEnum2<St, Init=()>
+pub enum DynSyncStageEnum<St, Init=()>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -283,13 +283,13 @@ where
 {
     Local(Arc<St>),
     Proxy {
-        stage: Arc<ProxyStage2<St>>,
+        stage: Arc<ProxyStage<St>>,
         init: Init
     }
 
 }
 
-impl <St, Init> Stage for DynSyncStageEnum2<St, Init>
+impl <St, Init> Stage for DynSyncStageEnum<St, Init>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -301,7 +301,7 @@ where
     type Out = St::Out;
 }
 
-impl<St, Init> Adjustable for DynSyncStageEnum2<St, Init>
+impl<St, Init> Adjustable for DynSyncStageEnum<St, Init>
 where
     St: SyncStage + Adjustable,
     for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
@@ -311,22 +311,14 @@ where
     // Preserve the local stage's adjustment marker across local/proxy dispatch.
 }
 
-impl <St, Init> SyncStage for DynSyncStageEnum2<St, Init>
+impl <St, Init> SyncStage for DynSyncStageEnum<St, Init>
 where
     St:SyncStage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
-    // fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
-    // where
-    //     Self: Sized
-    // {
-    //     match self {
-    //         Self::Local(stage) => stage.as_with_state(),
-    //         Self::Proxy { stage, .. } => None,
-    //     }
-    // }
+
 
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
@@ -352,7 +344,7 @@ where
 
 }
 
-impl <St, Init> StageWithState for DynSyncStageEnum2<St, Init>
+impl <St, Init> StageWithState for DynSyncStageEnum<St, Init>
 where
     St:SyncStage+StageWithState+Send+Sync,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -380,10 +372,8 @@ where
 }
 
 
-///
-///
 #[async_trait]
-impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum2<St, Init>
+impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum<St, Init>
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -392,10 +382,10 @@ where
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self {
-            DynSyncStageEnum2::Local(stage) => {
+            DynSyncStageEnum::Local(stage) => {
                 stage.has_gpu_data(device_idx).await
             }
-            DynSyncStageEnum2::Proxy { .. } => {
+            DynSyncStageEnum::Proxy { .. } => {
                 true
             }
         }
@@ -403,10 +393,10 @@ where
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self {
-            DynSyncStageEnum2::Local(local) => {
+            DynSyncStageEnum::Local(local) => {
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
-            DynSyncStageEnum2::Proxy { stage,  .. } => {
+            DynSyncStageEnum::Proxy { stage,  .. } => {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async move {
                         thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
@@ -423,10 +413,10 @@ where
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self {
-            DynSyncStageEnum2::Local(local) => {
+            DynSyncStageEnum::Local(local) => {
                 local.drop_gpu(device_idx, name).await
             }
-            DynSyncStageEnum2::Proxy { .. } => {
+            DynSyncStageEnum::Proxy { .. } => {
                 Ok(())
             }
         }
@@ -434,20 +424,18 @@ where
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         match self {
-            DynSyncStageEnum2::Local(local) => {
+            DynSyncStageEnum::Local(local) => {
                 local.purge_cpu(purge_until).await
             }
-            DynSyncStageEnum2::Proxy { .. } => {
+            DynSyncStageEnum::Proxy { .. } => {
                 0
             }
         }
     }
 }
 
-///////
-///
 #[derive(Debug)]
-pub enum DynSyncStageWithStateEnum2<St, Init=()>
+pub enum DynSyncStageWithStateEnum<St, Init=()>
 where
     St:SyncStage+StageWithState,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -456,12 +444,12 @@ where
 {
     Local(Arc<St>),
     Proxy {
-        stage: Arc<ProxyStage2<St>>,
+        stage: Arc<ProxyStage<St>>,
         init: Init
     }
 }
 
-impl <St, Init> Stage for DynSyncStageWithStateEnum2<St, Init>
+impl <St, Init> Stage for DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -473,7 +461,7 @@ where
     type Out = St::Out;
 }
 
-impl <St, Init> Adjustable for DynSyncStageWithStateEnum2<St, Init>
+impl <St, Init> Adjustable for DynSyncStageWithStateEnum<St, Init>
 where
     St: SyncStage + StageWithState + Adjustable,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -483,7 +471,7 @@ where
     // Preserve the wrapped stage's adjustment capability across local/proxy dispatch.
 }
 
-impl <St, Init> SyncStage for DynSyncStageWithStateEnum2<St, Init>
+impl <St, Init> SyncStage for DynSyncStageWithStateEnum<St, Init>
 where
     St: SyncStage + StageWithState + Send + Sync,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -511,7 +499,7 @@ where
 
 
 ///
-impl <St, Init> StageWithState for DynSyncStageWithStateEnum2<St, Init>
+impl <St, Init> StageWithState for DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState+Send+Sync,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -540,7 +528,7 @@ where
 ///
 ///
 #[async_trait]
-impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum2<St, Init>
+impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -549,10 +537,10 @@ where
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self {
-            DynSyncStageWithStateEnum2::Local(stage) => {
+            DynSyncStageWithStateEnum::Local(stage) => {
                 stage.has_gpu_data(device_idx).await
             }
-            DynSyncStageWithStateEnum2::Proxy { .. } => {
+            DynSyncStageWithStateEnum::Proxy { .. } => {
                 true
             }
         }
@@ -560,10 +548,10 @@ where
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self {
-            DynSyncStageWithStateEnum2::Local(local) => {
+            DynSyncStageWithStateEnum::Local(local) => {
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
-            DynSyncStageWithStateEnum2::Proxy { stage,  .. } => {
+            DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async move {
                         thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
@@ -580,10 +568,10 @@ where
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self {
-            DynSyncStageWithStateEnum2::Local(local) => {
+            DynSyncStageWithStateEnum::Local(local) => {
                 local.drop_gpu(device_idx, name).await
             }
-            DynSyncStageWithStateEnum2::Proxy { .. } => {
+            DynSyncStageWithStateEnum::Proxy { .. } => {
                 Ok(())
             }
         }
@@ -591,10 +579,10 @@ where
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         match self {
-            DynSyncStageWithStateEnum2::Local(local) => {
+            DynSyncStageWithStateEnum::Local(local) => {
                 local.purge_cpu(purge_until).await
             }
-            DynSyncStageWithStateEnum2::Proxy { .. } => {
+            DynSyncStageWithStateEnum::Proxy { .. } => {
                 0
             }
         }

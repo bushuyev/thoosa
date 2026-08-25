@@ -6,7 +6,7 @@ use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::tests::run_ipc_test;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use crate::ipc::wraps::WorkerWrapper;
-use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -99,15 +99,15 @@ impl <C> SimpStage<C>
 where
     C:RunCtx
 {
-    pub async fn new() -> Result<DynSyncStageEnum2<SimpStage<RunCtxImpl>>, ThoError> {
+    pub async fn new() -> Result<DynSyncStageEnum<SimpStage<RunCtxImpl>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
-            Ok(DynSyncStageEnum2::Proxy {
-                stage:Arc::new(ProxyStage2::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, 0, 1, Box::new(())).await?),
+            Ok(DynSyncStageEnum::Proxy {
+                stage:Arc::new(ProxyStage::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, 0, 1, Box::new(())).await?),
                 init:()
             })
 
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(SimpStage::<RunCtxImpl>::new_local())))
+            Ok(DynSyncStageEnum::Local(Arc::new(SimpStage::<RunCtxImpl>::new_local())))
         }
 
     }
