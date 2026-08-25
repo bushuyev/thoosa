@@ -61,7 +61,7 @@ impl SyncStageIpcConsumeResponse {
     }
 }
 
-pub trait SyncStageIpcWrapper:Sync + Debug {
+pub trait SyncStageIpcWrapper: Send + Sync + Debug {
     fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
         None
     }
