@@ -694,8 +694,17 @@ where
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
 {
     if tho_device_idx == 0 {
+        // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
+        let state = if let Some(with_state) = task.as_with_state() {
+            Some(with_state.pre_run(0).await?)
+        } else {
+            None
+        };
         let borrowed = track_await(BorrowRef::borrow_to(&input, 0)).await?;
-        return Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx);
+        return match state {
+            Some(state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
+            None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
+        };
     }
 
     track_await(oom_executor(tho_device_idx).submit(
@@ -755,8 +764,17 @@ where
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
 {
     if tho_device_idx == 0 {
+        // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
+        let state = if let Some(with_state) = task.as_with_state() {
+            Some(with_state.pre_run(0).await?)
+        } else {
+            None
+        };
         let borrowed = track_await(SelectRef::borrow_to(&input, 0, selector)).await?;
-        return Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx);
+        return match state {
+            Some(state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
+            None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
+        };
     }
 
     track_await(oom_executor(tho_device_idx).submit(
