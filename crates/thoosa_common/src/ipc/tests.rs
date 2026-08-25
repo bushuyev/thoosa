@@ -915,7 +915,7 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_concurrent_copy_local() -> Result<(), ThoError> {//heavy_
+    async fn heavy_concurrent_copy_local() -> Result<(), ThoError> {//heavy_
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -931,12 +931,12 @@ mod tests {
 
 
     #[test]
-    fn test_concurrent_copy_ipc() -> Result<(), ThoError> {//heavy_
+    fn heavy_concurrent_copy_ipc() -> Result<(), ThoError> {//heavy_
 
         run_ipc_test(
             async {
                 let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_concurrent_copy_ipc");
+                let test_name = format!("{module}::heavy_concurrent_copy_ipc");
                 GlobalCtx::init_devices_ipc(2, vec![
                     test_name, "--exact".to_string(),
                     "--nocapture".to_string(), "--no-capture".to_string(),

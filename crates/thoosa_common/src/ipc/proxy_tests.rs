@@ -391,7 +391,7 @@ mod tests {
         run_ipc_test(
             async {
                 let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_simp_ipc");
+                let test_name = format!("{module}::test_oom_error_ipc");
                 GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
                 let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 

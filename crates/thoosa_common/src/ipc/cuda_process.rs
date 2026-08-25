@@ -450,79 +450,14 @@ where
             debug!("worker_response_writer_loop: msg out ok");
             continue
         }
-        // let write_result = match reply.payload {
-        //     // OutgoingRequestPayload::BinaryStream { chunks, completed } => {
-        //     //     let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
-        //     //     let completion = result.as_ref().map(|_| ()).map_err(|error| ThoError::new(error.to_string()));
-        //     //     let _ = completed.send(completion);
-        //     //     result
-        //     // }
-        //     payload => {
-        //         let frame = encode_wire_frame(reply.id, &payload)?;
-        //         write_frame(&mut writer, &frame, "worker").await
-        //     }
-        // };
-        // if let Err(error) = write_result {
-        //     if matches!(error.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof) {
-        //         debug!("worker_response_writer_loop: parent IPC stream closed");
-        //         break;
-        //     }
-        //     return Err(error.into());
-        // }
+
     }
 
     Ok(())
 }
 
-async fn write_binary_stream_response<W>(writer: &mut W, id: u64, mut chunks: mpsc::Receiver<Result<Vec<u8>, ThoError>>) -> std::io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    while let Some(chunk) = chunks.recv().await {
-        match chunk {
-            Ok(chunk) => {
-                let frame = encode_binary_response_frame(id, BINARY_RESPONSE_CHUNK_PREFIX, &chunk);
-                write_frame(writer, &frame, "worker binary response chunk").await?;
-            }
-            Err(error) => {
-                let frame = format!("{id}\t{}", encode_worker_copy_error(&error));
-                write_frame(writer, frame.as_bytes(), "worker binary response error").await?;
-                return Ok(());
-            }
-        }
-    }
 
-    let frame = encode_binary_response_frame(id, BINARY_RESPONSE_END_PAYLOAD, &[]);
-    write_frame(writer, &frame, "worker binary response end").await
-}
 
-fn encode_binary_response_frame(id: u64, prefix: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut frame = format!("{id}\t").into_bytes();
-    frame.extend_from_slice(prefix);
-    frame.extend_from_slice(payload);
-    frame
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="describe_worker_tensor"))]
-pub(crate) async fn describe_worker_tensor(
-    all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
-    tensor_key: u64,
-) -> Result<WorkerTensorInfoPayload, ThoError> {
-    let tensors = all_cuda_tensors.lock();
-    let tensor = tensors
-        .get(&tensor_key)
-        .ok_or_else(|| ThoError::new(format!("worker tensor key={tensor_key} not found")))?;
-    if !tensor.is_contiguous() {
-        return Err(ThoError::new(format!("worker tensor key={tensor_key} is not contiguous")));
-    }
-    let shape = tensor.size();
-    Ok(WorkerTensorInfoPayload {
-        tensor_key,
-        kind: tensor.kind().into(),
-        tensor_byte_len: tensor_mem_size(tensor.kind(), &shape),
-        shape,
-    })
-}
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="worker_role_cuda_device"))]
 fn worker_role_cuda_device(role: &IpcProcessRole, context: &str) -> Result<usize, ThoError> {
@@ -2336,21 +2271,7 @@ impl CudaIPCActorHandle {
         })
     }
 
-    #[deprecated]//use install_stage_2
-    async fn install_endpoint_raw(&self, init_msg: String) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::InstallEndpoint {
-                init_msg,
-                respond_to,
-            }
-        ).instrument(tracing::debug_span!(
-            "CudaIPCActorHandle::install_endpoint_raw",
-            agg_perf="CudaIPCActorHandle::install_endpoint_raw",
-        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
 
     pub async fn invoke_stage(&self, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> Result<CudaWorkerMsgOut, ThoError> {
         debug!("CudaIPCActorHandle::invoke_stage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
@@ -2394,39 +2315,6 @@ impl CudaIPCActorHandle {
         )
         .instrument(tracing::debug_span!("CudaIPCActorHandle::send_msg",agg_perf="CudaIPCActorHandle::install_stage_2",)).await
         .map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
-
-    #[deprecated]//use invoke_stage
-    async fn invoke_endpoint_raw(&self, input: String) -> Result<String, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::InvokeEndpoint {
-                input,
-                respond_to,
-            }
-        ).instrument(tracing::debug_span!(
-            "CudaIPCActorHandle::invoke_endpoint_raw",
-            agg_perf="CudaIPCActorHandle::invoke_endpoint_raw",
-        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
-    #[deprecated]//use invoke_stage
-    async fn consume_endpoint_raw(&self, input: String) -> Result<String, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::ConsumeEndpoint {
-                input,
-                respond_to,
-            }
-        ).instrument(tracing::debug_span!(
-            "CudaIPCActorHandle::consume_endpoint_raw",
-            agg_perf="CudaIPCActorHandle::consume_endpoint_raw",
-        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
@@ -2518,38 +2406,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     }
 
-    async fn install_endpoint(&self, stage_id: u32, init_msg: String) -> Result<(), ThoError> {
-        self.install_endpoint_raw(encode_stage_payload(stage_id, &init_msg)).await
-    }
-
-    async fn invoke_endpoint(&self, stage_id: u32, input: String) -> Result<String, ThoError> {
-        let response = self.invoke_endpoint_raw(encode_stage_payload(stage_id, &input)).await?;
-        String::from_utf8(decode_endpoint_response_bytes(&response)?).map_err(|e| ThoError::new(format!("endpoint response is not utf8: {e}")))
-    }
-
-
-
-    async fn install_endpoint_bytes(&self, stage_id: u32, init_msg: Vec<u8>) -> Result<(), ThoError> {
-        self.install_endpoint_raw(
-            encode_stage_payload(stage_id, &String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?)
-        ).await
-    }
-
-    async fn invoke_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
-        let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?;
-        let response = self.invoke_endpoint_raw(
-            encode_stage_payload(stage_id, &input)
-        ).await?;
-        decode_endpoint_response_bytes(&response)
-    }
-
-    async fn consume_endpoint_bytes(&self, stage_id: u32, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
-        let input = String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint consume payload is not utf8: {e}")))?;
-        let response = self.consume_endpoint_raw(
-            encode_stage_payload(stage_id, &input)
-        ).await?;
-        decode_endpoint_response_bytes(&response)
-    }
 
 
     async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
@@ -2569,7 +2425,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_endpoint_bytes(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
+    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::PurgeEndpoint {
@@ -2602,39 +2458,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 }
 
-pub(crate) async fn write_text_frame<W>(
-    writer: &mut W,
-    text: &str, descr: &str,
-) -> Result<(), ThoError>
-where
-    W: AsyncWrite + Unpin,
-{
-    write_frame(writer, text.as_bytes(), descr).await?;
-    Ok(())
-}
-
-pub(crate) async fn read_text_frame<R>(
-    reader: &mut R, descr: &str,
-) -> Result<String, ThoError>
-where
-    R: AsyncRead + Unpin,
-{
-    let payload = read_frame(reader, descr, MAX_FRAME_LEN).await?;
-
-    match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
-        Ok(v) => {
-            debug!("postcard: ok={v:?}");
-            return Ok("Ok".to_string())
-        },
-        Err(e)=>{
-            debug!("postcard: e={e:?}");
-        }
-    };
-
-
-    String::from_utf8(payload)
-        .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")))
-}
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="write_frame"))]
 pub async fn write_frame<W>(
@@ -2727,7 +2550,7 @@ mod tests {
     use std::any::Any;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-    use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV};
+    use crate::ipc::cuda_process::{encode_endpoint_payload, CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::{init_ipc_test, run_ipc_test};
