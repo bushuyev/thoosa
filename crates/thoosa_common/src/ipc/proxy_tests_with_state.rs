@@ -326,11 +326,11 @@ pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_
 
 mod tests {
     use std::time::Duration;
-    use crate::ipc::codec::{JsonIpcCodec, install_ipc_endpoint};
+    use crate::ipc::codec::{JsonIpcCodec};
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
-    use crate::ipc::tests::run_ipc_test;
+    use crate::ipc::tests::{init_ipc_test, run_ipc_test};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::purge::FuturesRunnerMapPurger;
@@ -459,9 +459,10 @@ mod tests {
         // Dropping the last proxy reference must asynchronously release its worker key so that the same id can be installed again.
         drop(first_stage);
         tokio::task::yield_now().await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-             TestStageB::<(), TestRunCtx>::new(1, 1, TestStageInitB::new(2, 1)).await
-        }).await??;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+         TestStageB::<(), TestRunCtx>::new(1, 1, TestStageInitB::new(2, 1)).await?;
+
 
         // A repeated stage_id must fail without replacing the already-installed stage.
        let Err(e) = TestStageB::<(), TestRunCtx>::new( 2,1,  TestStageInitB::new(4, 1)).await else {

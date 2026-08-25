@@ -67,23 +67,6 @@ impl IpcSyncStageRunInput {
     }
 }
 
-// Shared proxies serialize their endpoint-specific initializer through this helper.
-pub async fn install_ipc_endpoint<C, T>(
-    actor: &dyn CudaActorHandle,
-    endpoint_name: &str,
-    stage_id: u32,
-    init_msg: &T,
-) -> Result<(), ThoError>
-where
-    C: IpcCodec,
-    T: Serialize + ?Sized,
-{
-    let init_msg = C::encode(init_msg)?;
-    actor
-        .install_endpoint(stage_id, encode_endpoint_payload_bytes(endpoint_name, &init_msg))
-        .await
-}
-
 
 pub async fn purge_ipc_sync_stage<C>(
     actor: &dyn CudaActorHandle,
@@ -96,7 +79,7 @@ where
     debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
 
 
-    let response = actor.purge_endpoint_bytes(
+    let response = actor.purge_stage_state(
         stage_id,
         encode_endpoint_payload_bytes(endpoint_name, b"purge")
     ).await?;
