@@ -24,6 +24,8 @@ where
 {
     debug!("collect_futures_with_progress: descr={descr} len={len}");
     let registration = crate::futures_limits::futures_limits().register(descr);
+    debug!("collect_futures_with_progress: registration={registration:?}");
+
     collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, descr).await
 }
 
@@ -41,6 +43,8 @@ where
 {
     let mut buffer_limit = buffer_limit.as_ref().clone();
     let initial_buffer_limit = *buffer_limit.borrow_and_update();
+    debug!("collect_futures_with_progress_with_limit: initial_buffer_limit={initial_buffer_limit}");
+
     assert!(initial_buffer_limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
 
     let mut results = Vec::with_capacity(len);
