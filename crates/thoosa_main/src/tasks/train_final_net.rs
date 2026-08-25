@@ -823,6 +823,11 @@ mod tests {
                     ("A".to_string(), vec![(label_a_run_config_id, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
                     ("B".to_string(), vec![(label_b_run_config_id, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
                 ]))
+                // Final-net training reloads each selected label checkpoint after listing the available nets.
+                .with_load_label_net(vec![
+                    ("aaa".into(), label_a_run_config_id, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1),
+                    ("bbb".into(), label_b_run_config_id, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1),
+                ])
                 .build(),
         ));
 

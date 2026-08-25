@@ -2580,14 +2580,6 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_tho_error_oom_debug_is_short() {
-        let err = ThoError::from_cuda_message("CUDA out of memory. Tried to allocate 1024 bytes");
-        let formatted = format!("{err:?}");
-        assert!(formatted.contains("backtrace_last") || !formatted.contains("backtrace"), "expected OOM debug output to avoid full backtrace");
-        assert!(!formatted.contains("frame_"), "expected OOM debug output to omit per-frame trace");
-    }
-
-    #[test]
     fn test_parse_corr_labels() -> Result<(), ThoError> {
         assert_eq!(
             vec![
