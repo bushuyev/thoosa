@@ -50,7 +50,7 @@ use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -66,7 +66,7 @@ where
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     apply_motif_nets: Arc<AMN>,
-    apply_label_net: Arc<DynSyncStageWithStateEnum2<ApplyLabelNet<C>,ApplyLabelNetInit>>
+    apply_label_net: Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>,ApplyLabelNetInit>>
 }
 
 /// Applies label nets and returns per-model probabilities. Output is a flat list of label-model
@@ -560,19 +560,19 @@ impl<C> StackAppliedLabelNets<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum2<StackAppliedLabelNets<C>>, ThoError> {
+    async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedLabelNets<C>>, ThoError> {
         let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
 
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
             let init = StackAppliedLabelNetsInit::new(id, order);
-            Ok(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
                 init: (),
             })
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(Self::new_local(StackAppliedLabelNetsInit::new(id, order)).await?)))
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(StackAppliedLabelNetsInit::new(id, order)).await?)))
         }
     }
 
@@ -813,7 +813,7 @@ where
         batch_in_chunks: usize,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         quantize: bool,
-    ) -> Result<DynSyncStageWithStateEnum2<ApplyLabelNet<C>, ApplyLabelNetInit>, ThoError> {
+    ) -> Result<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>, ThoError> {
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
                &trained_net.net_path,
                &device,
@@ -831,13 +831,13 @@ where
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            Ok(DynSyncStageWithStateEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init.clone())).await?),
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init.clone())).await?),
                 init,
             })
         } else {
             Ok(
-                DynSyncStageWithStateEnum2::Local(Arc::new(ApplyLabelNet::new_local(
+                DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
                     label,
                     train_label_net_run_config_id,
                     net,

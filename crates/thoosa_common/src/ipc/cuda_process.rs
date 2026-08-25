@@ -61,109 +61,23 @@ use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operat
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 pub  const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
-pub(crate) const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
-const COPY_ERROR_PAYLOAD_PREFIX: &str = "copy-error:";
-pub(crate) const DESCRIBE_REF_PAYLOAD_PREFIX: &str = "describe-ref:";
-pub(super) const TENSOR_INFO_PAYLOAD_PREFIX: &str = "tensor-info:";
-pub(crate) const H2D_START_PAYLOAD_PREFIX: &str = "h2d-start:";
-pub(crate) const D2H_START_PAYLOAD_PREFIX: &str = "d2h-start:";
-pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
-pub(crate) const INVOKE_ENDPOINT_PREFIX: &str = "invoke_endpoint:";
-pub(crate) const PURGE_ENDPOINT_PREFIX: &str = "purge_endpoint:";
-pub(crate) const DROP_ENDPOINT_PREFIX: &str = "drop_endpoint:";
-pub(crate) const CONSUME_ENDPOINT_PREFIX: &str = "consume_endpoint:";
 const WORKER_COPY_STREAMS: usize = 32;
 // Keep IPC staging bounded independently of GPU VRAM. Sixteen 512 MiB sparse memfd mappings retain enough capacity for the existing oversized-copy OOM test while avoiding a pool sized as a fraction of total VRAM.
 const IPC_COPY_BUFFERS: usize = 16;
 const IPC_COPY_BUFFER_SIZE: usize = 512 * 1024 * 1024;
-pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
-pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
-pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
-pub(crate) const DROP_THO_TENSOR: &str = "drop_tho_tensor:";
-const ENDPOINT_BYTES_PAYLOAD_PREFIX: &str = "endpoint-bytes:";
-const BINARY_RESPONSE_CHUNK_PREFIX: &[u8] = b"binary-response-chunk:";
-const BINARY_RESPONSE_END_PAYLOAD: &[u8] = b"binary-response-end";
 const BINARY_RESPONSE_CHUNK_LEN: usize = 10 * 1024 * 1024;
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
 }
 
-// Keep the stage id separate from the endpoint payload so the worker can still select the initializer by its static endpoint name.
-fn encode_stage_payload(stage_id: u32, payload: &str) -> String {
-    format!("{stage_id}\t{payload}")
-}
 
-pub(crate) fn split_stage_payload(payload: &str) -> Result<(u32, &str), ThoError> {
-    let (stage_id, payload) = payload.split_once('\t').ok_or_else(|| ThoError::new(format!("can't parse stage payload: {payload}")))?;
-    Ok((stage_id.parse::<u32>()?, payload))
-}
 
 // Installed stages share an initializer name but must have distinct invocation keys.
 pub(crate) fn endpoint_stage_key(endpoint_name: &str, stage_id: u32) -> String {
     format!("{endpoint_name}{stage_id}")
 }
 
-pub(crate) fn encode_endpoint_payload_bytes(endpoint_name: &str, payload: &[u8]) -> String {
-    format!("{endpoint_name}\t{ENDPOINT_BYTES_PAYLOAD_PREFIX}{}", bytes_to_hex(payload))
-}
-
-pub(crate) fn encode_endpoint_response_bytes(payload: &[u8]) -> String {
-    format!("{ENDPOINT_BYTES_PAYLOAD_PREFIX}{}", bytes_to_hex(payload))
-}
-
-pub(crate) fn split_endpoint_payload(payload: &str) -> Result<(&str, &str), ThoError> {
-    payload.split_once('\t').map(|v|Ok(v)).unwrap_or_else(||Err(ThoError::new(format!("can't parse payload: {payload}"))))
-}
-
-pub(crate) fn split_endpoint_payload_bytes(payload: &str) -> Result<(&str, Vec<u8>), ThoError> {
-    let (endpoint_name, payload) = split_endpoint_payload(payload)?;
-    Ok((endpoint_name, decode_endpoint_bytes_payload(payload)?))
-}
-
-pub(crate) fn decode_endpoint_response_bytes(payload: &str) -> Result<Vec<u8>, ThoError> {
-    decode_endpoint_bytes_payload(payload)
-}
-
-fn decode_endpoint_bytes_payload(payload: &str) -> Result<Vec<u8>, ThoError> {
-    match payload.strip_prefix(ENDPOINT_BYTES_PAYLOAD_PREFIX) {
-        Some(hex) => hex_to_bytes(hex),
-        None => Ok(payload.as_bytes().to_vec()),
-    }
-}
-
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, ThoError> {
-    if hex.len() % 2 != 0 {
-        return Err(ThoError::new(format!("endpoint byte payload has odd hex length: {}", hex.len())));
-    }
-    let bytes = hex.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks_exact(2) {
-        let hi = hex_value(chunk[0])?;
-        let lo = hex_value(chunk[1])?;
-        out.push((hi << 4) | lo);
-    }
-    Ok(out)
-}
-
-fn hex_value(byte: u8) -> Result<u8, ThoError> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(ThoError::new(format!("endpoint byte payload contains non-hex byte: {byte}"))),
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerCopyDonePayload {
@@ -213,15 +127,6 @@ impl WorkerCopyErrorPayload {
             is_retryable_oom: inferred.is_retryable_oom(),
             needs_cuda_ctx_reset: inferred.needs_cuda_ctx_reset(),
         }
-    }
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="encode_worker_copy_error"))]
-pub(crate) fn encode_worker_copy_error(error: &ThoError) -> String {
-    let payload = WorkerCopyErrorPayload::from_error(error);
-    match serde_json::to_string(&payload) {
-        Ok(json) => format!("{COPY_ERROR_PAYLOAD_PREFIX}{json}"),
-        Err(e) => format!("{COPY_ERROR_PAYLOAD_PREFIX}failed to encode worker error: {e}; original error: {error}"),
     }
 }
 
@@ -410,30 +315,6 @@ pub(crate) struct WorkerReply {
     pub msg:Option<CudaWorkerMsgOut>//TODO replace WorkerReply with CudaWorkerMsgOut
 }
 
-pub(crate) struct IpcChunkWriter {
-    chunks: mpsc::Sender<Result<Vec<u8>, ThoError>>,
-}
-
-impl IpcChunkWriter {
-    pub(crate) fn new(chunks: mpsc::Sender<Result<Vec<u8>, ThoError>>) -> Self {
-        Self { chunks }
-    }
-}
-
-impl std::io::Write for IpcChunkWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        for chunk in buf.chunks(BINARY_RESPONSE_CHUNK_LEN) {
-            self.chunks.blocking_send(Ok(chunk.to_vec()))
-                .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, "worker binary response writer is closed"))?;
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 
 pub(crate) async fn worker_response_writer_loop<W>(
     mut writer: W,
@@ -452,11 +333,8 @@ where
         }
 
     }
-
     Ok(())
 }
-
-
 
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="worker_role_cuda_device"))]
@@ -810,19 +688,13 @@ struct OutgoingRequest {
 
 
 pub enum OutgoingRequestPayload {
-    Msg(String),//action:data
+    Msg(String)//action:data
 
-    SharedMemfdBuffer{
-        meta: IpcTensorTransferMetadata,
-        fd:OwnedFd,
-    },
 }
 
 #[derive(Debug)]
 enum IncomingResponsePayload {
     Msg(String),
-    // BinaryChunk(Vec<u8>),
-    // BinaryEnd,
 }
 
 impl IncomingResponsePayload {
@@ -1538,7 +1410,7 @@ impl CudaIPCActor {
                             chunk_index: chunk.index,
                             chunk_count,
                             mapped_len: buf.len(),
-                            offset: 0,//TODO
+                            offset: 0,
                             kind: src_kind.into(),
                             shape: src_shape.clone(),
                             direction: IpcTransferDirection::HostToDevice,
@@ -1548,7 +1420,7 @@ impl CudaIPCActor {
                         debug!("CudaIPCActor::handle_h2d_copy:, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
                         let fd = buf.try_clone_fd()?;
-                        
+
                         self_tx.send(
                             OutgoingRequest {
                                 id: transfer_id,
@@ -1679,14 +1551,6 @@ async fn writer_loop<W>(
             break;
         }
 
-        if let OutgoingRequestPayload::SharedMemfdBuffer { fd, .. } = &req.payload {
-            if let Err(e) = send_fd(writer.as_ref(), fd.as_fd()).await {
-                error!("worker IPC fd send failed: {e}");
-                fail_one_pending(&pending, req.id, format!("failed to send request {} fd: {e}", req.id)).await;
-                fail_all_pending(&pending, format!("worker IPC writer stopped while sending fd: {e}")).await;
-                break;
-            }
-        }
     }
 
     debug!("worker IPC writer loop finished");
@@ -1753,79 +1617,6 @@ async fn reader_loop<R>(
     }
 
     debug!("worker IPC reader loop finished");
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_wire_msg"))]
-pub(crate) fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
-    let Some((id, payload)) = frame.split_once('\t') else {
-        return Err(ThoError::new(format!("bad wire frame without request id separator: {frame:?}")));
-    };
-
-    let id = id
-        .parse::<u64>()
-        .map_err(|e| ThoError::new(format!("bad request id {id:?}: {e}")))?;
-
-    Ok((id, payload.to_string()))
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_wire_response"))]
-fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload), ThoError> {
-
-    let separator = frame.iter().position(|byte| *byte == b'\t')
-        .ok_or_else(|| ThoError::new("bad wire response without request id separator"))?;
-
-    let id = std::str::from_utf8(&frame[..separator])
-        .map_err(|e| ThoError::new(format!("bad utf8 request id in wire response: {e}")))?
-        .parse::<u64>()
-        .map_err(|e| ThoError::new(format!("bad request id in wire response: {e}")))?;
-
-    let payload = &frame[separator + 1..];
-
-    // if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_CHUNK_PREFIX) {
-    //     Ok((id, IncomingResponsePayload::BinaryChunk(payload.to_vec())))
-    // } else if payload == BINARY_RESPONSE_END_PAYLOAD {
-    //     Ok((id, IncomingResponsePayload::BinaryEnd))
-    // } else {
-        let payload = String::from_utf8(payload.to_vec())
-            .map_err(|e| ThoError::new(format!("received non-utf8 message response: {e}")))?;
-        Ok((id, IncomingResponsePayload::Msg(payload)))
-    // }
-}
-
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_h2d_start_preflight_reply"))]
-fn parse_worker_h2d_start_preflight_reply(payload: &str) -> Result<(), ThoError> {
-    if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-        return Err(parse_worker_copy_error_payload(error));
-    }
-    if payload == H2D_START_OK_PAYLOAD {
-        Ok(())
-    } else {
-        Err(ThoError::new(format!("worker H2D preflight response was not {H2D_START_OK_PAYLOAD:?}: {payload:?}")))
-    }
-}
-
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_tensor_info_payload"))]
-fn parse_worker_tensor_info_payload(payload: &str) -> Result<WorkerTensorInfoPayload, ThoError> {
-    if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-        return Err(parse_worker_copy_error_payload(error));
-    }
-    let info_json = payload.strip_prefix(TENSOR_INFO_PAYLOAD_PREFIX)
-        .ok_or_else(|| ThoError::new(format!("worker tensor info response did not start with {TENSOR_INFO_PAYLOAD_PREFIX:?}: {payload:?}")))?;
-
-    serde_json::from_str(info_json)
-        .map_err(|e| ThoError::new(format!("failed to parse worker tensor info response: {e}")))
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_copy_error_payload"))]
-fn parse_worker_copy_error_payload(payload: &str) -> ThoError {
-    debug!("parse_worker_copy_error_payload: payload={payload}");
-
-    match serde_json::from_str::<WorkerCopyErrorPayload>(payload) {
-        Ok(error) => error.into_error(),
-        Err(_) => WorkerCopyErrorPayload::from_legacy_message(payload).into_error(),
-    }
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_parent_d2h_chunk"))]
@@ -1943,12 +1734,6 @@ fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8
     match payload {
         OutgoingRequestPayload::Msg(msg) => frame.extend_from_slice(msg.as_bytes()),
 
-        OutgoingRequestPayload::SharedMemfdBuffer{ meta, .. } => {
-            let metadata_json = serde_json::to_string(meta)
-                .map_err(|e| ThoError::new(format!("failed to encode shared memfd metadata: {e}")))?;
-
-            frame.extend_from_slice(format!("{SHARED_MEMFD_PAYLOAD_PREFIX}{metadata_json}").as_bytes());
-        }
     }
 
     Ok(frame)

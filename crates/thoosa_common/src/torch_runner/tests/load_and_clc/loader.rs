@@ -4,7 +4,7 @@ use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_wokrer::WorkerStageInput;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
-use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -279,12 +279,12 @@ impl SyncTestTensorLoader {
         if GlobalCtx::global().is_ipc() {
             let init = SyncTestTensorLoaderInit::new(size, kind);
             // ProxyStage2 installs the typed initializer and keeps the endpoint stage id for later invocations.
-            DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx, Box::new(init)).await.expect("SyncTestTensorLoader::new: install endpoint")),
+            DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx, Box::new(init)).await.expect("SyncTestTensorLoader::new: install endpoint")),
                 init: (),
             }
         } else {
-            DynSyncStageEnum2::Local(Arc::new(Self::new_local(size, kind)))
+            DynSyncStageEnum::Local(Arc::new(Self::new_local(size, kind)))
         }
     }
 
@@ -342,4 +342,4 @@ pub(crate) fn sync_test_tensor_loader_endpoint_init(init: Box<dyn WorkerInput>, 
     }.boxed()
 }
 
-type LoaderDynSyncStage = DynSyncStageEnum2<SyncTestTensorLoader>;
+type LoaderDynSyncStage = DynSyncStageEnum<SyncTestTensorLoader>;

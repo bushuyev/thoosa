@@ -19,13 +19,13 @@ use crate::ipc::codec::JsonIpcCodec;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use crate::ipc::wraps::WorkerWrapper;
-use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 
 use super::common::{ABData, ClsOut, ModelTestId};
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
 
-type ClassifierDynSyncStage = DynSyncStageEnum2<SyncClassifierStage>;
+type ClassifierDynSyncStage = DynSyncStageEnum<SyncClassifierStage>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SyncClassifierStageInit {
@@ -73,8 +73,8 @@ impl Classifier {
             Ok(Self {
                 id,
                 // ProxyStage2 installs the typed initializer and keeps the existing endpoint stage id.
-                sync_classifier: Arc::new(DynSyncStageEnum2::Proxy {
-                    stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                sync_classifier: Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_CLASSIFIER_ENDPOINT,
                         0,
                         device.tho_device_idx(),
@@ -88,7 +88,7 @@ impl Classifier {
             let local = SyncClassifierStage::new(id.clone(), in_dim, epochs, lr, fail_until);
             Ok(Self {
                 id,
-                sync_classifier: Arc::new(DynSyncStageEnum2::Local(Arc::new(local))),
+                sync_classifier: Arc::new(DynSyncStageEnum::Local(Arc::new(local))),
             })
         }
     }

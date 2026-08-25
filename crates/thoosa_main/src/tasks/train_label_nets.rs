@@ -24,7 +24,7 @@ use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
@@ -295,15 +295,15 @@ impl <C> SyncLabelBatch<C>
 where
     C: RunCtx + 'static
 {
-    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum2<SyncLabelBatch<C>>, ThoError> {
+    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLabelBatch<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
-            Ok(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(SYNC_LABEL_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
                 init: (),
             })
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(Self::new_local().await?)))
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?)))
         }
     }
 
@@ -401,7 +401,7 @@ where
     store: Arc<Box<dyn Store>>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
-    sync_label_batch:Arc<DynSyncStageEnum2<SyncLabelBatch<C>>>
+    sync_label_batch:Arc<DynSyncStageEnum<SyncLabelBatch<C>>>
 
 }
 
@@ -1098,14 +1098,14 @@ impl<C> TrainStepFactory<MotifProbability, LabelProbability, C, LabelNetParams, 
 where
     C: RunCtx + 'static,
 {
-    async fn new(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum2<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
+    async fn new(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
         let node_params = train_label_step_params(&run_config, self.num_nets);
         if GlobalCtx::global().is_ipc() {
             static TRAIN_LABEL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_LABEL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &crate::tasks::train_step::TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
-            Ok((DynSyncStageWithStateEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
             let training_config = run_config.common_training_args.clone();
@@ -1124,7 +1124,7 @@ where
                 run_config,
                 vs_path,
             ).await?;
-            Ok((DynSyncStageWithStateEnum2::Local(Arc::new(train_step)), node_params))
+            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
         }
     }
 }

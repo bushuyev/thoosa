@@ -36,7 +36,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, Ra
 use thoosa_shared::{ThoError, mono_key};
 use tracing::debug;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
-use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
@@ -318,7 +318,7 @@ pub struct ABClcSyncStage {
 pub struct ProxyABClcSyncStage {
     id: MonoKey,
     num_calls: AtomicUsize,
-    stage: Arc<DynSyncStageEnum2<ABClcSyncStage>>,
+    stage: Arc<DynSyncStageEnum<ABClcSyncStage>>,
 }
 
 impl ProxyABClcSyncStage {
@@ -326,8 +326,8 @@ impl ProxyABClcSyncStage {
         Ok(Self {
             id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
             num_calls: AtomicUsize::default(),
-            stage: Arc::new(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?),
+            stage: Arc::new(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?),
                 init: ()
             }),
         })

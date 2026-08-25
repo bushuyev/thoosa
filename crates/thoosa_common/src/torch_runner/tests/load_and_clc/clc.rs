@@ -12,7 +12,7 @@ use crate::torch_runner::tests::load_and_clc::SYNC_CLC_ENDPOINT;
 use crate::ipc::codec::JsonIpcCodec;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapperWithState;
-use crate::ipc::wraps2::{DynSyncStageWithStateEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::debug;
@@ -58,7 +58,7 @@ pub struct SyncClcStage {
 pub(crate) struct ClcDynSyncStage {
     id: SynKey,
     fail_until_dump_to_cpu: bool,
-    stage: Arc<DynSyncStageWithStateEnum2<SyncClcStage>>,
+    stage: Arc<DynSyncStageWithStateEnum<SyncClcStage>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,8 +91,8 @@ impl SyncClcStage {
                 id,
                 fail_until_dump_to_cpu: !dumped.is_empty(),
                 // ProxyStage2 installs the typed initializer and retains the existing endpoint stage id.
-                stage: Arc::new(DynSyncStageWithStateEnum2::Proxy {
-                    stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                stage: Arc::new(DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_CLC_ENDPOINT,
                         0,
                         device.tho_device_idx(),
@@ -106,7 +106,7 @@ impl SyncClcStage {
             ClcDynSyncStage {
                 id: id.clone(),
                 fail_until_dump_to_cpu: false,
-                stage: Arc::new(DynSyncStageWithStateEnum2::Local(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))),
+                stage: Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))),
             }
         }
     }
@@ -307,8 +307,8 @@ impl Stage for ClcDynSyncStage {
 impl SyncStage for ClcDynSyncStage {
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         match self.stage.as_ref() {
-            DynSyncStageWithStateEnum2::Local(_) => Some(self),
-            DynSyncStageWithStateEnum2::Proxy { .. } => None,
+            DynSyncStageWithStateEnum::Local(_) => Some(self),
+            DynSyncStageWithStateEnum::Proxy { .. } => None,
         }
     }
 

@@ -1,7 +1,7 @@
 use std::any::Any;
 use crate::dims::{Batch, Dims};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
+use crate::ipc::cuda_process::{CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
 use crate::ipc::wraps::WorkerWrapperWithState;
@@ -33,7 +33,7 @@ use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
-use crate::ipc::wraps2::{DynSyncStageEnum2, DynSyncStageWithStateEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
@@ -203,18 +203,18 @@ where
     P:Debug,
     C:RunCtx
 {
-    pub async fn new(stage_id: u32, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageWithStateEnum2<TestStageB<u32, TestRunCtx>>, ThoError> {
+    pub async fn new(stage_id: u32, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageWithStateEnum<TestStageB<u32, TestRunCtx>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
 
-            Ok(DynSyncStageWithStateEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+            Ok(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
                 init: (),
             })
 
 
 
         } else {
-            Ok(DynSyncStageWithStateEnum2::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
+            Ok(DynSyncStageWithStateEnum::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
         }
     }
 

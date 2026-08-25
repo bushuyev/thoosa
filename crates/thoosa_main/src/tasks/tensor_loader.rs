@@ -20,7 +20,7 @@ use thoosa_common::dims::Dims;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -94,7 +94,7 @@ where
 {
     Local(Arc<SyncRawTensorLoader<C>>),
     Proxy {
-        stage: Arc<DynSyncStageEnum2<SyncRawTensorLoaderProxyTarget>>,
+        stage: Arc<DynSyncStageEnum<SyncRawTensorLoaderProxyTarget>>,
         loader_fn: DebugLoadFn,
         device: ThoDevice,
     },
@@ -147,8 +147,8 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // The closure runs in the main process; only its copied tensor crosses the shared endpoint.
             Ok(RawTensorLoaderDynSyncStage::Proxy {
-                stage: Arc::new(DynSyncStageEnum2::Proxy {
-                    stage: Arc::new(ProxyStage2::proxy_with_input_cloner(
+                stage: Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_RAW_TENSOR_LOADER_ENDPOINT,
                         stage_id,
                         tho_device_idx,
