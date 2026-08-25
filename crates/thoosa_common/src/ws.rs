@@ -1113,6 +1113,31 @@ impl WsMockBuilder {
         self
     }
 
+    pub fn with_load_label_net(
+        mut self,
+        nets: Vec<(
+            PathBuf,
+            RunConfigId,
+            Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
+            Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>,
+        )>,
+    ) -> Self {
+        // Match individual checkpoints by path because current label inference loads one trained net at a time.
+        let nets = Arc::new(nets);
+        self.mock
+            .expect_load_label_net()
+            .returning(move |net_path: &Path, _device, _quantize| {
+                let net_path = net_path.to_path_buf();
+                let entry = nets
+                    .iter()
+                    .find(|(path, _, _, _)| *path == net_path)
+                    .ok_or_else(|| ThoError::new(format!("Not found: {net_path:?}")))?;
+                Ok((entry.1, (entry.2)(), (entry.3)()))
+            });
+
+        self
+    }
+
     pub fn build(self) -> Box<dyn Workspace> {
         Box::new(self.mock)
     }
