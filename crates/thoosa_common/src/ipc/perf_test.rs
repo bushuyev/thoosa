@@ -133,7 +133,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         // Identity work isolates IPC and sync-stage dispatch overhead from tensor computation.
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_secs(1));
 
         Ok(SimpOutput { value: input.value })
     }
