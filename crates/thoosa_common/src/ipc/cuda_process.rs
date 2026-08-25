@@ -44,7 +44,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -65,7 +65,6 @@ const WORKER_COPY_STREAMS: usize = 32;
 // Keep IPC staging bounded independently of GPU VRAM. Sixteen 512 MiB sparse memfd mappings retain enough capacity for the existing oversized-copy OOM test while avoiding a pool sized as a fraction of total VRAM.
 const IPC_COPY_BUFFERS: usize = 16;
 const IPC_COPY_BUFFER_SIZE: usize = 512 * 1024 * 1024;
-const BINARY_RESPONSE_CHUNK_LEN: usize = 10 * 1024 * 1024;
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
@@ -309,29 +308,17 @@ impl PendingWorkerD2hTransfer {
     }
 }
 
-pub(crate) struct WorkerReply {
-    pub(crate) id: u64,
-    pub(crate) payload: OutgoingRequestPayload,
-    pub msg:Option<CudaWorkerMsgOut>//TODO replace WorkerReply with CudaWorkerMsgOut
-}
-
-
 pub(crate) async fn worker_response_writer_loop<W>(
     mut writer: W,
-    mut reply_rx: mpsc::Receiver<WorkerReply>,
+    mut reply_rx: mpsc::Receiver<CudaWorkerMsgOut>,
 ) -> Result<(), ThoError>
 where
     W: AsyncWrite + Unpin,
 {
-    while let Some(reply) = reply_rx.recv().await {
-        if let Some(msg) = reply.msg {
-            debug!("worker_response_writer_loop: msg={msg:?}");
-
-            write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg)?/*TODO move to codec*/, "worker").await?;
-            debug!("worker_response_writer_loop: msg out ok");
-            continue
-        }
-
+    while let Some(msg) = reply_rx.recv().await {
+        debug!("worker_response_writer_loop: msg={msg:?}");
+        write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg)?/*TODO move to codec*/, "worker").await?;
+        debug!("worker_response_writer_loop: msg out ok");
     }
     Ok(())
 }
@@ -489,14 +476,14 @@ pub(crate) fn spawn_worker_h2d_copy_task(
     transfer: PendingWorkerH2dTransfer,
     resources: Arc<WorkerCudaResources>,
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
-    reply_tx: mpsc::Sender<WorkerReply>,
+    reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     with_digest: bool,
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
         let copy_result = copy_worker_h2d_transfer_to_cuda(transfer, resources, with_digest).await;
 
-        // Copy completion uses the same postcard response envelope as the other worker operations.
+        // Copy completion uses the same postcard response message as the other worker operations.
         let status = match copy_result {
             Ok((transfer_id, tensor, tensor_digest_hex)) => {
                 //TODO should tensors have their own id generator?
@@ -509,11 +496,7 @@ pub(crate) fn spawn_worker_h2d_copy_task(
             Err(e) => e.into(),
         };
 
-        let _ = reply_tx.send(WorkerReply {
-            id: request_id,
-            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-            msg: Some(CudaWorkerMsgOut { request_id, status }),
-        }).await;
+        let _ = reply_tx.send(CudaWorkerMsgOut { request_id, status }).await;
     });
 }
 
@@ -607,7 +590,7 @@ pub(crate) fn spawn_worker_d2h_copy_task(
     transfer: PendingWorkerD2hTransfer,
     resources: Arc<WorkerCudaResources>,
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
-    reply_tx: mpsc::Sender<WorkerReply>,
+    reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     with_digest: bool,
 ) {
     tokio::spawn(async move {
@@ -631,11 +614,7 @@ pub(crate) fn spawn_worker_d2h_copy_task(
             Err(e) => e.into(),
         };
 
-        let _ = reply_tx.send(WorkerReply {
-            id: request_id,
-            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-            msg: Some(CudaWorkerMsgOut { request_id, status }),
-        }).await;
+        let _ = reply_tx.send(CudaWorkerMsgOut { request_id, status }).await;
     });
 }
 
@@ -680,44 +659,8 @@ pub enum CudaIPCActorMessage {
     },
 }
 
-struct OutgoingRequest {
-    id: u64,
-    payload: OutgoingRequestPayload,
-    msg:Option<CudaWorkerMsgIn>//TODO replace OutgoingRequest with CudaWorkerMsg
-}
-
-
-pub enum OutgoingRequestPayload {
-    Msg(String)//action:data
-
-}
-
-#[derive(Debug)]
-enum IncomingResponsePayload {
-    Msg(String),
-}
-
-impl IncomingResponsePayload {
-    fn into_msg(self) -> Result<String, ThoError> {
-        match self {
-            Self::Msg(response) => Ok(response),
-            // Self::BinaryChunk(_) | Self::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum PendingResponse {
-    Buffered(oneshot::Sender<Result<IncomingResponsePayload, ThoError>>),
-    File {
-        output: tokio::fs::File,
-        respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
-        error: Option<ThoError>,
-    },
-    Msg(oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>)
-}
-
-type PendingResponses = Arc<Mutex<HashMap<u64, PendingResponse>>>;
+// Typed postcard replies are routed directly by request id; no string response envelope remains.
+type PendingResponses = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>>>>;
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
@@ -734,7 +677,7 @@ pub struct CudaIPCActor {
 #[derive(Debug)]
 struct SpawnedState {
     pending: PendingResponses,
-    tx:Sender<OutgoingRequest>,
+    tx:Sender<CudaWorkerMsgIn>,
     child:Child,
     writer_handle:JoinHandle<()>,
     reader_handle:JoinHandle<()>,
@@ -814,7 +757,7 @@ impl CudaIPCActor {
 
         let (reader, writer) = stream.into_split();
 
-        let (tx, rx): (Sender<OutgoingRequest>, Receiver<OutgoingRequest>) = mpsc::channel::<OutgoingRequest>(1024);
+        let (tx, rx): (Sender<CudaWorkerMsgIn>, Receiver<CudaWorkerMsgIn>) = mpsc::channel::<CudaWorkerMsgIn>(1024);
 
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
         let cancel = CancellationToken::new();
@@ -926,19 +869,16 @@ impl CudaIPCActor {
                 tokio::spawn(async move {
                     {
                         let mut pending = pending.lock().await;
-                        let old = pending.insert(id, PendingResponse::Msg(reply_tx));
+                        let old = pending.insert(id, reply_tx);
                         debug_assert!(old.is_none());
                     }
 
                     if self_tx.send(
-                        OutgoingRequest {
-                        id,
-                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                        msg: Some(CudaWorkerMsgIn {
+                        CudaWorkerMsgIn {
                             request_id: id,
                             operation: Operation::DropThoTensor {tensor_key: key},
-                        }),
-                    }).await.is_err() {
+                        },
+                    ).await.is_err() {
                         let mut pending = pending.lock().await;
                         pending.remove(&id);
                         let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
@@ -973,21 +913,18 @@ impl CudaIPCActor {
 
                 {
                     let mut pending = pending.lock().await;
-                    let old = pending.insert(next_id, PendingResponse::Msg(reply_tx));
+                    let old = pending.insert(next_id, reply_tx);
                     debug_assert!(old.is_none());
                 }
 
                 debug!("CudaIPCActorMessage::Shutdown: next_id={next_id}");
 
                 if self_tx.send(
-                    OutgoingRequest {
-                        id: next_id,
-                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                        msg: Some(CudaWorkerMsgIn {
+                    CudaWorkerMsgIn {
                             request_id: next_id,
                             operation: Operation::Shutdown{ dummy: "dummy".to_string() },
-                        }),
-                    }).await.is_err() {
+                    },
+                ).await.is_err() {
 
                     let mut pending = pending.lock().await;
                     pending.remove(&next_id);
@@ -1016,14 +953,9 @@ impl CudaIPCActor {
                 tokio::spawn(async move {
 
                     let response = send_request_and_wait_msg(
-                        next_id,
                         self_tx,
                         pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                            msg: Some(input),
-                        },
+                        input,
                     ).await;
                     let _ = respond_to.send(response);
 
@@ -1099,18 +1031,11 @@ impl CudaIPCActor {
 
         let setup_result = async {
             let response = match send_request_and_wait_msg(
-                describe_id,
                 self_tx.clone(),
                 Arc::clone(&pending),
-                OutgoingRequest {
-                    id: describe_id,
-                    payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                    msg: Some(
-                        CudaWorkerMsgIn {
-                            request_id: describe_id,
-                            operation: Operation::DescribeRef { tensor_key },
-                        }
-                    ),
+                CudaWorkerMsgIn {
+                    request_id: describe_id,
+                    operation: Operation::DescribeRef { tensor_key },
                 },
             ).await {
                 Ok(v) => v,
@@ -1169,21 +1094,15 @@ impl CudaIPCActor {
                         {
                             let mut pending = pending.lock().await;
                             // The final copy acknowledgement is a postcard CudaWorkerMsgOut.
-                            let old = pending.insert(transfer_id, PendingResponse::Msg(reply_tx));
+                            let old = pending.insert(transfer_id, reply_tx);
                             debug_assert!(old.is_none());
                         }
 
 
                         self_tx.send(
-                            OutgoingRequest {
-                                id: transfer_id,
-                                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                                msg: Some(
-                                    CudaWorkerMsgIn {
-                                        request_id: transfer_id,
-                                        operation: Operation::D2HStart { tensor_key },
-                                    }
-                                ),
+                            CudaWorkerMsgIn {
+                                request_id: transfer_id,
+                                operation: Operation::D2HStart { tensor_key },
                             },
                         ).await.map_err(|e|ThoError::new(e.to_string()))?;
 
@@ -1210,20 +1129,10 @@ impl CudaIPCActor {
                         debug!("CudaIPCActor::Copy D2H: sending shared memfd chunk to worker: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
                         let fd = buf.try_clone_fd()?;
-                        // if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata.clone(), fd }, msg: None }).await.is_err() {
-                        //     return Err(ThoError::new("worker IPC writer task is closed"));
-                        // }
-
                         self_tx.send(
-                            OutgoingRequest {
-                                id: transfer_id,
-                                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                                msg: Some(
-                                    CudaWorkerMsgIn {
-                                        request_id: transfer_id,
-                                        operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
-                                    }
-                                ),
+                            CudaWorkerMsgIn {
+                                request_id: transfer_id,
+                                operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
                             },
                         ).await.map_err(|e|ThoError::new(e.to_string()))?;
 
@@ -1358,24 +1267,17 @@ impl CudaIPCActor {
             let result = async move {
 
                 let response = send_request_and_wait_msg(
-                    transfer_id,
                     self_tx.clone(),
                     Arc::clone(&pending),
-                    OutgoingRequest {
-                        id: transfer_id,
-                        payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                        msg: Some(
-                            CudaWorkerMsgIn {
-                                request_id: transfer_id,
-                                operation: Operation::H2dStart {
-                                    worker_id: dst_worker_id,
-                                    kind: src_kind.into(),
-                                    shape: src_shape.clone(),
-                                    tensor_byte_len: tensor_mem_size,
-                                    chunk_count,
-                                },
-                            }
-                        ),
+                    CudaWorkerMsgIn {
+                        request_id: transfer_id,
+                        operation: Operation::H2dStart {
+                            worker_id: dst_worker_id,
+                            kind: src_kind.into(),
+                            shape: src_shape.clone(),
+                            tensor_byte_len: tensor_mem_size,
+                            chunk_count,
+                        },
                     },
                 ).await?;
 
@@ -1384,7 +1286,7 @@ impl CudaIPCActor {
                 {
                     let mut pending = pending.lock().await;
                     // H2D preflight has completed; wait for the typed final copy acknowledgement.
-                    let old = pending.insert(transfer_id, PendingResponse::Msg(reply_tx));
+                    let old = pending.insert(transfer_id, reply_tx);
                     debug_assert!(old.is_none());
                 }
 
@@ -1422,15 +1324,9 @@ impl CudaIPCActor {
                         let fd = buf.try_clone_fd()?;
 
                         self_tx.send(
-                            OutgoingRequest {
-                                id: transfer_id,
-                                payload: OutgoingRequestPayload::Msg("dummy".to_string()),
-                                msg: Some(
-                                    CudaWorkerMsgIn {
-                                        request_id: transfer_id,
-                                        operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
-                                    }
-                                ),
+                            CudaWorkerMsgIn {
+                                request_id: transfer_id,
+                                operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
                             },
                         ).await.map_err(|e|ThoError::new(e.to_string()))?;
                         held_buffers.push(buf);
@@ -1480,7 +1376,7 @@ impl CudaIPCActor {
 
 async fn writer_loop<W>(
     mut writer: W,
-    mut rx: mpsc::Receiver<OutgoingRequest>,
+    mut rx: mpsc::Receiver<CudaWorkerMsgIn>,
     pending: PendingResponses,
     cancel: CancellationToken,
 ) where
@@ -1488,67 +1384,44 @@ async fn writer_loop<W>(
 {
     loop {
 
-        let req = tokio::select! {
+        let msg = tokio::select! {
             _ = cancel.cancelled() => {
                 break;
             }
 
-            maybe_req = rx.recv() => {
-                match maybe_req {
-                    Some(req) => req,
+            maybe_msg = rx.recv() => {
+                match maybe_msg {
+                    Some(msg) => msg,
                     None => break,
                 }
             }
         };
 
-        if let Some(msg) = req.msg {
-            debug!("writer_loop: msg={msg:?}");
-
-            if let Err(e) = write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg).unwrap(), "CudaWorkerMsg").await {
-                error!("worker IPC writer failed: {e}");
-
-                fail_one_pending(
-                    &pending,
-                    req.id,
-                    format!("failed to write request {}: {e}", req.id),
-                ).await;
-
-                fail_all_pending(&pending, format!("worker IPC writer stopped: {e}")).await;
-                break;
-            }
-            if let Operation::SharedMemfd {fd:Some(fd), ..} = msg.operation {
-                debug!("writer_loop: fd={fd:?}");
-                if let Err(e) = send_fd(writer.as_ref(), fd.as_fd()).await.map_err(|e|ThoError::new(e.to_string())) {
-                    error!("worker IPC fd send failed: {e}");
-                    fail_one_pending(&pending, req.id, format!("failed to send request {} fd: {e}", req.id)).await;
-                    fail_all_pending(&pending, format!("worker IPC writer stopped while sending fd: {e}")).await;
-                    break;
-                }
-            }
-
-            continue
-        }
-
-        let frame = match encode_wire_frame(req.id, &req.payload) {
+        let request_id = msg.request_id;
+        debug!("writer_loop: msg={msg:?}");
+        let frame = match PostcardToFromBytes::to_bytes(&msg) {
             Ok(frame) => frame,
             Err(e) => {
-                error!("worker IPC writer failed to encode request {}: {e}", req.id);
-                fail_one_pending(&pending, req.id, format!("failed to encode request {}: {e}", req.id)).await;
+                error!("worker IPC writer failed to encode request {request_id}: {e}");
+                fail_one_pending(&pending, request_id, format!("failed to encode request {request_id}: {e}")).await;
                 continue;
             }
         };
 
-        if let Err(e) = write_frame(&mut writer, &frame, "CudaIPCActor").await {
+        if let Err(e) = write_frame(&mut writer, &frame, "CudaWorkerMsg").await {
             error!("worker IPC writer failed: {e}");
-
-            fail_one_pending(
-                &pending,
-                req.id,
-                format!("failed to write request {}: {e}", req.id),
-            ).await;
-
+            fail_one_pending(&pending, request_id, format!("failed to write request {request_id}: {e}")).await;
             fail_all_pending(&pending, format!("worker IPC writer stopped: {e}")).await;
             break;
+        }
+        if let Operation::SharedMemfd {fd:Some(fd), ..} = msg.operation {
+            debug!("writer_loop: fd={fd:?}");
+            if let Err(e) = send_fd(writer.as_ref(), fd.as_fd()).await.map_err(|e|ThoError::new(e.to_string())) {
+                error!("worker IPC fd send failed: {e}");
+                fail_one_pending(&pending, request_id, format!("failed to send request {request_id} fd: {e}")).await;
+                fail_all_pending(&pending, format!("worker IPC writer stopped while sending fd: {e}")).await;
+                break;
+            }
         }
 
     }
@@ -1588,9 +1461,9 @@ async fn reader_loop<R>(
         match PostcardToFromBytes::from_bytes::<CudaWorkerMsgOut>(&frame) {
             Ok(msg) => {
                 debug!("reader_loop: msg={msg:?}");
-                let pending_response = {
+                {
                     let mut pending = pending.lock().await;
-                    let waiter = match pending.remove(&msg.request_id) {
+                    let msg_waiter = match pending.remove(&msg.request_id) {
                         None => {
                             error!("no waiter for {}", msg.request_id);
                             continue
@@ -1600,13 +1473,12 @@ async fn reader_loop<R>(
                             v
                         }
                     };
-                    if let PendingResponse::Msg(msg_waiter) = waiter {
-                        msg_waiter.send(Ok(msg)).expect("failed to send todo");
+                    if msg_waiter.send(Ok(msg)).is_ok() {
                         debug!("reader_loop: send ok");
                     } else {
-                        error!("Unexpected waiter for msg: waiter={waiter:?}")
+                        debug!("reader_loop: response receiver was dropped");
                     }
-                };
+                }
                 continue
             }
             Err(e) => {
@@ -1646,16 +1518,16 @@ fn copy_parent_d2h_chunk(
 
 
 
-async fn send_request_and_wait_msg<R>(
-    id:u64,
-    tx: mpsc::Sender<R>,
+async fn send_request_and_wait_msg(
+    tx: mpsc::Sender<CudaWorkerMsgIn>,
     pending: PendingResponses,
-    request: R,
+    request: CudaWorkerMsgIn,
 ) -> Result<CudaWorkerMsgOut, ThoError> {
+    let id = request.request_id;
     let (reply_tx, reply_rx) = oneshot::channel();
     {
         let mut pending = pending.lock().await;
-        let old = pending.insert(id, PendingResponse::Msg(reply_tx));
+        let old = pending.insert(id, reply_tx);
         debug_assert!(old.is_none());
     }
     if tx.send(request).await.is_err() {
@@ -1689,18 +1561,8 @@ async fn fail_one_pending(
     };
 
 
-    if let Some(pending_response) = reply_tx {
-        match pending_response {
-            PendingResponse::Buffered(reply_tx) => {
-                let _ = reply_tx.send(Err(ThoError::new(msg)));
-            }
-            PendingResponse::File { respond_to, .. } => {
-                let _ = respond_to.send(Err(ThoError::new(msg)));
-            }
-            PendingResponse::Msg(respond_to) => {
-                let _ = respond_to.send(Err(ThoError::new(msg)));
-            }
-        }
+    if let Some(respond_to) = reply_tx {
+        let _ = respond_to.send(Err(ThoError::new(msg)));
     }
 }
 
@@ -1713,30 +1575,9 @@ async fn fail_all_pending(
         pending.drain().collect::<Vec<_>>()
     };
 
-    for (_id, pending_response) in pending_items {
-        match pending_response {
-            PendingResponse::Buffered(reply_tx) => {
-                let _ = reply_tx.send(Err(ThoError::new(msg.clone())));
-            }
-            PendingResponse::File { respond_to, .. } => {
-                let _ = respond_to.send(Err(ThoError::new(msg.clone())));
-            }
-            PendingResponse::Msg(respond_to) => {
-                let _ = respond_to.send(Err(ThoError::new(msg.clone())));
-            }
-        }
+    for (_id, respond_to) in pending_items {
+        let _ = respond_to.send(Err(ThoError::new(msg.clone())));
     }
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="encode_wire_frame"))]
-fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8>, ThoError> {
-    let mut frame = format!("{id}\t").into_bytes();
-    match payload {
-        OutgoingRequestPayload::Msg(msg) => frame.extend_from_slice(msg.as_bytes()),
-
-    }
-
-    Ok(frame)
 }
 
 
