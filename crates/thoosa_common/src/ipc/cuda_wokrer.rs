@@ -72,6 +72,7 @@ struct WorkerRequestContext {
 enum WorkerReaderAction {
     Ready,
     ReceiveFd(oneshot::Sender<std::io::Result<OwnedFd>>),
+    Shutdown { request_id: u64 },
 }
 
 enum WorkerRequestControl {
@@ -230,49 +231,55 @@ impl CudaWorker {
         };
         let mut request_tasks = JoinSet::new();
 
-        // Decode in the spawned task, but synchronize ancillary descriptor receipt before reading the next frame.
+        // Always finish each frame read once started: read_exact is not cancellation-safe, so selecting it against a completed request task can leave the stream cursor inside a frame.
         let shutdown_request_id = loop {
-            let completed = tokio::select! {
-                biased;
-                joined = request_tasks.join_next(), if !request_tasks.is_empty() => {
-                    let joined = joined.ok_or_else(|| ThoError::new("worker request JoinSet ended unexpectedly"))?;
-                    let control = joined.map_err(|error| ThoError::new(format!("worker request task failed: {error}")))??;
-                    Some(control)
-                }
-                payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN) => {
-                    let payload = payload?;
-                    let (reader_action_tx, reader_action_rx) = oneshot::channel();
-                    let task_context = request_context.clone();
-                    request_tasks.spawn(async move { Self::process_worker_payload(payload, reader_action_tx, task_context).await });
+            let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
+            let (reader_action_tx, reader_action_rx) = oneshot::channel();
+            let task_context = request_context.clone();
+            request_tasks.spawn(async move { Self::process_worker_payload(payload, reader_action_tx, task_context).await });
 
-                    match reader_action_rx.await.map_err(|_| ThoError::new("worker request task stopped before releasing the socket reader"))? {
-                        WorkerReaderAction::Ready => {}
-                        WorkerReaderAction::ReceiveFd(fd_tx) => {
-                            let fd_result = recv_fd(reader.as_ref()).await;
-                            let fd_error = fd_result.as_ref().err().map(ToString::to_string);
-                            if fd_tx.send(fd_result).is_err() {
-                                return Err(ThoError::new("worker request task stopped before receiving its shared-memory descriptor"));
-                            }
-                            if let Some(error) = fd_error {
-                                return Err(ThoError::new(format!("failed to receive worker shared-memory descriptor: {error}")));
-                            }
-                        }
+            let shutdown = match reader_action_rx.await.map_err(|_| ThoError::new("worker request task stopped before releasing the socket reader"))? {
+                WorkerReaderAction::Ready => None,
+                WorkerReaderAction::ReceiveFd(fd_tx) => {
+                    let fd_result = recv_fd(reader.as_ref()).await;
+                    let fd_error = fd_result.as_ref().err().map(ToString::to_string);
+                    if fd_tx.send(fd_result).is_err() {
+                        return Err(ThoError::new("worker request task stopped before receiving its shared-memory descriptor"));
+                    }
+                    if let Some(error) = fd_error {
+                        return Err(ThoError::new(format!("failed to receive worker shared-memory descriptor: {error}")));
                     }
                     None
                 }
+                WorkerReaderAction::Shutdown { request_id } => Some(request_id),
             };
 
-            if let Some(WorkerRequestControl::Shutdown { request_id }) = completed {
+            if let Some(request_id) = shutdown {
                 break request_id;
+            }
+
+            // Reap tasks only between complete frames so doing so can never cancel an in-progress socket read.
+            while let Some(joined) = request_tasks.try_join_next() {
+                let control = joined.map_err(|error| ThoError::new(format!("worker request task failed: {error}")))??;
+                if let WorkerRequestControl::Shutdown { request_id } = control {
+                    return Err(ThoError::new(format!("worker request {request_id} completed as shutdown without stopping the socket reader")));
+                }
             }
         };
 
         // A shutdown response means every request accepted before shutdown has finished, not merely that shutdown was decoded.
+        let mut shutdown_task_finished = false;
         while let Some(joined) = request_tasks.join_next().await {
             let control = joined.map_err(|error| ThoError::new(format!("worker request task failed during shutdown: {error}")))??;
             if let WorkerRequestControl::Shutdown { request_id } = control {
-                return Err(ThoError::new(format!("worker received duplicate shutdown request {request_id}")));
+                if request_id != shutdown_request_id || shutdown_task_finished {
+                    return Err(ThoError::new(format!("worker received unexpected shutdown request {request_id}")));
+                }
+                shutdown_task_finished = true;
             }
+        }
+        if !shutdown_task_finished {
+            return Err(ThoError::new(format!("worker shutdown request {shutdown_request_id} did not finish")));
         }
 
         info!("worker finished");
@@ -304,12 +311,19 @@ impl CudaWorker {
         };
         debug!("run_worker: postcard: ok={request:?}");
 
-        if let Operation::SharedMemfd { fd, .. } = &mut request.operation {
-            let (fd_tx, fd_rx) = oneshot::channel();
-            reader_action_tx.send(WorkerReaderAction::ReceiveFd(fd_tx)).map_err(|_| ThoError::new("worker socket reader stopped before receiving shared-memory descriptor"))?;
-            *fd = Some(fd_rx.await.map_err(|_| ThoError::new("worker socket reader dropped shared-memory descriptor response"))??);
-        } else {
-            reader_action_tx.send(WorkerReaderAction::Ready).map_err(|_| ThoError::new("worker socket reader stopped before request dispatch"))?;
+        match &mut request.operation {
+            Operation::SharedMemfd { fd, .. } => {
+                let (fd_tx, fd_rx) = oneshot::channel();
+                reader_action_tx.send(WorkerReaderAction::ReceiveFd(fd_tx)).map_err(|_| ThoError::new("worker socket reader stopped before receiving shared-memory descriptor"))?;
+                *fd = Some(fd_rx.await.map_err(|_| ThoError::new("worker socket reader dropped shared-memory descriptor response"))??);
+            }
+            Operation::Shutdown { .. } => {
+                // Stop the sole reader before it waits for another frame; the shutdown task itself is still drained with all previously accepted work.
+                reader_action_tx.send(WorkerReaderAction::Shutdown { request_id: request.request_id }).map_err(|_| ThoError::new("worker socket reader stopped before shutdown dispatch"))?;
+            }
+            _ => {
+                reader_action_tx.send(WorkerReaderAction::Ready).map_err(|_| ThoError::new("worker socket reader stopped before request dispatch"))?;
+            }
         }
 
         Self::process_worker_request(request, context).await
