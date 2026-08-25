@@ -29,7 +29,7 @@ use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -612,7 +612,7 @@ impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum2<SyncMotifLoader<C>>>, ThoError> {
+    pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
         let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
         let mut instances = INSTANCES.lock().await;
 
@@ -620,9 +620,9 @@ where
         let cache = instances
             .entry(TypeId::of::<C>())
             .or_insert_with(|| {
-                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum2<SyncMotifLoader<C>>>>::new())
+                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>::new())
             })
-            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum2<SyncMotifLoader<C>>>>>()
+            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>>()
             .unwrap();
 
         if let Some(v) = cache.get(&id) {
@@ -633,13 +633,13 @@ where
 
         let v = if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
-            Arc::new(DynSyncStageEnum2::Proxy {
+            Arc::new(DynSyncStageEnum::Proxy {
                 // The local id is deterministic, so the typed initializer does not need a serializable SynKey wrapper.
-                stage: Arc::new(ProxyStage2::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
                 init: (),
             })
         } else {
-            Arc::new(DynSyncStageEnum2::Local(Arc::new(Self::new_local(id.clone()).await?)))
+            Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id.clone()).await?)))
         };
 
         cache.insert(id, Arc::clone(&v));
@@ -1237,7 +1237,7 @@ impl SyncStage for SyncLoadMotifResources {
 
 #[derive(Debug)]
 struct SyncLoadMotifResourcesDynStage<C> {
-    stage: Arc<DynSyncStageEnum2<SyncLoadMotifResources>>,
+    stage: Arc<DynSyncStageEnum<SyncLoadMotifResources>>,
     pd: PhantomData<C>,
 }
 
@@ -1250,9 +1250,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Install the borrowed-input loader with the typed stateless worker wrapper.
-            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum2::Local(Arc::new(SyncLoadMotifResources::new()))
+            DynSyncStageEnum::Local(Arc::new(SyncLoadMotifResources::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }
@@ -1548,7 +1548,7 @@ impl SyncStage for SyncLoadRandomSlices {
 
 #[derive(Debug)]
 struct SyncLoadRandomSlicesDynStage<C> {
-    stage: Arc<DynSyncStageEnum2<SyncLoadRandomSlices>>,
+    stage: Arc<DynSyncStageEnum<SyncLoadRandomSlices>>,
     pd: PhantomData<C>,
 }
 
@@ -1561,9 +1561,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Shared typed dispatch keeps tensor-reference decoding consistent with other loaders.
-            DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
+            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
         } else {
-            DynSyncStageEnum2::Local(Arc::new(SyncLoadRandomSlices::new()))
+            DynSyncStageEnum::Local(Arc::new(SyncLoadRandomSlices::new()))
         };
         Ok(Self { stage: Arc::new(stage), pd: PhantomData })
     }

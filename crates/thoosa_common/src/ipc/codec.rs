@@ -6,7 +6,6 @@ use tracing::debug;
 use thoosa_shared::ThoError;
 
 use crate::copy_ctx::CudaActorHandle;
-use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -78,10 +77,9 @@ where
 {
     debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
 
-
     let response = actor.purge_stage_state(
         stage_id,
-        encode_endpoint_payload_bytes(endpoint_name, b"purge")
+        endpoint_name.to_string()
     ).await?;
 
     debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");

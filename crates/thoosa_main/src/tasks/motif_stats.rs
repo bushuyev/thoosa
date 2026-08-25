@@ -26,7 +26,7 @@ use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -940,7 +940,7 @@ enum MotifStatsDynSyncStage<C>//TODO remove
 where
     C: RunCtx + Adjustable + 'static,
 {
-    Shared(Arc<DynSyncStageEnum2<MotifStatsSyncStage<RunCtxImpl>>>, PhantomData<C>),
+    Shared(Arc<DynSyncStageEnum<MotifStatsSyncStage<RunCtxImpl>>>, PhantomData<C>),
 }
 
 #[derive(Debug, Named)]
@@ -961,9 +961,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Shared proxy dispatch separates the run context throttle from the motif payload.
-            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
+            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
         } else {
-            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum2::Local(Arc::new(MotifStatsSyncStage::<RunCtxImpl>::new_local()))), PhantomData))
+            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<RunCtxImpl>::new_local()))), PhantomData))
         }
     }
 
@@ -1151,7 +1151,7 @@ enum MotifStatsDynConsumeStage<C>//TODO remove
 where
     C: RunCtx + 'static,
 {
-    Shared(Arc<DynSyncStageEnum2<MotifStatsConsumeStage<RunCtxImpl>>>, PhantomData<C>),
+    Shared(Arc<DynSyncStageEnum<MotifStatsConsumeStage<RunCtxImpl>>>, PhantomData<C>),
 }
 
 #[derive(Debug, Named)]
@@ -1172,9 +1172,9 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Use shared consuming dispatch so tensor references are deleted only after success.
-            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum2::Proxy { stage: Arc::new(ProxyStage2::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
+            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
         } else {
-            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum2::Local(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()))), PhantomData))
+            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()))), PhantomData))
         }
     }
 

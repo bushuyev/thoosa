@@ -13,4 +13,4 @@ mod proxy_tests_with_state;
 #[cfg(test)]
 mod perf_test;
 pub mod worker_msg;
-pub mod wraps2;
+pub mod proxy;

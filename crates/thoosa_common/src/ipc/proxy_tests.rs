@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{encode_endpoint_payload_bytes, CudaIPCActorHandle};
+use crate::ipc::cuda_process::{ CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
@@ -28,7 +28,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
-use crate::ipc::wraps2::{DynSyncStageEnum2, ProxyStage2};
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -204,17 +204,17 @@ where
     C:RunCtx
 {
 
-    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInitA) -> Result<DynSyncStageEnum2<TestStageA<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInitA) -> Result<DynSyncStageEnum<TestStageA<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
 
-            Ok(DynSyncStageEnum2::Proxy {
-                stage: Arc::new(ProxyStage2::proxy(TEST_ENDPOINT, 0, tho_device_idx, Box::new(init)).await?),
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx, Box::new(init)).await?),
                 init: (),
             })
         } else {
-            Ok(DynSyncStageEnum2::Local(Arc::new(TestStageA::<u32, TestRunCtx>::new_local(init))))
+            Ok(DynSyncStageEnum::Local(Arc::new(TestStageA::<u32, TestRunCtx>::new_local(init))))
         }
 
     }
