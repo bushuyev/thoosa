@@ -21,6 +21,7 @@ const OOM_RATE_MIN_EXECUTIONS: usize = 16;
 const OOM_RATE_DENOMINATOR: usize = 16;
 const FEEDBACK_WINDOW_CAPACITY: usize = 64;
 
+#[derive(Debug)]
 pub struct DynamicFutureLimit {
     sender: watch::Sender<usize>,
     receiver: Arc<watch::Receiver<usize>>,
@@ -50,13 +51,14 @@ impl DynamicFutureLimit {
     }
 }
 
+#[derive(Debug)]
 struct FutureLimitEntry {
     limit: DynamicFutureLimit,
     registrations: usize,
     weight: usize,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct FuturesLimitsState {
     futures_limits: HashMap<String, FutureLimitEntry>,
     forced_future_limits: HashMap<String, usize>,
@@ -170,12 +172,14 @@ impl Drop for SyncExecutionPermit {
 /// or concurrent collector therefore lowers existing allowances; already-running futures drain,
 /// while new futures observe the reduced watch value. Dynamic task executors use shared execution
 /// permits, so the same limit is enforced across all per-device executor instances.
+#[derive(Debug)]
 pub struct FuturesLimits {
     state: Mutex<FuturesLimitsState>,
     sync_execution_limiter: Arc<SyncExecutionLimiter>,
     publish_progress: bool,
 }
 
+#[derive(Debug)]
 pub struct FuturesLimitRegistration<'a> {
     owner: &'a FuturesLimits,
     descr: String,
