@@ -1104,7 +1104,7 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::spawn_worker: _addr={_addr:?}");
 
-        let device_info:DeviceInfo = serde_json5::from_str(&read_text_frame(&mut stream, "CudaIPCActor").await?)?;
+        let device_info:DeviceInfo = PostcardToFromBytes::from_bytes(&read_frame(&mut stream, "DeviceInfo/main", MAX_FRAME_LEN).await?)?;
         debug!("CudaIPCActor::spawn_worker: main received: {device_info:?}");
 
 
@@ -2637,7 +2637,7 @@ where
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="write_frame"))]
-async fn write_frame<W>(
+pub async fn write_frame<W>(
     writer: &mut W,
     payload: &[u8],
     descr: &str,
