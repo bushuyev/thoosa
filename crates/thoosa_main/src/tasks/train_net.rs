@@ -263,7 +263,6 @@ where
 
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?} epoch={idx} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
 
-                // TODO(perf): rebuilding the batch stream every epoch duplicates batch-index/resource setup; reuse per-epoch planning state when stochastic inputs allow it.
                 let mut batches = batch.train_batch_stream(ctx.branch(false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
 

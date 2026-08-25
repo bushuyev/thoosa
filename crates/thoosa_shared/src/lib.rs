@@ -436,7 +436,7 @@ impl ThoError {
         debug!("ThoosaError::new: msg={msg}");
 
         let backtrace = Backtrace::capture();
-        debug!("msg={msg} {}", backtrace.to_string());
+        trace!("ThoosaError::new: msg={msg} {}", backtrace.to_string());
 
         Self {
             msg: msg.into(),

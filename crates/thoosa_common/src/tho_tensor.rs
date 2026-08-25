@@ -384,7 +384,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.into_inner_tensor()
     }
 
-    // No-params variant: transform tensor with a function that only needs &Tensor
+    // TODO remove
     pub fn run_inner<R, F>(&self, func: F) -> Result<R, ThoError>
     where
         F: Fn(&Tensor) -> Result<R, ThoError>,
