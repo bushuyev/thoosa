@@ -64,19 +64,6 @@ where
     }
 }
 
-impl<C, InD, OutD> WithId for Stft<C, InD, OutD>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    InD: Dims + 'static,
-    OutD: Dims + 'static,
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl<C, InD, OutD> OutId for Stft<C, InD, OutD>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,

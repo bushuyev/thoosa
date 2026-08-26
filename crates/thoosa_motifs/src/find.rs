@@ -73,7 +73,7 @@ use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::traits::Data;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::panic_to_err;
 use thoosa_store::fs_store::FileMotifTrackerStore;
@@ -149,15 +149,6 @@ impl SavableResult for FindMotifsSavableResult {
 }
 
 impl Output for FindMotifsSavableResult {}
-impl WithId for FindMotifsSavableResult {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
-
 
 //TODO trait for MotifTracker
 #[derive(Debug)]

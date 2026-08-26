@@ -339,14 +339,6 @@ impl SyncMotifLoaderInputWrapper {
     }
 }
 
-impl WithId for SyncMotifLoaderInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl ConsumeData for SyncMotifLoaderInputWrapper {
     type O = SyncMotifLoaderInput;
 
@@ -1031,14 +1023,6 @@ impl SyncLoadMotifResourcesInputWrapper {
     }
 }
 
-impl WithId for SyncLoadMotifResourcesInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl BorrowRef for SyncLoadMotifResourcesInputWrapper {
     type Out<'a> = SyncLoadMotifResourcesInput<'a> where Self: 'a;
 
@@ -1345,14 +1329,6 @@ impl SyncLoadRandomSlicesInputWrapper {
         descr: String,
     ) -> Self {
         Self { id: raw_tensor.id().clone(), raw_tensor, resource_id, find_motifs_run_config_id, channels, window, slices, descr }
-    }
-}
-
-impl WithId for SyncLoadRandomSlicesInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

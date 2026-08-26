@@ -150,18 +150,6 @@ where
     }
 }
 
-impl<L, ML, C> WithId for SelectBucketsStage<L, ML, C>
-where
-    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 impl<L, ML, C> SelectBucketsStage<L, ML, C>
 where
@@ -346,14 +334,6 @@ impl<'a> SelectBucketsSyncInput<'a> {
     }
 }
 
-impl WithId for SelectBucketsSyncInput<'_> {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
 impl Data for SelectBucketsSyncInput<'_> {
     type Metrics = ();
     type M = CpuOnly<Self>;
@@ -381,14 +361,6 @@ struct SelectBucketsSyncInputWrapper {
 impl SelectBucketsSyncInputWrapper {
     fn new(select_config: SelectBucketsRunConfig) -> Self {
         Self { select_config }
-    }
-}
-
-impl WithId for SelectBucketsSyncInputWrapper {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
     }
 }
 
@@ -487,14 +459,6 @@ where
 
 impl<C> Adjustable for SyncSelectBucketsStage<C> where C: RunCtx + Adjustable + 'static {}
 
-impl<C> OutId for SyncSelectBucketsStage<C>
-where
-    C: RunCtx + 'static,
-{
-    fn out_id(&self, _input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        ()
-    }
-}
 
 impl<C> Stage for SyncSelectBucketsStage<C>
 where

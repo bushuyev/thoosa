@@ -92,25 +92,6 @@ where
     }
 }
 
-impl<A, B, C> WithId for ABStage<A, B, C>
-where
-    C:RunCtx + 'static,
-
-    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>:  WithId + Send + Sync,
-    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
-
-    for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-
 // #[async_trait]
 impl<A, B, C> AsyncStage for ABStage<A, B, C>
 where

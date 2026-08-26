@@ -306,14 +306,6 @@ mod tests {
         }
     }
 
-    impl WithId for ConsumeTestInput {
-        type ID = SynKey;
-
-        fn id(&self) -> &Self::ID {
-            self.input.id()
-        }
-    }
-
     impl ConsumeData for ConsumeTestInput {
         type O = ThoTensor<LoadedTensor, SynKey>;
 

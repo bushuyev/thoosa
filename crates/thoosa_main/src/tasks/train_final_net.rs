@@ -158,21 +158,12 @@ where
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainFinalNetOutput {
-    id: SynKey,
     result: TrainFinalNetsRunConfigResult,
 }
 
 impl TrainFinalNetOutput {
-    pub fn new(id: SynKey, result: TrainFinalNetsRunConfigResult) -> Self {
-        Self { id, result }
-    }
-}
-
-impl WithId for TrainFinalNetOutput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
+    pub fn new(result: TrainFinalNetsRunConfigResult) -> Self {
+        Self { result }
     }
 }
 
@@ -263,7 +254,7 @@ where
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store_path, result.node_params, result.run_config);
             info!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
-            Ok(Arc::new(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result)))
+            Ok(Arc::new(TrainFinalNetOutput::new(final_result)))
         }
     }
 }
@@ -349,14 +340,6 @@ struct SyncLogitsBatchInputWrapper {
 impl SyncLogitsBatchInputWrapper {
     fn new(outputs: Vec<Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>>, labels: Vec<Vec<f32>>, labels_len: usize) -> Self {
         Self { id: SynKey::new([mono_key!("logits_batch", "SyncLogitsBatch")]), outputs, labels, labels_len }
-    }
-}
-
-impl WithId for SyncLogitsBatchInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

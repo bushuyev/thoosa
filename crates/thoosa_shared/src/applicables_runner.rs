@@ -1,4 +1,4 @@
-use crate::traits::{Data, Named, SimpleId, WithId};
+use crate::traits::{Named, WithId};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -39,13 +39,3 @@ impl WithId for () {
 }
 
 impl Output for () {}
-
-impl WithId for SimpleId {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-

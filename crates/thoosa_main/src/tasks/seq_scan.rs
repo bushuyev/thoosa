@@ -58,14 +58,6 @@ impl SavableResult for SeqScanOutput {
     }
 }
 
-impl WithId for SeqScanOutput {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
 #[derive(Debug, Clone)]
 struct SeqScanBucketEntry {
     resource: Resource,
@@ -782,9 +774,6 @@ mod tests {
                 mock_run_ctx::default(0),
             )
             .await?;
-
-        assert_eq!(&(), out.as_ref().id());
-        assert_eq!(&(), SeqScanOutput::new().id());
 
         Ok(())
     }

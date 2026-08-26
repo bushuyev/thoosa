@@ -34,14 +34,6 @@ unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 impl<I: Named + Debug + Clone + Send + Sync, D: Dims> Input for ThoTensor<D, I> {}
 impl<I: Named + Debug + Clone + Send + Sync, D: Dims> Input for &ThoTensor<D, I> {}
 
-impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl<D: Dims, Id: Named + Debug + Clone> AsRef<Tensor> for ThoTensor<D, Id> {
     fn as_ref(&self) -> &Tensor {
         self.t_ref()
@@ -59,7 +51,7 @@ impl<D: Dims> ThoTensor<D, SimpleId> {
         }
     }
 
-    pub fn drop(self) {
+    pub fn drop_inner(self) {
         drop(self.inner);
     }
 

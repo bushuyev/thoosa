@@ -11,13 +11,12 @@ use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
-use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{ThoError, mono_key};
+use thoosa_shared::traits::Data;
+use thoosa_shared::ThoError;
 use thoosa_store::{SqlStore, Store, TrainedNetsBy};
 
 #[derive(Debug, Args, Clone)]
@@ -31,28 +30,18 @@ pub struct ExportArgs {
 
 #[derive(Debug, Clone, DummyData)]
 pub struct ExportInput {
-    id: SynKey,
 }
 
 impl ExportInput {
     pub fn new() -> Self {
-        Self { id: SynKey::new([mono_key!("export", "export")]) }
+        Self {}
     }
 }
 
 impl Input for ExportInput {}
 
-impl WithId for ExportInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ExportOutput {
-    id: SynKey,
     target_dir: PathBuf,
     label_net_run_config_ids: Vec<RunConfigId>,
     motif_net_run_config_ids: Vec<RunConfigId>,
@@ -62,7 +51,7 @@ pub struct ExportOutput {
 
 impl ExportOutput {
     fn new(target_dir: PathBuf, label_net_run_config_ids: Vec<RunConfigId>, motif_net_run_config_ids: Vec<RunConfigId>, copied_models: Vec<PathBuf>, converted: Vec<ConvertedNet>) -> Self {
-        Self { id: SynKey::new([mono_key!("export", "export_output")]), target_dir, label_net_run_config_ids, motif_net_run_config_ids, copied_models, converted }
+        Self { target_dir, label_net_run_config_ids, motif_net_run_config_ids, copied_models, converted }
     }
 
     pub fn target_dir(&self) -> &Path {
@@ -103,14 +92,6 @@ impl Data for ExportOutput {
     }
 }
 
-impl WithId for ExportOutput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl Output for ExportOutput {}
 
 #[derive(Debug)]
@@ -118,7 +99,6 @@ pub struct Export<C>
 where
     C: RunCtx + 'static,
 {
-    id: SynKey,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     args: ExportArgs,
@@ -130,18 +110,7 @@ where
     C: RunCtx + 'static,
 {
     pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Box<dyn Store>>, args: ExportArgs) -> Self {
-        Self { id: SynKey::new([mono_key!("export", "stage")]), ws: Arc::clone(ws), store: Arc::clone(store), args, pd: PhantomData }
-    }
-}
-
-impl<C> WithId for Export<C>
-where
-    C: RunCtx + 'static,
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
+        Self { ws: Arc::clone(ws), store: Arc::clone(store), args, pd: PhantomData }
     }
 }
 

@@ -357,8 +357,7 @@ where
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
-        fixed_config: FixedFindMotifsConfig,
-        _device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
+        fixed_config: FixedFindMotifsConfig, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
         mut init_ctx:C
     ) -> Result<Self, ThoError> {
         
@@ -372,7 +371,7 @@ where
         ));
 
 
-        //gpt Build per-run-config loaders in parallel; each run_config becomes its own CrossLoader pipeline.
+        //Build per-run-config loaders; each run_config becomes its own CrossLoader pipeline.
         let run_configs_len = run_configs.len();
         let ws = Arc::clone(ws);
         let store = Arc::clone(store);
@@ -770,7 +769,6 @@ mod tests {
                 find_motifs_run_config
             ],
             FixedFindMotifsConfig::new(30000, false),
-            ThoDevice::from(1),
             ctx.branch(false)
         ).await.expect("FindMotifsStage::new failed in test"));
 

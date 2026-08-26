@@ -861,14 +861,10 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
         true,
     ).await);
 
-    let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
-
-
-
     let multed = Arc::clone(&load_and_mut)
         .run_cached(
             "resource_1".into(),
-            ctx_device.write().branch(false),
+            RunCtxImpl::new(1, "test"),
         )
         .await?;
 

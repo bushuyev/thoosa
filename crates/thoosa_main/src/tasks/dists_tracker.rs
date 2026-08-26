@@ -31,7 +31,7 @@ use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
@@ -457,14 +457,6 @@ unsafe impl Sync for DistsMask {}
 
 impl Output for DistsMask {}
 impl Input for DistsMask {}
-
-impl WithId for DistsMask {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
 
 impl Data for DistsMask {
     type Metrics = ();
