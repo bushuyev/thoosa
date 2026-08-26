@@ -207,14 +207,16 @@ mod tests {
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shims::context::ThoCudaContext;
 
-    fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) {
+    fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) ->Result<(), ThoError>{
         let self_k = parse_numeric_part(resource).unwrap_or(1.0);
-        let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())
+        let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())?
             .sum_dim_intlist(1, false, out.t_ref().kind())
             .view((-1, 1));
         let ok = expected.allclose(out.t_ref(), 0.1, 0.1, false);
         debug!("check_sum_result: resource={resource} expected=\n{expected} actual=\n{}", out.t_ref());
         assert!(ok);
+
+        Ok(())
     }
 
     fn sync_clc_endpoint_inits() -> HashMap<String, InitFn> {
@@ -416,7 +418,7 @@ mod tests {
 
                 let input_id = SynKey::new([mono_key!(resource, "resource key")]);
                 let self_k = parse_numeric_part(resource).unwrap_or(1.0);
-                let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu);
+                let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu)?;
 
                 let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.into();
                 debug!("run_load_and_clc_ipc_cuda_worker: worker_ref={worker_ref:?}");
@@ -626,7 +628,7 @@ mod tests {
             let tho_device_idx = 1;
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
 
-            let smoke = lin_for_size(1.0, [3000, 30000], Float, &Device::Cpu);
+            let smoke = lin_for_size(1.0, [3000, 30000], Float, &Device::Cpu)?;
             let expected_smoke = smoke.copy();
             let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
             assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
@@ -688,9 +690,9 @@ mod tests {
                     |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
                     move |res, out| {
                         crate::torch_runner::tests::load_and_clc::mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
-                            lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                            Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
                                 .sum_dim_intlist(1, false, t.kind())
-                                .view((-1, 1))
+                                .view((-1, 1)))
                         })
                     },
                     false,
@@ -754,9 +756,9 @@ mod tests {
                         |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
                         move |res, out| {
                             mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
-                                lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                                Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
                                     .sum_dim_intlist(1, false, t.kind())
-                                    .view((-1, 1))
+                                    .view((-1, 1)))
                             });
                         },
                         false,

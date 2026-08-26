@@ -194,11 +194,11 @@ where
             OOMRunnerConfig::DumpedToCpu => {
                 let run_ctx = ctx.branch(false);
                 let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
-                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
                         *MaxParallelStep::FIFTY,
                     ))),
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                         min_split_len,
                     ))),
