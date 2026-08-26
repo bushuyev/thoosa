@@ -32,9 +32,9 @@ use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, 
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
@@ -47,7 +47,7 @@ use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore, TrainMotifsNetsResult};
+use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore};
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
@@ -69,6 +69,7 @@ use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::tasks::stft::SyncStft;
+use crate::tasks::train_motif_nets::TrainMotifNetsResult;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
@@ -83,7 +84,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
-    ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
+    ws:Arc<RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
     apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>)>,
     pub slice_step: u32,//should be in the input
@@ -701,14 +702,6 @@ impl StackAppliedMotifNetsInputWrapper {
     }
 }
 
-impl WithId for StackAppliedMotifNetsInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl ConsumeData for StackAppliedMotifNetsInputWrapper {
     type O = StackAppliedMotifNetsInput;
 
@@ -1029,15 +1022,6 @@ impl ApplyMotifNetInputWrapper {
         Self { batch }
     }
 }
-
-impl WithId for ApplyMotifNetInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        self.batch.id()
-    }
-}
-
 
 impl BorrowRef for ApplyMotifNetInputWrapper {
     type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;

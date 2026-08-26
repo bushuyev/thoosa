@@ -13,13 +13,12 @@ use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
-use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, recurse_files};
+use thoosa_shared::traits::Data;
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -152,24 +151,15 @@ impl ConvertPrecisionArgs {
 
 #[derive(Debug, Clone, DummyData)]
 pub struct ConvertPrecisionInput {
-    id: SynKey,
 }
 
 impl ConvertPrecisionInput {
     pub fn new() -> Self {
-        Self { id: SynKey::new([mono_key!("convert_precision", "convert_precision")]) }
+        Self {}
     }
 }
 
 impl Input for ConvertPrecisionInput {}
-
-impl WithId for ConvertPrecisionInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ConvertedNet {
@@ -181,13 +171,12 @@ pub struct ConvertedNet {
 
 #[derive(Debug, Clone)]
 pub struct ConvertPrecisionOutput {
-    id: SynKey,
     converted: Vec<ConvertedNet>,
 }
 
 impl ConvertPrecisionOutput {
     fn new(converted: Vec<ConvertedNet>) -> Self {
-        Self { id: SynKey::new([mono_key!("convert_precision", "convert_precision_output")]), converted }
+        Self { converted }
     }
 
     pub fn converted(&self) -> &[ConvertedNet] {
@@ -209,14 +198,6 @@ impl Data for ConvertPrecisionOutput {
 
     fn mem_size(&self) -> u64 {
         0
-    }
-}
-
-impl WithId for ConvertPrecisionOutput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

@@ -6,8 +6,8 @@ use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::{BinaryHeadPool, MotifInitMode, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
 use crate::utils::{ListenerResponse, TrainListener, plot_series};
+use crate::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{CopyToDevice, mono_key, panic_to_err, panic_to_err_async};
@@ -152,15 +152,6 @@ pub struct TrainLabelNetRunConfigResult {
     var_store_path: TmpFile,
     motif_nets_ids:Vec<u32>
 }
-
-impl WithId for Box<TrainLabelNetRunConfigResult> {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
 
 impl TrainLabelNetRunConfigResult {
     pub fn new(
@@ -1886,49 +1877,6 @@ impl TrainMotifNetResult {
 
 }
 
-#[derive(Debug, DummyData)]
-#[dummy_data(no_clone)]
-pub struct TrainMotifsNetsResult {//TODO move to train_motif_nets.rs
-    select_motifs_run_config_ids: Vec<RunConfigId>,
-    pub train_motif_nets_results:Vec<TrainMotifNetResult>
-}
-
-impl TrainMotifsNetsResult {
-    pub fn new(select_motifs_run_config_ids: Vec<RunConfigId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
-        Self {  select_motifs_run_config_ids, train_motif_nets_results }
-    }
-}
-
-#[async_trait]
-impl SavableResult for TrainMotifsNetsResult {
-    type R = Vec<u32>;
-
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
-
-        let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
-        for r in self.train_motif_nets_results.iter_mut() {
-            result.push(
-            track_await(r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).await?
-            );
-        }
-
-        Ok(result)
-    }
-}
-
-
-impl WithId for TrainMotifsNetsResult {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
-#[async_trait]
-impl Output for TrainMotifsNetsResult {
-}
-
 
 #[async_trait]
 impl SavableResult for TrainMotifNetResult {
@@ -2149,36 +2097,6 @@ pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)
         .flat_map(|(_resource_key, slices)| slices.into_iter())
         .collect::<Vec<Tensor>>()
 }
-
-
-#[derive(Debug)]
-pub struct LoadMotifNetOutput {
-    #[allow(dead_code)]
-    channel: u32,
-    #[allow(dead_code)]
-    nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, //single motif's nets (of different types)
-}
-
-impl LoadMotifNetOutput {
-    pub fn new(
-        channel: u32,
-        nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>,
-    ) -> Self {
-        Self { channel, nets }
-    }
-}
-
-impl WithId for LoadMotifNetOutput {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-
-
-
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
@@ -2515,10 +2433,10 @@ mod train_tests {
     use crate::my_tch::{InitDummy, MotifInitMode, ThoModule};
     use crate::tho_tensor::ThoTensor;
     use crate::train_nets::ConvNetArgsFields::Joint;
+    use crate::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetJoint, ConvNetParams, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinLenNetParams, LinNetArgs, MotifCosine2dNetParams, MotifCosineNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
-    use crate::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetJoint, ConvNetParams, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinLenNetParams, LinNetArgs, LoadMotifNetOutput, MotifCosine2dNetParams, MotifCosineNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::utils::{TrainListener, debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, vs_mem_size};
     use crate::utils::{
@@ -2549,8 +2467,8 @@ mod train_tests {
     use tch::Kind::{Bool, Float, Half};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::nn::{AdamW, LinearConfig, Module, OptimizerConfig, VarStore, init};
-    use tch::{IndexOp, Kind, Reduction};
     use tch::{Device, Tensor, nn};
+    use tch::{IndexOp, Kind, Reduction};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;

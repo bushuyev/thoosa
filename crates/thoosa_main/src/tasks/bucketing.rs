@@ -66,17 +66,6 @@ where
     }
 }
 
-impl<RC> WithId for BucketingInput<RC>
-where
-    RC: ResourcesConfig + Debug + Send + Sync + Clone,
-{
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
 impl<RC> Data for BucketingInput<RC>
 where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
@@ -111,14 +100,6 @@ impl BucketingOutput {
 
     pub fn run_config_ids_motif_ids(&self) -> &(RunConfigId, Vec<u32>) {
         &self.motif_ids
-    }
-}
-
-impl WithId for BucketingOutput {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
     }
 }
 
@@ -390,18 +371,6 @@ where
 {
     fn new(resource_id: ResourceId, tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>, bucket_window_samples: i64, bucket_step_samples: i64) -> Self {
         Self { resource_id, tensor, bucket_window_samples, bucket_step_samples }
-    }
-}
-
-impl<D, Id> WithId for BucketingTensorInput<D, Id>
-where
-    D: Dims + Send + Sync + 'static,
-    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-{
-    type ID = Id;
-
-    fn id(&self) -> &Self::ID {
-        self.tensor.id()
     }
 }
 

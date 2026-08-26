@@ -51,7 +51,6 @@ use tracing::Instrument;
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct ExtendMotifsInput {
-    id: SynKey,
     resources_input: ResourcesConfigInput<Simple>,
 }
 
@@ -60,7 +59,6 @@ impl ExtendMotifsInput {
 
     pub fn new(resources_input: ResourcesConfigInput<Simple>) -> Self {
         Self {
-            id: SynKey::new([mono_key!("ExtendMotifsInput", "stage")]),
             resources_input,
         }
     }
@@ -73,36 +71,20 @@ impl ExtendMotifsInput {
 
 impl Input for ExtendMotifsInput {}
 
-impl WithId for ExtendMotifsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
 pub struct ExtendMotifsSavableResult {
-    dummy_id: RunConfigId,
 }
 
 impl ExtendMotifsSavableResult {
     fn new() -> Self {
-        Self { dummy_id: 0 }
+        Self { }
     }
 }
 
 impl Output for ExtendMotifsSavableResult {}
 
 
-impl WithId for ExtendMotifsSavableResult {
-    type ID = RunConfigId;
-
-    fn id(&self) -> &Self::ID {
-        &self.dummy_id
-    }
-}
 
 #[async_trait]
 impl SavableResult for ExtendMotifsSavableResult {
@@ -143,19 +125,6 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExtendMotifsStage").field("id", &self.id).field("run_configs", &self.run_configs).finish()
-    }
-}
-
-impl<L, ML, C> WithId for ExtendMotifsStage<L, ML, C>
-where
-    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 
@@ -757,14 +726,6 @@ impl Data for SelectMotifsInputSelectorWrap {
         self.batch.iter().map(|batch| batch.mem_size()).sum::<u64>()
             + self.stacked_motifs.mem_size()
             + self.motifs_stats.mem_size()
-    }
-}
-
-impl WithId for SelectMotifsInputSelectorWrap {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

@@ -322,15 +322,6 @@ impl MotifStatsCalcInputWrapper {
 
 }
 
-impl WithId for MotifStatsCalcInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-
 impl BorrowRef for MotifStatsCalcInputWrapper {
     type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
 
@@ -447,14 +438,6 @@ impl MotifStatsTmpCachedChannelsInput {
         quantiles: Option<Vec<f32>>,
     ) -> Self {
         Self { id, channels_motifs_slices, metrics, quantiles }
-    }
-}
-
-impl WithId for MotifStatsTmpCachedChannelsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

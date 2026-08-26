@@ -63,7 +63,13 @@ pub struct FindMotifsRunConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum FinderKind {
+    ///To run a distance metric on each data slice pair
     CrossLoader(CrossLoaderRunConfig),
+    /// Convert data slices to log-[mel] spectrogram patches, group similar
+    /// time-frequency patterns into buckets, and build one prototype/kernel per
+    /// bucket. The resulting kernel bank acts as motif detectors: each kernel is
+    /// scanned over a spectrogram to find whether that relative frequency-time
+    /// pattern appears anywhere in the signal.
     Bucket(BucketRunConfig)
 }
 
@@ -1456,38 +1462,21 @@ impl SelectMotifsRunResult {
 
 impl Output for SelectMotifsRunResult {}
 
-impl WithId for SelectMotifsRunResult {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
-    dummy_id: RunConfigId,
     run_results: Vec<SelectMotifsRunResult>,
 }
 
 impl Output for SelectMotifsSavableResult {}
 
 
-impl WithId for SelectMotifsSavableResult {
-    type ID = RunConfigId;
-
-    fn id(&self) -> &Self::ID {
-        &self.dummy_id
-    }
-}
 
 impl SelectMotifsSavableResult {
     pub fn new(
         run_results: Vec<SelectMotifsRunResult>,
     ) -> Self {
         Self {
-            dummy_id: 0,
             run_results,
         }
     }

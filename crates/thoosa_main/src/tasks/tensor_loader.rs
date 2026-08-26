@@ -68,14 +68,6 @@ impl RawTensorLoaderInputWrapper {
     }
 }
 
-impl WithId for RawTensorLoaderInputWrapper {
-    type ID = Resource;
-
-    fn id(&self) -> &Self::ID {
-        self.resource.id()
-    }
-}
-
 impl BorrowRef for RawTensorLoaderInputWrapper {
     type Out<'a> = Resource where Self: 'a;
 

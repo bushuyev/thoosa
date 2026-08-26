@@ -24,8 +24,8 @@ use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
@@ -52,12 +52,12 @@ use thoosa_common::dims::{Batch, MotifProbability, MotifSlices, Slice, ThoBatch}
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
-use thoosa_common::runs::Empty;
+use thoosa_common::runs::{Empty, SavableResult};
 use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifsNetsResult, lin_motif_node};
+use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, lin_motif_node};
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -71,7 +71,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, val};
 use thoosa_store::Store;
 
 pub(crate) const TRAIN_MOTIF_STEP_ENDPOINT: &str = "TrainMotifStep";
@@ -362,22 +362,9 @@ where
 }
 
 
-impl <L, C> OutId for TrainMotifNets<L, C>
-where
-    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
-{
-
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        ()
-    }
-}
-
-
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
-    id: SynKey,
     motifs_by: MotifsBy,
     opt_config:Arc<OptConfig>
 }
@@ -385,15 +372,7 @@ pub struct TrainMotifNetInput{
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
     pub fn new(motifs_by: MotifsBy, opt_config:Arc<OptConfig>) -> Self {
-        Self { id: SynKey::new([mono_key!("TrainMotifNetInput", "stage")]), motifs_by, opt_config }
-    }
-}
-
-impl WithId for TrainMotifNetInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
+        Self { motifs_by, opt_config }
     }
 }
 
@@ -432,7 +411,7 @@ where
 {
     type Ctx = C;
     type In<'a> = TrainMotifNetInput;//MotifID
-    type Out = Arc<TrainMotifsNetsResult>;
+    type Out = Arc<TrainMotifNetsResult>;
 }
 
 impl <L, C> TrainMotifNets<L, C>
@@ -525,7 +504,7 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
     let mut trials = Vec::new();
     for child_entry in child_entries {
         let values = track_await(store.list_run_config_values(child_entry.id)).await?;
-        let Some(loss) = values.get("loss").and_then(val_to_f32) else {
+        let Some(loss) = values.get("loss").and_then(val::val_to_f32) else {
             continue;
         };
         if loss.is_finite() {
@@ -533,16 +512,6 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
         }
     }
     Ok(trials)
-}
-
-fn val_to_f32(val: &Val) -> Option<f32> {
-    match val {
-        Val::Real(v) => Some(*v as f32),
-        Val::Int(v) => Some(*v as f32),
-        Val::UInt(v) => Some(*v as f32),
-        Val::Str(v) => v.parse().ok(),
-        Val::Bool(_) => None,
-    }
 }
 
 impl <L, C> AsyncStage for TrainMotifNets<L, C>
@@ -749,7 +718,7 @@ where
 
         debug!("TrainMotifNets::run: results={results:?}");
 
-        Ok(Arc::new(TrainMotifsNetsResult::new(select_motifs_run_config_ids, results)))
+        Ok(Arc::new(TrainMotifNetsResult::new(select_motifs_run_config_ids, results)))
     }
 
 }
@@ -787,14 +756,6 @@ struct SyncMotifBatchInputWrapper {
 impl SyncMotifBatchInputWrapper {
     fn new(id: SynKey, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, num_slices: i64, descr: String) -> Self {
         Self { id, motifs, random_slices, num_slices, descr }
-    }
-}
-
-impl WithId for SyncMotifBatchInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 
@@ -1093,14 +1054,6 @@ struct SplitMotifIntoTrainValidInputWrapper {
 impl SplitMotifIntoTrainValidInputWrapper {
     fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>) -> Self {
         Self { id: motif.id().clone(), motif }
-    }
-}
-
-impl WithId for SplitMotifIntoTrainValidInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 
@@ -1483,7 +1436,7 @@ mod tests {
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::motif_loader::{MotifMeta, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, SYNC_MOTIF_LOADER_ENDPOINT, sync_load_motif_resources_endpoint_init, sync_motif_loader_endpoint_init};
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_motif_nets::{SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT, TrainMotifNetInput, TrainMotifNets, split_motif_into_train_valid_endpoint_init, sync_motif_bastch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits};
+    use crate::tasks::train_motif_nets::{SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT, TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult, split_motif_into_train_valid_endpoint_init, sync_motif_bastch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits};
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
     use async_trait::async_trait;
     use futures_util::FutureExt;
@@ -1512,10 +1465,10 @@ mod tests {
     use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
     use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+    use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
     use thoosa_common::ipc::wraps::WorkerWrapperWithState;
-    use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -1529,7 +1482,7 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifsNetsResult, final_net};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, final_net};
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
@@ -1888,4 +1841,39 @@ mod tests {
         )
     }
 
+}
+
+#[derive(Debug, DummyData)]
+#[dummy_data(no_clone)]
+pub struct TrainMotifNetsResult {
+    select_motifs_run_config_ids: Vec<RunConfigId>,
+    pub train_motif_nets_results:Vec<TrainMotifNetResult>
+}
+
+impl TrainMotifNetsResult {
+    pub fn new(select_motifs_run_config_ids: Vec<RunConfigId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
+        Self {  select_motifs_run_config_ids, train_motif_nets_results }
+    }
+}
+
+#[async_trait]
+impl SavableResult for TrainMotifNetsResult {
+    type R = Vec<u32>;
+
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+
+        let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
+        for r in self.train_motif_nets_results.iter_mut() {
+            result.push(
+            track_await(r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).await?
+            );
+        }
+
+        Ok(result)
+    }
+}
+
+
+#[async_trait]
+impl Output for TrainMotifNetsResult {
 }

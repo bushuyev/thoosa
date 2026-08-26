@@ -206,13 +206,6 @@ impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrappe
 }
 
 
-impl WithId for ABClcSyncStageInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ABClcSyncStageInputWrapperSelector {
     a_select:RangeSelector,

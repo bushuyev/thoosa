@@ -196,7 +196,7 @@ where
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
         trace!("TrainStep::do_run: x_t=\n{x_t}");
 
-        x_t.drop();
+        x_t.drop_inner();
         let loss_value = panic_to_err!(Ok::<_, ThoError>(loss.double_value(&[])))? as f32;
 
         if input.train {
@@ -207,7 +207,7 @@ where
             debug!("TrainStep::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));
             trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
 
-            predicted_y.drop();
+            predicted_y.drop_inner();
             drop(expected_y);
             debug!("TrainStep::do_run: 2.1 cuda_mem={:?}",maybe_cuda_mem(&self.device));
 
@@ -223,7 +223,7 @@ where
             debug!("TrainStep::do_run: 2.2 cuda_mem={:?}  optimizer_size={}", maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
             debug!("TrainStep::do_run: device={:?}  backward_step done in {}", self.device, t1.elapsed().as_millis());
         } else {
-            predicted_y.drop();
+            predicted_y.drop_inner();
             drop(expected_y);
         }
 

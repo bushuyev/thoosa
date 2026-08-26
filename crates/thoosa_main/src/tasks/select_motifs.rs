@@ -98,7 +98,6 @@ pub(crate) enum SelectMotifsOutputMode {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct SelectMotifsInput {
-    id: SynKey,
     resources_input: ResourcesConfigInput<Simple>,
     output_mode: SelectMotifsOutputMode,
 }
@@ -114,7 +113,6 @@ impl SelectMotifsInput {
 
     fn new(resources_input: ResourcesConfigInput<Simple>, output_mode: SelectMotifsOutputMode) -> Self {
         Self {
-            id: SynKey::new([mono_key!("SelectMotifsInput", "stage")]),
             resources_input,
             output_mode,
         }
@@ -130,15 +128,6 @@ impl SelectMotifsInput {
 }
 
 impl Input for SelectMotifsInput {}
-
-impl WithId for SelectMotifsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 
 #[derive(Debug, Clone)]
 struct SelectedMotifEvaluation {
@@ -236,26 +225,12 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectMotifsStage")
-            .field("id", self.id())
+            .field("id", &self.id)
             .field("run_configs", &self.run_configs)
             .field("find_motifs_run_config_ids", &self.find_motifs_run_config_ids)
             .finish()
     }
 }
-
-impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
-where
-    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where

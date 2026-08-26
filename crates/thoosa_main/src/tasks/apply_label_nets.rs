@@ -483,14 +483,6 @@ impl StackAppliedLabelNetsInputWrapper {
     }
 }
 
-impl WithId for StackAppliedLabelNetsInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     type O = StackAppliedLabelNetsInput;
 
@@ -737,14 +729,6 @@ struct ApplyLabelNetInputWrapper {
 impl ApplyLabelNetInputWrapper {
     fn new(input: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>) -> Self {
         Self { id: input.id().clone(), input }
-    }
-}
-
-impl WithId for ApplyLabelNetInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 
