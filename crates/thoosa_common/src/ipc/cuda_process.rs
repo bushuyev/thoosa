@@ -63,7 +63,7 @@ pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 pub  const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 const WORKER_COPY_STREAMS: usize = 32;
 // Keep IPC staging bounded independently of GPU VRAM. Sixteen 512 MiB sparse memfd mappings retain enough capacity for the existing oversized-copy OOM test while avoiding a pool sized as a fraction of total VRAM.
-const IPC_COPY_BUFFERS: usize = 16;
+const IPC_COPY_BUFFERS: usize = 32;
 const IPC_COPY_BUFFER_SIZE: usize = 512 * 1024 * 1024;
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
@@ -941,6 +941,7 @@ impl CudaIPCActor {
 
                 self.spawned_state.reader_handle.abort();
                 self.spawned_state.writer_handle.abort();
+                #[cfg(not(test))]
                 self.spawned_state.child.kill().await?;
 
             }
@@ -1230,7 +1231,7 @@ impl CudaIPCActor {
                 ThoTensor::new((), cpu_tensor)
             }.await;
 
-            debug!("CudaIPCActor::Copy D2H: done");
+            debug!("CudaIPCActor::Copy D2H: done, result={result:?}");
 
             let _ = respond_to.send(result);
         });

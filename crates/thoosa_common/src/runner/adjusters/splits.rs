@@ -72,6 +72,7 @@ where
         _adjustable: A,
         adjust_context: &mut AC,
     ) -> Result<A, AdjusterError<A>> {
+        debug!("SplitsAdjuster::adjust, self={:?}", self);
 
         let split_start = adjust_context.done_to();
 

@@ -898,7 +898,7 @@ where
             run_context,
             contexts,
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
-                debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
+                debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
 
                 /*
                 SyncStage::do_run – executes operations on tensors synchronously, receives tensors or composite tensor types as references
@@ -947,7 +947,7 @@ where
             run_context,
             contexts,
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
-                debug!("OOMHandler::consume: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
+                debug!("OOMHandler::consume: task={task:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
                 track_await(consume_stage_owned(task, input, tho_device_idx, run_ctx, job_id_to_rerun)).await
             },
         )).await
@@ -956,7 +956,7 @@ where
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="pref_oom_count"))]
-fn pref_oom_count(){
+fn perf_oom_count(){
 
 }
 
@@ -1135,7 +1135,7 @@ where
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
             if te.is_retryable_oom() {
-                pref_oom_count();
+                perf_oom_count();
                 debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} before adjusters",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                 for adjuster in adjusters {
@@ -1177,7 +1177,7 @@ where
                             return Err(te);
                         }
 
-                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
+                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
                         let run_result = track_await(runner
                             .run(
@@ -1209,10 +1209,10 @@ where
                             }
                             Err(te) => {
                                 exclusive_job.update_from_error(&te);
-                                debug!("OOMHandler::run, error: err te={te:?}");
+                                debug!("OOMHandler::run, error: err is_retryable_oom={} te={te:?}", te.is_retryable_oom());
 
                                 if te.is_retryable_oom() {
-                                    pref_oom_count();
+                                    perf_oom_count();
                                     debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                     if !adjuster.degrade(&mut contexts) {

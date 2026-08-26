@@ -496,15 +496,17 @@ where
             }
         };
 
-        if let Some(key) = copy.ref_key() {
-            debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copied to out-of-process ref key={key}", self.id);
-            return Ok(ThoTensor::new_ref(id, key, vec![], tch::Kind::Float, None, 1));
+        match copy.inner {
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+                // Keep the actor-provided metadata so selectors and later D2H copies describe the actual worker tensor.
+                debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copied to out-of-process ref key={key}", self.id);
+                Ok(ThoTensor::new_ref(id, key, size, kind, selector, tho_device_idx))
+            }
+            ThoTensorInner::Val { t } => {
+                debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copy.device={:?}", self.id, t.device());
+                ThoTensor::new(id, t)
+            }
         }
-
-        let copy = copy.t();
-        debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copy.device={:?}", self.id, copy.device());
-
-        Ok(ThoTensor::new(id, copy)?)
     }
 }
 
