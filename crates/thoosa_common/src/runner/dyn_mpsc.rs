@@ -624,6 +624,8 @@ impl DynamicTaskExecutor {
                 let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
                 let is_ok = result.is_ok();
 
+                debug!("DynamicTaskExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
+
                 let result = if is_oom && max_other_parallel == 0 {
                     let mut exclusive_job_id = exclusive_job_id.write();
                     exclusive_job_id.replace(job_id);

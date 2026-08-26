@@ -317,7 +317,7 @@ impl SyncStage for SyncTestTensorLoader {
                 (&self.size).into(),
                 self.kind,
                 &ThoDevice::from(device_idx),
-            ),
+            )?,
         )?;
 
         Ok(tensor)

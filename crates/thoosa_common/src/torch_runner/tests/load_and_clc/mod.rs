@@ -3,7 +3,7 @@ use crate::cuda_utils::cuda_mem;
 use crate::dims::{AnyDims, Dims};
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel, MaxParallelStep};
 use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
-use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::*;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::global_ctx::{GlobalCtx, mock_global_ctx};
@@ -32,11 +32,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::Add;
+use std::ops::{Add, Deref};
 use std::ops::Mul;
 use std::sync::Arc;
 use std::time::Duration;
-use tch::Device::Cuda;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, Scalar, Tensor};
@@ -115,14 +115,9 @@ impl Stage for LoadAndClcStage {
     type Ctx = RunCtxImpl;
 }
 
-// #[async_trait]
-impl AsyncStage for LoadAndClcStage {
-    // type RunInput = Arc<Self::In<'static>>;
-    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-    //     WithId::id(input)
-    // }
+impl AsyncStage for LoadAndClcStage {
+
     async fn run(
         self: Arc<Self>,
         input: Self::In<'static>,
@@ -138,8 +133,8 @@ impl AsyncStage for LoadAndClcStage {
 
         debug!("LoadAndMulTask::run: loaded_id={loaded_id:?} output_id={output_id:?}");
 
-        let loaded_id_name = "LoadedTensorId"; //loaded.id().id_name().clone();
-        let output_id_name = "MulTaskOutputId"; //loaded.id().id_name().clone();
+        let loaded_id_name = "LoadedTensorId";
+        let output_id_name = "MulTaskOutputId";
 
         debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id={:?}" ,output_id);
 
@@ -383,11 +378,11 @@ pub fn mul_check_with_exp_f<F>(
     atol: f64,
     exp_f: F,
 ) where
-    F: Fn(f64, &Tensor) -> Tensor,
+    F: Fn(f64, &Tensor) -> Result<Tensor, ThoError>,
 {
     let self_k = parse_numeric_part(res).unwrap_or(1.0);
 
-    let expected = exp_f(self_k * mul_k, &result.t_ref());
+    let expected = exp_f(self_k * mul_k, &result.t_ref()).unwrap();
 
     debug!("mul_check: res={res}  result_t.size()={:?} \n\n",result.size());
 
@@ -555,9 +550,9 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
             // mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
 
             mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
-                lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+               Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
                     .sum_dim_intlist(1, false, t.kind())
-                    .view((-1, 1))
+                    .view((-1, 1)))
             })
         },
         true,
@@ -615,9 +610,9 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
         |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
         move |res, out| {
             mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
-                lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
                     .sum_dim_intlist(1, false, t.kind())
-                    .view((-1, 1))
+                    .view((-1, 1)))
             });
         },
         true,
@@ -857,7 +852,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
             }),
         ),
         Kind::Int64,
-        Device::Cuda(0).into(),
+        Cuda(0).into(),
         true,
     ).await);
 
@@ -870,11 +865,17 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     debug!("multed={multed:?}");
 
-    let r = BorrowRef::borrow_to(&multed, 1).await?;
-    mul_check_with_exp_f(MUL_K as f64, "resource_1", r.as_ref(), 0.01, 0.01, |k, t| {
-        lin_for_size(k, size, t.kind(), &t.device())
+    let ThoDataRef::ReadLocked(r) = BorrowRef::borrow_to(&multed, 1).await? else {
+        panic!("unexpected result multed={multed:?}");
+    };
+
+    let cpu_r = r.copy_to_device(0).await?;
+
+
+    mul_check_with_exp_f(MUL_K as f64, "resource_1", &cpu_r, 0.01, 0.01, |k, t| {
+        Ok(lin_for_size(k, size, t.kind(), &Cpu)?
             .sum_dim_intlist(1, false, t.kind())
-            .view((-1, 1))
+            .view((-1, 1)))
     });
 
     debug!("Ok");
