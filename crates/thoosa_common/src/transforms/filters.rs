@@ -311,7 +311,7 @@ pub struct ReplicatePadding {}
 
 
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
-fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
+pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
     if pad == 0 {
         return Ok(x.shallow_clone());
     }

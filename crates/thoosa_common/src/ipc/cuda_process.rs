@@ -903,7 +903,7 @@ impl CudaIPCActor {
                 let _ = respond_to.send(Ok(()));
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
-                // self.spawned_state.child.kill().await?;
+
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let pending = Arc::clone(&self.spawned_state.pending);
@@ -941,6 +941,7 @@ impl CudaIPCActor {
 
                 self.spawned_state.reader_handle.abort();
                 self.spawned_state.writer_handle.abort();
+                self.spawned_state.child.kill().await?;
 
             }
             CudaIPCActorMessage::SendMsg { mut input, respond_to } => {
@@ -1890,7 +1891,7 @@ mod tests {
     use crate::ipc::cuda_process::{encode_endpoint_payload, CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
-    use crate::ipc::tests::{init_ipc_test, run_ipc_test};
+    use crate::ipc::tests::run_ipc_test;
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
     use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::global_ctx::GlobalCtx;
@@ -1931,17 +1932,6 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::task::JoinSet;
     use futures_util::FutureExt;
-
-    macro_rules! pure_module_path {
-        () => {{
-            let p = module_path!();
-
-            match p.split_once("::") {
-                Some((_crate_name, rest)) => rest,
-                None => "",
-            }
-        }};
-    }
 
     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();
@@ -2013,12 +2003,12 @@ mod tests {
     }
 
     #[test]
-    fn test_copy_ipc_cuda_worker_propagates_oom() -> Result<(), ThoError>{
+    fn test_copy_cuda_worker_propagates_oom_ipc() -> Result<(), ThoError>{
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(async {
-            init_ipc_test("test_copy_ipc_cuda_worker_propagates_oom", pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
+        run_ipc_test(
+            module_path!(),
+            async {
+                let tho_device_idx = 1;
 
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             let (free_mem, _total_mem) = cuda_mem();
@@ -2061,12 +2051,18 @@ mod tests {
 
             debug!("All ok");
 
-            Ok(())
-        },
-       async |sock_path| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Cuda(0))).await
-        })
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    HashMap::new(),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
     }
 
 
@@ -2074,30 +2070,37 @@ mod tests {
     #[test]
     fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(async {
-            init_ipc_test("heavy_copy_ipc_cuda_worker_once", pure_module_path!()).await?;
+        run_ipc_test(
+            module_path!(),
+            async {
+                let tho_device_idx = 1;
+                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                let (d2h, h2d)  = run_ipc_copy_perf(cuda_actor, 3, 3).await?;
 
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let (d2h, h2d)  = run_ipc_copy_perf(cuda_actor, 3, 3).await?;
-
-            info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
+                info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
 
 
-            Ok(())
-        }, async |sock_path| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Cuda(0))).await
-        })
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    HashMap::new(),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
     }
 
     #[test]
-    fn test_copy_ipc_cuda_worker_ok() -> Result<(), ThoError> {
+    fn test_copy_cuda_worker_ok_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(async {
-            init_ipc_test("test_copy_ipc_cuda_worker_ok", pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
+        run_ipc_test(
+            module_path!(),
+            async {
+                let tho_device_idx = 1;
 
             let main_process_cpu_tensor = Tensor::rand(&[5_000, 10_000], FLOAT_CPU);
             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
@@ -2150,11 +2153,18 @@ mod tests {
 
             info!("main: \n{}", format_perf_map(&PERF));
 
-            Ok(())
-        }, async |sock_path| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::new(), ThoDevice::from(Cuda(0))).await
-        })
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    HashMap::new(),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
     }
 
 }

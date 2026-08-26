@@ -327,10 +327,10 @@ pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_
 mod tests {
     use std::time::Duration;
     use crate::ipc::codec::{JsonIpcCodec};
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
-    use crate::ipc::tests::{init_ipc_test, run_ipc_test};
+    use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::purge::FuturesRunnerMapPurger;
@@ -366,12 +366,8 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         run_ipc_test(
+            module_path!(),
             async {
-                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_with_state_ipc");
-                GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
-
                 do_test_with_state().await?;
 
                 Ok(())
@@ -379,21 +375,18 @@ mod tests {
 
             async |sock_path| {
 
-                CudaWorker::run_worker2(
+                CudaWorker::run_worker(
                     sock_path,
                     &ws,
                     HashMap::from([
-
-                    ]),
-                    HashMap::from([
                         (
                             TEST_ENDPOINT.to_string(),
-                            Box::new(with_state_init) as InitFn2,
+                            Box::new(with_state_init) as InitFn,
                         ),
                     ]),
                     ThoDevice::from(Cuda(0)),
                 ).await
-            }
+            },
         )
     }
 
@@ -403,12 +396,8 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         run_ipc_test(
+            module_path!(),
             async {
-                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_with_state_ipc");
-                GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
-
                 do_test_distinct_stateful_endpoints().await?;
 
                 Ok(())
@@ -416,21 +405,18 @@ mod tests {
 
             async |sock_path| {
 
-                CudaWorker::run_worker2(
+                CudaWorker::run_worker(
                     sock_path,
                     &ws,
                     HashMap::from([
-
-                    ]),
-                    HashMap::from([
                         (
                             TEST_ENDPOINT.to_string(),
-                            Box::new(with_state_init) as InitFn2,
+                            Box::new(with_state_init) as InitFn,
                         ),
                     ]),
                     ThoDevice::from(Cuda(0)),
                 ).await
-            }
+            },
         )
     }
 

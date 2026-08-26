@@ -1,9 +1,9 @@
 //! Tensor-free IPC fixture for measuring the sync-stage invocation path without tensor transfer work.
 
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
-use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::tests::run_ipc_test;
+use crate::ipc::tests::{init_ipc_test, run_ipc_test};
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use crate::ipc::wraps::WorkerWrapper;
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
@@ -133,9 +133,9 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         // Identity work isolates IPC and sync-stage dispatch overhead from tensor computation.
-        std::thread::sleep(Duration::from_secs(1));
+        // std::thread::sleep(Duration::from_secs(1));
 
-        Ok(SimpOutput { value: input.value })
+        Ok(SimpOutput { value: input.value * 10 })
     }
 }
 
@@ -158,7 +158,7 @@ async fn do_test_simp() -> Result<(), ThoError> {
     for _ in 0..100 {
         let input = SimpInput { value: 42 };
         let output = cuda_actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
-        assert_eq!(output, SimpOutput { value: 42 });
+        assert_eq!(output, SimpOutput { value: 420 });
     }
 
 
@@ -182,20 +182,18 @@ fn test_simp_ipc() -> Result<(), ThoError> {
     let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
     run_ipc_test(
+        module_path!(),
         async {
-            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-            let test_name = format!("{module}::test_simp_ipc");
-            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
-            do_test_simp().await
+            do_test_simp().await?;
+
+            Ok(())
         },
         async |sock_path: OsString| {
-            CudaWorker::run_worker2(
+            CudaWorker::run_worker(
                 sock_path,
                 &ws,
-                HashMap::new(),
-                HashMap::from([(SIMP_ENDPOINT.to_string(), Box::new(simp_stage_init) as InitFn2)]),
+                HashMap::from([(SIMP_ENDPOINT.to_string(), Box::new(simp_stage_init) as InitFn)]),
                 ThoDevice::from(Device::Cuda(0)),
             ).await
         },

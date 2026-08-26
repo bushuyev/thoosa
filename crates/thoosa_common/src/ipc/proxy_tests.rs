@@ -276,7 +276,7 @@ pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<B
 
 
 mod tests {
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn2};
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::proxy_tests::{test_simp_init_2, TestOutputA, TestStageInitA, TEST_ENDPOINT};
     use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
     use crate::ipc::tests::run_ipc_test;
@@ -314,12 +314,8 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         run_ipc_test(
+            module_path!(),
             async {
-                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_simp_tensor_ipc");
-                GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
-
                 do_test_tensor_simp().await?;
 
                 debug!("test_simp_ipc ok");
@@ -328,16 +324,14 @@ mod tests {
             },
 
             async |sock_path| {
-
                 return {
-                    let r= CudaWorker::run_worker2(
+                    let r= CudaWorker::run_worker(
                         sock_path,
                         &ws,
-                        HashMap::from([]),
                         HashMap::from([
                             (
                                 TEST_ENDPOINT.to_string(),
-                                Box::new(test_simp_init_2) as InitFn2,
+                                Box::new(test_simp_init_2) as InitFn,
                             ),
                         ]),
                         ThoDevice::from(Cuda(0)),
@@ -347,7 +341,7 @@ mod tests {
 
                     Ok(())
                 }
-            }
+            },
         )
     }
 
@@ -389,12 +383,8 @@ mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         run_ipc_test(
+            module_path!(),
             async {
-                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::test_oom_error_ipc");
-                GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
-
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
                 let test_stage = Arc::new(TestStageA::<u32, TestRunCtx>::new(1, TestStageInitA::new(2)).await?);
@@ -424,21 +414,18 @@ mod tests {
 
             async |sock_path| {
 
-                CudaWorker::run_worker2(
+                CudaWorker::run_worker(
                     sock_path,
                     &ws,
                     HashMap::from([
-
-                    ]),
-                    HashMap::from([
                         (
                             TEST_ENDPOINT.to_string(),
-                            Box::new(test_simp_init_2) as InitFn2,
+                            Box::new(test_simp_init_2) as InitFn,
                         ),
                     ]),
                     ThoDevice::from(Cuda(0)),
                 ).await
-            }
+            },
         )
     }
 }

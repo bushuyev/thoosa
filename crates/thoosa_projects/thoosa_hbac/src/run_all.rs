@@ -772,13 +772,8 @@ mod tests {
     fn heavy_test_run_all_ipc() -> Result<(), ThoError> {
         let test_fn_name = "heavy_test_run_all_ipc";
         run_ipc_test(
+            module_path!(),
             async {
-                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-                let test_name = format!("{module}::{test_fn_name}");
-                GlobalCtx::init_devices_ipc(2, vec![
-                    test_name, "--exact".to_string(),
-                    "--nocapture".to_string(), "--no-capture".to_string(),
-                ]).await?;
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
                 do_heavy_test_run_all(test_fn_name).await?;
@@ -794,19 +789,18 @@ mod tests {
                         WsConfigs::new(1, 0, 100)
                     )?));
                     // Heavy IPC tests use the same typed worker protocol as the application entry point.
-                    let r = CudaWorker::run_worker2(
+                    let r = CudaWorker::run_worker(
                         sock_path,
                         &ws,
-                        HashMap::new(),
                         crate::cuda_worker_endpoint_inits(),
-                        ThoDevice::from(Device::Cuda(0))
+                        ThoDevice::from(Device::Cuda(0)),
                     ).await;
 
                     info!("heavy_test_run_all_ipc: r={r:?}");
 
                     Ok(())
                 }
-            }
+            },
         )
     }
 
