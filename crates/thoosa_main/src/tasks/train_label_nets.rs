@@ -21,7 +21,7 @@ use tch::{Reduction, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
@@ -1129,10 +1129,10 @@ where
     }
 }
 
-pub fn train_label_step_endpoint_inits() -> HashMap<String, InitFn2> {
+pub fn train_label_step_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([(
         TRAIN_LABEL_STEP_ENDPOINT.to_string(),
-        Box::new(train_label_step_endpoint_init) as InitFn2,
+        Box::new(train_label_step_endpoint_init) as InitFn,
     )])
 }
 

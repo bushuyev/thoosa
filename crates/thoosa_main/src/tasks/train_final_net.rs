@@ -30,7 +30,7 @@ use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
@@ -717,10 +717,10 @@ where
     }
 }
 
-pub fn train_final_step_endpoint_inits() -> HashMap<String, InitFn2> {
+pub fn train_final_step_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([(
         TRAIN_FINAL_STEP_ENDPOINT.to_string(),
-        Box::new(train_final_step_endpoint_init) as InitFn2
+        Box::new(train_final_step_endpoint_init) as InitFn
     )])
 }
 

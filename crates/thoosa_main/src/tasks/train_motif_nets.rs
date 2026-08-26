@@ -22,7 +22,7 @@ use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn2, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
@@ -250,35 +250,35 @@ where
     }
 }
 
-pub fn train_motif_step_endpoint_inits() -> HashMap<String, InitFn2> {
+pub fn train_motif_step_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([
         (
             TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
-            Box::new(train_motif_step_endpoint_init) as InitFn2,
+            Box::new(train_motif_step_endpoint_init) as InitFn,
         ),
         (
             SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
-            Box::new(sync_motif_bastch_endpoint_init) as InitFn2,
+            Box::new(sync_motif_bastch_endpoint_init) as InitFn,
         ),
         (
             SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT.to_string(),
-            Box::new(split_motif_into_train_valid_endpoint_init) as InitFn2,
+            Box::new(split_motif_into_train_valid_endpoint_init) as InitFn,
         ),
         (
             SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT.to_string(),
-            Box::new(sync_load_motif_resources_endpoint_init) as InitFn2,
+            Box::new(sync_load_motif_resources_endpoint_init) as InitFn,
         ),
         (
             SYNC_LOAD_RANDOM_SLICES_ENDPOINT.to_string(),
-            Box::new(sync_load_random_slices_endpoint_init) as InitFn2,
+            Box::new(sync_load_random_slices_endpoint_init) as InitFn,
         ),
         (
             SYNC_MOTIF_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_motif_loader_endpoint_init) as InitFn2,
+            Box::new(sync_motif_loader_endpoint_init) as InitFn,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as InitFn2,
+            Box::new(sync_label_batch_endpoint_init) as InitFn,
         ),
     ])
 }
@@ -1510,7 +1510,7 @@ mod tests {
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn2, WokerRunCtx};
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
@@ -1700,18 +1700,24 @@ mod tests {
     // #[test]
     fn test_train_motif_nets_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(async {
-            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-            let test_name = format!("{module}::test_train_motif_nets_ipc");
-            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, true);
-            let cuda_actor = GlobalCtx::global().cuda_actor(1);
-            let result = run_train_motif_nets().await?;
+        run_ipc_test(
+            module_path!(),
+            async {
+                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+                let result = run_train_motif_nets().await?;
 
-            Ok(())
-
-        }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    train_motif_step_endpoint_inits(),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
     }
 
     #[test]
@@ -1788,33 +1794,38 @@ mod tests {
         }
 
         // Exercise the same shared stateful wrapper used by production train steps.
-        run_ipc_test(async {
-            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-            let test_name = format!("{module}::test_train_step_ipc");
-            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, true);
-            let stage_id = 0;
-            let init = TrainTestStepInit { lr: 0.001, vs_path: PathBuf::from("/tmp/thoosa_train_step_ipc.safetensors") };
-            let input_cloner = Arc::new(|input: &TrainStepInput<InDims, OutDims>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
-            let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1, Box::new(init), input_cloner).await?),
-                init: (),
-            };
-            let cuda_actor = GlobalCtx::global().cuda_actor(1);
-            let input = TrainStepInput::<InDims, OutDims>::new(
-                to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
-                None,
-                to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
-                false,
-                false,
-            );
-            let output = Arc::new(train_step).do_run(&input, &RunCtxImpl::new(1, "train_step_ipc"))?;
-            assert!(output.loss.is_finite());
-            Ok(())
-        }, async |sock_path| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), HashMap::from([(TRAIN_TEST_STEP_ENDPOINT.to_string(), Box::new(train_test_step_endpoint_init) as InitFn2)]), ThoDevice::from(Cuda(0))).await
-        })
+        run_ipc_test(
+            module_path!(),
+            async {
+                let stage_id = 0;
+                let init = TrainTestStepInit { lr: 0.001, vs_path: PathBuf::from("/tmp/thoosa_train_step_ipc.safetensors") };
+                let input_cloner = Arc::new(|input: &TrainStepInput<InDims, OutDims>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+                let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1, Box::new(init), input_cloner).await?),
+                    init: (),
+                };
+                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+                let input = TrainStepInput::<InDims, OutDims>::new(
+                    to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
+                    None,
+                    to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
+                    false,
+                    false,
+                );
+                let output = Arc::new(train_step).do_run(&input, &RunCtxImpl::new(1, "train_step_ipc"))?;
+                assert!(output.loss.is_finite());
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    HashMap::from([(TRAIN_TEST_STEP_ENDPOINT.to_string(), Box::new(train_test_step_endpoint_init) as InitFn)]),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
     }
 
     pub fn to_tho_tensor<D>(inner: ThoTensorInner, id: String) -> ThoTensor<D, SimpleId>
