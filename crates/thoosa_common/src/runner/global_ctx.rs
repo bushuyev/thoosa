@@ -457,6 +457,7 @@ impl GlobalCtx {
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
+    use std::fmt::{Debug, Formatter};
     use crate::runner::dyn_mpsc::DynamicTaskExecutor;
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
@@ -492,7 +493,7 @@ pub mod mock_global_ctx {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    pub trait GlobalCtxMockGuard {}
+    pub trait GlobalCtxMockGuard:Debug {}
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     struct GlobalCtxMockContexts<G, S> {
@@ -502,6 +503,12 @@ pub mod mock_global_ctx {
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     impl<G, S> GlobalCtxMockGuard for GlobalCtxMockContexts<G, S> {}
+
+    impl<G, S> Debug for GlobalCtxMockContexts<G, S> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("GlobalCtxMockContexts").finish()
+        }
+    }
 
 
     #[cfg(any(test, feature = "mock_global_ctx"))]

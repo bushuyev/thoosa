@@ -945,7 +945,6 @@ mod tests {
     use crate::dims::{AnyDims, Batch};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
-    use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_device::ThoDevice;

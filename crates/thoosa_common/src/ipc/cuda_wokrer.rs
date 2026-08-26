@@ -48,16 +48,14 @@ static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
 //1 cuda device per worker
 pub struct CudaWorker;
 
-#[deprecated]//use InitFn2
-pub type InitFn = Box<dyn Fn(Vec<u8>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>>  >;
-pub type InitFn2 = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
+pub type InitFn = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
 type InstalledEndpoints = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
 
 #[derive(Clone)]
 struct WorkerRequestContext {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    endpoint_inits: Arc<HashMap<String, InitFn2>>,
+    endpoint_inits: Arc<HashMap<String, InitFn>>,
     exec_stream_pool: Arc<Pool<ThoCudaStream>>,
     all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
     pending_h2d_transfers: Arc<Mutex<HashMap<u64, PendingWorkerH2dTransfer>>>,
@@ -103,7 +101,7 @@ pub struct WorkerCli {
 
 impl CudaWorker {
 
-    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn2>) -> Result<(), ThoError>{
+    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn>) -> Result<(), ThoError>{
 
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
@@ -155,7 +153,12 @@ impl CudaWorker {
                 )?));
 
                 // Application workers use only postcard/typetag endpoint initializers after the proxy migration.
-                CudaWorker::run_worker2(sock_path, &ws, HashMap::new(), init_map, ThoDevice::from(Device::Cuda(0))).await//TODO Cuda(0)
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    init_map,
+                    ThoDevice::from(Device::Cuda(0)),
+                ).await//TODO Cuda(0)
             })?;
 
             std::process::exit(0);
@@ -168,16 +171,6 @@ impl CudaWorker {
         sock_path:OsString,
         ws:&Arc<RwLock<Box<dyn Workspace>>>,
         endpoint_inits: HashMap<String, InitFn>,
-        tho_device: ThoDevice
-    ) -> Result<(), ThoError> {
-        Self::run_worker2(sock_path, ws, endpoint_inits, HashMap::new(), tho_device).await
-    }
-
-    pub async fn run_worker2(
-        sock_path:OsString,
-        ws:&Arc<RwLock<Box<dyn Workspace>>>,
-        _endpoint_inits: HashMap<String, InitFn>,
-        endpoint_inits2: HashMap<String, InitFn2>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
@@ -193,7 +186,7 @@ impl CudaWorker {
                 .collect::<Result<Vec<_>, _>>()?,
         ));
 
-        info!("run_worker: sock_path={sock_path:?} cuda_device={cuda_device} endpoint_inits.keys={:?}", endpoint_inits2.keys().collect::<Vec<_>>());
+        info!("run_worker: sock_path={sock_path:?} cuda_device={cuda_device} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
@@ -218,7 +211,7 @@ impl CudaWorker {
         let all_cuda_tensors = Arc::new(parking_lot::Mutex::new(HashMap::new()));//TODO to RwLock?
         let request_context = WorkerRequestContext {
             ws: Arc::clone(ws),
-            endpoint_inits: Arc::new(endpoint_inits2),
+            endpoint_inits: Arc::new(endpoint_inits),
             exec_stream_pool,
             all_cuda_tensors,
             pending_h2d_transfers: Arc::new(Mutex::new(HashMap::new())),
