@@ -1262,14 +1262,13 @@ pub fn lin_t(n: u32) -> Tensor {
     Tensor::arange(n as i64, FLOAT_CPU)
 }
 
-pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
+pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Result<Tensor, ThoError> {
     let end = size.iter().fold(1, |a, v| a * *v);
 
     debug!("lin_for_size: end={end}");
 
-    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))
-        .expect("f_arange failed")
-        .view(&size[..]);
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))?
+        .f_view(&size[..])?;
 
     t = t.set_requires_grad(false);
     match kind {
@@ -1284,7 +1283,7 @@ pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tens
     trace!("lin_for_size:t=\n{t}");
     debug!("lin_for_size: t.size={:?}", t.size());
 
-    t
+    Ok(t)
 }
 
 pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
