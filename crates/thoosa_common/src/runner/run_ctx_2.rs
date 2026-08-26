@@ -81,8 +81,8 @@ impl RunCtxImpl {
 
 impl MaxParallelCtx for RunCtxImpl {
 
-    fn set_max_other_parallel(&mut self, permit: MaxParallel) {
-        self.max_other_parallel = permit
+    fn set_max_other_parallel(&mut self, max_other_parallel: MaxParallel) {
+        self.max_other_parallel = max_other_parallel
     }
 
 
