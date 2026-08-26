@@ -228,7 +228,6 @@ pub struct DataId(pub u32);//for sql-store based stuff
 unsafe impl Send for DataId {}
 unsafe impl Sync for DataId {}
 
-
 impl WithId for DataId {
     type ID = Self;
 
@@ -582,14 +581,6 @@ pub trait Data: Debug {
     where
     Self:Sized{
 
-    }
-}
-
-impl WithId for MockData {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        todo!()
     }
 }
 

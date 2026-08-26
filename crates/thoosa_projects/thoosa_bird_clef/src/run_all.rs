@@ -179,7 +179,6 @@ pub(crate) async fn run_all(
                                         Arc::clone(&loader_spawn),
                                         run_configs,
                                         fixed_find_motif_config,
-                                        ThoDevice::from(1),
                                         init_ctx_find_motifs
                                     )
                                     .instrument(tracing::debug_span!("FindMotifsStage::new",file = file!(),line = line!()))

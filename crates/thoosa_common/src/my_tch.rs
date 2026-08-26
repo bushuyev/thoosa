@@ -1359,7 +1359,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAttnPool1d {
         let h = t.as_ref();
 
         let p = self.proj.forward(&h);
-        let t = p.tanh();
+        let t = p.f_tanh()?;
 
         let scores = self.v.forward(&t).squeeze_dim(1);
 

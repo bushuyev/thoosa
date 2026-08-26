@@ -55,7 +55,6 @@ where
 {
     async fn add_partial_output(&mut self, out: R::Out);
     fn all_done(&self) -> bool;
-    // fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
     async fn build_final_output(self) -> Result<R::Out, ThoError>;
 }
 
@@ -84,13 +83,13 @@ pub mod mock_input_context {
     }
 
     impl InputContextBuilder {
-        pub fn with_partial_output(mut self, inp: super::test_types::TestOutput) -> Self {
+        pub fn with_partial_output(mut self, inp: TestOutput) -> Self {
             self.mock.expect_add_partial_output().call(inp);
 
             self
         }
 
-        pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
+        pub fn with_build_final_output(mut self, inp: TestOutput) -> Self {
             self.mock
                 .expect_build_final_output()
                 .return_once(move || Ok(inp));
@@ -688,8 +687,8 @@ async fn run_stage_borrowed<R, W>(
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    R::Out: Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
 {
@@ -727,8 +726,8 @@ async fn consume_stage_owned<'z, R, W>(
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:Send + Sync,
+    R::Out: Send + Sync + 'static,
     W: ConsumeData<O = R::In<'z>> + Debug + Send + Sync + 'static,
     R::In<'z>: 'static,
 {
@@ -757,8 +756,8 @@ async fn run_stage_selected<R, W, S>(
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    R::Out: Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
     W: SelectRef<S> + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
@@ -807,8 +806,8 @@ impl<R, W, S> InputRun<R, W, S> for NoInputAdjuster
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    R::Out: Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
 {
@@ -829,8 +828,8 @@ impl<'adjuster, R, W, S, IC> InputRun<R, W, S> for Box<dyn Adjuster<IC, A = S> +
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    R::Out: Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
     W: SelectRef<S> + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
@@ -880,11 +879,10 @@ where
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
-        for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-        R::Out: WithId + Send + Sync + 'static,
+        for<'i> <R as Stage>::In<'i>:  Send + Sync,
+        R::Out: Send + Sync + 'static,
         S: Debug + Clone + Default + Send + 'static,
         W: BorrowRef + Debug + Send + Sync + 'static,
-        W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
     {
         if run_context.tho_device_idx() == 0 {
@@ -933,11 +931,11 @@ where
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
-        for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-        R::Out: WithId + Send + Sync + 'static,
+        for<'i> <R as Stage>::In<'i>:Send + Sync,
+        R::Out: Send + Sync + 'static,
         S: Debug + Clone + Default + Send + 'static,
         W:ConsumeData<O = <R as Stage>::In<'z>>,
-        W:WithId<ID = <R::In<'z> as WithId>::ID> + Debug + Send + Sync + 'static,
+        W: Debug + Send + Sync + 'static,
         <R as Stage>::In<'z>: 'static,
     {
 
@@ -1089,8 +1087,8 @@ where
 async fn run_with_runner_impl<'a, 'z, R, S, A, C, IA, TA, CA>(
     adjusters: &[Adjusters<IA, TA, CA>],
     task: Arc<R>,
+    #[cfg(tho_debug)]
     input_id_dbg: String,
-    out_key: <R::In<'_> as WithId>::ID,
     run_context: R::Ctx,
     mut contexts: C,
     mut runner: A,
@@ -1102,8 +1100,8 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: TaskAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
     A: RunnerRetryAdapter<'z, R, S>,
 {
@@ -1112,7 +1110,10 @@ where
     let mut task = Some(task);
     let mut run_context = Some(run_context);
 
-    debug!("OOMHandler::run: 1.  ctx_id={ctx_id:?} task={:?} os_thread_id={} input.id={input_id_dbg} max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
+    #[cfg(not(tho_debug))]
+    const INPUT_ID_DBG:&str = "n/a";
+
+    debug!("OOMHandler::run: 1.  ctx_id={ctx_id:?} task={:?} os_thread_id={} input.id={INPUT_ID_DBG} max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
     let mut i = 0;
     let mut input_select_adjusted: Option<S> = None;
@@ -1234,11 +1235,11 @@ where
 
             collect_eta_record_oom_all_failed();
 
-            warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} out_key={out_key:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
+            warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
             #[cfg(tho_debug)]
             track_await(GlobalCtx::global().debug_caches(device_idx, "all_failed")).await;
 
-            Err(Cause::SomethingElse(format!("all_failed: task.out_key={out_key:?}")).into())
+            Err(Cause::SomethingElse(format!("all_failed: INPUT_ID_DBG={INPUT_ID_DBG}")).into())
         }
         Ok(o) => {
             debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());
@@ -1263,20 +1264,21 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: TaskAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
-    W: WithId<ID = <R::In<'z> as WithId>::ID>,
+    W:Debug,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
-    let input_id_dbg = format!("{:?}", input.id());
+    #[cfg(tho_debug)]
+    let input_id_dbg = format!("input={:?}", input);
 
     track_await(run_with_runner_impl(
         adjusters,
         task,
+        #[cfg(tho_debug)]
         input_id_dbg,
-        input.id().clone(),
         run_context,
         contexts,
         SharedRunnerRetryAdapter { input, runner },
@@ -1299,21 +1301,22 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: TaskAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>: Send + Sync,
+    R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
-    W: ConsumeData<O = <R as Stage>::In<'z>> + WithId<ID = <R::In<'z> as WithId>::ID>,
+    W: ConsumeData<O = <R as Stage>::In<'z>> + Debug, // + WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
     Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
-    let input_id_dbg = format!("{:?}", input.id());
+    #[cfg(tho_debug)]
+    let input_id_dbg = format!("input={:?}", input);
 
 
     track_await(run_with_runner_impl(
         adjusters,
         task,
+        #[cfg(tho_debug)]
         input_id_dbg,
-        input.id().clone(),
         run_context,
         contexts,
         ConsumeRunnerRetryAdapter {
@@ -1399,8 +1402,6 @@ pub mod test_types {
             &self.id
         }
     }
-
-    // impl Input for TestInput {}
 
     impl TestInput {
         pub fn new(n: u32) -> Self {
@@ -1773,14 +1774,6 @@ mod tests {
             Self: 'o,
         {
             async move { Ok(&self.inner) }
-        }
-    }
-
-    impl WithId for BorrowOnlyInput {
-        type ID = TestId;
-
-        fn id(&self) -> &Self::ID {
-            self.inner.id()
         }
     }
 

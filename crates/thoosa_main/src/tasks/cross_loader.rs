@@ -591,14 +591,6 @@ impl Data for CrossInputSelectorWrap {
 }
 
 
-impl WithId for CrossInputSelectorWrap {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl CrossInputSelectorWrap {
     pub fn new(
         id:SynKey,
@@ -1309,24 +1301,14 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
     struct TestBatchOutput {
-        id: SynKey,
         call_index: usize,
     }
 
     impl TestBatchOutput {
         fn new(call_index: usize) -> Self {
             Self {
-                id: SynKey::new([mono_key!("batch_output", "batch_output")]),
                 call_index,
             }
-        }
-    }
-
-    impl WithId for TestBatchOutput {
-        type ID = SynKey;
-
-        fn id(&self) -> &Self::ID {
-            &self.id
         }
     }
 
@@ -1345,24 +1327,14 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct CpuMergeOutput {
-        id: SynKey,
         to_cpu_calls: Arc<AtomicUsize>,
     }
 
     impl CpuMergeOutput {
-        fn new(to_cpu_calls: Arc<AtomicUsize>, call_index: usize) -> Self {
+        fn new(to_cpu_calls: Arc<AtomicUsize>) -> Self {
             Self {
-                id: SynKey::new([mono_key!("cpu_merge_output", format!("call_{call_index}"))]),
                 to_cpu_calls,
             }
-        }
-    }
-
-    impl WithId for CpuMergeOutput {
-        type ID = SynKey;
-
-        fn id(&self) -> &Self::ID {
-            &self.id
         }
     }
 
@@ -2224,12 +2196,12 @@ mod tests {
     async fn test_output_builder_cpu_merge_calls_to_cpu() -> Result<(), ThoError> {
         let to_cpu_calls = Arc::new(AtomicUsize::new(0));
         let output_0 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 0),
+            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
             SlicesIter::new(1, vec![]),
             SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
         let output_1 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 1),
+            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
             SlicesIter::new(1, vec![]),
             SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
@@ -2249,12 +2221,12 @@ mod tests {
     async fn test_output_builder_gpu_merge_skips_to_cpu() -> Result<(), ThoError> {
         let to_cpu_calls = Arc::new(AtomicUsize::new(0));
         let output_0 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 0),
+            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
             SlicesIter::new(1, vec![]),
             SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );
         let output_1 = CrossUnfoldClcOutput::new(
-            CpuMergeOutput::new(Arc::clone(&to_cpu_calls), 1),
+            CpuMergeOutput::new(Arc::clone(&to_cpu_calls)),
             SlicesIter::new(1, vec![]),
             SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
         );

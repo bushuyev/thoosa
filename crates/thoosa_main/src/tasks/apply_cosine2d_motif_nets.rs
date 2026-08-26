@@ -462,14 +462,6 @@ impl ApplyCosine2DMotifNetsSyncInputWrapper {
     }
 }
 
-impl WithId for ApplyCosine2DMotifNetsSyncInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        self.input.id()
-    }
-}
-
 impl BorrowRef for ApplyCosine2DMotifNetsSyncInputWrapper {
     type Out<'a> = ApplyCosine2DMotifNetsSyncInput<'a> where Self: 'a;
 
@@ -716,14 +708,6 @@ struct BatchCosineConv2dTensorsInputWrapper {
 impl BatchCosineConv2dTensorsInputWrapper {
     fn new(id: SynKey, tmp_cache: TmpCached<CosineConv2dTensorPart>) -> Self {
         Self { id, tmp_cache }
-    }
-}
-
-impl WithId for BatchCosineConv2dTensorsInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

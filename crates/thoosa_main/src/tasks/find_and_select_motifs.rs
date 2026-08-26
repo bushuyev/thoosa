@@ -28,14 +28,13 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, MaxParallelCtx, WithId};
+use thoosa_shared::traits::{Adjustable, MaxParallelCtx};
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{FuturesOrdering, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources};
+use thoosa_shared::{FuturesOrdering, ResourceType, ThoError, collect_futures_with_progress, panic_to_err_async, parse_resources};
 use thoosa_store::Store;
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
@@ -57,7 +56,6 @@ pub struct FindAndSelectMotifsRunConfig {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct FindAndSelectMotifsInput {
-    id: SynKey,
     pub find_resources: String,
     pub select_resources: String,
 }
@@ -65,7 +63,6 @@ pub struct FindAndSelectMotifsInput {
 impl FindAndSelectMotifsInput {
     pub fn new(find_resources: String, select_resources: String) -> Self {
         Self {
-            id: SynKey::new([mono_key!("FindAndSelectMotifsInput", "stage")]),
             find_resources,
             select_resources,
         }
@@ -73,14 +70,6 @@ impl FindAndSelectMotifsInput {
 }
 
 impl Input for FindAndSelectMotifsInput {}
-
-impl WithId for FindAndSelectMotifsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
@@ -108,13 +97,6 @@ impl FindAndSelectEvalMetrics {
     }
 }
 
-impl WithId for FindAndSelectMotifsResult {
-    type ID = RunConfigId;
-
-    fn id(&self) -> &Self::ID {
-        &0
-    }
-}
 
 #[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
@@ -242,7 +224,6 @@ impl FindAndSelectMotifsStage {
                 Arc::clone(&loader),
                 vec![run_config.find_motifs_run_config.clone()],
                 fixed_find_motifs_config,
-                ThoDevice::from(device_idx),
                 ctx.branch(true),
             )).await?,
         );

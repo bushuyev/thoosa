@@ -126,18 +126,10 @@ impl SyncLabelBatchInputWrapper {
     }
 }
 
-impl WithId for SyncLabelBatchInputWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl BorrowRef for SyncLabelBatchInputWrapper {
     type Out<'a> = SyncLabelBatchInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
@@ -529,71 +521,15 @@ where
     }
 
 }
-//TODO remove
-#[derive(Debug)]
-pub struct TrainLabelNetsInput {
-    id: SynKey
-}
-
-impl TrainLabelNetsInput {
-    pub fn new(id: SynKey) -> Self {
-        Self { id }
-    }
-}
-
-impl Data for TrainLabelNetsInput {
-    type Metrics = ();
-    type M = CpuOnly<Self>;
-
-    fn size(&self) -> Self::Metrics {
-        ()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-
-    fn mem_size(&self) -> u64 {
-        0
-    }
-}
-
-impl Input for TrainLabelNetsInput {
-
-}
-
-impl WithId for TrainLabelNetsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainLabelNetsOutput {
-    id: RunConfigId,
     train_motif_nets_run_config_ids: Vec<RunConfigId>,
     motif_nets_ids:Vec<u32>,
     results: Vec<TrainLabelNetRunConfigResult>
 }
-impl WithId for TrainLabelNetsOutput {
-    type ID = RunConfigId;
 
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-impl WithId for Box<TrainLabelNetsOutput> {
-    type ID = RunConfigId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 impl Output for TrainLabelNetsOutput {
 
 }
@@ -624,7 +560,6 @@ impl SavableResult for TrainLabelNetsOutput {
 impl TrainLabelNetsOutput {
     pub fn new(train_motif_nets_run_config_ids: Vec<RunConfigId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetRunConfigResult>) -> Self {
         Self {
-            id: 0,
             train_motif_nets_run_config_ids,
             motif_nets_ids,
             results
@@ -1142,7 +1077,7 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput, new_train_label_nets};
+    use crate::tasks::train_label_nets::{ResourcesBatch, TrainLabelNets, TrainLabelNetsOutput, new_train_label_nets};
     use futures::FutureExt;
     use futures_util::StreamExt;
     use futures_util::future::try_join_all;

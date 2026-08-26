@@ -76,23 +76,18 @@ pub(crate) async fn run_all(
 ) -> Result<(), ThoError> {
     debug!("run_all: run_all_args={run_all_args:?} all_config={all_config:?}");
 
-    //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
     let find_motifs_input = Arc::new(track_await(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?);
 
-    //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
     let select_motifs_input = Arc::new(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).await?));
 
-    //gpt Build the input for label training: this is typically a labeled resource set.
     let train_labels_input = Arc::new(track_await(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
        run_all_args.train_resource_config()
     ).check(&store)).await?);
 
-    //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
     let train_final_input = Arc::new(track_await(ResourcesConfigInput::new(
         run_all_args.train_final_resource_config()).check(&store)).await?);
 
 
-    //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
     let init_ctx_find_motifs = root_ctx.branch(true);
     let store_in_find_motifs = Arc::clone(&store);
     let ws_in_find_motifs = Arc::clone(&ws);
@@ -123,7 +118,6 @@ pub(crate) async fn run_all(
                             loader_in_find_motifs,
                             run_configs,
                             fixed_find_motifs_config,
-                            ThoDevice::from(1),
                             init_ctx_find_motifs
                         )).await?,
                     ))
@@ -136,27 +130,10 @@ pub(crate) async fn run_all(
 
             assert!(!find_motifs_run_config_ids.is_empty(), "no find_motifs_run_config_ids");
 
-            //gpt Run optional motif extension first; SelectMotifs then consumes either FindMotifs outputs directly or the extension outputs.
             let mut select_motifs_run_config_ids = vec![];
 
-            //                 Arc::new(ExtendMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
-            //                     &ws,
-            //                     &store,
-            //                     Arc::clone(&loader),
-            //                     Arc::new(MotifLoader::new(
-            //                         Arc::clone(&store),
-            //                         Arc::clone(&loader),
-            //                         &ws
-            //                     )),
-            //                     run_configs,
-            //                     vec![*find_motifs_run_config_id],
-            //                     run_all_args.max_chunk_size as i64,
-            //                     None
-            //                 ).await.expect("ExtendMotifsStage::new failed"))
-            //
-
             for find_motifs_run_config_id in &find_motifs_run_config_ids {
-                select_motifs_run_config_ids.extend( track_await(run_grid::</*Labeled,*/ _, _, _, _, _>(
+                select_motifs_run_config_ids.extend( track_await(run_grid(
                     Some(vec![*find_motifs_run_config_id]),
                     select_motifs_run_config.clone(),
                     select_motifs_input.clone(),
@@ -879,8 +856,6 @@ mod tests {
         ));
 
         let mut ctx = RunCtxImpl::new(1, "test_run_all");
-        // ctx.add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
-
 
         let run_all_args = RunAllArgs{
             find_resources: "group:pure group 10".to_string(),
@@ -926,12 +901,6 @@ mod tests {
     }
 
     fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
-        // tch_test_utils::resource_tensor(
-        //     1000usize,
-        //     &[
-        //         vec![(3, 100, MotifKind::Pulse)
-        //         ],
-        //     ], 100, 10.0)
 
         let r = resource_tensor_two_easy_motifs(
             2000, //rng().random_range(1000..2000),
@@ -1070,8 +1039,8 @@ mod tests {
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
             train_motifs_opt_config:Arc::new(OptConfig::new(30, 10)),
-            train_labels_opt_config: Arc::new(OptConfig::new(50, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(50, 10)),
+            train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
+            train_final_opt_config: Arc::new(OptConfig::new(100, 10)),
         }
     }
 

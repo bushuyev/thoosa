@@ -62,8 +62,8 @@ use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::tasks::seq_scan::SeqScanStage;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::train_final_net::new_train_final_net;
-use crate::tasks::train_label_nets::{TrainLabelNets, TrainLabelNetsInput, new_train_label_nets};
-use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
+use crate::tasks::train_label_nets::{TrainLabelNets, new_train_label_nets};
+use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult};
 use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::data_with_extra::DataWithExtra;
@@ -75,7 +75,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, Se
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNetsArgs, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsResult, load_final_model, opt_train};
+use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNetsArgs, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, load_final_model, opt_train};
 use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_motifs::find;
@@ -650,8 +650,7 @@ where
                             &init_store,
                             init_loader,
                             run_configs,
-                            find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
-                            ThoDevice::from(1),
+                            find_motifs_args.fixed_config.clone(),
                             init_ctx
                         )).await?,
                     ))
@@ -1951,8 +1950,8 @@ where
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource + Debug,
-    for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
-    for<'a> <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<P<'a>:Default>,
+    for<'c> <ST as Stage>::In<'c>: Send + Sync,
+    for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<P<'a>:Default>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     debug!("run_all_grid_step: rcrv={rcrv:?}");
@@ -2006,8 +2005,8 @@ where
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
     + ToHashmap,
     RCRV: OptRunConfigSource,
-    for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
-    for<'a> <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<P<'a>:Default, R=Vec<RunConfigId>>,
+    for<'c> <ST as Stage>::In<'c>: Send + Sync,
+    for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<P<'a>:Default, R=Vec<RunConfigId>>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     let opt_run_configs = rcrv.opt_run_configs()?;

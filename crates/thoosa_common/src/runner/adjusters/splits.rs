@@ -270,11 +270,6 @@ mod tests {
                 fn mem_size(&self) -> u64;
         }
 
-        impl WithId for TestOutput {
-            type ID =  MockCachableId;
-            fn id(&self) -> & MockCachableId;
-        }
-
         impl Output for TestOutput {
         }
 

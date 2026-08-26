@@ -11,12 +11,11 @@ use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
-use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, recurse_files};
+use thoosa_shared::traits::Data;
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 use thoosa_store::{Store, TrainedNetEntry, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE};
 
 
@@ -131,24 +130,15 @@ impl PurgeModelsArgs {
 
 #[derive(Debug, Clone, DummyData)]
 pub struct PurgeModelsInput {
-    id: SynKey,
 }
 
 impl PurgeModelsInput {
     pub fn new() -> Self {
-        Self { id: SynKey::new([mono_key!("purge_models", "purge_models")]) }
+        Self {  }
     }
 }
 
 impl Input for PurgeModelsInput {}
-
-impl WithId for PurgeModelsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PurgeModelType {
@@ -169,13 +159,12 @@ pub struct PurgedModel {
 
 #[derive(Debug, Clone)]
 pub struct PurgeModelsOutput {
-    id: SynKey,
     purged: Vec<PurgedModel>,
 }
 
 impl PurgeModelsOutput {
     fn new(purged: Vec<PurgedModel>) -> Self {
-        Self { id: SynKey::new([mono_key!("purge_models", "purge_models_output")]), purged }
+        Self { purged }
     }
 
     pub fn purged(&self) -> &[PurgedModel] {
@@ -197,14 +186,6 @@ impl Data for PurgeModelsOutput {
 
     fn mem_size(&self) -> u64 {
         0
-    }
-}
-
-impl WithId for PurgeModelsOutput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
     }
 }
 

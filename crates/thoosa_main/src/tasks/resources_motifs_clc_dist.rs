@@ -269,15 +269,6 @@ impl ClcResourcesMotifsDistInputDeviceWrapper {
     }
 }
 
-impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-
 impl BorrowRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 

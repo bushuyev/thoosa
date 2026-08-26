@@ -35,14 +35,12 @@ pub struct MergeSelectedMotifsArgs {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct MergeSelectedMotifsInput {
-    id: SynKey,
     run_config_ids: Vec<RunConfigId>,
 }
 
 impl MergeSelectedMotifsInput {
     pub fn new(run_config_ids: Vec<RunConfigId>) -> Self {
         Self {
-            id: SynKey::new([mono_key!("MergeSelectedMotifsInput", "stage")]),
             run_config_ids,
         }
     }
@@ -53,14 +51,6 @@ impl MergeSelectedMotifsInput {
 }
 
 impl Input for MergeSelectedMotifsInput {}
-
-impl WithId for MergeSelectedMotifsInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(no_clone)]

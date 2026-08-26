@@ -402,17 +402,6 @@ where
 
 }
 
-impl <C> WithId for SyncFreqFilter<C>
-where
-    C: RunCtx + 'static
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 impl SyncFreqFilter<WokerRunCtx> {}
 
 
