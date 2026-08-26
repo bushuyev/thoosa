@@ -107,7 +107,10 @@ where
             let state = SyncStageIpcWrapperWithState::pre_run(self, tho_device).await?;
             // Create the thread-affine stream guard after pre_run so it is never held across an await.
             let _guard = ThoStreamGuard::new(stream)?;
-            SyncStageIpcWrapperWithState::do_run_with_state_2(self, input, all_cuda_tensors, state, tho_device, run_ctx)
+            let output = SyncStageIpcWrapperWithState::do_run_with_state_2(self, input, all_cuda_tensors, state, tho_device, run_ctx)?;
+            // Match stateless worker execution by completing queued CUDA work before another stream can consume the returned tensor reference.
+            stream.synchronize()?;
+            Ok(output)
         }.boxed()
     }
 }

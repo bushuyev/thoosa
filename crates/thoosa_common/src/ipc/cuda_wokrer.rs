@@ -275,7 +275,7 @@ impl CudaWorker {
             return Err(ThoError::new(format!("worker shutdown request {shutdown_request_id} did not finish")));
         }
 
-        info!("worker finished");
+
         reply_tx
             .send(CudaWorkerMsgOut { request_id: shutdown_request_id, status: OpResult::Ok(None) })
             .await
@@ -285,7 +285,7 @@ impl CudaWorker {
         drop(request_context);
         drop(reply_tx);
         writer_task.await.map_err(|error| ThoError::new(format!("worker response writer task failed: {error}")))??;
-        debug!("run_worker: exiting run_worker2");
+        info!("worker finished");
         Ok(())
     }
 
@@ -344,7 +344,7 @@ impl CudaWorker {
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::D2HStart { tensor_key } => {
-                debug!("run_worker: Operation::D2HStart tensor_key={tensor_key}");
+                debug!("run_worker: Operation::D2HStart tensor_key={tensor_key} request_id={request_id}");
                 if !context.all_cuda_tensors.lock().contains_key(&tensor_key) {
                     return Err(ThoError::new(format!("No tensor with tensor_key={tensor_key}")));
                 }

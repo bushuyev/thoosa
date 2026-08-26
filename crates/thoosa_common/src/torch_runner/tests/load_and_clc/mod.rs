@@ -811,17 +811,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
-    debug!("test_real_oom_dump_and_split");
-    unsafe {
-        let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-    }
-
-    use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-
+pub async fn do_real_oom_dump_and_split() -> Result<(), ThoError> {
     let (free_mem, _total_mem) = cuda_mem();
     let init_type = Kind::Int64;
 
@@ -846,7 +836,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
                     id,
                     1,
                     &[dim_1, 1],
-                    (init_type, Device::Cuda(0)),
+                    (init_type, Cpu),
                     BuildAs::Sum,
                 ).expect("single dim output builder")
             }),
@@ -863,10 +853,10 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
         )
         .await?;
 
-    debug!("multed={multed:?}");
+    debug!("test_real_oom_dump_and_split: multed={multed:?}");
 
     let ThoDataRef::ReadLocked(r) = BorrowRef::borrow_to(&multed, 1).await? else {
-        panic!("unexpected result multed={multed:?}");
+        panic!("test_real_oom_dump_and_split: unexpected result multed={multed:?}");
     };
 
     let cpu_r = r.copy_to_device(0).await?;
@@ -883,6 +873,20 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn heavy_test_real_oom_dump_and_split_local() -> Result<(), ThoError> {
+    debug!("test_real_oom_dump_and_split");
+    unsafe {
+        let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+    }
+
+    use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+    RealGlobalCtx::init_devices(2);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
+    do_real_oom_dump_and_split().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

@@ -420,7 +420,7 @@ impl ThoError {
         if msg_lc.contains("cuda") {
             Self::from_cuda_message(msg_lc)
         } else {
-            Self::new_with_cause("Unknown error", Cause::SomethingElse(msg))
+            Self::new_with_cause(msg.to_string(), Cause::SomethingElse(msg))
         }
     }
 

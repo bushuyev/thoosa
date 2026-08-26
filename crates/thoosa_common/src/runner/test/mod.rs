@@ -120,7 +120,7 @@ where
         let mut min_split_len = size.clone();
         min_split_len /= 10;
 
-        // debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
+        debug!("ClcOOMRunner::run: min_split_len={min_split_len:?} size={size:?}");
         let out_id = runnable.out_id(input.id()); //.clone();
 
         match self.config {

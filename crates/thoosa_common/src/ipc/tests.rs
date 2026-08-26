@@ -197,7 +197,7 @@ mod tests {
 
     use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
     use crate::torch_runner::tests::load_and_clc::loader::{LoadedTensor, SyncTestTensorLoader};
-    use crate::torch_runner::tests::load_and_clc::{LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT, mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init};
+    use crate::torch_runner::tests::load_and_clc::{do_real_oom_dump_and_split, mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
     use crate::torch_runner::tests::model_test::common::ModelTestId;
     use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
    
@@ -938,6 +938,27 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_model_test_endpoint_inits(),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
+    }
+
+    #[test]
+    fn heavy_test_real_oom_dump_and_split_ipc() -> Result<(), ThoError> {
+        // log::set_max_level(LevelFilter::Debug);
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(
+            module_path!(),
+            async {
+                do_real_oom_dump_and_split().await
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    sync_clc_endpoint_inits(),
                     ThoDevice::from(Cuda(0)),
                 ).await
             },

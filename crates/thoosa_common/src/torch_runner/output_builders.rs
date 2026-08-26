@@ -106,7 +106,7 @@ where
 
                 let mut t = self.output.to_mut();
 
-                t.add_(&partial).unwrap();
+                t.add_(&partial.copy_to_device(0).await.unwrap()).unwrap();
             }
         }
 
