@@ -518,7 +518,12 @@ impl CopyCtx {
         debug!("CopyCtx::new_with_buf_size: cuda_device={cuda_device} buffs={buffs} buf_size={buf_size}");
 
         let (exec_stream_pool, bufs_pool_d2h, bufs_pool_h2d, ipc_bufs_pool) = if is_ipc {
-            (None, None, None, Some(Self::build_ipc_pool(buffs, buf_size, cuda_device)?))
+            (
+                None,
+                None,
+                None,
+                Some(Self::build_ipc_pool(buffs, buf_size, cuda_device)?)
+            )
         } else {
             let exec_streams = (0..32)
                 .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))

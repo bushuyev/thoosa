@@ -3,7 +3,7 @@ use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerTensorInfoPayload};
+use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerD2hChunk, WorkerH2dChunk, WorkerH2dStartPayload, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd};
 use crate::ipc::json_ser::{ErasedWithState, PostcardToFromBytes, SyncStageIpcResponse, SyncStageIpcWrapper, ToFromBytes};
 use crate::ipc::proxy_tests::TestOutputA;
@@ -59,12 +59,13 @@ struct WorkerRequestContext {
     exec_stream_pool: Arc<Pool<ThoCudaStream>>,
     all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
     pending_h2d_transfers: Arc<Mutex<HashMap<u64, PendingWorkerH2dTransfer>>>,
-    pending_d2h_transfers: Arc<Mutex<HashMap<u64, PendingWorkerD2hTransfer>>>,
-    cuda_resources: Arc<Mutex<HashMap<usize, Arc<WorkerCudaResources>>>>,
+    // Reuse each shared-memory pool mapping and its CUDA host registration instead of paying mmap and page-pinning costs for every tensor copy.
+    copy_buffers: Arc<Mutex<HashMap<u64, Arc<SharedMemfdBuffer>>>>,
+    // A worker is bound to one CUDA device, so copy streams need one pool rather than a device-keyed map and lock on every chunk.
+    copy_stream_pool: Arc<Pool<ThoCudaStream>>,
     installed_endpoints: InstalledEndpoints,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
-    with_digest: bool,
 }
 
 enum WorkerReaderAction {
@@ -108,12 +109,8 @@ impl CudaWorker {
 
         if let Some(sock_path) = ipc_sock {
 
-
-
             let worker_cli = WorkerCli::parse();
             let ws_root:PathBuf = worker_cli.ws_path.into();
-
-
 
             let log_filename = ws_root.join("log")
                 .join(format!("thoosa_worker_{}.log", cdt).to_owned());
@@ -171,20 +168,23 @@ impl CudaWorker {
         sock_path:OsString,
         ws:&Arc<RwLock<Box<dyn Workspace>>>,
         endpoint_inits: HashMap<String, InitFn>,
-        tho_device: ThoDevice
+        tho_device: ThoDevice //handles execution on single Cuda device
     ) -> Result<(), ThoError> {
         info!("run_worker: sock_path={sock_path:?} tho_device={tho_device:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
         GlobalCtx::init_devices(2)?;//TODO config
 
-        let with_digest = false;//TODO config
-
         let cuda_device = tho_device.gpu_ordinal();
 
         let exec_stream_pool = Arc::new(Pool::from_iter(
             (0..WORKER_EXEC_STREAMS)
                 .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
+                .collect::<Result<Vec<_>, _>>()?,
+        ));
+        let copy_stream_pool = Arc::new(Pool::from_iter(
+            (0..cuda_process::WORKER_COPY_STREAMS)
+                .map(|_| ThoCudaStream::from_pool(cuda_device as i32, true))
                 .collect::<Result<Vec<_>, _>>()?,
         ));
 
@@ -217,12 +217,11 @@ impl CudaWorker {
             exec_stream_pool,
             all_cuda_tensors,
             pending_h2d_transfers: Arc::new(Mutex::new(HashMap::new())),
-            pending_d2h_transfers: Arc::new(Mutex::new(HashMap::new())),
-            cuda_resources: Arc::new(Mutex::new(HashMap::new())),
+            copy_buffers: Arc::new(Mutex::new(HashMap::new())),
+            copy_stream_pool,
             installed_endpoints: Arc::new(DashMap::new()),
             reply_tx: reply_tx.clone(),
             tho_device,
-            with_digest,
         };
         let mut request_tasks = JoinSet::new();
 
@@ -337,34 +336,38 @@ impl CudaWorker {
             }
             Operation::H2dStart { worker_id, kind, shape, tensor_byte_len, chunk_count } => {
                 debug!("run_worker: Operation::H2dStart worker_id={worker_id:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} chunk_count={chunk_count}");
-                {
-                    let mut cuda_resources = context.cuda_resources.lock();
-                    panic_to_err!(cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload { transfer_id: 0, worker_id, kind, shape, tensor_byte_len, chunk_count }, &mut cuda_resources))?;
+                let cuda_device = context.tho_device.gpu_ordinal();
+                let transfer = panic_to_err!(cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload { transfer_id: request_id, worker_id, kind, shape, tensor_byte_len, chunk_count }, cuda_device))?;
+                // Retain preflight metadata so the ordered start is validated once; CUDA allocation remains bounded by completed staged transfers.
+                let old = context.pending_h2d_transfers.lock().insert(request_id, transfer);
+                if old.is_some() {
+                    return Err(ThoError::new(format!("duplicate H2D transfer start for transfer_id={request_id}")));
                 }
                 context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                 debug!("run_worker: Operation::H2dStart done");
                 Ok(WorkerRequestControl::Continue)
             }
-            Operation::D2HStart { tensor_key } => {
-                debug!("run_worker: Operation::D2HStart tensor_key={tensor_key} request_id={request_id}");
-                if !context.all_cuda_tensors.lock().contains_key(&tensor_key) {
-                    return Err(ThoError::new(format!("No tensor with tensor_key={tensor_key}")));
-                }
-                let old = context.pending_d2h_transfers.lock().insert(request_id, PendingWorkerD2hTransfer::new(request_id, tensor_key));
-                if old.is_some() {
-                    return Err(ThoError::new(format!("duplicate D2H transfer start for transfer_id={request_id}")));
-                }
-                debug!("run_worker: Operation::D2HStart done");
-                Ok(WorkerRequestControl::Continue)
-            }
-            Operation::SharedMemfd { metadata, fd } => {
+            Operation::SharedMemfd { metadata, tensor_key, fd } => {
                 let fd = fd.ok_or_else(|| ThoError::new(format!("shared-memory request {request_id} did not receive a descriptor")))?;
-                let buffer = SharedMemfdBuffer::from_received_fd(fd, metadata.mapped_len)?;
+                let buffer = if let Some(buffer) = context.copy_buffers.lock().get(&metadata.buffer_id).cloned() {
+                    if buffer.len() != metadata.mapped_len {
+                        return Err(ThoError::new(format!("shared-memory buffer {} changed mapped length from {} to {}", metadata.buffer_id, buffer.len(), metadata.mapped_len)));
+                    }
+                    buffer
+                } else {
+                    let buffer = Arc::new(SharedMemfdBuffer::from_received_fd(metadata.buffer_id, fd, metadata.mapped_len)?);
+                    context.copy_buffers.lock().insert(metadata.buffer_id, Arc::clone(&buffer));
+                    buffer
+                };
                 match metadata.direction {
                     IpcTransferDirection::HostToDevice => {
+                        if tensor_key.is_some() {
+                            return Err(ThoError::new(format!("H2D shared-memory request {request_id} unexpectedly contains a tensor key")));
+                        }
                         debug!("run_worker: IpcTransferDirection::HostToDevice");
                         let chunk = WorkerH2dChunk { metadata, buffer };
-                        let cuda_device = cuda_process::validate_worker_h2d_chunk(&chunk)?;
+                        let cuda_device = context.tho_device.gpu_ordinal();
+                        cuda_process::validate_worker_h2d_chunk(&chunk, cuda_device)?;
                         let preview_len = chunk.metadata.byte_len.min(16);
                         let preview = unsafe {
                             // SAFETY: validate_worker_h2d_chunk checked offset + byte_len against the live mmap, and preview_len is bounded by byte_len.
@@ -387,29 +390,22 @@ impl CudaWorker {
                             }
                         };
                         if let Some(transfer) = completed {
-                            let resources = cuda_process::get_or_create_worker_cuda_resources(&mut context.cuda_resources.lock(), cuda_device)?;
-                            cuda_process::spawn_worker_h2d_copy_task(transfer, resources, Arc::clone(&context.all_cuda_tensors), context.reply_tx.clone(), context.with_digest);
+                            cuda_process::spawn_worker_h2d_copy_task(transfer, Arc::clone(&context.copy_stream_pool), cuda_device, Arc::clone(&context.all_cuda_tensors), context.reply_tx.clone());
                         }
                     }
                     IpcTransferDirection::DeviceToHost => {
                         debug!("run_worker: IpcTransferDirection::DeviceToHost");
                         let chunk = WorkerD2hChunk { metadata, buffer };
-                        let cuda_device = cuda_process::validate_worker_d2h_chunk(&chunk)?;
+                        let cuda_device = context.tho_device.gpu_ordinal();
+                        cuda_process::validate_worker_d2h_chunk(&chunk, cuda_device)?;
                         debug!("run_worker: received shared memfd D2H tensor chunk: metadata={:?} local_mmap_ptr={:?}", chunk.metadata, chunk.buffer.as_ptr());
-                        let transfer_id = chunk.metadata.transfer_id;
-                        let completed = {
-                            let mut pending = context.pending_d2h_transfers.lock();
-                            pending.get_mut(&transfer_id).ok_or_else(|| ThoError::new(format!("received D2H chunk before start for transfer_id={transfer_id}")))?.push(chunk)?;
-                            if pending.get(&transfer_id).is_some_and(PendingWorkerD2hTransfer::is_complete) {
-                                Some(pending.remove(&transfer_id).ok_or_else(|| ThoError::new(format!("complete D2H transfer {transfer_id} disappeared")))?)
-                            } else {
-                                None
-                            }
-                        };
-                        if let Some(transfer) = completed {
-                            let resources = cuda_process::get_or_create_worker_cuda_resources(&mut context.cuda_resources.lock(), cuda_device)?;
-                            cuda_process::spawn_worker_d2h_copy_task(transfer, resources, Arc::clone(&context.all_cuda_tensors), context.reply_tx.clone(), context.with_digest);
+                        let tensor_key = tensor_key.ok_or_else(|| ThoError::new(format!("D2H shared-memory request {request_id} is missing its tensor key")))?;
+                        let mut transfer = PendingWorkerD2hTransfer::new(request_id, tensor_key);
+                        transfer.push(chunk)?;
+                        if !transfer.is_complete() {
+                            return Err(ThoError::new(format!("D2H shared-memory request {request_id} did not contain a complete chunk transfer")));
                         }
+                        cuda_process::spawn_worker_d2h_copy_task(transfer, Arc::clone(&context.copy_stream_pool), cuda_device, Arc::clone(&context.all_cuda_tensors), context.reply_tx.clone());
                     }
                     IpcTransferDirection::GpuToGpuThroughHost => return Err(ThoError::new("worker IPC actor does not handle combined GPU-to-GPU chunks directly")),
                 }

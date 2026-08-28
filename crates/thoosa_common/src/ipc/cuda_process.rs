@@ -1,7 +1,7 @@
 use crate::copy_ctx::{CopyCtx, CudaActorHandle, HandleCtx};
 use crate::cuda_utils::{make_chunks, tensor_mem_size};
 use crate::dims::Dims;
-use crate::ipc::ipc_cuda_utils::{CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd, send_fd};
+use crate::ipc::ipc_cuda_utils::{IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd, send_fd};
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
@@ -9,7 +9,6 @@ use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunn
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::utils::tensor_digest;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
@@ -48,7 +47,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, Semaphore, mpsc, oneshot};
 use tokio::task::{JoinHandle, spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -61,9 +60,10 @@ use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operat
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 pub  const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
-const WORKER_COPY_STREAMS: usize = 32;
+// A copy task owns at least one of the sixteen staging buffers, so additional streams could never increase copy concurrency.
+pub(crate) const WORKER_COPY_STREAMS: usize = 16;
 // Keep IPC staging bounded independently of GPU VRAM. Sixteen 512 MiB sparse memfd mappings retain enough capacity for the existing oversized-copy OOM test while avoiding a pool sized as a fraction of total VRAM.
-const IPC_COPY_BUFFERS: usize = 32;
+const IPC_COPY_BUFFERS: usize = 16;
 const IPC_COPY_BUFFER_SIZE: usize = 512 * 1024 * 1024;
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
@@ -82,7 +82,6 @@ pub(crate) fn endpoint_stage_key(endpoint_name: &str, stage_id: u32) -> String {
 struct WorkerCopyDonePayload {
     transfer_id: u64,
     tensor_ref:u64,
-    tensor_digest_hex: Option<String>,
 }
 
 #[typetag::serde]
@@ -153,16 +152,6 @@ pub(crate) struct WorkerH2dStartPayload {
     pub(crate) chunk_count: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct WorkerD2hStartPayload {
-    pub(crate) transfer_id: u64,
-    pub(crate) tensor_key: u64,
-}
-
-pub(crate) struct WorkerCudaResources {
-    stream_pool: Arc<Pool<ThoCudaStream>>,
-}
-
 #[typetag::serde]
 impl WorkerOutput for WorkerTensorInfoPayload {
 
@@ -177,20 +166,9 @@ fn validate_ipc_chunk_capacity(chunk_count: usize, label: &str) -> Result<(), Th
     Ok(())
 }
 
-impl WorkerCudaResources {
-    fn new(cuda_device: usize) -> Result<Self, ThoError> {
-        let streams = (0..WORKER_COPY_STREAMS)
-            .map(|_| ThoCudaStream::from_pool(cuda_device as i32, true))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
-            stream_pool: Arc::new(Pool::from_iter(streams)),
-        })
-    }
-}
-
 pub(crate) struct WorkerH2dChunk {
     pub(crate) metadata: IpcTensorTransferMetadata,
-    pub(crate) buffer: SharedMemfdBuffer,
+    pub(crate) buffer: Arc<SharedMemfdBuffer>,
 }
 
 pub(crate) struct PendingWorkerH2dTransfer {
@@ -216,11 +194,11 @@ impl PendingWorkerH2dTransfer {
         Ok(transfer)
     }
 
-    pub(crate) fn new_preflight(request_id: u64, destination: Tensor) -> Self {
+    pub(crate) fn new_preflight(request_id: u64) -> Self {
         Self {
             request_id,
             metadata: None,
-            destination: Some(destination),
+            destination: None,
             received_bytes: 0,
             seen_chunks: HashSet::new(),
             chunks: Vec::new(),
@@ -256,7 +234,7 @@ impl PendingWorkerH2dTransfer {
 
 pub(crate) struct WorkerD2hChunk {
     pub(crate) metadata: IpcTensorTransferMetadata,
-    pub(crate) buffer: SharedMemfdBuffer,
+    pub(crate) buffer: Arc<SharedMemfdBuffer>,
 }
 
 pub(crate) struct PendingWorkerD2hTransfer {
@@ -336,15 +314,7 @@ fn worker_role_cuda_device(role: &IpcProcessRole, context: &str) -> Result<usize
         .ok_or_else(|| ThoError::new("worker id 0 cannot map to CUDA device"))
 }
 
-fn worker_cuda_device(metadata: &IpcTensorTransferMetadata) -> Result<usize, ThoError> {
-    worker_role_cuda_device(&metadata.consumer, "H2D consumer")
-}
-
-fn worker_d2h_cuda_device(metadata: &IpcTensorTransferMetadata) -> Result<usize, ThoError> {
-    worker_role_cuda_device(&metadata.producer, "D2H producer")
-}
-
-pub(crate) fn validate_worker_h2d_chunk(chunk: &WorkerH2dChunk) -> Result<usize, ThoError> {
+pub(crate) fn validate_worker_h2d_chunk(chunk: &WorkerH2dChunk, cuda_device: usize) -> Result<(), ThoError> {
     if !matches!(chunk.metadata.direction, IpcTransferDirection::HostToDevice) {
         return Err(ThoError::new(format!("worker H2D copy got direction {:?}", chunk.metadata.direction)));
     }
@@ -352,10 +322,14 @@ pub(crate) fn validate_worker_h2d_chunk(chunk: &WorkerH2dChunk) -> Result<usize,
         return Err(ThoError::new(format!("worker H2D copy got producer {:?}", chunk.metadata.producer)));
     }
     chunk.metadata.validate_for_buffer(&chunk.buffer)?;
-    worker_cuda_device(&chunk.metadata)
+    let metadata_device = worker_role_cuda_device(&chunk.metadata.consumer, "H2D consumer")?;
+    if metadata_device != cuda_device {
+        return Err(ThoError::new(format!("H2D consumer CUDA device {metadata_device} does not match this worker's device {cuda_device}")));
+    }
+    Ok(())
 }
 
-pub(crate) fn validate_worker_d2h_chunk(chunk: &WorkerD2hChunk) -> Result<usize, ThoError> {
+pub(crate) fn validate_worker_d2h_chunk(chunk: &WorkerD2hChunk, cuda_device: usize) -> Result<(), ThoError> {
     if !matches!(chunk.metadata.direction, IpcTransferDirection::DeviceToHost) {
         return Err(ThoError::new(format!("worker D2H copy got direction {:?}", chunk.metadata.direction)));
     }
@@ -366,27 +340,21 @@ pub(crate) fn validate_worker_d2h_chunk(chunk: &WorkerD2hChunk) -> Result<usize,
         return Err(ThoError::new(format!("worker D2H copy got consumer {:?}", chunk.metadata.consumer)));
     }
     chunk.metadata.validate_for_buffer(&chunk.buffer)?;
-    worker_d2h_cuda_device(&chunk.metadata)
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="get_or_create_worker_cuda_resources"))]
-pub(crate) fn get_or_create_worker_cuda_resources(
-    resources: &mut HashMap<usize, Arc<WorkerCudaResources>>,
-    cuda_device: usize,
-) -> Result<Arc<WorkerCudaResources>, ThoError> {
-    if let Some(resources) = resources.get(&cuda_device) {
-        return Ok(Arc::clone(resources));
+    let metadata_device = worker_role_cuda_device(&chunk.metadata.producer, "D2H producer")?;
+    if metadata_device != cuda_device {
+        return Err(ThoError::new(format!("D2H producer CUDA device {metadata_device} does not match this worker's device {cuda_device}")));
     }
-    let created = Arc::new(WorkerCudaResources::new(cuda_device)?);
-    resources.insert(cuda_device, Arc::clone(&created));
-    Ok(created)
+    Ok(())
 }
 
 pub(crate) fn prepare_worker_h2d_transfer(
     start: WorkerH2dStartPayload,
-    resources: &mut HashMap<usize, Arc<WorkerCudaResources>>,
+    cuda_device: usize,
 ) -> Result<PendingWorkerH2dTransfer, ThoError> {
-    let cuda_device = worker_role_cuda_device(&IpcProcessRole::Worker { worker_id: start.worker_id }, "H2D preflight worker")?;
+    let metadata_device = worker_role_cuda_device(&IpcProcessRole::Worker { worker_id: start.worker_id }, "H2D preflight worker")?;
+    if metadata_device != cuda_device {
+        return Err(ThoError::new(format!("H2D preflight CUDA device {metadata_device} does not match this worker's device {cuda_device}")));
+    }
     if start.chunk_count == 0 {
         return Err(ThoError::new("H2D preflight chunk_count must be non-zero"));
     }
@@ -398,30 +366,27 @@ pub(crate) fn prepare_worker_h2d_transfer(
         return Err(ThoError::new("worker IPC H2D preflight does not support zero-byte tensors"));
     }
 
-    let _resources = get_or_create_worker_cuda_resources(resources, cuda_device)?;
-    let destination = Tensor::f_empty(start.shape.as_slice(), (start.kind.into(), Cuda(cuda_device)))?;
-
-    Ok(PendingWorkerH2dTransfer::new_preflight(start.transfer_id, destination))
+    // Allocation is deferred until all chunks are staged so the bounded shared-buffer pool also bounds concurrent VRAM reservations.
+    Ok(PendingWorkerH2dTransfer::new_preflight(start.transfer_id))
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_worker_h2d_transfer_to_cuda"))]
 async fn copy_worker_h2d_transfer_to_cuda(
     transfer: PendingWorkerH2dTransfer,
-    resources: Arc<WorkerCudaResources>,
-    with_digest: bool,
-) -> Result<(u64, Tensor, Option<String>), ThoError> {
-    let stream = resources.stream_pool.acquire().await;
+    copy_stream_pool: Arc<Pool<ThoCudaStream>>,
+    cuda_device: usize,
+) -> Result<(u64, Tensor), ThoError> {
+    let stream = copy_stream_pool.acquire().await;
     // CUDA host registration and stream synchronization are blocking driver calls. Run the whole transfer on a blocking-pool thread so the worker's async socket and endpoint tasks remain schedulable.
-    spawn_blocking(move || copy_worker_h2d_transfer_to_cuda_blocking(transfer, stream, with_digest)).await.map_err(|error| ThoError::new(format!("worker H2D blocking task failed: {error}")))?
+    spawn_blocking(move || copy_worker_h2d_transfer_to_cuda_blocking(transfer, stream, cuda_device)).await.map_err(|error| ThoError::new(format!("worker H2D blocking task failed: {error}")))?
 }
 
 fn copy_worker_h2d_transfer_to_cuda_blocking(
     mut transfer: PendingWorkerH2dTransfer,
     stream: Guard<ThoCudaStream>,
-    with_digest: bool,
-) -> Result<(u64, Tensor, Option<String>), ThoError> {
+    cuda_device: usize,
+) -> Result<(u64, Tensor), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("H2D transfer {} has no metadata", transfer.request_id)))?.clone();
-    let cuda_device = worker_cuda_device(&metadata)?;
     // bind_worker_copy_cuda_context(cuda_device)?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
 
@@ -449,6 +414,8 @@ fn copy_worker_h2d_transfer_to_cuda_blocking(
     let dst_base = destination.data_ptr() as u64;
 
     for chunk in &transfer.chunks {
+        // Registration can block while CUDA pins pages; perform it on this blocking thread with the copy context current. Pool ownership keeps the cached buffer idle until this transfer replies.
+        chunk.buffer.ensure_cuda_registered(chunk.metadata.offset, chunk.metadata.byte_len)?;
         let source = unsafe {
             // SAFETY: metadata.validate_for_buffer was run before insertion and sort does not mutate buffer metadata.
             chunk.buffer.as_ptr().add(chunk.metadata.offset)
@@ -456,40 +423,36 @@ fn copy_worker_h2d_transfer_to_cuda_blocking(
         let destination_offset = dst_base
             .checked_add(chunk.metadata.tensor_offset as u64)
             .ok_or_else(|| ThoError::new("H2D destination pointer overflow"))?;
-        let _registration = CuMemHostRegistrationGuard::new(&chunk.buffer, chunk.metadata.offset, chunk.metadata.byte_len)?;
         let result = unsafe {
-            // SAFETY: destination_offset points into the CUDA tensor byte range checked by metadata tensor offsets, source points into the registered live mmap, and the stream context is current on this OS thread.
+            // SAFETY: destination_offset points into the CUDA tensor byte range checked by metadata tensor offsets, source points into the persistently registered live worker mapping, and the stream context is current on this OS thread.
             tho_cu_memcpy_htod_async(destination_offset, source.cast::<c_void>(), chunk.metadata.byte_len, stream.as_mut_ptr())
         };
         check_cuda_status(result, "cuMemcpyHtoDAsync(worker memfd chunk)")?;
-        stream.synchronize()?;
     }
+    stream.synchronize()?;
 
-
-    let copied_cpu = destination.f_to_device(Cpu)?;
-    let copied_digest = with_digest.then(||tensor_digest(&copied_cpu)).transpose()?;
-    debug!("copy_worker_h2d_transfer_to_cuda: copied tensor digest={copied_digest:?}");
-    Ok((metadata.transfer_id, destination, copied_digest.map(|d|d.hex)))
+    // The transport already reports CUDA copy errors; copying the whole result back to CPU for a disabled digest made H2D scale with an extra D2H transfer.
+    Ok((metadata.transfer_id, destination))
 }
 
 pub(crate) fn spawn_worker_h2d_copy_task(
     transfer: PendingWorkerH2dTransfer,
-    resources: Arc<WorkerCudaResources>,
+    copy_stream_pool: Arc<Pool<ThoCudaStream>>,
+    cuda_device: usize,
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
-    with_digest: bool,
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
-        let copy_result = copy_worker_h2d_transfer_to_cuda(transfer, resources, with_digest).await;
+        let copy_result = copy_worker_h2d_transfer_to_cuda(transfer, copy_stream_pool, cuda_device).await;
 
         // Copy completion uses the same postcard response message as the other worker operations.
         let status = match copy_result {
-            Ok((transfer_id, tensor, tensor_digest_hex)) => {
+            Ok((transfer_id, tensor)) => {
                 //TODO should tensors have their own id generator?
                 // all_cuda_tensors.lock().insert(transfer_id, tensor);
                 match insert_worker_tensor(&all_cuda_tensors, tensor) {
-                    Ok(tensor_ref) => OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex }) as Box<dyn WorkerOutput>)),
+                    Ok(tensor_ref) => OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id, tensor_ref }) as Box<dyn WorkerOutput>)),
                     Err(e) => ThoError::new(format!("can't insert worker tensor {request_id}: {e}")).into(),
                 }
             }
@@ -503,23 +466,22 @@ pub(crate) fn spawn_worker_h2d_copy_task(
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_worker_d2h_transfer_to_memfd"))]
 async fn copy_worker_d2h_transfer_to_memfd(
     transfer: PendingWorkerD2hTransfer,
-    resources: Arc<WorkerCudaResources>,
+    copy_stream_pool: Arc<Pool<ThoCudaStream>>,
+    cuda_device: usize,
     source: Tensor,
-    with_digest: bool,
-) -> Result<(u64, Option<String>), ThoError> {
-    let stream = resources.stream_pool.acquire().await;
+) -> Result<u64, ThoError> {
+    let stream = copy_stream_pool.acquire().await;
     // Keep blocking CUDA registration and synchronization out of the async worker runtime for the same reason as H2D copies.
-    spawn_blocking(move || copy_worker_d2h_transfer_to_memfd_blocking(transfer, stream, source, with_digest)).await.map_err(|error| ThoError::new(format!("worker D2H blocking task failed: {error}")))?
+    spawn_blocking(move || copy_worker_d2h_transfer_to_memfd_blocking(transfer, stream, cuda_device, source)).await.map_err(|error| ThoError::new(format!("worker D2H blocking task failed: {error}")))?
 }
 
 fn copy_worker_d2h_transfer_to_memfd_blocking(
     mut transfer: PendingWorkerD2hTransfer,
     stream: Guard<ThoCudaStream>,
+    cuda_device: usize,
     source: Tensor,
-    with_digest: bool,
-) -> Result<(u64, Option<String>), ThoError> {
+) -> Result<u64, ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("D2H transfer {} has no metadata", transfer.request_id)))?.clone();
-    let cuda_device = worker_d2h_cuda_device(&metadata)?;
     // bind_worker_copy_cuda_context(cuda_device)?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
     if source.kind() != metadata.tch_kind() {
@@ -555,6 +517,8 @@ fn copy_worker_d2h_transfer_to_memfd_blocking(
 
     let src_base = source.data_ptr() as u64;
     for chunk in &mut transfer.chunks {
+        // Keep page registration and the CUDA copy on the same blocking thread and current context.
+        chunk.buffer.ensure_cuda_registered(chunk.metadata.offset, chunk.metadata.byte_len)?;
         let source_offset = src_base
             .checked_add(chunk.metadata.tensor_offset as u64)
             .ok_or_else(|| ThoError::new("D2H source pointer overflow"))?;
@@ -564,34 +528,23 @@ fn copy_worker_d2h_transfer_to_memfd_blocking(
             chunk.buffer.as_mut_ptr().add(chunk.metadata.offset)
         };
 
-        let _registration = CuMemHostRegistrationGuard::new(&chunk.buffer, chunk.metadata.offset, chunk.metadata.byte_len)?;
         let result = unsafe {
-            // SAFETY: source_offset points into the local CUDA tensor byte range checked by metadata tensor offsets, destination points into the registered live mmap, and the stream context is current on this OS thread.
+            // SAFETY: source_offset points into the local CUDA tensor byte range checked by metadata tensor offsets, destination points into the persistently registered live worker mapping, and the stream context is current on this OS thread.
             tho_cu_memcpy_dtoh_async(destination.cast::<c_void>(), source_offset, chunk.metadata.byte_len, stream.as_mut_ptr())
         };
         check_cuda_status(result, "cuMemcpyDtoHAsync(worker memfd chunk)")?;
         stream.synchronize()?;
     }
 
-
-    // Independent chunk transfers must not each copy the full source tensor merely to skip a disabled diagnostic digest.
-    let source_digest = if with_digest {
-        let source_cpu = source.f_to_device(Cpu)?;
-        Some(tensor_digest(&source_cpu)?)
-    } else {
-        None
-    };
-
-    debug!("copy_worker_d2h_transfer_to_memfd: source tensor digest={source_digest:?}");
-    Ok((metadata.transfer_id, source_digest.map(|d|d.hex)))
+    Ok(metadata.transfer_id)
 }
 
 pub(crate) fn spawn_worker_d2h_copy_task(
     transfer: PendingWorkerD2hTransfer,
-    resources: Arc<WorkerCudaResources>,
+    copy_stream_pool: Arc<Pool<ThoCudaStream>>,
+    cuda_device: usize,
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
-    with_digest: bool,
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
@@ -603,14 +556,14 @@ pub(crate) fn spawn_worker_d2h_copy_task(
         let copy_result = match source {
             Some(source) => {
 
-                copy_worker_d2h_transfer_to_memfd(transfer, resources, source, with_digest).await
+                copy_worker_d2h_transfer_to_memfd(transfer, copy_stream_pool, cuda_device, source).await
             }
             None => Err(ThoError::new(format!("worker tensor key={tensor_ref} not found"))),
         };
 
         // Copy completion uses a typed WorkerOutput so the parent does not parse JSON prefixes.
         let status = match copy_result {
-            Ok((transfer_id, tensor_digest_hex)) => OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex }) as Box<dyn WorkerOutput>)),
+            Ok(transfer_id) => OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id, tensor_ref }) as Box<dyn WorkerOutput>)),
             Err(e) => e.into(),
         };
 
@@ -669,6 +622,7 @@ pub struct CudaIPCActor {
     spawned_state: SpawnedState,
     next_id: Arc<AtomicU64>,
     copy_ctx:Arc<RwLock<CopyCtx>>,
+    h2d_buffer_permits: Arc<Semaphore>,
     buf_size: usize,
     tho_device_idx: usize,
     cuda_worker_args: Arc<Vec<String>>
@@ -744,6 +698,7 @@ impl CudaIPCActor {
             spawned_state,
             next_id: Arc::new(AtomicU64::new(1)),
             copy_ctx: Arc::new(RwLock::new(copy_ctx)),
+            h2d_buffer_permits: Arc::new(Semaphore::new(IPC_COPY_BUFFERS)),
             buf_size,
             tho_device_idx,
             cuda_worker_args,
@@ -783,7 +738,7 @@ impl CudaIPCActor {
         debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
 
         let dir = tempfile::tempdir()?;
-        let sock_path = dir.path().join("worker.sock");
+        let sock_path = dir.path().join(format!("worker_{cuda_device}.sock"));
 
         debug!("CudaIPCActor::spawn_worker, dir={dir:?} sock_path={sock_path:?}");
 
@@ -842,6 +797,7 @@ impl CudaIPCActor {
     }
 
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_message"))]
     async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
@@ -1100,17 +1056,6 @@ impl CudaIPCActor {
                             debug_assert!(old.is_none());
                         }
 
-
-                        self_tx.send(
-                            CudaWorkerMsgIn {
-                                request_id: transfer_id,
-                                operation: Operation::D2HStart { tensor_key },
-                            },
-                        ).await.map_err(|e|ThoError::new(e.to_string()))?;
-
-                        // debug!("CudaIPCActor::handle_ref_d2h_copy: d2h_response={d2h_response:?}");
-
-
                         let metadata = IpcTensorTransferMetadata {
                             transfer_id,
                             buffer_id: buf.buffer_id(),
@@ -1134,7 +1079,8 @@ impl CudaIPCActor {
                         self_tx.send(
                             CudaWorkerMsgIn {
                                 request_id: transfer_id,
-                                operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
+                                // Carry the tensor key atomically with the D2H chunk; a separate start frame could be processed later by another worker task.
+                                operation: Operation::SharedMemfd { metadata:metadata.clone(), tensor_key:Some(tensor_key), fd:Some(fd) },
                             },
                         ).await.map_err(|e|ThoError::new(e.to_string()))?;
 
@@ -1160,7 +1106,7 @@ impl CudaIPCActor {
                             copy_parent_d2h_chunk(metadata, buf, &info, destination_ptr)
                         }).await??;
 
-                        Ok::<_, ThoError>(done.tensor_digest_hex)
+                        Ok::<_, ThoError>(())
                     }.await;
 
                     if result.is_err() {
@@ -1185,17 +1131,10 @@ impl CudaIPCActor {
         tokio::spawn(async move {
             let result = async {
                 let mut first_error = None;
-                let mut worker_digest_hex = None;
+
                 for (transfer_id, chunk_task) in chunk_tasks {
                     match chunk_task.await {
-                        Ok(Ok(Some(digest))) => {
-                            if worker_digest_hex.as_ref().is_some_and(|expected| expected != &digest) && first_error.is_none() {
-                                first_error = Some(ThoError::new(format!("worker D2H chunks returned inconsistent tensor digests for transfer {transfer_id}")));
-                            } else {
-                                worker_digest_hex = Some(digest);
-                            }
-                        }
-                        Ok(Ok(None)) => {}
+                        Ok(Ok(())) => {}
                         Ok(Err(error)) => {
                             if first_error.is_none() {
                                 first_error = Some(error);
@@ -1220,14 +1159,6 @@ impl CudaIPCActor {
                         None => Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?,
                     }
                 };
-                if let Some(hex) = worker_digest_hex {
-                    let cpu_digest = tensor_digest(&cpu_tensor)?;
-                    debug!("CudaIPCActor::Copy D2H: worker and parent tensor digests matched: digest={}", cpu_digest.hex);
-                    if cpu_digest.hex.ne(&hex) {
-                        return Err(ThoError::new(format!("worker D2H digest mismatch: worker={} parent={}", hex, cpu_digest.hex)));
-                    }
-                }
-
                 ThoTensor::new((), cpu_tensor)
             }.await;
 
@@ -1248,6 +1179,7 @@ impl CudaIPCActor {
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
         let copy_ctx = Arc::clone(&self.copy_ctx);
+        let h2d_buffer_permits = Arc::clone(&self.h2d_buffer_permits);
         let buf_size = self.buf_size;
         let dst_worker_id = dst_device.tho_device_idx() as u64;
 
@@ -1266,7 +1198,12 @@ impl CudaIPCActor {
         let src_ptr: usize = src.t_ref().data_ptr() as usize;
 
         tokio::spawn(async move {
+            // The staging tasks use raw offsets into src, so retain its storage until the worker acknowledges the complete H2D transfer.
+            let src_keepalive = src;
             let result = async move {
+                // H2D buffers remain leased until the complete tensor is acknowledged. Reserve the full set atomically to prevent concurrent multi-chunk transfers from each holding an unusable subset of the pool.
+                let permit_count = u32::try_from(chunk_count).map_err(|_| ThoError::new(format!("H2D chunk count {chunk_count} does not fit the copy-buffer semaphore")))?;
+                let _buffer_permits = h2d_buffer_permits.acquire_many_owned(permit_count).await.map_err(|_| ThoError::new("IPC H2D buffer semaphore is closed"))?;
 
                 let response = send_request_and_wait_msg(
                     self_tx.clone(),
@@ -1296,15 +1233,16 @@ impl CudaIPCActor {
                     let mut held_buffers = Vec::new();//TODO remove from held_buffers?
                     for chunk in chunks {
 
-                        let mut buf = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
+                        let buf = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
                         let src_off_ptr = src_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("source tensor pointer offset overflow"))?;
                         if chunk.len > buf.len() {
                             return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
                         }
-                        unsafe {
-                            // SAFETY: src_ptr is the data pointer of src, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
-                            std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf.as_mut_ptr(), chunk.len);
-                        }
+                        // Large CPU memcopies must not occupy every Tokio worker and starve IPC response and socket processing.
+                        let buf = spawn_blocking(move || copy_parent_h2d_chunk(src_off_ptr, chunk.len, buf))
+                            .await
+                            .map_err(|error| ThoError::new(format!("parent H2D staging task failed: {error}")))??;
+                        
                         let metadata = IpcTensorTransferMetadata {
                             transfer_id,
                             buffer_id: buf.buffer_id(),
@@ -1328,7 +1266,7 @@ impl CudaIPCActor {
                         self_tx.send(
                             CudaWorkerMsgIn {
                                 request_id: transfer_id,
-                                operation: Operation::SharedMemfd { metadata:metadata.clone(), fd:Some(fd) },
+                                operation: Operation::SharedMemfd { metadata:metadata.clone(), tensor_key:None, fd:Some(fd) },
                             },
                         ).await.map_err(|e|ThoError::new(e.to_string()))?;
                         held_buffers.push(buf);
@@ -1341,16 +1279,6 @@ impl CudaIPCActor {
 
                     let done = Self::copy_result(reply)?;
 
-                    if let Some(hex) = done.tensor_digest_hex.as_ref() {
-                        let source_digest = tensor_digest(src.t_ref())?;
-                        debug!("CudaIPCActor::handle_h2d_copy:  original tensor digest={source_digest:?}");
-                        let source_digest_hex = source_digest.hex.clone();
-                        if  source_digest_hex.ne(hex) {
-                            return Err(ThoError::new(format!("worker copy digest mismatch for transfer {}: source={} copied={}", done.transfer_id, source_digest_hex, hex)));
-                        }
-                        debug!("CudaIPCActor::handle_h2d_copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, hex);
-                    }
-
                     Ok::<_, ThoError>(ThoTensor::new_ref((), done.tensor_ref, src_shape, src_kind, None, dst_device.tho_device_idx()))
                 }.await;
 
@@ -1361,6 +1289,7 @@ impl CudaIPCActor {
                 final_result
             }.await;
 
+            drop(src_keepalive);
             let _ = respond_to.send(result);
         });
 
@@ -1491,6 +1420,22 @@ async fn reader_loop<R>(
     }
 
     debug!("worker IPC reader loop finished");
+}
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_parent_h2d_chunk"))]
+fn copy_parent_h2d_chunk(
+    source_ptr: usize,
+    byte_len: usize,
+    mut buffer: Guard<SharedMemfdBuffer>,
+) -> Result<Guard<SharedMemfdBuffer>, ThoError> {
+    if byte_len > buffer.len() {
+        return Err(ThoError::new(format!("parent H2D chunk len={byte_len} exceeds shared buffer len={}", buffer.len())));
+    }
+    unsafe {
+        // SAFETY: the owning ThoTensor remains in the caller task until the worker acknowledges the transfer, and byte_len came from a validated chunk within that tensor and buffer.
+        std::ptr::copy_nonoverlapping(source_ptr as *const u8, buffer.as_mut_ptr(), byte_len);
+    }
+    Ok(buffer)
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_parent_d2h_chunk"))]

@@ -1134,29 +1134,48 @@ mod tests {
         F:Fn(i64)->BoxFuture<'static, Result<(), ThoError>> + Send + Sync + 'static
     {
         let (free_mem, total_mem) = cuda_mem();
+        info!("heavy_test_concurrent_copy: free_mem={free_mem}");
 
         let elts = free_mem / Float.elt_size_in_bytes() / DIM_1 as usize;
 
-        for dim_0 in  [/*10, 100, */1000, 10_000, 100_000] {
-            let chunks = elts / dim_0 as usize;
-            info!("heavy_test_concurrent_copy: chunks={chunks}");
+        for dim_0 in  [10, 100, 1000, 10_000, 100_000, 300_000] {
+            let num_tensors = elts / dim_0 as usize;
+            info!("heavy_test_concurrent_copy: num_tensors={num_tensors}");
             let t = Instant::now();
             let test_f = Arc::clone(&test_f);
 
-            let x = (0..chunks).map( |i| {
+            let mut set = JoinSet::new();
+            let mut iter = (0..num_tensors);
+            let mut out = Vec::new();
 
-                let test_f = Arc::clone(&test_f);
-                async move {
-                   test_f(dim_0).await
+            // Fill initial batch.
+            for _ in 0..32 {
+                let Some(item) = iter.next() else {
+                    break;
+                };
+
+                set.spawn(test_f(dim_0));
+            }
+
+            while let Some(result) = set.join_next().await {
+                let value = result
+                    .expect("task panicked")?;
+
+                out.push(value);
+
+                // One slot became free: spawn one more.
+                if let Some(item) = iter.next() {
+                    set.spawn(test_f(dim_0));
                 }
-            }).collect::<JoinSet<_>>().join_all().await;
+            }
 
             info!("n={dim_0} done in {} mls", t.elapsed().as_millis());
         }
 
+
+
         Ok(())
     }
-
 
 
 

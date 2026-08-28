@@ -27,9 +27,6 @@ pub enum Operation {
     DescribeRef {
         tensor_key: u64
     },
-    D2HStart {
-        tensor_key: u64
-    },
     H2dStart {
         worker_id: u64,
         kind: IpcTensorKind,
@@ -39,6 +36,8 @@ pub enum Operation {
     },
     SharedMemfd {
         metadata: IpcTensorTransferMetadata,
+        // D2H carries its source key with the fd so concurrent worker tasks cannot observe a chunk before separate setup completes.
+        tensor_key: Option<u64>,
         #[serde(skip)]
         fd: Option<OwnedFd>,
     },

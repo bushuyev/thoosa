@@ -724,10 +724,12 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
-    use log::info;
+    use log::{debug, info};
     use tracing::Instrument;
     use crate::{cdt_for_dir, ThoError};
     use crate::perf_logging::{format_perf_map, init_perf_writer, PERF};
+
+    const NS_IN_MLS:u64 = 1_000_000;
 
     #[test]
     fn test_init_perf_writer_none_uses_sink() {
@@ -793,10 +795,11 @@ mod tests {
 
         info!("\n{}", format_perf_map(&PERF));
 
-        assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
-        assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
-        assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
-        assert!(PERF.get("outer").unwrap().elapsed_ns.load(Ordering::Relaxed) > 3000);
+
+        assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("outer").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 3000 < 6);
     }
 
     #[test]
