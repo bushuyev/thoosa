@@ -176,7 +176,7 @@ impl CudaWorker {
         info!("run_worker: sock_path={sock_path:?} tho_device={tho_device:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
-        GlobalCtx::init_devices(2);//TODO config
+        GlobalCtx::init_devices(2)?;//TODO config
 
         let with_digest = false;//TODO config
 

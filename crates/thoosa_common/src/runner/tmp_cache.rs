@@ -284,7 +284,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
     async fn test_tmp_cache() -> Result<(), ThoError> {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices(2);
+        RealGlobalCtx::init_devices(2)?;
 
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -369,7 +369,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_take_all_recovering_preserves_data_on_cuda_reset_error() -> Result<(), ThoError> {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices(2);
+        RealGlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         #[derive(Debug, Clone)]

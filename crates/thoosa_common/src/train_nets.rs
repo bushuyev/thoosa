@@ -2607,7 +2607,7 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_conv_label_node() -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         _test_save_load_conv_label_node(
@@ -2625,7 +2625,7 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_conv_label_node_1() -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         _test_save_load_conv_label_node(
@@ -2643,7 +2643,7 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_self_attention_label_node() -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         _test_save_load_self_attention_label_node(

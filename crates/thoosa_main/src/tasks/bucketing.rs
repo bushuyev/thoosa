@@ -1464,7 +1464,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_run_mel_path_1_channel() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1713,7 +1713,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_run_mel_path_3_channel() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());

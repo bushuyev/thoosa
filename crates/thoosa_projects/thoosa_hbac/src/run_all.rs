@@ -735,7 +735,7 @@ mod tests {
         }
 
         // log::set_max_level(log::LevelFilter::Debug   );
-        let global_ctx = GlobalCtx::init_devices(2);
+        let global_ctx = GlobalCtx::init_devices(2)?;
         do_heavy_test_run_all("heavy_test_run_all_local").await?;
         global_ctx.shutdown().await;
 

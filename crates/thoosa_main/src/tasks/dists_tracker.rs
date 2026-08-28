@@ -1996,7 +1996,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_mask_indexes() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
 
         let dists = Tensor::from_slice(&[
             0.1, 0.0, 0.0,

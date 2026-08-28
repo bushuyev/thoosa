@@ -1192,7 +1192,7 @@ mod tests {
         channels: u32,
         batch_chunks: usize,
     ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
-        GlobalCtx::init_devices(1);
+        GlobalCtx::init_devices(1)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let find_motifs_run_config_id = 300;
         let device = Device::Cpu;

@@ -86,12 +86,17 @@ impl RegisteredCacheHandle {
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
 
-    fn new(num_devices: usize) -> Self {
+    fn new(num_devices: usize) -> Result<Self, ThoError> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
 
-        Self {
+        let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
+        for tho_device_idx in 1..num_devices {
+            cuda_actors.push(Box::new(CudaLocalActorHandle::new(tho_device_idx)?) as Box<dyn CudaActorHandle>);
+        }
+
+        Ok(Self {
             num_devices,
 
             executors: (0..num_devices).map(|tho_device_idx| {
@@ -109,9 +114,9 @@ impl GlobalCtx {
             shutting_down: false.into(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
-            cuda_actors: (1..num_devices).map(|tho_device_idx|Box::new(CudaLocalActorHandle::new(tho_device_idx)) as Box<dyn CudaActorHandle>).collect(),
+            cuda_actors,
             is_ipc: false,
-        }
+        })
     }
 
     //TODO this should replace GlobalCtx::new when ipc refactoring is completed
@@ -184,14 +189,14 @@ impl GlobalCtx {
     }
 
     ///num_devices: number of devices - CPU + GPU count
-    pub fn init_devices(num_devices: usize) -> &'static GlobalCtx {
+    pub fn init_devices(num_devices: usize) -> Result<&'static GlobalCtx, ThoError> {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
         GLOBAL_CTX
-            .set(GlobalCtx::new(num_devices))
-            .expect("`init_devices` must only be called once at program start");
+            .set(GlobalCtx::new(num_devices)?)
+            .map_err(|_| ThoError::new("`init_devices` must only be called once at program start"))?;
 
-        Self::global()
+        Ok(Self::global())
     }
 
     ///num_devices: number of devices - CPU + GPU count
@@ -200,7 +205,7 @@ impl GlobalCtx {
 
         GLOBAL_CTX
             .set(GlobalCtx::new_ipc(num_devices, cuda_worker_args).await?)
-            .expect("`init_devices` must only be called once at program start");
+            .map_err(|_| ThoError::new("`init_devices` must only be called once at program start"))?;
 
         Ok(Self::global())
     }
@@ -772,7 +777,11 @@ pub mod mock_global_ctx {
 impl MockGlobalCtx {
     pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, _device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
         static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
-        track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).read()).await
+        // This mock-only accessor cannot return initialization errors without changing the generated mock API.
+        track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(match CopyCtx::make_instance(0.2, 16) {
+            Ok(copy_ctx) => copy_ctx,
+            Err(error) => panic!("failed to initialize mock CopyCtx: {error:?}"),
+        })).read()).await
     }
 
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
@@ -782,7 +791,11 @@ impl MockGlobalCtx {
         }
 
         static COPY_CTX_ONCE: std::sync::OnceLock<Box<dyn CudaActorHandle>> = std::sync::OnceLock::new();
-        COPY_CTX_ONCE.get_or_init(|| Box::new(CudaLocalActorHandle::new(device.tho_device_idx())) as Box<dyn CudaActorHandle>)
+        // This mock-only accessor must preserve the infallible generated mock API.
+        COPY_CTX_ONCE.get_or_init(|| match CudaLocalActorHandle::new(device.tho_device_idx()) {
+            Ok(actor) => Box::new(actor) as Box<dyn CudaActorHandle>,
+            Err(error) => panic!("failed to initialize mock CUDA actor: {error:?}"),
+        })
     }
 
 
@@ -826,7 +839,7 @@ mod tests {
         }
 
 
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let tmp_cache:TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;

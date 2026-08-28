@@ -225,7 +225,7 @@ async fn test_load_tensor_cuda_to_cuda() -> Result<(), ThoError> {
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
 
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -241,7 +241,7 @@ async fn test_load_tensor_cpu_to_cuda() -> Result<(), ThoError> {
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
 
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -312,7 +312,7 @@ async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
@@ -399,7 +399,7 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
@@ -450,7 +450,7 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
@@ -505,7 +505,7 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
@@ -568,7 +568,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
@@ -629,7 +629,7 @@ async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
@@ -683,7 +683,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
 
-    let _global_ctx = GlobalCtx::init_devices(2);
+    let _global_ctx = GlobalCtx::init_devices(2)?;
 
     const MUL_K: f64 = 2.;
     let size = [3, 100000];
@@ -883,7 +883,7 @@ async fn heavy_test_real_oom_dump_and_split_local() -> Result<(), ThoError> {
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     do_real_oom_dump_and_split().await
@@ -892,7 +892,7 @@ async fn heavy_test_real_oom_dump_and_split_local() -> Result<(), ThoError> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_with_tho_tensor() -> Result<(), ThoError> {
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices(2);
+    RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test").await;
