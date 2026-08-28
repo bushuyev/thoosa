@@ -502,7 +502,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_converts_saved_final_net() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         run_convert_precision_stage_final_net(ConvertPrecisionTarget::Fp64, Kind::Double).await?;
@@ -577,7 +577,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_preserves_existing_tensor_names() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));

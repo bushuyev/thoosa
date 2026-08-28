@@ -753,7 +753,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_train_final_net_smoke() -> Result<(), ThoError> {
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let train_motif_nets_run_config_id: RunConfigId = 2;

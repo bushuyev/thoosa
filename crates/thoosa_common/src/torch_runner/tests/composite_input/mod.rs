@@ -31,7 +31,7 @@ async fn test_ab_clc() -> Result<(), ThoError> {
 }
 
 pub async fn run_ab_clc() -> Result<Result<(), ThoError>, ThoError> {
-    GlobalCtx::init_devices(2);
+    GlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
     run_ab_clc_with_current_ctx().await?;
@@ -104,7 +104,7 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_ab_clc_sync_with_selector() -> Result<(), ThoError> {
-    GlobalCtx::init_devices(2);
+    GlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
     let ab_stage = Arc::new(ABClcStage::new());
 

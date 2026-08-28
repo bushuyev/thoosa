@@ -783,7 +783,7 @@ mod tests {
         }
 
         // log::set_max_level(log::LevelFilter::Trace);
-        let global_ctx = GlobalCtx::init_devices(2);
+        let global_ctx = GlobalCtx::init_devices(2)?;
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let test_dir = Path::new("/tmp/heavy_test_run_all");

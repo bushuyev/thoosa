@@ -1233,7 +1233,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
@@ -1309,7 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_output_builder() -> Result<(), ThoError>  {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let num_channels = 3;
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0, vec![]), num_channels as u32, 50).await);
 

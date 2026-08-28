@@ -1127,7 +1127,7 @@ mod tests {
 
         log::set_max_level(Debug);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let input_n_0 = 1000;
@@ -1356,7 +1356,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_resources_batch() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let resources_1_train = Arc::new(vec![
@@ -1438,7 +1438,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_1_resource_batch() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let resources_1_train = Arc::new(vec![

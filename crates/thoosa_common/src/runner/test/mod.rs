@@ -1092,7 +1092,7 @@ mod tests {
     async fn test_load_and_clc_no_oom_dummy() -> Result<(), ThoError> {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
-        RealGlobalCtx::init_devices(2);
+        RealGlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let _device_idx = 0;
@@ -1150,7 +1150,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_clc_oom_till_max_parallel_dummy() -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let device_idx = 1;
@@ -1185,7 +1185,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_load_and_clc_oom_compete_for_max_parallel_dummy() -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let device_idx = 1;
@@ -1223,7 +1223,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_clc_oom_splits_dummy() -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let device_idx = 1;
@@ -1266,7 +1266,7 @@ mod tests {
     async fn test_load_and_clc_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoError> {
         //TODO check if with_is_all_on_cpu mocked correctly
 
-        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
 

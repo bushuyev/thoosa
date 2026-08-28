@@ -586,7 +586,7 @@ pub mod tests {
         LOSS_FN_CALLS.store(0, Ordering::SeqCst);
 
 
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let opt_config = Arc::new(OptConfig::new(10, 3));
