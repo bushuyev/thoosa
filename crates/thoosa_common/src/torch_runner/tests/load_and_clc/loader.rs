@@ -174,8 +174,10 @@ impl LoadedTensor {
 
         debug!("LoadedTensor::clc_sum: sum={sum:?}");
 
-        let tensor = sum?
-            .view((-1, 1));
+        let tensor = sum?.view((-1, 1));
+
+        debug!("LoadedTensor::clc_sum: device={:?}", tensor.device());
+
         ThoTensor::new(
             id,
             tensor

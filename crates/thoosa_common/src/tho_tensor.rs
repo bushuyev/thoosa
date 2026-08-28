@@ -40,12 +40,29 @@ impl<D: Dims, Id: Named + Debug + Clone> AsRef<Tensor> for ThoTensor<D, Id> {
     }
 }
 
-impl<D: Dims> ThoTensor<D, SimpleId> {
+impl<D, Id> ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone
+{
     //TODO remove
-    pub fn shallow_clone<DO: Dims>(&self) -> ThoTensor<DO, SimpleId> {
+    pub fn shallow_clone<DO: Dims>(&self) -> ThoTensor<DO, Id> {
         ThoTensor {
             id: self.id.clone(),
-            inner: ThoTensorInner::Val { t: self.t_ref().shallow_clone() },
+            inner: match &self.inner{
+                ThoTensorInner::Val { t } => {
+                    ThoTensorInner::Val { t: t.shallow_clone() }
+                }
+                ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+                    ThoTensorInner::Ref {
+                        key: *key,
+                        size: size.clone(),
+                        kind: *kind,
+                        selector: selector.as_ref().map(|v|v.clone_box()),
+                        tho_device_idx: *tho_device_idx,
+                    }
+                }
+            },
             pd: Default::default(),
             tracking: Default::default(),
         }
@@ -116,7 +133,10 @@ pub /*TODO*/ enum ThoTensorInner {
 impl Debug for ThoTensorInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ThoTensorInner::Val { t } => f.debug_struct("Val").field("t", t).finish(),
+            ThoTensorInner::Val { t } => f.debug_struct("Val")
+                .field("t", t)
+                .field("device", &t.device())
+                .finish(),
             ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => f.debug_struct("Ref").field("key", key).field("size", size).field("kind", kind).field("selector", selector).field("tho_device_idx", tho_device_idx).finish(),
         }
     }
@@ -250,7 +270,10 @@ where
 
 impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("").field("id", &self.id).field("inner", &self.inner).finish()
+        f.debug_struct("")
+            .field("id", &self.id)
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 
