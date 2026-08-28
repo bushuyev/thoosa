@@ -53,11 +53,7 @@ impl WorkerInput for TestStageInitB{
 }
 
 impl WorkerStageInput for TestStageInitB {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let mut input = JsonIpcCodec::decode::<Self>(&input)?;
 
-        Ok(input)
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,15 +103,6 @@ impl WorkerStageInput for TestInputB {
         })
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let mut input = JsonIpcCodec::decode::<Self>(&input)?;
-
-        debug!("SimpWrapper::do_run: 1. input={input:?}");
-
-        input.value = ThoTensor::ref_to_tensor(all_cuda_tensors, input.value)?;
-
-        Ok(input)
-    }
 }
 
 

@@ -458,17 +458,6 @@ where
         })
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<Self>(input)?;
-        // Shared wrappers decode worker references before the stateful stage runs.
-        Ok(Self::new(
-            ThoTensor::ref_to_tensor(all_cuda_tensors, input.x)?,
-            input.lengths,
-            ThoTensor::ref_to_tensor(all_cuda_tensors, input.expected_y)?,
-            input.train,
-            input.save_var_store,
-        ))
-    }
 }
 
 impl WorkerStageOutput for TrainStepOutput {

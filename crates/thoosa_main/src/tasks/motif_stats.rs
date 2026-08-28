@@ -895,21 +895,6 @@ impl WorkerStageInput for MotifStatsCalcInput<'_> {
         };
         Ok(Self::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone()))
     }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<MotifStatsSyncStageIpcInput>(input)?;
-        let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>()?;
-        match input.data {
-            MotifStatsIpcData::Managed(motif) => {
-                let motif = Self::decode_motif(motif, all_cuda_tensors)?;
-                Ok(Self::from_data_refs(input.id, MotifStatsCalcInputData::Managed(ThoDataRef::Owned(motif)), metrics, input.quantiles))
-            }
-            MotifStatsIpcData::Motifs(motifs) => {
-                let motifs = motifs.into_iter().map(|motif| Ok(ThoDataRef::Owned(Self::decode_motif(motif, all_cuda_tensors)?))).collect::<Result<Vec<_>, ThoError>>()?;
-                Ok(Self::from_data_refs(input.id, MotifStatsCalcInputData::Motifs(motifs), metrics, input.quantiles))
-            }
-        }
-    }
 }
 
 impl WorkerStageOutput for MotifStatsOutput {
@@ -1099,13 +1084,6 @@ impl<'de> Deserialize<'de> for MotifStatsLoadedChannelsInput {
 impl WorkerInput for MotifStatsLoadedChannelsInput {}
 
 impl MotifStatsLoadedChannelsInput {
-    fn decode_for_worker_inner<C: IpcCodec>(encoded: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
-        let input = C::decode::<MotifStatsConsumeStageIpcInput>(encoded)?;
-        let consumed_tensor_keys = input.channels_motifs_slices.iter().map(|tensor| tensor.ref_key().ok_or_else(|| ThoError::new(format!("MotifStatsConsumeStage expected worker tensor ref, got {tensor:?}")))).collect::<Result<Vec<_>, _>>()?;
-        let channels_motifs_slices = input.channels_motifs_slices.into_iter().map(|tensor| ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)).collect::<Result<Vec<_>, _>>()?;
-        let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>()?;
-        Ok((Self::new(input.id, channels_motifs_slices, metrics, input.quantiles), consumed_tensor_keys))
-    }
 }
 
 impl WorkerStageInput for MotifStatsLoadedChannelsInput {
@@ -1120,13 +1098,6 @@ impl WorkerStageInput for MotifStatsLoadedChannelsInput {
         Ok(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone()))
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        Ok(Self::decode_for_worker_inner::<C>(input, all_cuda_tensors)?.0)
-    }
-
-    fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
-        Self::decode_for_worker_inner::<C>(input, all_cuda_tensors)
-    }
 }
 
 #[derive(Debug)]

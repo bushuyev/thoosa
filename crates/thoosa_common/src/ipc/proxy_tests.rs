@@ -43,11 +43,6 @@ impl TestStageInitA {
 }
 
 impl WorkerStageInput for TestStageInitA {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let mut input = JsonIpcCodec::decode::<Self>(&input)?;
-
-        Ok(input)
-    }
 }
 
 #[typetag::serde]
@@ -115,13 +110,7 @@ impl <'a> WorkerStageInput for TestInputA<'a> {
             name: self.name.clone(),
         })
     }
-
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<Self>(input)?;
-        input.ref_to_tensor(all_cuda_tensors, false)
-    }
-
+    
 
 }
 

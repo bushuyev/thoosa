@@ -430,14 +430,6 @@ impl WorkerStageInput for StackAppliedLabelNetsInput {
         Ok(Self::new(self.id.clone(), outputs, self.device_idx))
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<StackAppliedLabelNetsInput>(input)?;
-        Ok(StackAppliedLabelNetsInput{
-            id: input.id,
-            device_idx: input.device_idx,
-            label_outputs: input.label_outputs.into_iter().map(|v|ThoTensor::<LabelProbability, SynKey>::ref_to_tensor(all_cuda_tensors, v)).collect::<Result<_, ThoError>>()?,
-        })
-    }
 }
 
 #[typetag::serde(name = "StackAppliedLabelNetsInput")]
@@ -698,23 +690,6 @@ impl WorkerStageInput for ApplyLabelNetInput<'_> {
         let input = self.input.as_ref();
         Ok(Self { id: self.id.clone(), input: ThoDataRef::Owned(DataWithExtra::new(WorkerStageInput::ref_to_tensor(input.data(), all_cuda_tensors, remove)?, input.extra().clone())) })
     }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<Self>(input)?;
-        let ThoDataRef::Owned(input_ref) = input.input else {
-            panic!("unexpected ref: input.batch={:?}", input.input);
-        };
-
-        let DataWithExtra{data, extra} = input_ref;
-
-        Ok(Self{
-            id: input.id,
-            input: ThoDataRef::Owned(DataWithExtra::new(
-                ThoTensor::ref_to_tensor(all_cuda_tensors, data)?,
-                Arc::into_inner(extra).unwrap()//TODO
-            ))
-        })
-    }
 }
 
 #[typetag::serde(name = "ApplyLabelNetInput")]
@@ -762,9 +737,6 @@ impl ApplyLabelNetInit {
 }
 
 impl WorkerStageInput for ApplyLabelNetInit {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[typetag::serde(name = "ApplyLabelNetInit")]

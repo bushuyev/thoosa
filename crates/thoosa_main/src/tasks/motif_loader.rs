@@ -558,35 +558,6 @@ impl WorkerStageInput for SyncMotifLoaderInput {
         })).collect::<Result<Vec<_>, ThoError>>()?;
         Ok(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone()))
     }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<SyncMotifLoaderIpcInput>(input)?;
-        let loaded_resources = input.loaded_resources.into_iter().map(|resource| {
-            Ok(LoadedMotifResource {
-                id: LoadedMotifResourceId::new(resource.resource_id),
-                resource_id: resource.resource_id,
-                slices: resource.slices,
-                raw_tensor: ThoTensor::ref_to_tensor(all_cuda_tensors, resource.raw_tensor)?,
-            })
-        }).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(SyncMotifLoaderInput::new(
-            input.id,
-            input.motif_id.into(),
-            input.select_motifs_run_config_id,
-            input.find_motifs_run_config_id,
-            input.channel,
-            input.window,
-            loaded_resources,
-            input.descr,
-        ))
-    }
-
-    fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
-        let input_refs = C::decode::<SyncMotifLoaderIpcInput>(input)?;
-        let keys = input_refs.loaded_resources.iter().filter_map(|resource| resource.raw_tensor.ref_key()).collect();
-        let encoded = C::encode(&input_refs)?;
-        Ok((Self::decode_for_worker::<C>(&encoded, all_cuda_tensors)?, keys))
-    }
 }
 
 #[derive(Debug, Named)]
@@ -1151,20 +1122,6 @@ impl WorkerStageInput for SyncLoadMotifResourcesInput<'_> {
         })
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<SyncLoadMotifResourcesIpcInput>(input)?;
-        Ok(Self {
-            id: input.id,
-            raw_tensor: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.raw_tensor)?),
-            motif_id: input.motif_id.into(),
-            resource_id: input.resource_id,
-            find_motifs_run_config_id: input.find_motifs_run_config_id,
-            channel: input.channel,
-            window: input.window,
-            slices: input.slices,
-            descr: input.descr,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -1450,20 +1407,6 @@ impl WorkerStageInput for SyncLoadRandomSlicesInput<'_> {
             window: self.window,
             slices: self.slices.clone(),
             descr: self.descr.clone(),
-        })
-    }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<SyncLoadRandomSlicesIpcInput>(input)?;
-        Ok(Self {
-            id: input.id,
-            raw_tensor: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.raw_tensor)?),
-            resource_id: input.resource_id,
-            find_motifs_run_config_id: input.find_motifs_run_config_id,
-            channels: input.channels,
-            window: input.window,
-            slices: input.slices,
-            descr: input.descr,
         })
     }
 }

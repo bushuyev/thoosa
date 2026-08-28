@@ -118,9 +118,6 @@ fn train_motif_step_params(run_config: &TrainMotifNetRunConfig, motif_width: u32
 }
 
 impl WorkerStageInput for TrainMotifStepIpcInit {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[typetag::serde(name = "TrainMotifStepIpcInit")]
@@ -881,16 +878,6 @@ impl WorkerStageInput for SyncMotifBatchInput<'_> {
         })
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<SyncMotifBatchIpcInput>(input)?;
-        Ok(Self {
-            id: input.id,
-            motifs: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.motifs)?),
-            random_slices: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.random_slices)?),
-            num_slices: input.num_slices,
-            descr: input.descr,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -1147,11 +1134,6 @@ impl WorkerStageInput for SplitMotifIntoTrainValidInput<'_> {
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
         Ok(Self { id: self.id.clone(), motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.motif.motif(), all_cuda_tensors, remove)?)) })
-    }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<SplitMotifIntoTrainValidIpcInput>(input)?;
-        Ok(Self { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input.motif)?)) })
     }
 }
 
@@ -1684,9 +1666,6 @@ mod tests {
         }
 
         impl WorkerStageInput for TrainTestStepInit {
-            fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-                C::decode(input)
-            }
         }
 
         #[typetag::serde(name = "TrainTestStepInit")]
