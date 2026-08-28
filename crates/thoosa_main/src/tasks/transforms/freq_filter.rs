@@ -80,9 +80,6 @@ impl SyncFreqFilterIpcInit {
 }
 
 impl WorkerStageInput for SyncFreqFilterIpcInit {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[typetag::serde]

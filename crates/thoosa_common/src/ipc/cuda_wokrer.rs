@@ -173,6 +173,8 @@ impl CudaWorker {
         endpoint_inits: HashMap<String, InitFn>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
+        info!("run_worker: sock_path={sock_path:?} tho_device={tho_device:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
+
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
         GlobalCtx::init_devices(2);//TODO config
 
@@ -186,7 +188,7 @@ impl CudaWorker {
                 .collect::<Result<Vec<_>, _>>()?,
         ));
 
-        info!("run_worker: sock_path={sock_path:?} cuda_device={cuda_device} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
+
 
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
@@ -524,13 +526,6 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
         todo!()
     }
 
-    #[deprecated]//the method is to be removed after migration to postcard is done
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;//on worker side
-
-    #[deprecated]//the method is to be removed after migration to postcard is done
-    fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
-        Ok((Self::decode_for_worker::<C>(input, all_cuda_tensors)?, Vec::new()))
-    }
 }
 
 pub trait WorkerStageOutput: Debug + Sized + Serialize {
@@ -548,21 +543,6 @@ where
         // Typed worker wrappers receive the tensor reference as a trait object and materialize it only inside the worker.
         Self::ref_to_tensor_(all_cuda_tensors, self, remove)
     }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        debug!("ThoTensor::decode_for_worker: input={input:?}");
-        let input_ref = C::decode::<Self>(input)?;
-        debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
-
-        Self::ref_to_tensor(all_cuda_tensors, input_ref)
-    }
-
-    fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
-        let input_ref = C::decode::<Self>(input)?;
-        let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker consuming sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
-        Ok((Self::ref_to_tensor(all_cuda_tensors, input_ref)?, vec![input_key]))
-    }
-
 
 }
 

@@ -199,14 +199,6 @@ impl WorkerStageInput for CrossInput<'_, Arc<Resource>> {
             self.id.clone(),
         ))
     }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<CrossInputFindMotifsIpcInput>(input)?;
-        let tensors = input.tensors.into_iter().map(|tensor| Ok(ThoDataRef::Owned(ThoTensor::<ChannelsData, SynKey>::ref_to_tensor(all_cuda_tensors, tensor)?))).collect::<Result<Vec<_>, ThoError>>()?;
-        let resources_0 = input.resources_0.into_iter().map(|resource| Arc::new(resource.into_resource())).collect();
-        let resources_1 = input.resources_1.into_iter().map(|resource| Arc::new(resource.into_resource())).collect();
-        Ok(CrossInput::from_decoded_parts(tensors, resources_0, resources_1, input.id))
-    }
 }
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> WithId for CrossInput<'a, R> {

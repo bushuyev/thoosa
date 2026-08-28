@@ -278,25 +278,6 @@ impl WorkerStageInput for SyncLogitsBatchInput<'_> {
         let outputs = self.outputs.iter().map(|output| Ok(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(output.as_ref(), all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?;
         Ok(Self { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
     }
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<Self>(input)?;
-
-        Ok(
-            SyncLogitsBatchInput{
-                id: input.id,
-                outputs: input.outputs.into_iter().map(|input_ref|{
-                    let ThoDataRef::Owned(input_ref) = input_ref else {
-                        panic!("unexpected ref: input_ref={:?}", input_ref);
-                    };
-
-                    Ok(ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, input_ref)?))
-                }).collect::<Result<Vec<_>, ThoError>>()?,
-                labels: input.labels,
-                labels_len: input.labels_len,
-            }
-        )
-    }
 }
 
 #[typetag::serde(name = "SyncLogitsBatchInput")]
@@ -615,9 +596,6 @@ fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError
 }
 
 impl WorkerStageInput for TrainFinalStepIpcInit {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[typetag::serde(name = "TrainFinalStepIpcInit")]

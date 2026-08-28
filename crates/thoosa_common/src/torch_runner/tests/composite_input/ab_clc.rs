@@ -435,16 +435,6 @@ impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
             from_b: ThoDataRef::Owned(self.from_b.as_ref().ref_to_tensor(all_cuda_tensors, remove)?),
         })
     }
-
-
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<ABClcSyncStageIpcInput>(input)?;
-        Ok(Self {
-            id: input.id,
-            from_a: ThoDataRef::Owned(input.from_a.ref_to_tensor(all_cuda_tensors, false)?),
-            from_b: ThoDataRef::Owned(input.from_b.ref_to_tensor(all_cuda_tensors, false)?),
-        })
-    }
 }
 
 impl Data for ABClcSyncStageInput<'_> {

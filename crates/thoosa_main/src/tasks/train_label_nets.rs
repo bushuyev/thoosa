@@ -258,21 +258,6 @@ impl WorkerStageInput for SyncLabelBatchInput<'_> {
         Ok(Self { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<SyncLabelBatchIpcInput>(input)?;
-        if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
-            return Err(ThoError::new("SyncLabelBatch: tensor and length metadata counts differ"));
-        }
-        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| Ok(ThoDataRef::Owned(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths)))).collect::<Result<Vec<_>, ThoError>>()?;
-        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| Ok(ThoDataRef::Owned(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths)))).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Self {
-            id: input.id,
-            x_1,
-            x_0,
-            num_nets: input.num_nets,
-            label: input.label,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -980,9 +965,6 @@ fn train_label_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError
 }
 
 impl WorkerStageInput for TrainLabelStepIpcInit {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[typetag::serde(name = "TrainLabelStepIpcInit")]
