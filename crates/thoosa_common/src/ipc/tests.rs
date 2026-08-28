@@ -1081,7 +1081,7 @@ mod tests {
         )
     }
 
-    const SIZES:[i64;4] = [10, 100, 1000, 10000];
+    const SIZES:[i64;5] = [10, 100, 1000, 10000, 20000];
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="heavy_test_concurrent_copy"))]
     async fn heavy_test_concurrent_copy(descr:&str)->Result<(), ThoError>{
