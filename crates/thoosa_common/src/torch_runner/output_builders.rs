@@ -103,10 +103,15 @@ where
             }
             BuildAs::Sum => {
                 debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: self.output.size={:?} partial_size={partial_size:?}", self.output.size());
+                if self.output.device() != partial.device() {
+                    let mut t = self.output.to_mut();
 
-                let mut t = self.output.to_mut();
-
-                t.add_(&partial.copy_to_device(0).await.unwrap()).unwrap();
+                    t.add_(&partial.copy_to_device(0).await.unwrap()).unwrap();
+                } else {
+                    let mut t = self.output.to_mut();
+                    t.add_(&partial).unwrap();
+                }
+    
             }
         }
 
