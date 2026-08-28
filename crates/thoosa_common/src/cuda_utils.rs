@@ -799,7 +799,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     #[cfg_attr(miri, ignore)]
     #[allow(dead_code)]
-    async fn heavy_test_copy_from_ptr() {
+    async fn heavy_test_copy_from_ptr() -> Result<(), ThoError> {
         let cu_ctx = ThoCudaContext::new(0 as i32).expect("failed to create CUDA context");
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -809,9 +809,9 @@ mod tests {
             for mem_k in [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 2.] {
                 for buffs in [2, 4, 8, 16, 32, 64] {
                     if ctx.is_none() {
-                        ctx = Some(UnsafeCell::new(CopyCtx::make_instance(mem_k, buffs)));
+                        ctx = Some(UnsafeCell::new(CopyCtx::make_instance(mem_k, buffs)?));
                     } else {
-                        ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)
+                        ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)?
                     }
 
                     let (d2h, h2d) = run_test_copy_from_ptr(&*ctx.as_ref().unwrap().get(), 10, 10).await;
@@ -820,10 +820,11 @@ mod tests {
                 }
             }
         }
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_copy_from_ptr_once() {
+    async fn heavy_copy_from_ptr_once() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -831,12 +832,13 @@ mod tests {
         futures_limits().force(COPY_H2D, 10);
         futures_limits().force(COPY_D2H, 10);
 
-        let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)));
+        let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)?));
 
         let (d2h, h2d) = run_test_copy_from_ptr(ctx, 3, 10).await;
         info!("\n Copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
 
         info!("\n{}", format_perf_map(&PERF));
+        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_test_copy_from_ptr"))]
@@ -1117,7 +1119,7 @@ mod tests {
 
         for mem_k in [0.1, 0.5, 1.] {
             for buffs in [2, 4, 8, 16, 32] {
-                let copy_ctx = CopyCtx::make_instance(mem_k, buffs);
+                let copy_ctx = CopyCtx::make_instance(mem_k, buffs)?;
 
                 let mut copy_unfold_time = 0;
                 let mut unfold_copy_time = 0;
@@ -1192,7 +1194,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
 
         // try CPU; switch to Device::Cuda(0) if you want to test on GPU
         let dev = ThoDevice::from(Device::Cpu);

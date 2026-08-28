@@ -736,7 +736,7 @@ impl CudaIPCActor {
 
 
         debug!("CudaIPCActor::new: worker device_info={:?} ipc_copy_buffers={IPC_COPY_BUFFERS} ipc_copy_buffer_size={IPC_COPY_BUFFER_SIZE}", spawned_state.device_info);
-        let copy_ctx = CopyCtx::make_ipc_instance_for_cuda_device(tho_device_idx - 1, IPC_COPY_BUFFERS, IPC_COPY_BUFFER_SIZE);
+        let copy_ctx = CopyCtx::make_ipc_instance_for_cuda_device(tho_device_idx - 1, IPC_COPY_BUFFERS, IPC_COPY_BUFFER_SIZE)?;
         let buf_size = copy_ctx.buf_size;
 
         Ok(Self {

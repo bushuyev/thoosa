@@ -1550,7 +1550,7 @@ pub(crate) mod tests {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 1;
@@ -1719,7 +1719,7 @@ pub(crate) mod tests {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         // log::set_max_level(Debug);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 1;
@@ -1825,7 +1825,7 @@ pub(crate) mod tests {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 1;

@@ -499,7 +499,7 @@ where
         ]).await?;
     } else {
         // kick_register_cuda_hooks();
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
     }
 
 
@@ -2547,7 +2547,7 @@ mod cli_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
 
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let (pulse_triangle_t, intervals, _) = resource_tensor_two_easy_motifs(

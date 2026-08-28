@@ -164,7 +164,7 @@ async fn do_test_simp() -> Result<(), ThoError> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_simp_local() -> Result<(), ThoError> {
-    GlobalCtx::init_devices(2);
+    GlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     do_test_simp().await?;

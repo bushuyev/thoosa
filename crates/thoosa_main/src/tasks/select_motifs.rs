@@ -555,7 +555,7 @@ pub mod tests {
 
         // log::set_max_level(LevelFilter::Debug);
         // reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
 
@@ -632,7 +632,7 @@ pub mod tests {
 
         log::set_max_level(Info);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
@@ -710,7 +710,7 @@ pub mod tests {
 
         log::set_max_level(LevelFilter::Info);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
@@ -811,7 +811,7 @@ pub mod tests {
     async fn test_3_resources_2_labels_3_channels_3_motifs_cuda() -> Result<(), ThoError> {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
@@ -934,7 +934,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_by_criteria_filters_by_slices_and_score() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 11;
@@ -992,7 +992,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_by_norm_thickness() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 11;
@@ -1041,7 +1041,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_requires_each_criterion_to_meet_min() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 41;
@@ -1093,7 +1093,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_select_motifs_run_reuses_criterion_scores_for_constraint_metrics() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 31;
@@ -1227,7 +1227,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_uses_existing_slices_when_extend_config_is_none() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         // reset_print_options();
 
@@ -1302,7 +1302,7 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_filters_motifs_by_criteria_min() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         reset_print_options();
 
@@ -1577,7 +1577,7 @@ pub mod tests {
     async fn heavy_test_oom_cuda() -> Result<(), ThoError> {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
         let run_config_id = 1;

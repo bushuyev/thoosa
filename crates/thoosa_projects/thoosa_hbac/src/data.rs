@@ -1106,7 +1106,7 @@ mod tests {
         if !tch::Cuda::is_available() {
             return Ok(());
         }
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
 
         let find_motifs_run_config_id: RunConfigId = 1;
         let select_motifs_run_config_id: RunConfigId = 2;

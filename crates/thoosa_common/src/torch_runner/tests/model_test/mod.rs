@@ -33,11 +33,13 @@ fn init() {
     thoosa_shared::test_utils::init_test_logging();
 }
 
-fn init_devices_once() {
-    static INIT: std::sync::Once = std::sync::Once::new();
-    INIT.call_once(|| {
-        let _ = RealGlobalCtx::init_devices(2);
-    });
+fn init_devices_once() -> Result<(), ThoError> {
+    // Cache initialization failures too so concurrent tests observe the same fallible outcome.
+    static INIT: std::sync::OnceLock<Result<(), ThoError>> = std::sync::OnceLock::new();
+    match INIT.get_or_init(|| RealGlobalCtx::init_devices(2).map(|_| ())) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(ThoError::new(format!("failed to initialize devices once: {error:?}"))),
+    }
 }
 
 pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, InitFn> {
@@ -93,7 +95,7 @@ async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
     unsafe {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
-    init_devices_once();
+    init_devices_once()?;
     let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
     run_model_test_pipeline(
@@ -114,7 +116,7 @@ async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> 
     unsafe {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
-    init_devices_once();
+    init_devices_once()?;
     let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
     run_model_test_pipeline(
@@ -141,7 +143,7 @@ async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
         let _lib = libloading::Library::new("libtorch_cpu.so").expect("no libtorch_cpu.so");
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
-    init_devices_once();
+    init_devices_once()?;
     let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
     let files: Vec<(&'static str, f64)> = (0..16)
