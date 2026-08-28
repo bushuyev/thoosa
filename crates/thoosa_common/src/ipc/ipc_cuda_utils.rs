@@ -73,6 +73,8 @@ pub struct SharedMemfdBuffer {
     fd: OwnedFd,
     ptr: NonNull<u8>,
     len: usize,
+    // Worker-side cached mappings retain their CUDA page registration so repeated tensor copies do not pin and unpin the same pages.
+    cuda_registration: parking_lot::Mutex<Option<(NonNull<c_void>, usize)>>,
 }
 
 impl Debug for SharedMemfdBuffer {
@@ -118,7 +120,7 @@ impl SharedMemfdBuffer {
     }
 
     /// Maps an fd received through inheritance or `SCM_RIGHTS` in this process.
-    pub fn from_received_fd(fd: OwnedFd, mapped_len: usize) -> Result<Self, ThoError> {
+    pub fn from_received_fd(buffer_id: u64, fd: OwnedFd, mapped_len: usize) -> Result<Self, ThoError> {
         if mapped_len == 0 {
             return Err(invalid("cannot mmap a zero-length memfd"));
         }
@@ -139,7 +141,7 @@ impl SharedMemfdBuffer {
         if stat.st_size < 0 || (stat.st_size as usize) < mapped_len {
             return Err(invalid(format!("received memfd is too small: file_len={} mapped_len={mapped_len}", stat.st_size)));
         }
-        Self::map_owned_fd(0, fd, mapped_len)
+        Self::map_owned_fd(buffer_id, fd, mapped_len)
     }
 
     fn map_owned_fd(buffer_id: u64, fd: OwnedFd, mapped_len: usize) -> Result<Self, ThoError> {
@@ -160,7 +162,7 @@ impl SharedMemfdBuffer {
         }
         let ptr = NonNull::new(raw_ptr.cast::<u8>()).ok_or_else(|| invalid("mmap returned a null pointer"))?;
         debug!("SharedMemfdBuffer::map_owned_fd: buffer_id={buffer_id} fd={} local_mmap_ptr={:?} mapped_len={mapped_len}", fd.as_raw_fd(), ptr);
-        Ok(Self { buffer_id, fd, ptr, len: mapped_len })
+        Ok(Self { buffer_id, fd, ptr, len: mapped_len, cuda_registration: parking_lot::Mutex::new(None) })
     }
 
     pub fn buffer_id(&self) -> u64 {
@@ -171,7 +173,7 @@ impl SharedMemfdBuffer {
         self.ptr.as_ptr()
     }
 
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+    pub fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr.as_ptr()
     }
 
@@ -215,17 +217,50 @@ impl SharedMemfdBuffer {
         let registration_len = registration_end.checked_sub(registration_offset).ok_or_else(|| invalid("shared buffer registration range underflow"))?;
         Ok((self.checked_ptr(registration_offset, registration_len)?, registration_len))
     }
+
+    /// Keeps the mapped prefix used by IPC chunks registered until the worker cache drops this buffer.
+    pub(crate) fn ensure_cuda_registered(&self, offset: usize, byte_len: usize) -> Result<(), ThoError> {
+        let (registration_ptr, registration_len) = self.cuda_registration_range(offset, byte_len)?;
+        let registration_ptr = NonNull::new(registration_ptr.cast_mut().cast::<c_void>()).ok_or_else(|| invalid("cannot register a null mmap pointer"))?;
+        let mut registered = self.cuda_registration.lock();
+        if registered.as_ref().is_some_and(|(ptr, len)| *ptr == registration_ptr && *len >= registration_len) {
+            return Ok(());
+        }
+        if let Some((ptr, _)) = registered.take() {
+            let result = unsafe {
+                // SAFETY: this pointer was registered by this buffer and pool ownership prevents reuse until the previous CUDA copy is synchronized.
+                tho_cu_mem_host_unregister(ptr.as_ptr())
+            };
+            check_cuda_status(result, "cuMemHostUnregister(cached IPC buffer)")?;
+        }
+        let result = unsafe {
+            // SAFETY: cuda_registration_range returned a page-aligned live mmap range and the cached buffer owns the mapping until worker shutdown.
+            tho_cu_mem_host_register(registration_ptr.as_ptr(), registration_len, CU_MEMHOSTREGISTER_PORTABLE)
+        };
+        check_cuda_status(result, "cuMemHostRegister(cached IPC buffer)")?;
+        *registered = Some((registration_ptr, registration_len));
+        Ok(())
+    }
 }
 
 // The mapping and fd have stable ownership and may move between threads. Shared
-// mutation is not exposed: writable access requires `&mut self`, while raw pointer
-// use is confined to validated CUDA/copy operations and externally synchronized by
-// the transfer ownership protocol.
+// mutation is confined to validated CUDA/copy operations and externally synchronized
+// by the transfer ownership protocol, which gives the worker exclusive use of a pool
+// buffer until its copy-completion reply.
 unsafe impl Send for SharedMemfdBuffer {}
 unsafe impl Sync for SharedMemfdBuffer {}
 
 impl Drop for SharedMemfdBuffer {
     fn drop(&mut self) {
+        if let Some((ptr, _)) = self.cuda_registration.get_mut().take() {
+            let result = unsafe {
+                // SAFETY: either the worker cache or an in-flight transfer retains this mapping until its CUDA copy has synchronized.
+                tho_cu_mem_host_unregister(ptr.as_ptr())
+            };
+            if let Err(error) = check_cuda_status(result, "cuMemHostUnregister(cached IPC buffer drop)") {
+                error!("SharedMemfdBuffer::drop: {error:?}");
+            }
+        }
         let result = unsafe {
             // SAFETY: ptr/len are exactly the mapping returned by mmap and this is
             // their sole owner. CUDA registration guards borrow Self, so they must
@@ -909,7 +944,7 @@ mod tests {
         let (left, right) = UnixStream::pair()?;
         send_fd(&left, owner.fd()).await?;
         let received = recv_fd(&right).await?;
-        let mapped = SharedMemfdBuffer::from_received_fd(received, metadata.mapped_len)?;
+        let mapped = SharedMemfdBuffer::from_received_fd(metadata.buffer_id, received, metadata.mapped_len)?;
         let mut consumer = IpcBufferOwnership::from_ready(ready)?;
         consumer.begin_consuming(&metadata)?;
         let source = mapped.checked_ptr(metadata.offset, metadata.byte_len)?;
