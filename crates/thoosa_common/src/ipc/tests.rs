@@ -63,7 +63,7 @@ where
     if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
         init_test_logging();
 
-        debug!("run_ipc_test2: sock_path={sock_path:?}");
+        debug!("run_ipc_test: sock_path={sock_path:?}");
 
 
         let tho_cuda_context = ThoCudaContext::new(0)?;
@@ -84,7 +84,11 @@ where
             })
             .build()?;
 
+        debug!("run_ipc_test: worker_rt={worker_rt:?}");
+
         worker_rt.block_on(async {
+            debug!("run_ipc_test: in block_on");
+
             let r = panic_to_err_async!(worker_f(sock_path));
 
             info!("worker perf:\n{}", format_perf_map(&PERF));
@@ -183,7 +187,7 @@ mod tests {
     use std::sync::atomic::Ordering::Acquire;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
-    use tch::Device::Cuda;
+    use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::{Device, Tensor};
@@ -1077,12 +1081,14 @@ mod tests {
         )
     }
 
+    const SIZES:[i64;4] = [10, 100, 1000, 10000];
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="heavy_test_concurrent_copy"))]
     async fn heavy_test_concurrent_copy(descr:&str)->Result<(), ThoError>{
 
-
-        for n in [10, 100, 1000, 10000] {
+        for n in  SIZES {
             let t = Instant::now();
-            let x = (0..100).map(|i| {
+            let x = (0..10).map(|i| {
                 async move {
                     let t_cpu_0 = ThoTensor::new((), Tensor::rand(&[n, 10000], FLOAT_CPU))?;
                     let t_cpu_0_t = t_cpu_0.as_ref().as_ref().shallow_clone();
@@ -1102,4 +1108,34 @@ mod tests {
         Ok(())
     }
 
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn heavy_test_concurrent_copy_direct()->Result<(), ThoError>{
+        do_concurrent_copy_direct().await;
+        info!("\n{}", format_perf_map(&PERF));
+
+        Ok(())
+    }
+
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_concurrent_copy_direct"))]
+    async fn do_concurrent_copy_direct() {
+        for n in SIZES {
+            let t = Instant::now();
+            let x = (0..10).map(|i| {
+                async move {
+                    let t_cpu_0 = Tensor::rand(&[n, 10000], FLOAT_CPU);
+                    let t_cuda = t_cpu_0.to_device(Cuda(0));
+                    // let t_cpu_1 = t_cuda.to_device(Cpu);
+                    // debug!("i={i} os_thread_id={}",os_thread_id());
+                    //
+                    // assert!(t_cpu_0.allclose(t_cpu_1.as_ref(), 0.01, 0.01, false));
+
+                    Ok::<_, ThoError>(())
+                }
+            }).collect::<JoinSet<_>>().join_all().await;
+
+            info!("n={n} done in {} mls", t.elapsed().as_millis());
+        }
+    }
 }

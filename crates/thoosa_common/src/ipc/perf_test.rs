@@ -65,9 +65,6 @@ impl WorkerStageInput for SimpInput {
         Ok(self.clone())
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]

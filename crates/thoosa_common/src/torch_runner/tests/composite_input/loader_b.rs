@@ -105,10 +105,6 @@ impl WorkerStageInput for BStageOutput {
         })
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        todo!()
-    }
-
 }
 
 impl Select<RangeSelector> for BStageOutput {

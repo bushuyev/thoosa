@@ -639,14 +639,6 @@ impl WorkerStageInput for StackAppliedMotifNetsInput {
         Ok(Self::new(self.id.clone(), tensors, self.device_idx))
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<StackAppliedMotifNetsInput>(input)?;
-        Ok(StackAppliedMotifNetsInput{
-            id: input.id,
-            device_idx: input.device_idx,
-            motif_nets_applied: input.motif_nets_applied.into_iter().map(|v|ThoTensor::<MotifProbability, SynKey>::ref_to_tensor(all_cuda_tensors, v)).collect::<Result<_, ThoError>>()?,
-        })
-    }
 }
 
 #[typetag::serde(name = "StackAppliedMotifNetsInput")]
@@ -935,9 +927,6 @@ impl ApplyMotifNetInit {
 }
 
 impl WorkerStageInput for ApplyMotifNetInit {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        C::decode(input)
-    }
 }
 
 #[typetag::serde(name = "ApplyMotifNetInit")]
@@ -960,15 +949,6 @@ impl WorkerStageInput for ApplyMotifNetInput<'_> {
         Ok(Self::from_data_ref(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.batch.as_ref(), all_cuda_tensors, remove)?)))
     }
 
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input = C::decode::<Self>(input)?;
-        let ThoDataRef::Owned(batch_ref) = input.batch else {
-            panic!("unexpected ref: input.batch={:?}", input.batch);
-        };
-        Ok(Self{
-            batch: ThoDataRef::Owned(ThoTensor::ref_to_tensor(all_cuda_tensors, batch_ref)?)
-        })
-    }
 }
 
 #[typetag::serde(name = "ApplyMotifNetInput")]
