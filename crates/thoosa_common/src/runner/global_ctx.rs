@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::ready;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
@@ -155,7 +155,8 @@ impl GlobalCtx {
 
         let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
         for tho_device_idx in 1..num_devices {
-            cuda_actors.push(Box::new(CudaIPCActorHandle::new(tho_device_idx, cuda_worker_args.clone(), arena_fd.as_raw_fd()).await?) as Box<dyn CudaActorHandle>);
+            // Each actor retains its own descriptor so worker resets can remap the parent-owned arena independently.
+            cuda_actors.push(Box::new(CudaIPCActorHandle::new(tho_device_idx, cuda_worker_args.clone(), arena_fd.try_clone()?).await?) as Box<dyn CudaActorHandle>);
         }
 
         Ok(Self {

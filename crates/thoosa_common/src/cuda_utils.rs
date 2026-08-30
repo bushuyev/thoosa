@@ -246,103 +246,68 @@ pub async fn copy_d2h_from_ptr(
     src_ptr: usize,
     src_size: &[i64],
 ) -> Result<Tensor, ThoError> {
-    let tensor_mem_size = tensor_mem_size(init_type, &src_size);
-
-    //TODO add build config to enable asserts
-    // if tensor_mem_size != 0 {
-    //     ensure_copy_d2h_source_is_device_memory(src_ptr)?;
-    // }
-
-    // Keep one future per chunk so a limit increase can start more copy work immediately.
-    let chunks = make_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_from_ptr")?;
-    let chunk_len = chunks.len();
-
     let dst_t = Tensor::f_empty(src_size, (init_type, Cpu))?;
-
-    debug!("copy_d2h_from_ptr: src_t.size={:?} chunks={chunks:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes} dst_t={dst_t:?}",src_size);
-
-    unsafe {
-        let dst_ptr: usize = dst_t.data_ptr() as usize;
-
-        track_await(collect_futures_with_progress(
-            chunks.into_iter().map(|chunk| {
-                let pool = Arc::clone(&bufs_pool);
-                async move {
-                    let buf_stream = track_await(pool.acquire()).await;
-
-                    let result = track_await(spawn_blocking(move || {
-                        let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
-                        let stream = Arc::clone(&buf_stream.1);
-                        let _guard = ThoStreamGuard::new(stream.as_ref())?;
-                        //chunk group was to group adjacent chunks so one blocking task can reuse the same pinned buffer and CUDA stream before returning them to the pool.
-                        // this way of grouping chunks doesn't work with dynamic parallel execution limit in collect_futures_with_progress.
-                        // TODO should still be possible to group chunks according to the current limit?
-                        // for chunk in chunk_group {
-                            let src_off_ptr = src_ptr.add(chunk.offset) as thoosa_shims::memcpy::CuDevicePtr;
-                            let dst_off_ptr: usize = dst_ptr.add(chunk.offset);
-
-                            debug!("copy_d2h_from_ptr: starting {} thread_name={:?} src_off_ptr={src_off_ptr:?} off={}", chunk.index, os_thread_id(), chunk.offset);
-
-
-                            let result = {
-                                let span = tracing::debug_span!(
-                                    "copy_d2h_from_ptr",
-                                    agg_perf = "cuda_utils::copy_d2h_from_ptr/tho_cu_memcpy_dtoh_async",
-                                    len = chunk.len,
-                                );
-
-                                let _enter = span.enter();
-                                thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
-                                    buf_ptr as *mut c_void,
-                                    src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                                    chunk.len,
-                                    stream.as_mut_ptr(),
-                                )
-                            };
-                            if result != CUDA_SUCCESS {
-                                debug!("tho_cu_memcpy_dtoh_async failed at chunk {} with {result:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={}", chunk.index, chunk.len);
-                                check_cuda_status(result, "tho_cu_memcpy_dtoh_async")?;
-                            }
-
-                            debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={result:?}");
-
-                            stream.synchronize()?;
-
-
-                            {
-                                let span = tracing::debug_span!(
-                                    "copy_d2h_from_ptr",
-                                    agg_perf = "cuda_utils::copy_d2h_from_ptr/copy_nonoverlapping",
-                                    len = chunk.len,
-                                );
-
-                                let _enter = span.enter();
-                                std::ptr::copy_nonoverlapping(
-                                    buf_ptr as *const u8,
-                                    dst_off_ptr as *mut u8,
-                                    chunk.len,
-                                );
-                            }
-                        // }
-
-                        drop(buf_stream);
-                        Ok::<(), ThoError>(())
-                    })).await
-                        .map_err(join_error_to_tho_error)
-                        .and_then(|result| result);
-
-                    Ok::<_, ThoError>(result)
-                }
-            }),
-            chunk_len,
-            FuturesOrdering::Unordered,
-            COPY_D2H,
-        )).await
-            .into_iter()
-            .collect::<Result<(), ThoError>>()?;
-    }
+    track_await(copy_d2h_to_ptr(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size, dst_t.data_ptr() as usize)).await?;
     debug!("copy_d2h_from_ptr: dst_t={dst_t:?} dst_t.device={:?}", dst_t.device());
     Ok(dst_t)
+}
+
+/// Copies a CUDA tensor into caller-owned CPU storage. The caller must keep both pointer ranges alive and guarantee that `dst_ptr` covers the byte size implied by `init_type` and `src_size`.
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_to_ptr"))]
+pub async fn copy_d2h_to_ptr(
+    init_type: Kind,
+    buf_size_bytes: usize,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+    src_ptr: usize,
+    src_size: &[i64],
+    dst_ptr: usize,
+) -> Result<(), ThoError> {
+    let tensor_mem_size = tensor_mem_size(init_type, src_size);
+    let chunks = make_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_to_ptr")?;
+    let chunk_len = chunks.len();
+    debug!("copy_d2h_to_ptr: src_size={src_size:?} chunks={chunks:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}");
+
+    track_await(collect_futures_with_progress(
+        chunks.into_iter().map(|chunk| {
+            let pool = Arc::clone(bufs_pool);
+            async move {
+                let buf_stream = track_await(pool.acquire()).await;
+                let result = track_await(spawn_blocking(move || {
+                    let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
+                    let stream = Arc::clone(&buf_stream.1);
+                    let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                    let src_off_ptr = src_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("D2H source pointer offset overflow"))? as thoosa_shims::memcpy::CuDevicePtr;
+                    let dst_off_ptr = dst_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("D2H destination pointer offset overflow"))?;
+                    debug!("copy_d2h_to_ptr: starting {} thread_name={:?} src_off_ptr={src_off_ptr:?} off={}", chunk.index, os_thread_id(), chunk.offset);
+
+                    let result = {
+                        let span = tracing::debug_span!("copy_d2h_to_ptr", agg_perf = "cuda_utils::copy_d2h_to_ptr/tho_cu_memcpy_dtoh_async", len = chunk.len);
+                        let _enter = span.enter();
+                        unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(buf_ptr as *mut c_void, src_off_ptr, chunk.len, stream.as_mut_ptr()) }
+                    };
+                    if result != CUDA_SUCCESS {
+                        debug!("tho_cu_memcpy_dtoh_async failed at chunk {} with {result:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={}", chunk.index, chunk.len);
+                        check_cuda_status(result, "tho_cu_memcpy_dtoh_async")?;
+                    }
+                    stream.synchronize()?;
+
+                    let span = tracing::debug_span!("copy_d2h_to_ptr", agg_perf = "cuda_utils::copy_d2h_to_ptr/copy_nonoverlapping", len = chunk.len);
+                    let _enter = span.enter();
+                    unsafe {
+                        // SAFETY: the caller guarantees the destination range, chunk offsets cover disjoint validated tensor ranges, and the pinned buffer remains leased here.
+                        std::ptr::copy_nonoverlapping(buf_ptr as *const u8, dst_off_ptr as *mut u8, chunk.len);
+                    }
+                    drop(buf_stream);
+                    Ok::<(), ThoError>(())
+                })).await.map_err(join_error_to_tho_error).and_then(|result| result);
+                Ok::<_, ThoError>(result)
+            }
+        }),
+        chunk_len,
+        FuturesOrdering::Unordered,
+        COPY_D2H,
+    )).await.into_iter().collect::<Result<(), ThoError>>()?;
+    Ok(())
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d"))]

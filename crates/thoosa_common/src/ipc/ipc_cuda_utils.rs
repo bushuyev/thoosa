@@ -1,10 +1,8 @@
-//! Interprocess tensor staging backed by anonymous Linux memfd objects.
+//! Legacy per-buffer tensor staging helpers backed by anonymous Linux memfd objects.
 //!
-//! The fd, together with [`IpcTensorTransferMetadata`], is the only shared-memory
-//! identity sent between processes. Mapped addresses and tensor data pointers are
-//! always process-local. The parent should retain an fd for every buffer that must
-//! survive worker restarts and send that fd to each new worker with [`send_fd`].
-//! Concurrent bidirectional transfers should use distinct buffers so each direction has independent ownership.
+//! The active IPC copy protocol maps the parent allocator's arena once and sends
+//! tensor offsets. These helpers remain for their focused low-level tests and any
+//! callers that still need standalone shared mappings.
 
 use std::ffi::{CString, c_void};
 use std::fmt::{Debug, Formatter};
