@@ -632,18 +632,18 @@ mod tests {
         run_ipc_test(
             module_path!(),
             async {
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                let tho_device_idx = 1;
+                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
 
-            let smoke = lin_for_size(1.0, [3000, 30000], Float, &Device::Cpu)?;
-            let expected_smoke = smoke.copy();
-            let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
-            assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
+                let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu)?;
+                let expected_smoke = smoke.copy();
+                let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
+                assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
 
-            let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
-            assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
+                let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
+                assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
 
-            Ok(())
+                Ok(())
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));

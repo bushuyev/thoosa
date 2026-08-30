@@ -706,7 +706,7 @@ pub async fn recv_fd(stream: &UnixStream) -> io::Result<OwnedFd> {
     }
 }
 
-fn send_fd_once(socket_fd: RawFd, fd: RawFd) -> io::Result<()> {
+pub fn send_fd_once(socket_fd: RawFd, fd: RawFd) -> io::Result<()> {
     let marker = [0x46u8];
     let mut iov = libc::iovec { iov_base: marker.as_ptr().cast_mut().cast::<c_void>(), iov_len: marker.len() };
     let control_len = unsafe {

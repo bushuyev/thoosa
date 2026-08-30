@@ -101,6 +101,7 @@ fn main() {
     rerun_if_changed("src-cpp/errors.h");
     rerun_if_changed("src-cpp/optimizers.cpp");
     rerun_if_changed("src-cpp/optimizers.h");
+    rerun_if_changed("src-cpp/shared_arena_allocator.cpp");
 }
 
 fn copy_file(src: impl AsRef<Path>, dst: impl AsRef<Path>) {

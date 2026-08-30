@@ -519,7 +519,7 @@ where
             }
         };
 
-        match copy.inner {
+        match copy.inner {//restores id
             ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
                 // Keep the actor-provided metadata so selectors and later D2H copies describe the actual worker tensor.
                 debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copied to out-of-process ref key={key}", self.id);

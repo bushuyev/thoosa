@@ -85,7 +85,7 @@ tempfile = "3.27.0"
 libc.workspace = true
 typetag.workspace = true
 postcard.workspace = true
-
+memmap2.workspace = true
 [build-dependencies]
 chrono.workspace = true
 
