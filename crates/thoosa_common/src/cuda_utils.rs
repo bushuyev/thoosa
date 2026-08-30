@@ -423,7 +423,7 @@ pub async fn copy_h2d_from_ptr(
                                     agg_perf = "cuda_utils::copy_h2d_from_ptr/copy_nonoverlapping",
                                     len = chunk.len,
                                 );
-
+                                let _enter = span.enter();
                                 std::ptr::copy_nonoverlapping(
                                     src_off_ptr as *const u8,
                                     buf_ptr as *mut u8,
@@ -437,7 +437,7 @@ pub async fn copy_h2d_from_ptr(
                                     agg_perf = "cuda_utils::copy_h2d_from_ptr/tho_cu_memcpy_htod_async",
                                     len = chunk.len,
                                 );
-
+                                let _enter = span.enter();
                                 thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                                     dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                                     buf_ptr as *const c_void,
