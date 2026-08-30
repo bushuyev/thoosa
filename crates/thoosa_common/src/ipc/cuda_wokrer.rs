@@ -247,7 +247,14 @@ impl CudaWorker {
 
         let arena_size = file.metadata()?.len() as usize;
 
-        let arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
+        let mut arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
+        // unsafe {
+            // assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_RANDOM), 0);
+            // assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_HUGEPAGE), 0);
+        // };
+
+
+
         // The descriptor can close after mmap; the mapping itself remains shared and is retained by the request context.
         let shared_arena = Arc::new(WorkerSharedArena { mapping: arena });
         debug!("run_worker: mapped shared arena len={arena_size}");
@@ -262,7 +269,7 @@ impl CudaWorker {
             exec_stream_pool,
             all_cuda_tensors,
             shared_arena,
-            copy_ctx: Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 16)?)),
+            copy_ctx: Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.1, 32)?)),
             installed_endpoints: Arc::new(DashMap::new()),
             reply_tx: reply_tx.clone(),
             tho_device,

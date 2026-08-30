@@ -69,6 +69,7 @@ pub unsafe extern "C" fn rust_talc_init(
 
 
 #[unsafe(no_mangle)]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="rust_talc_alloc"))]
 pub extern "C" fn rust_talc_alloc(
     size: usize,
     alignment: usize,

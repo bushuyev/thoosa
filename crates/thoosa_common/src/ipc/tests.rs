@@ -100,7 +100,7 @@ where
 
     } else {
         let main_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(16)
+            .worker_threads(32)
             .enable_all()
             .thread_name_fn(|| {
                 static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
@@ -1149,7 +1149,7 @@ mod tests {
             let mut out = Vec::new();
 
             // Fill initial batch.
-            for _ in 0..32 {
+            for _ in 0..16 {
                 let Some(item) = iter.next() else {
                     break;
                 };
