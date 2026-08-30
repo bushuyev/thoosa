@@ -1,4 +1,4 @@
-use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d};
+use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_d2h_from_ptr, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::SharedMemfdBuffer;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
@@ -725,6 +725,12 @@ impl CopyCtx {
         // println!("copy_from_ptr: copied t.size={:?} dst_device={dst_device} t=\n{t}", t.size());
 
         t
+    }
+
+    /// Copies CUDA storage into an already allocated CPU range, which lets an IPC worker fill a tensor owned by the parent shared allocator.
+    pub async fn copy_to_cpu_ptr(&self, src_ptr: usize, src_size: &[i64], kind: Kind, dst_ptr: usize) -> Result<(), ThoError> {
+        let bufs_pool = self.bufs_pool_d2h.as_ref().ok_or_else(|| ThoError::new("D2H copy buffer pool is unavailable"))?;
+        track_await(copy_d2h_to_ptr(kind, self.buf_size, bufs_pool, src_ptr, src_size, dst_ptr)).await
     }
 
     pub fn buf_size(&self) -> usize {
