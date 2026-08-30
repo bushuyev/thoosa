@@ -16,6 +16,8 @@ log.workspace = true
 ctor.workspace = true
 tch.workspace = true
 tracing.workspace = true
+talc.workspace = true
+parking_lot.workspace = true
 [build-dependencies]
 cmake = "0.1"
 

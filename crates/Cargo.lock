@@ -50,6 +50,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "allocator-api2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
+
+[[package]]
 name = "ambassador"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1826,7 +1832,7 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
- "allocator-api2",
+ "allocator-api2 0.2.21",
  "equivalent",
  "foldhash 0.1.5",
 ]
@@ -1837,7 +1843,7 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
- "allocator-api2",
+ "allocator-api2 0.2.21",
  "equivalent",
  "foldhash 0.2.0",
  "rayon",
@@ -5095,6 +5101,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "talc"
+version = "5.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49661c532dfd6e4f570ef10a45cb92f6f4fce5a28245558ae48307b57b40a5b4"
+dependencies = [
+ "allocator-api2 0.4.0",
+ "lock_api",
+]
+
+[[package]]
 name = "tch"
 version = "0.20.0"
 source = "git+https://github.com/bushuyev/tch-rs.git?branch=tch-0.20-local#7acea73c07890f5799cbd32e22a0503926d90c70"
@@ -5231,6 +5247,7 @@ dependencies = [
  "libc",
  "libloading 0.9.0",
  "log",
+ "memmap2",
  "mockall",
  "mockall_double",
  "num-traits",
@@ -5554,6 +5571,8 @@ dependencies = [
  "cmake",
  "ctor 0.5.0",
  "log",
+ "parking_lot",
+ "talc",
  "tch",
  "thoosa_shared",
  "torch-sys",

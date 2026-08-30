@@ -7,3 +7,5 @@ pub mod inference_mode;
 pub mod quantized_linear;
 pub mod cpp_log;
 pub mod optimizers;
+pub mod arena;
+mod talc_alloca;

@@ -1,7 +1,7 @@
 use crate::copy_ctx::{CopyCtx, CudaActorHandle, HandleCtx};
-use crate::cuda_utils::{make_chunks, tensor_mem_size};
+use crate::cuda_utils::{make_chunks, tensor_mem_size, CopyChunk};
 use crate::dims::Dims;
-use crate::ipc::ipc_cuda_utils::{IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer, recv_fd, send_fd};
+use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, send_fd_once, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
@@ -24,7 +24,7 @@ use std::ffi::c_void;
 use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::mem;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -53,6 +53,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
 use tub::{Guard, Pool};
+use thoosa_shims::arena::shared_arena_offset_of;
 use crate::ipc::cuda_wokrer::insert_worker_tensor;
 use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
@@ -683,10 +684,10 @@ impl SpawnedState {
 }
 
 impl CudaIPCActor {
-    pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
+    pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, arena_fd: RawFd) -> Result<Self, ThoError> {
         let cuda_worker_args = Arc::new(cuda_worker_args);
 
-        let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args).await?;
+        let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args, arena_fd).await?;
 
 
         debug!("CudaIPCActor::new: worker device_info={:?} ipc_copy_buffers={IPC_COPY_BUFFERS} ipc_copy_buffer_size={IPC_COPY_BUFFER_SIZE}", spawned_state.device_info);
@@ -705,10 +706,10 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_and_loops(tho_device_idx: usize, cuda_worker_args: &Vec<String>) -> Result<SpawnedState, ThoError> {
+    async fn spawn_worker_and_loops(tho_device_idx: usize, cuda_worker_args: &Vec<String>,arena_fd: RawFd) -> Result<SpawnedState, ThoError> {
         debug!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
 
-        let (mut child, stream, device_info) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args).await?;
+        let (mut child, stream, device_info) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args, arena_fd).await?;
 
         let (reader, writer) = stream.into_split();
 
@@ -732,7 +733,7 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
+    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>, arena_fd: RawFd) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
         let exe = std::env::current_exe()?;
 
         debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
@@ -788,6 +789,7 @@ impl CudaIPCActor {
         let device_info:DeviceInfo = PostcardToFromBytes::from_bytes(&read_frame(&mut stream, "DeviceInfo/main", MAX_FRAME_LEN).await?)?;
         debug!("CudaIPCActor::spawn_worker: main received: {device_info:?}");
 
+        send_fd_once(stream.as_raw_fd(), arena_fd)?;
 
         // The socket file can be removed after accept. The connected UnixStream
         // remains valid.
@@ -847,16 +849,17 @@ impl CudaIPCActor {
                 });
             }
             CudaIPCActorMessage::Reset { respond_to } => {
-                debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
-                let self_arc = Arc::clone(&self.cuda_worker_args);
-
-
-                let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(self.tho_device_idx, &self_arc).await?);
-                // old_pawned_state.shutdown("ups").await;
-
-                debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset done");
-
-                let _ = respond_to.send(Ok(()));
+                // debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
+                // let self_arc = Arc::clone(&self.cuda_worker_args);
+                //
+                //
+                // let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(self.tho_device_idx, &self_arc).await?);
+                // // old_pawned_state.shutdown("ups").await;
+                //
+                // debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset done");
+                //
+                // let _ = respond_to.send(Ok(()));
+                todo!()
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
 
@@ -1190,9 +1193,15 @@ impl CudaIPCActor {
         }
 
         // The parent side of H2D only stages CPU bytes into memfd-backed chunks; the worker owns the later CUDA copy.
-        let chunks = make_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?;
+        let chunks: Vec<CopyChunk> = vec![]; //make_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?;
         let chunk_count = chunks.len();
-        validate_ipc_chunk_capacity(chunk_count, "worker IPC H2D copy")?;
+        let chunk_count =  unsafe {
+            shared_arena_offset_of(
+                src.t_ref().data_ptr()
+            )
+        } as usize;
+
+        // validate_ipc_chunk_capacity(chunk_count, "worker IPC H2D copy")?;
         let src_kind = src.t_ref().kind();
         let src_shape = src.t_ref().size();
         let src_ptr: usize = src.t_ref().data_ptr() as usize;
@@ -1202,9 +1211,9 @@ impl CudaIPCActor {
             let src_keepalive = src;
             let result = async move {
                 // H2D buffers remain leased until the complete tensor is acknowledged. Reserve the full set atomically to prevent concurrent multi-chunk transfers from each holding an unusable subset of the pool.
-                let permit_count = u32::try_from(chunk_count).map_err(|_| ThoError::new(format!("H2D chunk count {chunk_count} does not fit the copy-buffer semaphore")))?;
-                let _buffer_permits = h2d_buffer_permits.acquire_many_owned(permit_count).await.map_err(|_| ThoError::new("IPC H2D buffer semaphore is closed"))?;
-
+                let permit_count =0; // u32::try_from(chunk_count).map_err(|_| ThoError::new(format!("H2D chunk count {chunk_count} does not fit the copy-buffer semaphore")))?;
+                // let _buffer_permits = h2d_buffer_permits.acquire_many_owned(permit_count).await.map_err(|_| ThoError::new("IPC H2D buffer semaphore is closed"))?;
+                debug!("CudaIPCActor::handle_h2d_copy: chunk_count={chunk_count:?}");
                 let response = send_request_and_wait_msg(
                     self_tx.clone(),
                     Arc::clone(&pending),
@@ -1535,11 +1544,11 @@ pub struct CudaIPCActorHandle {
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
-    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<String>) -> Result<Self, ThoError> {
+    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<String>, arena_fd: RawFd) -> Result<Self, ThoError> {
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);
-        let actor = CudaIPCActor::new(tho_device_id, cuda_worker_args, receiver).await?;
+        let actor = CudaIPCActor::new(tho_device_id, cuda_worker_args, receiver, arena_fd).await?;
         tokio::spawn(CudaIPCActor::run(actor));
 
         Ok(Self {

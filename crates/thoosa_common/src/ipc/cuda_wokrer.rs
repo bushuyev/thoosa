@@ -1,6 +1,6 @@
-use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
+use crate::cuda_utils::{copy_h2d_from_ptr, cuda_mem_for_device, tensor_mem_size};
 use crate::data_with_extra::DataWithExtra;
-use crate::dims::Dims;
+use crate::dims::{AnyDims, Dims};
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerD2hChunk, WorkerH2dChunk, WorkerH2dStartPayload, WorkerTensorInfoPayload};
@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::Debug;
+use std::fs::File;
 use std::io::ErrorKind;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
@@ -41,6 +42,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::field::debug;
 use tub::Pool;
+use memmap2::{MmapMut, MmapOptions};
+use thoosa_shared::tracked_await::track_await;
+use crate::copy_ctx::CopyCtx;
 
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
@@ -66,6 +70,7 @@ struct WorkerRequestContext {
     installed_endpoints: InstalledEndpoints,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
+    copy_ctx:Arc<tokio::sync::RwLock<CopyCtx>>
 }
 
 enum WorkerReaderAction {
@@ -207,6 +212,17 @@ impl CudaWorker {
             "DeviceInfo/worker"
         ).await?;
 
+        let arena_fd = recv_fd(reader.as_ref()).await?;
+        debug!("run_worker: arena_fd={arena_fd:?}");
+        let file = File::from(arena_fd);
+
+
+        let arena_size = file.metadata()?.len() as usize;
+
+        let mut arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
+        debug!("run_worker: arena={arena:?}");
+        let arena_ptr = arena.as_mut_ptr() as usize;
+
         let (reply_tx, reply_rx) = mpsc::channel::<CudaWorkerMsgOut>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
@@ -222,6 +238,8 @@ impl CudaWorker {
             installed_endpoints: Arc::new(DashMap::new()),
             reply_tx: reply_tx.clone(),
             tho_device,
+
+            copy_ctx: Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 16)?))
         };
         let mut request_tasks = JoinSet::new();
 
@@ -230,7 +248,9 @@ impl CudaWorker {
             let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
             let (reader_action_tx, reader_action_rx) = oneshot::channel();
             let task_context = request_context.clone();
-            request_tasks.spawn(async move { Self::process_worker_payload(payload, reader_action_tx, task_context).await });
+            request_tasks.spawn(async move {
+
+                Self::process_worker_payload(payload, reader_action_tx, task_context, arena_ptr).await });
 
             let shutdown = match reader_action_rx.await.map_err(|_| ThoError::new("worker request task stopped before releasing the socket reader"))? {
                 WorkerReaderAction::Ready => None,
@@ -290,7 +310,7 @@ impl CudaWorker {
         Ok(())
     }
 
-    async fn process_worker_payload(payload: Vec<u8>, reader_action_tx: oneshot::Sender<WorkerReaderAction>, context: WorkerRequestContext) -> Result<WorkerRequestControl, ThoError> {
+    async fn process_worker_payload(payload: Vec<u8>, reader_action_tx: oneshot::Sender<WorkerReaderAction>, context: WorkerRequestContext, arena_ptr: usize) -> Result<WorkerRequestControl, ThoError> {
         let mut request = match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
             Ok(request) => request,
             Err(error) => {
@@ -316,10 +336,10 @@ impl CudaWorker {
             }
         }
 
-        Self::process_worker_request(request, context).await
+        Self::process_worker_request(request, context, arena_ptr).await
     }
 
-    async fn process_worker_request(request: CudaWorkerMsgIn, context: WorkerRequestContext) -> Result<WorkerRequestControl, ThoError> {
+    async fn process_worker_request(request: CudaWorkerMsgIn, context: WorkerRequestContext, arena_ptr: usize) -> Result<WorkerRequestControl, ThoError> {
         let request_id = request.request_id;
         let op_r: Result<WorkerRequestControl, ThoError> = (async || match request.operation {
             Operation::DescribeRef { tensor_key } => {
@@ -335,15 +355,48 @@ impl CudaWorker {
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::H2dStart { worker_id, kind, shape, tensor_byte_len, chunk_count } => {
-                debug!("run_worker: Operation::H2dStart worker_id={worker_id:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} chunk_count={chunk_count}");
+                debug!("run_worker: Operation::H2dStart worker_id={worker_id:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} chunk_count={chunk_count} arena_ptr={arena_ptr}");
                 let cuda_device = context.tho_device.gpu_ordinal();
-                let transfer = panic_to_err!(cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload { transfer_id: request_id, worker_id, kind, shape, tensor_byte_len, chunk_count }, cuda_device))?;
-                // Retain preflight metadata so the ordered start is validated once; CUDA allocation remains bounded by completed staged transfers.
-                let old = context.pending_h2d_transfers.lock().insert(request_id, transfer);
-                if old.is_some() {
-                    return Err(ThoError::new(format!("duplicate H2D transfer start for transfer_id={request_id}")));
-                }
-                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                let tensor_ptr =
+                    unsafe {
+                        (arena_ptr as *mut u8)
+                            .add(chunk_count)
+                    };
+
+                // debug!("run_worker: Operation::H2dStart tensor_ptr={tensor_ptr:?}");
+
+
+
+                // let t =         unsafe {
+                //     Tensor::from_blob(
+                //         tensor_ptr,
+                //         &shape,
+                //         &[],
+                //         kind.into(),
+                //         Device::Cpu,
+                //     )
+                // };
+                // debug!("run_worker: t=\n{t}");
+
+                // let tt = ThoTensor::<AnyDims, ()>::new((), t)?;
+                //
+                // let cuda_t = context.copy_ctx.read().await.copy(tt.as_ref(), 1, kind.into()).await?;
+                let cuda_t = context.copy_ctx.read().await.copy_from_ptr(
+                    unsafe {
+                        (arena_ptr as *mut u8)
+                            .add(chunk_count) as usize
+                    }, &shape, 1, kind.into()).await?;
+                debug!("run_worker: cuda_t=\n{cuda_t}, cuda_t.device={:?}", cuda_t.device());
+
+                // let transfer = panic_to_err!(cuda_process::prepare_worker_h2d_transfer(WorkerH2dStartPayload { transfer_id: request_id, worker_id, kind, shape, tensor_byte_len, chunk_count }, cuda_device))?;
+                // // Retain preflight metadata so the ordered start is validated once; CUDA allocation remains bounded by completed staged transfers.
+                // let old = context.pending_h2d_transfers.lock().insert(request_id, transfer);
+                // if old.is_some() {
+                //     return Err(ThoError::new(format!("duplicate H2D transfer start for transfer_id={request_id}")));
+                // }
+                // context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                
                 debug!("run_worker: Operation::H2dStart done");
                 Ok(WorkerRequestControl::Continue)
             }

@@ -13,6 +13,7 @@ use futures_util::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::ready;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
@@ -24,6 +25,7 @@ use thoosa_shared::{ThoError, async_perf_log, async_read_owned_lock, async_write
 use thoosa_shims::context::ThoCudaContext;
 use tokio::sync::RwLock as AsyncRwLock;
 use tracing::Instrument;
+use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
 
 pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 
@@ -45,6 +47,7 @@ pub struct GlobalCtx {
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
     is_ipc: bool,
+    arena_fd:Option<OwnedFd> //TODO needed in IPC mode only
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -116,6 +119,7 @@ impl GlobalCtx {
 
             cuda_actors,
             is_ipc: false,
+            arena_fd: None,
         })
     }
 
@@ -125,9 +129,33 @@ impl GlobalCtx {
 
         assert!(num_devices > 0);//TODO test if it works without GPU
 
+        const ARENA_SIZE: usize = 10 * 1024 * 1024 * 1024;
+
+        let rc = unsafe {
+            shared_arena_init(
+                ARENA_SIZE
+            )
+        };
+
+        if rc != 0 {
+            return Err(ThoError::new("shared_arena_init failed"));
+        }
+
+        let raw_fd = unsafe {
+            shared_arena_dup_fd()
+        };
+
+        if raw_fd < 0 {
+            return Err(ThoError::new("shared_arena_dup_fd failed"));
+        }
+
+
+        let arena_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+
+
         let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
         for tho_device_idx in 1..num_devices {
-            cuda_actors.push(Box::new(CudaIPCActorHandle::new(tho_device_idx, cuda_worker_args.clone()).await?) as Box<dyn CudaActorHandle>);
+            cuda_actors.push(Box::new(CudaIPCActorHandle::new(tho_device_idx, cuda_worker_args.clone(), arena_fd.as_raw_fd()).await?) as Box<dyn CudaActorHandle>);
         }
 
         Ok(Self {
@@ -148,8 +176,11 @@ impl GlobalCtx {
 
             cuda_actors,
             is_ipc: true,
+            arena_fd: Some(arena_fd),
         })
     }
+
+
 
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
