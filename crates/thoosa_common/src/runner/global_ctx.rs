@@ -129,7 +129,7 @@ impl GlobalCtx {
 
         assert!(num_devices > 0);//TODO test if it works without GPU
 
-        const ARENA_SIZE: usize = 10 * 1024 * 1024 * 1024;
+        const ARENA_SIZE: usize = 48 * 1024 * 1024 * 1024; //TODO config
 
         let rc = unsafe {
             shared_arena_init(
