@@ -1,10 +1,9 @@
 use std::any::Any;
 use std::fmt::Debug;
-use std::os::fd::OwnedFd;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::ThoError;
 use crate::ipc::cuda_wokrer::WorkerStageOutput;
-use crate::ipc::ipc_cuda_utils::{IpcTensorKind, IpcTensorTransferMetadata};
+use crate::ipc::ipc_cuda_utils::IpcTensorKind;
 use crate::runner::common::cachable::ThoDataRef;
 
 #[typetag::serde(tag = "type")]
@@ -27,19 +26,21 @@ pub enum Operation {
     DescribeRef {
         tensor_key: u64
     },
-    H2dStart {
+    H2dCopy {
         worker_id: u64,
         kind: IpcTensorKind,
         shape: Vec<i64>,
         tensor_byte_len: usize,
-        chunk_count: usize,
+        // The parent owns the shared allocator, so the worker addresses the live CPU tensor by its offset in the arena mapping.
+        arena_offset: usize,
     },
-    SharedMemfd {
-        metadata: IpcTensorTransferMetadata,
-        // D2H carries its source key with the fd so concurrent worker tasks cannot observe a chunk before separate setup completes.
-        tensor_key: Option<u64>,
-        #[serde(skip)]
-        fd: Option<OwnedFd>,
+    D2hCopy {
+        tensor_key: u64,
+        kind: IpcTensorKind,
+        shape: Vec<i64>,
+        tensor_byte_len: usize,
+        // D2H writes into a CPU tensor preallocated by the parent because only the parent may allocate and free arena storage.
+        arena_offset: usize,
     },
     DropThoTensor { tensor_key: u64 },
     InstallStage { endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput> },
@@ -77,6 +78,15 @@ pub struct CudaWorkerMsgOut {
     pub status:OpResult
 
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct WorkerCopyDonePayload {
+    pub(crate) transfer_id: u64,
+    pub(crate) tensor_ref: u64,
+}
+
+#[typetag::serde]
+impl WorkerOutput for WorkerCopyDonePayload {}
 
 impl OpResult {
     pub fn failed(msg:String)-> Self {
