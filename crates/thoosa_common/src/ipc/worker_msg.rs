@@ -27,7 +27,6 @@ pub enum Operation {
         tensor_key: u64
     },
     H2dCopy {
-        worker_id: u64,
         kind: IpcTensorKind,
         shape: Vec<i64>,
         tensor_byte_len: usize,

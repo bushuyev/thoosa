@@ -248,11 +248,10 @@ impl CudaWorker {
         let arena_size = file.metadata()?.len() as usize;
 
         let mut arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
-        // unsafe {
-            // assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_RANDOM), 0);
-            // assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_HUGEPAGE), 0);
-        // };
-
+       /* unsafe {
+            assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_RANDOM), 0);
+            assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_HUGEPAGE), 0);
+        };*/
 
 
         // The descriptor can close after mmap; the mapping itself remains shared and is retained by the request context.
@@ -289,7 +288,7 @@ impl CudaWorker {
             };
 
             if let Some(request_id) = shutdown {
-                break request_id;
+                break request_id;//can't break loop from match
             }
 
             // Reap tasks only between complete frames so doing so can never cancel an in-progress socket read.
@@ -369,13 +368,12 @@ impl CudaWorker {
                 debug!("run_worker: DescribeRef response {request_id} sent");
                 Ok(WorkerRequestControl::Continue)
             }
-            Operation::H2dCopy { worker_id, kind, shape, tensor_byte_len, arena_offset } => {
-                debug!("run_worker: Operation::H2dCopy worker_id={worker_id:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
-                if worker_id != context.tho_device.tho_device_idx() as u64 {
-                    return Err(ThoError::new(format!("H2D request targets worker_id={worker_id}, but this worker has id={}", context.tho_device.tho_device_idx())));
-                }
+            Operation::H2dCopy { kind, shape, tensor_byte_len, arena_offset } => {
+                debug!("run_worker: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
+
                 let cuda_device = context.tho_device.gpu_ordinal();
                 validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "H2D source")?;
+
                 let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
                 let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, 1, kind.into()).await?;
                 let tensor_ref = insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?;
@@ -389,6 +387,7 @@ impl CudaWorker {
             Operation::D2hCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
                 debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
                 validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "D2H destination")?;
+
                 let cuda_device = context.tho_device.gpu_ordinal();
                 let source = prepare_d2h_source(&context.all_cuda_tensors, tensor_key, kind, &shape, cuda_device)?;
                 let source_ptr = source.data_ptr() as usize;
