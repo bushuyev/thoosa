@@ -1110,10 +1110,8 @@ where
     let mut task = Some(task);
     let mut run_context = Some(run_context);
 
-    #[cfg(not(tho_debug))]
-    const INPUT_ID_DBG:&str = "n/a";
 
-    debug!("OOMHandler::run: 1.  ctx_id={ctx_id:?} task={:?} os_thread_id={} input.id={INPUT_ID_DBG} max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
+    debug!("OOMHandler::run: 1.  ctx_id={ctx_id:?} task={:?} os_thread_id={}  max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
     let mut i = 0;
     let mut input_select_adjusted: Option<S> = None;
@@ -1239,7 +1237,7 @@ where
             #[cfg(tho_debug)]
             track_await(GlobalCtx::global().debug_caches(device_idx, "all_failed")).await;
 
-            Err(Cause::SomethingElse(format!("all_failed: INPUT_ID_DBG={INPUT_ID_DBG}")).into())
+            Err(Cause::SomethingElse(format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task"))).into())
         }
         Ok(o) => {
             debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());
