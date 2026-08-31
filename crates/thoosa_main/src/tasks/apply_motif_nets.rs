@@ -1781,7 +1781,7 @@ pub(crate) mod tests {
                 .with_list_trained_nets([
                     (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
                         TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
-                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
+                        TrainedNet { id: 1, run_config_id: select_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
                     ])),
                 ])
                 .build(),
