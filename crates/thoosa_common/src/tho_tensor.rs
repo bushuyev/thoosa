@@ -72,13 +72,6 @@ where
         drop(self.inner);
     }
 
-}
-
-impl<D, Id> ThoTensor<D, Id>
-where
-    D: Dims,
-    Id: Named + Debug + Clone,
-{
     pub fn to_kind(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
         Ok(ThoTensor {
             id: self.id.clone(),
@@ -115,6 +108,36 @@ where
                 )
             }
         }
+    }
+
+    pub fn strip_types(self)->ThoTensor {
+        ThoTensor {
+            id: (),
+            inner: self.inner,
+            tracking: Default::default(),
+            pd: Default::default(),
+        }
+    }
+
+
+}
+
+impl ThoTensor {
+    pub fn to_types<Df, Idf>(self, id: Idf) -> Result<ThoTensor<Df, Idf>, ThoError>
+    where
+        Df: Dims,
+        Idf: Named + std::fmt::Debug + Clone,
+    {
+
+        match self.inner {
+            ThoTensorInner::Val { t } => {
+                ThoTensor::new(id, t)
+            }
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+                Ok(ThoTensor::new_ref(id, key, size, kind, selector, tho_device_idx))
+            }
+        }
+
     }
 
 }

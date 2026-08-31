@@ -89,12 +89,12 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>>;
 
 
-    fn do_run_with_state_2<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
+    fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
 }
 
 pub trait ErasedWithState: Sync + Debug {
 
-    fn do_run_with_state_2<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
+    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
 }
 
 impl<T> ErasedWithState for T
@@ -102,12 +102,12 @@ where
     T: SyncStageIpcWrapperWithState + 'static,
 {
 
-    fn do_run_with_state_2<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
+    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
         async move {
             let state = SyncStageIpcWrapperWithState::pre_run(self, tho_device).await?;
             // Create the thread-affine stream guard after pre_run so it is never held across an await.
             let _guard = ThoStreamGuard::new(stream)?;
-            let output = SyncStageIpcWrapperWithState::do_run_with_state_2(self, input, all_cuda_tensors, state, tho_device, run_ctx)?;
+            let output = SyncStageIpcWrapperWithState::do_run_with_state(self, input, all_cuda_tensors, state, tho_device, run_ctx)?;
             // Match stateless worker execution by completing queued CUDA work before another stream can consume the returned tensor reference.
             stream.synchronize()?;
             Ok(output)
@@ -116,7 +116,7 @@ where
 }
 
 
-pub trait ToFromBytes {
+pub trait ToFromBytes {//TODO rename
     fn to_bytes<T>(value:&T) -> Result<Vec<u8>, ThoError>
     where
         T: Serialize + ?Sized;

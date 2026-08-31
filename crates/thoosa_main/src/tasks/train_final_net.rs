@@ -40,6 +40,7 @@ use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
