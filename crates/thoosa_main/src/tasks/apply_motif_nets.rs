@@ -366,7 +366,7 @@ where
         let mut apply_motif_nets = vec![];
         for trained_net in trained_nets.into_iter() {
             // let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&trained_net.net_path, &ThoDevice::from(1).into(), false).unwrap();
-            let (channel, motif_id) = FsWorkspace::parse_motif_path(&trained_net.net_path).unwrap();
+            let (channel, motif_id) = FsWorkspace::parse_motif_path(&trained_net.net_path)?;
 
             let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
 

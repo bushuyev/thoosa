@@ -916,7 +916,7 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    pub async fn install_stage_2(&self, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> Result<CudaWorkerMsgOut, ThoError> {
+    pub async fn install_stage(&self, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> Result<CudaWorkerMsgOut, ThoError> {
         debug!("CudaIPCActorHandle::invoke_stage: install_stage_2={endpoint_name} stage_id={stage_id} init_data={init_data:?}");
 
         let (respond_to, recv) = oneshot::channel();
@@ -938,6 +938,8 @@ impl CudaIPCActorHandle {
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
+
+
 
 }
 
@@ -1082,6 +1084,26 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
+
+    async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
+        debug!("CudaIPCActorHandle::debug_worker");
+
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::SendMsg {
+                input: CudaWorkerMsgIn {
+                    request_id: 0,
+                    operation: Operation::Debug,
+                },
+                respond_to,
+            }
+        )
+            .instrument(tracing::debug_span!("CudaIPCActorHandle::send_msg",agg_perf="CudaIPCActorHandle::install_stage_2",)).await
+            .map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
 }
 
 

@@ -377,6 +377,9 @@ impl CudaWorker {
                 let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
                 let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, 1, kind.into()).await?;
                 let tensor_ref = insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?;
+
+                info!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref} request.request_id={:?}", request.request_id);
+
                 context.reply_tx.send(CudaWorkerMsgOut {
                     request_id,
                     status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)),
@@ -485,6 +488,15 @@ impl CudaWorker {
             Operation::Shutdown { dummy: _ } => {
                 debug!("run_worker: worker got shutdown command request_id={request_id}");
                 Ok(WorkerRequestControl::Shutdown { request_id })
+            }
+            Operation::Debug => {
+                info!("run_worker: context.tho_device={:?}", context.tho_device);
+                for (key, tensor) in context.all_cuda_tensors.lock().iter(){
+                    info!("run_worker: key={key:?} tensor={tensor:?}");
+                }
+
+                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                Ok(WorkerRequestControl::Continue)
             }
         })().await;
 
@@ -620,6 +632,8 @@ where
         let size = out_tensor.size();
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
+
+        info!("worker_tensor_to_ref: out_key={out_key} out_id={out_id:?}");
 
         Ok(ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.tho_device_idx()))
     }
