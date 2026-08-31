@@ -42,6 +42,7 @@ use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::tasks::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
+use crate::tasks::instance_cache::InstanceCache;
 use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
@@ -229,7 +230,7 @@ where
 
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: Arc::new(track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, label_net, 1.into(), batch_in_chunks, ws, false)).await?),
+                    apply_label_net: track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, label_net, 1.into(), batch_in_chunks, ws, false)).await?,
                 });
             }
         }
@@ -757,6 +758,9 @@ where
     batch_in_chunks: usize
 }
 
+// Loading a trained label net repeatedly must reuse both its module state and installed endpoint.
+static APPLY_LABEL_NET_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl<C> ApplyLabelNet<C>
 where
     C: RunCtx + 'static,
@@ -769,38 +773,39 @@ where
         batch_in_chunks: usize,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         quantize: bool,
-    ) -> Result<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>, ThoError> {
-        let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
-               &trained_net.net_path,
-               &device,
-               quantize
-        )?;
+    ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
+        let trained_net_id = trained_net.id;
+        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
+            let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
+                   &trained_net.net_path,
+                   &device,
+                   quantize
+            )?;
 
-        let init = ApplyLabelNetInit::new(
-            label.clone(),
-            train_label_net_run_config_id,
-            trained_net.net_path.clone(),
-            batch_in_chunks,
-            quantize
-        );
+            let init = ApplyLabelNetInit::new(
+                label.clone(),
+                train_label_net_run_config_id,
+                trained_net.net_path.clone(),
+                batch_in_chunks,
+                quantize
+            );
 
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
-            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init.clone())).await?),
-                init,
-            })
-        } else {
-            Ok(
-                DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
+            if GlobalCtx::global().is_ipc() {
+                static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
+                let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+                Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init.clone())).await?),
+                    init,
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
                     label,
                     train_label_net_run_config_id,
                     net,
                     batch_in_chunks
-                ).await?))
-            )
-        }
+                ).await?))))
+            }
+        }).await
     }
 
     async fn new_local(
