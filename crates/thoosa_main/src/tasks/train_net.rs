@@ -2,12 +2,13 @@ use async_trait::async_trait;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
-use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper, TrainStepXFn};
+use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use futures_util::{StreamExt, future::BoxFuture};
 use log::{debug, info, trace, warn};
 use rand::random;
@@ -30,7 +31,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::parzen::optimizer::CompletedTrial;
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -59,6 +60,65 @@ pub fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
         Device::Cuda(_) if  Device::cuda_if_available().is_cuda() => Some(cuda_mem()),
         _ => None,
+    }
+}
+
+/// Tracks batch chunks and combines their mean losses without biasing the final short chunk.
+#[derive(Debug)]
+struct TrainStepSplitsContext {
+    input_len: i64,
+    split_len: i64,
+    done_to: i64,
+    weighted_loss_sum: f64,
+    samples: i64,
+}
+
+impl TrainStepSplitsContext {
+    fn new(input_len: i64) -> Self {
+        Self { input_len, split_len: input_len, done_to: 0, weighted_loss_sum: 0.0, samples: 0 }
+    }
+}
+
+impl SplitsAdjusterContext for TrainStepSplitsContext {
+    type Metrics = i64;
+
+    fn input_len(&self) -> &Self::Metrics {
+        &self.input_len
+    }
+
+    fn split_len(&self) -> &Self::Metrics {
+        &self.split_len
+    }
+
+    fn done_to(&self) -> &Self::Metrics {
+        &self.done_to
+    }
+
+    fn split_len_mut(&mut self) -> &mut Self::Metrics {
+        &mut self.split_len
+    }
+}
+
+impl<'a, R> InputContext<'a, R> for TrainStepSplitsContext
+where
+    R: Stage<Out = TrainStepOutput> + 'a,
+{
+    async fn add_partial_output(&mut self, output: R::Out) {
+        let chunk_len = self.split_len.min(self.input_len - self.done_to);
+        self.weighted_loss_sum += f64::from(output.loss) * chunk_len as f64;
+        self.samples += chunk_len;
+        self.done_to += chunk_len;
+    }
+
+    fn all_done(&self) -> bool {
+        self.done_to >= self.input_len
+    }
+
+    async fn build_final_output(self) -> Result<R::Out, ThoError> {
+        if self.samples == 0 {
+            return Err(ThoError::new("TrainStep input adjuster produced no samples"));
+        }
+        Ok(TrainStepOutput { loss: (self.weighted_loss_sum / self.samples as f64) as f32 })
     }
 }
 
@@ -244,13 +304,14 @@ where
 
             debug!("TrainNet::run_inner: descr={descr} device={device:?} epochs={epochs}");
 
-            let oom_handler = OOMHandler::<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()>::new(
+            let oom_handler: OOMHandler<'_, '_, _, NoTaskAdjuster, _, TrainStepInputSelector> = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
                         *MaxParallelStep::FIFTY,
                     ))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("train_step"))),
+                    Adjusters::Input(input_adjuster(SplitsAdjuster::<TrainStepInputSelector, i64>::new(1))),
                 ],
                 None,
             );
@@ -282,7 +343,9 @@ where
                         &train_step,
                         Arc::clone(&input),
                         ctx.branch(false),
-                        WithRunCtxContext::new(
+                        Contexts::<DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, _, _, _>::new(
+                            TrainStepSplitsContext::new(input.batch_len()?),
+                            NoopRunnableContext {},
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
                                 DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
@@ -310,11 +373,14 @@ where
                         .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
                         .await {
                         let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false, false)));
+                        let input_context = TrainStepSplitsContext::new(input.batch_len()?);
                         let output = oom_handler.run(
                             &train_step,
                             input,
                             ctx.branch(false),
-                            WithRunCtxContext::new(
+                            Contexts::<DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, _, _, _>::new(
+                                input_context,
+                                NoopRunnableContext {},
                                 MaxParallelAndDumpToCpuAdjustableContex::new(
                                     MaxParallelAdjustContextImpl::new(),
                                     DumpToCpuContextImpl::new(&dump_to_cpu_exclude),

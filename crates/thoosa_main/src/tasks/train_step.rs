@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,17 +17,17 @@ use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::codec::IpcCodec;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::my_tch::LossFp;
-use thoosa_common::runner::common::cachable::{BorrowRef, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, ThoDataRef};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
 use thoosa_common::tho_varstore::ThoTrainModule;
 use thoosa_common::utils::optimizer_mem_size;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
 use thoosa_common::ipc::worker_msg::WorkerOutput;
@@ -313,6 +314,92 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
             save_var_store: self.save_var_store,
         })
     }
+
+    fn select_batch(&self, selector: TrainStepInputSelector) -> Result<Self, ThoError> {
+        let batch_range = selector.0;
+        let lengths = self.lengths.as_ref().map(|lengths| {
+            let range = checked_batch_range(lengths.as_slice().len() as i64, &batch_range)?;
+            Ok::<BatchLengths, ThoError>(BatchLengths::new(lengths.as_slice()[range].to_vec()))
+        }).transpose()?;
+
+        Ok(Self {
+            id: self.id.clone(),
+            x: select_batch_tensor(&self.x, &batch_range)?,
+            lengths,
+            expected_y: select_batch_tensor(&self.expected_y, &batch_range)?,
+            train: self.train,
+            // Saving on every retry chunk would checkpoint parameters after earlier chunks updated them.
+            save_var_store: self.save_var_store && batch_range.start == 0,
+        })
+    }
+}
+
+fn checked_batch_range(batch_len: i64, range: &Range<i64>) -> Result<Range<usize>, ThoError> {
+    if range.start < 0 || range.end < range.start || range.end > batch_len {
+        return Err(ThoError::new(format!("TrainStep batch selector range={range:?} is invalid for batch_len={batch_len}")));
+    }
+    Ok(range.start as usize..range.end as usize)
+}
+
+fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) -> Result<ThoBatch<D>, ThoError> {
+    let size = tensor.size();
+    let batch_len = *size.first().ok_or_else(|| ThoError::new("TrainStep batch tensor has no batch dimension"))?;
+    let range = checked_batch_range(batch_len, batch_range)?;
+    let selected_len = (range.end - range.start) as i64;
+
+    match &tensor.inner {
+        ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), t.f_narrow(0, range.start as i64, selected_len)?),
+        ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+            let mut ranges = match selector {
+                Some(selector) => selector.tensor_ranges()?,
+                None => vec![0..batch_len],
+            };
+            let current_batch_range = ranges.first_mut().ok_or_else(|| ThoError::new("TrainStep tensor selector has no batch range"))?;
+            let current_start = current_batch_range.start;
+            *current_batch_range = current_start + batch_range.start..current_start + batch_range.end;
+            let mut selected_size = size.clone();
+            selected_size[0] = selected_len;
+            Ok(ThoTensor::new_ref(tensor.id().clone(), *key, selected_size, *kind, Some(Box::new(TrainStepTensorSelector(ranges))), *tho_device_idx))
+        }
+    }
+}
+
+/// Selects the same batch range from every tensor carried by a training step.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct TrainStepInputSelector(Range<i64>);
+
+impl From<Range<i64>> for TrainStepInputSelector {
+    fn from(value: Range<i64>) -> Self {
+        Self(value)
+    }
+}
+
+impl Adjustable for TrainStepInputSelector {}
+
+#[typetag::serde(name = "TrainStepInputSelector")]
+impl ThoSelector for TrainStepInputSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(vec![self.0.clone()])
+    }
+}
+
+/// Preserves any pre-existing tensor ranges while narrowing the batch dimension.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TrainStepTensorSelector(Vec<Range<i64>>);
+
+#[typetag::serde(name = "TrainStepTensorSelector")]
+impl ThoSelector for TrainStepTensorSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(self.0.clone())
+    }
 }
 
 impl<DI: Dims, DO: Dims> Input for TrainStepInput<DI, DO> {
@@ -393,6 +480,10 @@ impl<DI: Dims, DO: Dims> TrainStepInputWrapper<DI, DO> {
     pub fn new(input: TrainStepInput<DI, DO>) -> Self {
         Self { input }
     }
+
+    pub(crate) fn batch_len(&self) -> Result<i64, ThoError> {
+        self.input.x.size().first().copied().ok_or_else(|| ThoError::new("TrainStep input has no batch dimension"))
+    }
 }
 
 impl<DI: Dims, DO: Dims> WithId for TrainStepInputWrapper<DI, DO> {
@@ -411,6 +502,26 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
         Self: 'a,
     {
         self.input.borrow_to(to_tho_device_idx)
+    }
+}
+
+impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWrapper<DI, DO> {
+    fn borrow_to<'a>(&'a self, to_tho_device_idx: usize, selector: Option<TrainStepInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    where
+        TrainStepInputSelector: 'a,
+        Self: 'a,
+    {
+        async move {
+            let Some(selector) = selector else {
+                return BorrowRef::borrow_to(self, to_tho_device_idx).await;
+            };
+            let selected = self.input.select_batch(selector)?;
+            if selected.device() == to_tho_device_idx {
+                Ok(ThoDataRef::Owned(selected))
+            } else {
+                Ok(ThoDataRef::Owned(track_await(selected.copy_to_device(to_tho_device_idx)).await?))
+            }
+        }
     }
 }
 
