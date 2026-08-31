@@ -81,11 +81,11 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     }
 
     async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
-        todo!()//TODO purge local states too
+        unreachable!()
     }
 
     async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
-        todo!()
+        unreachable!()
     }
 
     async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError>
@@ -215,6 +215,7 @@ struct CudaLocalActor {
 impl CudaLocalActor {
     pub fn new(tho_device_idx:usize, receiver: mpsc::Receiver<CudaActorMessage>) -> Result<Self, ThoError> {
         debug!("CudaActor::new: tho_device_idx={tho_device_idx}");
+        assert!(tho_device_idx > 0);
 
         Ok(Self {
             tho_device_idx,

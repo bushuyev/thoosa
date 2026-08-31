@@ -30,6 +30,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
 use thoosa_common::ipc::worker_msg::WorkerOutput;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,

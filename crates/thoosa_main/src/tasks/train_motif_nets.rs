@@ -1738,9 +1738,9 @@ mod tests {
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
                 let input = TrainStepInput::<InDims, OutDims>::new(
-                    to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
+                    cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 100], FLOAT_CPU))?, 1.into()).await?.to_types(simple_id!("2"))?,
                     None,
-                    to_tho_tensor(cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
+                    cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 1], FLOAT_CPU))?, 1.into()).await?.to_types(simple_id!("3"))?,
                     false,
                     false,
                 );
@@ -1760,15 +1760,6 @@ mod tests {
         )
     }
 
-    pub fn to_tho_tensor<D>(inner: ThoTensorInner, id: String) -> ThoTensor<D, SimpleId>
-    where
-        D:Dims
-    {
-        let ThoTensorInner::Ref{ key, size, kind, selector, tho_device_idx } = inner  else {
-            panic!("should be ref")
-        };
-        ThoTensor::new_ref(simple_id!(id), key, size.clone(), kind, None, tho_device_idx)
-    }
 
     fn cos_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
         thoosa_shared::run_configs::OptRunConfigs::new(
