@@ -1100,13 +1100,6 @@ impl WorkerStageInput for MotifStatsLoadedChannelsInput {
 
 }
 
-#[derive(Debug)]
-enum MotifStatsDynConsumeStage<C>//TODO remove
-where
-    C: RunCtx + 'static,
-{
-    Shared(Arc<DynSyncStageEnum<MotifStatsConsumeStage<RunCtxImpl>>>, PhantomData<C>),
-}
 
 #[derive(Debug, Named)]
 pub struct MotifStatsConsumeStage<C>
@@ -1121,14 +1114,14 @@ impl<C> MotifStatsConsumeStage<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(tho_device_idx: usize) -> Result<MotifStatsDynConsumeStage<C>, ThoError> {
+    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<MotifStatsConsumeStage<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Use shared consuming dispatch so tensor references are deleted only after success.
-            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
+            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
         } else {
-            Ok(MotifStatsDynConsumeStage::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()))), PhantomData))
+            Ok(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<C>::new_local())))
         }
     }
 
@@ -1142,22 +1135,15 @@ where
     }
 }
 
-impl<C> Adjustable for MotifStatsDynConsumeStage<C>
-where
-    C: RunCtx  + 'static,
-{
+pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    use futures_util::FutureExt;
+    async move {
+        // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
-impl<C> Adjustable for MotifStatsConsumeStage<C> where C: RunCtx + Adjustable + 'static {}
 
-impl<C> OutId for MotifStatsDynConsumeStage<C>
-where
-    C: RunCtx + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &motif_stats_stage_id() + input_id
-    }
-}
 
 impl<C> OutId for MotifStatsConsumeStage<C>
 where
@@ -1177,14 +1163,6 @@ where
     type Out = MotifStatsOutput;
 }
 
-impl<C> Stage for MotifStatsDynConsumeStage<C>
-where
-    C: RunCtx + 'static,
-{
-    type Ctx = C;
-    type In<'a> = MotifStatsLoadedChannelsInput;
-    type Out = MotifStatsOutput;
-}
 
 impl<C> SyncStage for MotifStatsConsumeStage<C>
 where
@@ -1202,25 +1180,6 @@ where
     }
 }
 
-impl<C> SyncStage for MotifStatsDynConsumeStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
-        let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), MOTIF_STATS_CONSUME_ENDPOINT);
-        proxy_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        let Self::Shared(stage, _) = self.as_ref();
-        Arc::clone(stage).consume(input, proxy_ctx)
-    }
-}
-
-pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    use futures_util::FutureExt;
-    async move {
-        // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
 
 #[derive(Cached, Named)]
 pub struct MotifStats<ML, L, C>
