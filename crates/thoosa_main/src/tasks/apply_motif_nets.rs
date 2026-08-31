@@ -1,6 +1,7 @@
 #![allow(unexpected_cfgs)]
 
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+use crate::tasks::instance_cache::InstanceCache;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -382,18 +383,18 @@ where
                 (
                     trained_net.id,
                     maybe_freq_filter,
-                    Arc::new(ApplyMotifNet::new(
+                    ApplyMotifNet::new(
                         slice_step, //TODO shouldn't be same as one used when training motif net
                         trained_net,
                         // trained_net.net_path,
                         channel,
                         motif_id,
-                        ThoDevice::from(1), //TODO
+                        stage_ctx.tho_device_idx().into(),
                         ws,
                         quantize,
                         #[cfg(test)]
                         fail_if_size_bigger_than,
-                    ).await?)
+                    ).await?
                 )
             );
         }
@@ -1052,6 +1053,9 @@ where
     fail_if_size_bigger_than:Option<usize>,
 }
 
+// A trained network owns mutable inference state, so reuse one stage instance per context and net.
+static APPLY_MOTIF_NET_INSTANCES: InstanceCache = InstanceCache::new();
+
 
 //properties needed when running stage
 pub trait ApplyMotifNetProps {
@@ -1118,45 +1122,46 @@ where
         #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>,
 
-    ) -> Result<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>, ThoError> {
+    ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
+        let trained_net_id = trained_net.id;
+        APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
+            let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+                   &trained_net.net_path,
+                   &device,
+                   quantize
+            )?;
 
-        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-               &trained_net.net_path,
-               &device,
-               quantize
-        )?;
+            if GlobalCtx::global().is_ipc() {
+                let init  = ApplyMotifNetInit::new(
+                    slice_step,
+                    trained_net.net_path,
+                    channel,
+                    motif_id,
+                    quantize,
+                    #[cfg(test)]
+                    fail_if_size_bigger_than
+                );
 
-        if GlobalCtx::global().is_ipc() {
-            let init  = ApplyMotifNetInit::new(
-                slice_step,
-                trained_net.net_path,
-                channel,
-                motif_id,
-                quantize,
-                #[cfg(test)]
-                fail_if_size_bigger_than
-            );
-
-            static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
-            // Use the typed stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
-            let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
-            // The proxy must dispatch with the id used to install this particular apply stage.
-            Ok(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(init)).await?),
-                init: MotifNetMeta::new(motif_id, channel, params),
-            })
-        } else {
-
-            Ok(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
-                slice_step,
-                params,
-                net,
-                channel,
-                motif_id,
-                #[cfg(test)]
-                fail_if_size_bigger_than,
-            ).await?)))
-        }
+                static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
+                // Use the typed stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
+                let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+                // The proxy must dispatch with the id used to install this particular apply stage.
+                Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(init)).await?),
+                    init: MotifNetMeta::new(motif_id, channel, params),
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
+                    slice_step,
+                    params,
+                    net,
+                    channel,
+                    motif_id,
+                    #[cfg(test)]
+                    fail_if_size_bigger_than,
+                ).await?))))
+            }
+        }).await
     }
 
     pub async fn new_local(
