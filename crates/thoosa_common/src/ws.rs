@@ -622,10 +622,7 @@ impl Workspace for FsWorkspace {
                             model_path.clone(),
                             *device,
                             quantize,
-                        )
-                        .map_err(|e| {
-                            ThoError::from_msg(format!("can't load label net model from {model_path:?}: {e}"))
-                        })?;
+                        )?;
 
                         debug!("load_label_nets: model={model_path:?} run_config_id={run_config_id} loaded");
 
