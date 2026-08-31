@@ -258,7 +258,7 @@ where
             }
         }
 
-        debug!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} on_gpu: {gpu_size} bytes", self.type_name(), self.len());
+        info!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} on_gpu: {gpu_size} bytes", self.type_name(), self.len());
 
         Ok(gpu_size)
     }
