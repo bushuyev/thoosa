@@ -632,7 +632,6 @@ impl CudaIPCActor {
                     CudaWorkerMsgIn {
                         request_id: transfer_id,
                         operation: Operation::H2dCopy {
-                            worker_id: dst_worker_id,
                             kind: src_kind.into(),
                             shape: src_shape.clone(),
                             tensor_byte_len,
