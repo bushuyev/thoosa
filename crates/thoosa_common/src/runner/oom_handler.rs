@@ -1191,7 +1191,7 @@ where
 
                         match run_result {
                             Ok(v) => {
-                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} v={v:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                                info!("OOMHandler::run, error: ctx_id={ctx_id:?} v={v:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                 match track_await(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
                                     InputAdjustedRun::Done(out) => {
@@ -1236,6 +1236,8 @@ where
             warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
             #[cfg(tho_debug)]
             track_await(GlobalCtx::global().debug_caches(device_idx, "all_failed")).await;
+
+            GlobalCtx::global().cuda_actor(device_idx).debug_worker().await?;
 
             Err(Cause::SomethingElse(format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task"))).into())
         }

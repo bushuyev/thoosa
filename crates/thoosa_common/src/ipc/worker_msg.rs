@@ -46,6 +46,7 @@ pub enum Operation {
     InvokeStage { endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume: bool },
     PurgeStage { endpoint_name: String, stage_id: u32 },
     DropStage { endpoint_name: String, stage_id: u32 },
+    Debug,
     Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?
 }
 

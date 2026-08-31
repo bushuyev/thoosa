@@ -33,7 +33,7 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::error;
 use tub::{Guard, Pool};
-use crate::ipc::worker_msg::CudaWorkerMsgOut;
+use crate::ipc::worker_msg::{CudaWorkerMsgOut, OpResult};
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -95,6 +95,8 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
 
 
     async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
+
+    async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError>;
 }
 
 impl dyn CudaActorHandle + '_ {
@@ -477,6 +479,9 @@ impl CudaActorHandle for CudaLocalActorHandle {
         Ok(Box::new(LocalHandleCtx { stream }))
     }
 
+    async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
+       Ok(CudaWorkerMsgOut{ request_id: 0, status: OpResult::Ok(None) })
+    }
 }
 
 
