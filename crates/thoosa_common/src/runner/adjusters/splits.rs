@@ -2,7 +2,7 @@ use crate::runner::oom_handler::AdjusterError;
 use crate::runner::oom_handler::{Adjuster, InputContext};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, info};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
@@ -72,7 +72,7 @@ where
         _adjustable: A,
         adjust_context: &mut AC,
     ) -> Result<A, AdjusterError<A>> {
-        debug!("SplitsAdjuster::adjust, self={:?}", self);
+        info!("SplitsAdjuster::adjust, self={:?}", self);
 
         let split_start = adjust_context.done_to();
 
@@ -84,7 +84,7 @@ where
         }
         adjust_context.input_len().cap(&mut split_end);
 
-        debug!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
+        info!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
 
 
         Ok((split_start.clone()..split_end).into())

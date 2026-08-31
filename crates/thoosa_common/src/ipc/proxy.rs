@@ -176,7 +176,7 @@ where
         let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
         let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
-        let rs = ipc_actor.install_stage_2(
+        let rs = ipc_actor.install_stage(
             endpoint_name.to_string(),
             stage_id,
             init_data,

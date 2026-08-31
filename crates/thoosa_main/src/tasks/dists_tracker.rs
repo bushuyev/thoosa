@@ -554,12 +554,14 @@ impl DistsMask {
         }
     }
 
-    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {//TODO replace with worker_tensor_to_ref
         fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<DistsMaskTensor, ThoError> {
             let tensor = DistsMask::into_local_tensor(tensor, "into_worker_ipc_refs")?;
             let size = tensor.size();
             let kind = tensor.kind();
             let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
+            info!("into_worker_ipc_refs: out_key={key} out_id={id:?}");
+
             Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.tho_device_idx()))
         }
 
