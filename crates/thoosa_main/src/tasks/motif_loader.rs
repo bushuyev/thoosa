@@ -5,13 +5,12 @@ use cached_derive::Cached;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter, format};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Instant;
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
@@ -43,6 +42,7 @@ use thoosa_store::Store;
 
 use crate::tasks::apply_motif_nets::{STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets};
 use crate::tasks::find_motifs::{FilteredLoaderStage, LoaderStageChoice, config_to_stage};
+use crate::tasks::instance_cache::InstanceCache;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
 use crate::tasks::stft::SyncStftSelector;
 use crate::tasks::transforms::freq_filter::FreqFilter;
@@ -569,45 +569,29 @@ where
     pd: PhantomData<C>,
 }
 
-static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+// Reuse the same local stage or IPC endpoint whenever this singleton loader is requested again.
+static INSTANCES: InstanceCache = InstanceCache::new();
 
 impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
-        let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
-        let mut instances = INSTANCES.lock().await;
+        let id: SynKey = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
+        INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(id.clone(), || async move {
+            debug!("SyncMotifLoader::new: id={id:?} TypeId::of::<C>={:?}", std::any::TypeId::of::<C>());
 
-
-        let cache = instances
-            .entry(TypeId::of::<C>())
-            .or_insert_with(|| {
-                Box::new(HashMap::<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>::new())
-            })
-            .downcast_mut::<HashMap<SynKey, Arc<DynSyncStageEnum<SyncMotifLoader<C>>>>>()
-            .unwrap();
-
-        if let Some(v) = cache.get(&id) {
-            return Ok(Arc::clone(v))
-        }
-
-        debug!("SyncMotifLoader::new: id={id:?} TypeId::of::<C>={:?}", TypeId::of::<C>());
-
-        let v = if GlobalCtx::global().is_ipc() {
-            let stage_id = 0;
-            Arc::new(DynSyncStageEnum::Proxy {
-                // The local id is deterministic, so the typed initializer does not need a serializable SynKey wrapper.
-                stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
-                init: (),
-            })
-        } else {
-            Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id.clone()).await?)))
-        };
-
-        cache.insert(id, Arc::clone(&v));
-
-        Ok(v)
+            if GlobalCtx::global().is_ipc() {
+                let stage_id = 0;
+                Ok(Arc::new(DynSyncStageEnum::Proxy {
+                    // The local id is deterministic, so the typed initializer does not need a serializable SynKey wrapper.
+                    stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_LOADER_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                    init: (),
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?))))
+            }
+        }).await
     }
 
     pub async fn new_local(id: SynKey) -> Result<Self, ThoError>{
