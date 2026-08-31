@@ -810,7 +810,7 @@ impl MockGlobalCtx {
     pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, _device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
         static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
         // This mock-only accessor cannot return initialization errors without changing the generated mock API.
-        track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(match CopyCtx::make_instance(0.2, 16) {
+        track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(match CopyCtx::make_instance_for_cuda_device(0, 0.2, 16) {
             Ok(copy_ctx) => copy_ctx,
             Err(error) => panic!("failed to initialize mock CopyCtx: {error:?}"),
         })).read()).await

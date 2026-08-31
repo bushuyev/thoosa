@@ -269,7 +269,7 @@ impl CudaWorker {
             exec_stream_pool,
             all_cuda_tensors,
             shared_arena,
-            copy_ctx: Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.1, 32)?)),
+            copy_ctx: Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 32)?)),
             installed_endpoints: Arc::new(DashMap::new()),
             reply_tx: reply_tx.clone(),
             tho_device,

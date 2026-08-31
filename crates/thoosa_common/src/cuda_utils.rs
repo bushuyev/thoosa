@@ -774,7 +774,7 @@ mod tests {
             for mem_k in [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 2.] {
                 for buffs in [2, 4, 8, 16, 32, 64] {
                     if ctx.is_none() {
-                        ctx = Some(UnsafeCell::new(CopyCtx::make_instance(mem_k, buffs)?));
+                        ctx = Some(UnsafeCell::new(CopyCtx::make_instance_for_cuda_device(0, mem_k, buffs)?));
                     } else {
                         ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)?
                     }
@@ -797,7 +797,7 @@ mod tests {
         futures_limits().force(COPY_H2D, 10);
         futures_limits().force(COPY_D2H, 10);
 
-        let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)?));
+        let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance_for_cuda_device(0, 0.2, 16)?));
 
         let (d2h, h2d) = run_test_copy_from_ptr(ctx, 3, 10).await;
         info!("\n Copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
@@ -1084,7 +1084,7 @@ mod tests {
 
         for mem_k in [0.1, 0.5, 1.] {
             for buffs in [2, 4, 8, 16, 32] {
-                let copy_ctx = CopyCtx::make_instance(mem_k, buffs)?;
+                let copy_ctx = CopyCtx::make_instance_for_cuda_device(0, mem_k, buffs)?;
 
                 let mut copy_unfold_time = 0;
                 let mut unfold_copy_time = 0;
