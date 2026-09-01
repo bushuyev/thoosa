@@ -371,7 +371,7 @@ impl CudaIPCActor {
                 let pending = Arc::clone(&self.spawned_state.pending);
                 let self_tx = self.spawned_state.tx.clone();
 
-                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} key={key}");
+                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} key={key:?}");
 
                 tokio::spawn(async move {
                     {
@@ -487,19 +487,19 @@ impl CudaIPCActor {
             Ok(Ok(reply)) => {
                 match reply.status {
                     OpResult::Ok(_) => {
-                        debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send ok");
+                        debug!("handle_reply: id={id:?} send ok");
 
                         let _ = respond_to.send(Ok(()));
                     }
                     OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
-                        debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {msg:?}");
+                        debug!("handle_reply: id={id:?} send err {msg:?}");
 
                         let _ = respond_to.send(Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset)));
                     }
                 }
             }
             e => {
-                debug!("handle_message: CudaIPCActorMessage::DropThoTensor id={id:?} send err {e:?}");
+                debug!("handle_reply: id={id:?} send err {e:?}");
 
                 let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {e:?}"))));
             }

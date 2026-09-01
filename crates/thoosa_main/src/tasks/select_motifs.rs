@@ -341,7 +341,7 @@ where
                             .find(|(constraint_key, _)| *constraint_key == constraint.key().expect("select_motifs constraint key"))
                             .map(|(key, score)| {
                                 let r = *score >= constraint.min as f64;
-                                debug!("SelectMotifsStage::run: motif_id={motif_id} key={key} score={score} constraint.min={} r={r}", constraint.min);
+                                debug!("SelectMotifsStage::run: motif_id={motif_id} key={key:?} score={score} constraint.min={} r={r}", constraint.min);
 
                                 r
                             })

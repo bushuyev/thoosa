@@ -265,7 +265,7 @@ impl StageWithState for SyncClcStage {
 
     fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
-        debug!("MulTask::do_run: loaded.id={:?} input.size={:?} self.fail_until={:?}", input.id(), input.size(), self.fail_until);
+        debug!("SyncClcStage::do_run: input={:?} self.fail_until={:?}", input, self.fail_until);
 
         let device_idx = ctx.tho_device_idx();
 
@@ -276,13 +276,13 @@ impl StageWithState for SyncClcStage {
 
 
                     if input.size()[1] > *mem_limit as i64 {
-                        debug!("MulTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
+                        debug!("SyncClcStage::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
                         return Err(ThoError::oom());
                     }
                 }
                 FailUntil::NaxParallel(max_other_parallel_threshold) => {
                     let max_other_parallel = ctx.max_other_parallel();
-                    debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
+                    debug!("SyncClcStage::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
 
                     if max_other_parallel > *max_other_parallel_threshold {
                         return Err(ThoError::oom());
@@ -292,10 +292,10 @@ impl StageWithState for SyncClcStage {
                 FailUntil::DumpedToCpu => {
                     let device_idx = ctx.tho_device_idx();
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
-                    debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
+                    debug!("SyncClcStage::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
                     if !is_all_on_cpu {
-                        debug!("MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
+                        debug!("SyncClcStage::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
                         return Err(ThoError::oom());
                     }
                 }
@@ -356,14 +356,8 @@ pub(crate) fn sync_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parkin
     }.boxed()
 }
 
-// #[async_trait]
 impl AsyncStage for ClcStage {
-    // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-    //     thoosa_shared::traits::WithId::id(input)
-    // }
     async fn run(
         self: Arc<Self>,
         input: Self::In<'static>,

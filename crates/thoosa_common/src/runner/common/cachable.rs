@@ -381,10 +381,16 @@ where
         async move {
             match selector {
                 None => {
+                    debug!("DevicesWrap::borrow_to: no selector self.id={:?}", self.id);
+
                     BorrowRef::borrow_to(self, to_tho_device_idx).await
                 }
                 Some(selector) => {
+                    debug!("DevicesWrap::borrow_to: selector={selector:?} self.id={:?}", self.id);
+
                     if self.is_resident_on_device(to_tho_device_idx) {
+                        debug!("DevicesWrap::borrow_to: self.id={:?} is_resident_on_device", self.id);
+
                         let guard = track_await(self.cached_data[to_tho_device_idx].read()).await;
                         match guard.as_ref() {
                             None => {
@@ -393,6 +399,8 @@ where
                             }
                             Some(data) => {
                                 let sub_t: O = data.subview(selector.clone())?;
+                                debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?}", sub_t.size());
+
                                 return Ok(ThoDataRef::Owned(sub_t));
                             }
                         }
@@ -682,6 +690,7 @@ where
                 }
                 if let Some(o) = lock.take() {
                     o.adrop().await;
+                    // drop(o);
                 }
 
                 self.mark_not_resident_on_device(device_idx);

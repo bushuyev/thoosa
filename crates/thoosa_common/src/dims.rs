@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use log::{debug, trace};
 use std::cmp::min;
 use std::fmt::Debug;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use tch::{IndexOp, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
@@ -28,8 +28,8 @@ where
             ThoTensorInner::Val { t } => {
                 Self::local_subview(self.id(), t, selector)
             }
-            ThoTensorInner::Ref { key, size, kind, tho_device_idx, .. } => {//TODO compose with 'parent' selector ?
-                Ok(ThoTensor::new_ref(self.id().clone(), *key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>), *tho_device_idx))
+            ThoTensorInner::Ref { key, size, kind, .. } => {//TODO compose with 'parent' selector ?
+                Ok(ThoTensor::new_ref(self.id().clone(), key.key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>), key.device_idx))
             }
         }
     }

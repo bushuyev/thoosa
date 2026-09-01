@@ -214,7 +214,7 @@ impl CudaWorker {
         info!("run_worker: sock_path={sock_path:?} tho_device={tho_device:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
-        GlobalCtx::init_devices(2)?;//TODO config
+        // GlobalCtx::init_devices(2)?;//TODO config
 
         let cuda_device = tho_device.gpu_ordinal();
 
@@ -405,7 +405,7 @@ impl CudaWorker {
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::DropThoTensor { tensor_key } => {
-                debug!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
+                info!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
                 let removed = context.all_cuda_tensors.lock().remove(&tensor_key);
                 debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
                 let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
@@ -413,7 +413,7 @@ impl CudaWorker {
                 Ok(WorkerRequestControl::Continue)
             }
             Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
-                let init_fn = context.endpoint_inits.get(&key).ok_or_else(|| ThoError::new(format!("No init function for key={key} stage_id={stage_id}")))?;
+                let init_fn = context.endpoint_inits.get(&key).ok_or_else(|| ThoError::new(format!("No init function for key={key:?} stage_id={stage_id}")))?;
                 let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
                 debug!("run_worker: install endpoint key={endpoint_key} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
                 let is_duplicate = match context.installed_endpoints.entry(endpoint_key.clone()) {
@@ -456,7 +456,11 @@ impl CudaWorker {
                         debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
                         panic_to_err!({
                             let _guard = ThoStreamGuard::new(&stream)?;
-                            let response = if consume { endpoint.consume(input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)? } else { endpoint.do_run(&input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)? };
+                            let response = if consume {
+                                endpoint.consume(input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)?
+                            } else {
+                                endpoint.do_run(&input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)?
+                            };
                             stream.synchronize()?;
                             Ok::<_, ThoError>(response)
                         })
@@ -490,7 +494,7 @@ impl CudaWorker {
                 Ok(WorkerRequestControl::Shutdown { request_id })
             }
             Operation::Debug => {
-                info!("run_worker: context.tho_device={:?}", context.tho_device);
+                info!("run_worker: Operation::Debug context.tho_device={:?}", context.tho_device);
                 for (key, tensor) in context.all_cuda_tensors.lock().iter(){
                     info!("run_worker: key={key:?} tensor={tensor:?}");
                 }
@@ -513,7 +517,7 @@ impl CudaWorker {
 
 pub trait WorkerStageInput: Debug + Sized + Debug {
 
-    //for cloning a on main-process-side ThoTensor/ThoModule  containing references to the data kept on  worker side
+    //for cloning on the main-process-side ThoTensor/ThoModule  containing references to the data kept on  worker side
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {//on main side
         error!("clone_refs: self={self:?}");
         todo!()
@@ -532,9 +536,13 @@ pub trait WorkerStageOutput: Debug + Sized + Serialize {
 
 impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
 where
+    // Self:WorkerInput,
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
+    // fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+    //     Ok(Box::new(self.clone_ref()?) as Box<dyn WorkerInput>)
+    // }
 
 
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
@@ -571,7 +579,7 @@ where
 
         let mut tensors = all_cuda_tensors.lock();
 
-        debug!("ThoTensor::ref_to_tensor: input_key={input_key:?}");
+        debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} selector={:?} remove={remove}", input_ref.selector());
         trace!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
 
         if remove {
@@ -588,6 +596,7 @@ where
             let mut tensor = source.f_alias()?;
 
             if let Some(selector) = input_ref.selector() {
+
                 let ranges = selector.tensor_ranges()?;
                 if ranges.len() > tensor.dim() {
                     return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
@@ -604,6 +613,8 @@ where
                     tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
                 }
             }
+
+            debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} tensor={tensor:?}");
 
             ThoTensor::new(input_ref.id().clone(), tensor)
         }
@@ -646,7 +657,7 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))
             .map_err(|_| ThoError::new("worker tensor key space exhausted"))?;
 
-        debug!("insert_worker_tensor: key={key}");
+        debug!("insert_worker_tensor: key={key:?} tensor={tensor:?}");
 
         if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {
             entry.insert(tensor);

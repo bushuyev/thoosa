@@ -281,7 +281,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
-            perf_log!(sync_write_lock!(self.caches, "key={key}"))
+            perf_log!(sync_write_lock!(self.caches, "key={key:?}"))
             .remove(key)
             .is_some()
         );
@@ -292,6 +292,10 @@ impl GlobalCtx {
     #[inline]
     pub fn global() -> &'static Self {
         GLOBAL_CTX.get().expect("call `init_devices` first")
+    }
+
+    pub fn is_installed() -> bool {//used to check if it's not worker
+        GLOBAL_CTX.get().is_some()
     }
 
 
@@ -338,7 +342,7 @@ impl GlobalCtx {
     }
 
 
-    #[cfg(tho_debug)]
+    // #[cfg(tho_debug)]
     async fn debug_caches_snapshot(&self, device_idx: usize, descr: &str, maps: &CacheSnapshot) {
         debug!("GlobalCtx::debug_caches: descr={descr:?}");
 
@@ -358,7 +362,7 @@ impl GlobalCtx {
         );
     }
 
-    #[cfg(tho_debug)]
+    // #[cfg(tho_debug)]
     pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
         let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
         track_await(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
@@ -534,15 +538,16 @@ pub mod mock_global_ctx {
     pub trait GlobalCtxMockGuard:Debug {}
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    struct GlobalCtxMockContexts<G, S> {
+    struct GlobalCtxMockContexts<G, S, I> {
         _global_context: G,
         _shutdown_context: S,
+        _is_installed_ctx:I
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    impl<G, S> GlobalCtxMockGuard for GlobalCtxMockContexts<G, S> {}
+    impl<G, S, I> GlobalCtxMockGuard for GlobalCtxMockContexts<G, S, I> {}
 
-    impl<G, S> Debug for GlobalCtxMockContexts<G, S> {
+    impl<G, S, I> Debug for GlobalCtxMockContexts<G, S, I> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("GlobalCtxMockContexts").finish()
         }
@@ -700,6 +705,29 @@ pub mod mock_global_ctx {
             self
         }
 
+        // #[cfg(tho_debug)]
+        pub fn with_debug_caches(mut self) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_debug_caches().times(0..).returning({
+                    move |device_idx, descr| {
+                        block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(
+                                real.debug_caches(device_idx, descr)
+                        )});
+
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_debug_caches().times(0..)
+                    .returning(move |_, _| {
+                        ()
+                    });
+            }
+
+            self
+        }
+
+
 
         pub fn finish(self) -> MockGlobalCtx {
             self.mock
@@ -721,7 +749,9 @@ pub mod mock_global_ctx {
                 mock_global_ctx,
             };
 
-            debug!("install_global_ctx_mock");
+            debug!("install_global_ctx_mock: use_real_ctx={use_real_ctx} is_ipc={is_ipc}");
+            let is_installed_ctx = MockGlobalCtx::is_installed_context();
+            is_installed_ctx.expect().return_const(true);
 
             let shutdown_ctx = MockGlobalCtx::is_shutting_down_context();
             shutdown_ctx.expect().return_const(false);
@@ -732,6 +762,8 @@ pub mod mock_global_ctx {
                 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
                 let real: &'static RealGlobalCtx = RealGlobalCtx::real_global();
+
+                debug!("install_global_ctx_mock: real={real:?}");
 
                 mock_global_ctx::set_manual_method_real_ctx(Some(real));
 
@@ -750,12 +782,13 @@ pub mod mock_global_ctx {
             GlobalCtxMockContexts {
                 _global_context: global_ctx,
                 _shutdown_context: shutdown_ctx,
+                _is_installed_ctx: is_installed_ctx
             }
         }
     }
 
     fn build_with_params_inner(builder: MockGlobalCtxBuilder, params: MockGlobalCtxBuildParams, is_ipc: bool) -> MockGlobalCtx {
-        builder
+        let mut builder = builder
             .with_age(params.age)
             .with_dump_all_to_cpu()
             .with_reset_all_on_cpu()
@@ -765,8 +798,12 @@ pub mod mock_global_ctx {
             .with_get_executor()
             .with_run_purge_gpu()
             .with_is_ipc(is_ipc)
-            .with_is_all_on_cpu(true)
-            .finish()
+            .with_is_all_on_cpu(true);
+
+        // #[cfg(tho_debug)]
+        builder = builder.with_debug_caches();
+
+        builder.finish()
     }
 
     pub fn build_with_params(params: MockGlobalCtxBuildParams, is_ipc: bool) -> MockGlobalCtx {

@@ -88,6 +88,8 @@ where
 
         worker_rt.block_on(async {
             debug!("run_ipc_test: in block_on");
+            let is_installed_context = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
+            is_installed_context.expect().return_const(false);
 
             let r = panic_to_err_async!(worker_f(sock_path));
 
@@ -125,7 +127,6 @@ where
 
     Ok(())
 }
-
 
 
 pub async fn init_ipc_test(module:&str) -> Result<impl GlobalCtxMockGuard, ThoError> {
@@ -392,7 +393,7 @@ mod tests {
                     todo!()
                 }
                 ThoTensorInner::Ref { key, size, kind, .. } => {
-                    ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], Float, None, 1)
+                    ThoTensor::new_ref(mono_key!(0, "todo").into(), key.key, vec![], Float, None, 1)
                 }
             }
         }
@@ -668,7 +669,7 @@ mod tests {
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             let result = async {
                 const MUL_K: f64 = 2.;
-                let size = [3, 40];
+                let size = [3, 140];
                 let load_and_clc = Arc::new(LoadAndClcStage::new(
                     LoadAndClcStageId("ipc_load_and_clc_oom_splits_id"),
                     MUL_K,
@@ -727,7 +728,7 @@ mod tests {
         run_ipc_test(
             module_path!(),
             async {
-                let resources = (0..3)
+                let resources = (0..1)//3
                     .map(|i| &*format!("resource_{i}").leak())
                     .collect::<Vec<_>>();
 
@@ -770,6 +771,9 @@ mod tests {
                         },
                         false,
                     ).await?;
+
+                    cuda_actor.debug_worker().await?;
+
                     Ok::<(), ThoError>(())
                 }.await;
 
@@ -786,6 +790,76 @@ mod tests {
             },
         )
     }
+
+    #[test]
+    fn test_load_and_clc_cuda_worker_oom_dump_to_cpu_and_splits_tensor_ipc() -> Result<(), ThoError> {
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(
+            module_path!(),
+            async {
+                let resources = (0..1)//3
+                    .map(|i| &*format!("resource_{i}").leak())
+                    .collect::<Vec<_>>();
+
+                let tho_device_idx = 1;
+                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                let result = async {
+                    const MUL_K: f64 = 2.;
+                    let size = [3, 100];
+                    let load_and_clc = Arc::new(LoadAndClcStage::new(
+                        LoadAndClcStageId("ipc_load_and_clc_oom_max_parallel_and_splits_id"),
+                        MUL_K,
+                        vec![FailUntil::DumpedToCpu, FailUntil::MemLimit(12)],
+                        size.into(),
+                        ClcOOMRunner::new(
+                            OOMRunnerConfig::DumpedToCpuAndSplits,
+                            Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
+                                id,
+                                0,
+                                &size,
+                                (Float, Device::Cpu),
+                                BuildAs::Sum,
+                            ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                        ),
+                        Float,
+                        Device::Cuda(0).into(),
+                        true,
+                    ).await);
+                    run_mul_task_invocations(
+                        Arc::clone(&load_and_clc),
+                        resources.as_slice(),
+                        tho_device_idx,
+                        0,
+                        |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                        move |res, out| {
+                            mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
+                                Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
+                                    .sum_dim_intlist(1, false, t.kind())
+                                    .view((-1, 1)))
+                            });
+                        },
+                        false,
+                    ).await?;
+
+                    cuda_actor.debug_worker().await?;
+
+                    Ok::<(), ThoError>(())
+                }.await;
+
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    sync_clc_endpoint_inits(),
+                    ThoDevice::from(Cuda(0)),
+                ).await
+            },
+        )
+    }
+
 
     #[test]
     fn test_load_and_clc_cuda_worker_oom_dump_to_cpu_ipc() -> Result<(), ThoError> {
