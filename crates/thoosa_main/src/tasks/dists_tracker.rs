@@ -545,7 +545,7 @@ impl DistsMask {
                 let copied = track_await(actor.copy(ThoTensor::new_ref((), key, size, kind, selector, 1), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} device={device:?} copied={copied:?}");
 
-                track_await(actor.drop_tho_tensor(ThoTensor::new_ref((), key, vec![], tch::Kind::Float, None, 1))).await?;
+                track_await(actor.drop_tho_tensor(key)).await?;
 
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} dropped");
 

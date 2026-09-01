@@ -1787,10 +1787,10 @@ where
 
     let (motif_net_params, motif_net) = {
         let ws_guard = ws.read();
-        ws_guard.load_motif_net(&net_path, &Cpu, false)?
+        ws_guard.load_motif_net(&net_path, &Cpu, false, true)?
     };
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
-    let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));
+    let motif_net = Arc::new(DataWithExtra::new(motif_net.expect("motif_net"), MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
     let tensor = BorrowRef::borrow_to(&filtered_or_raw, 0).await?;
 
