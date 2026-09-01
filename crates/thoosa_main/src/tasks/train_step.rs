@@ -30,7 +30,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
-use thoosa_common::ipc::worker_msg::WorkerOutput;
+use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
@@ -349,7 +349,7 @@ fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) 
 
     match &tensor.inner {
         ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), t.f_narrow(0, range.start as i64, selected_len)?),
-        ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+        ThoTensorInner::Ref { key, size, kind, selector } => {
             let mut ranges = match selector {
                 Some(selector) => selector.tensor_ranges()?,
                 None => vec![0..batch_len],
@@ -359,7 +359,7 @@ fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) 
             *current_batch_range = current_start + batch_range.start..current_start + batch_range.end;
             let mut selected_size = size.clone();
             selected_size[0] = selected_len;
-            Ok(ThoTensor::new_ref(tensor.id().clone(), *key, selected_size, *kind, Some(Box::new(TrainStepTensorSelector(ranges))), *tho_device_idx))
+            Ok(ThoTensor::new_ref(tensor.id().clone(), key.key, selected_size, *kind, Some(Box::new(TrainStepTensorSelector(ranges))), key.device_idx))
         }
     }
 }
@@ -558,6 +558,10 @@ where
     DO: Dims,
     Self: serde::de::DeserializeOwned,
 {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        todo!()
+    }
+
     fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
         // Materialize both batch references together immediately before the worker-side run.
         Ok(Self {

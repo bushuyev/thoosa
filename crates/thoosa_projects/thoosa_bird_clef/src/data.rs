@@ -109,7 +109,7 @@ pub fn labeled_resourses(
                 Some(s) => parse_secondary_labels(s),
                 None => Vec::new(),
             };
-            debug!("clef/labeled_resourses: file={file:?} csv_filename={csv_filename} key={key} secondary_labels={secondary_labels:?}");
+            debug!("clef/labeled_resourses: file={file:?} csv_filename={csv_filename} key={key:?} secondary_labels={secondary_labels:?}");
             let secondary_labels = secondary_labels.into_iter().filter(|secondary_label|{
                 let r = !secondary_label.eq(&label);
                 if !r {
@@ -129,7 +129,7 @@ pub fn labeled_resourses(
                 })).collect()
             };
 
-            debug!("clef/labeled_resourses: file={file:?} key={key} labels={labels:?}");
+            debug!("clef/labeled_resourses: file={file:?} key={key:?} labels={labels:?}");
 
             *counts.entry(key.clone()).or_insert(0) +=1;
 

@@ -220,6 +220,29 @@ where
                 )
                 .await
             }
+            OOMRunnerConfig::DumpedToCpuAndSplits  => {
+                let run_ctx = ctx.branch(false);
+                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
+                    Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
+                        min_split_len,
+                    ))),
+                ];
+                OOMHandler::new(
+                    adjusters,
+                    None,
+                )
+                    .run(
+                        &runnable,
+                        input,
+                        run_ctx,
+                        WithRunCtxContext::with_rest(
+                            DumpToCpuContextImpl::new(required_ids),
+                            WithInputContext::new(SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id))),
+                        ),
+                    )
+                    .await
+            }
         }
     }
 }
@@ -227,10 +250,11 @@ where
 //just for tests, normally task has single config
 #[derive(Debug)]
 pub enum OOMRunnerConfig {
-    MaxParallel { max: MaxParallel, step: MaxParallel },
+    MaxParallel { max: MaxParallel, step: u8 },
     DumpedToCpu,
     Splits,
-    MaxParallelAndSplits { max: MaxParallel, step: MaxParallel },
+    MaxParallelAndSplits { max: MaxParallel, step: u8 },
+    DumpedToCpuAndSplits,
 }
 
 pub async fn run_mul_task_invocations<R, F, CF>(
