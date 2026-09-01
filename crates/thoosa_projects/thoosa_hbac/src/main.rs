@@ -61,10 +61,6 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
             SYNC_FREQ_FILTER_ENDPOINT.to_string(),
             Box::new(sync_freq_filter_endpoint_init) as InitFn,
         ),
-        // (
-        //     SYNC_RAW_TENSOR_LOADER_ENDPOINT.to_string(),
-        //     Box::new(sync_raw_tensor_loader_endpoint_init) as InitFn,
-        // ),
         (
             APPLY_MOTIF_NET_ENDPOINT.to_string(),
             Box::new(apply_motif_net_endpoint_init) as InitFn,

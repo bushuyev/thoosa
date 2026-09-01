@@ -196,8 +196,7 @@ where
     {
         let tho_device_idx = stage_ctx.tho_device_idx();
 
-
-        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false)?;
+        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false, false)?;
 
         let mut apply_nets = vec![];
 
@@ -207,7 +206,7 @@ where
 
             debug!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
 
-            for (train_label_net_run_config_id, label_net_params, net) in nets {
+            for (train_label_net_run_config_id, label_net_params, _net) in nets {
                 let label_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
@@ -776,11 +775,7 @@ where
     ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
         let trained_net_id = trained_net.id;
         APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
-            let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
-                   &trained_net.net_path,
-                   &device,
-                   quantize
-            )?;
+
 
             let init = ApplyLabelNetInit::new(
                 label.clone(),
@@ -791,6 +786,13 @@ where
             );
 
             if GlobalCtx::global().is_ipc() {
+                let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
+                    &trained_net.net_path,
+                    &device,
+                    quantize,
+                    false
+                )?;
+
                 static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
                 let stage_id = STAGE_ID.fetch_add(1, Relaxed);
                 Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
@@ -798,10 +800,17 @@ where
                     init,
                 }))
             } else {
+                let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
+                    &trained_net.net_path,
+                    &device,
+                    quantize,
+                    true
+                )?;
+
                 Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
                     label,
                     train_label_net_run_config_id,
-                    net,
+                    net.expect("net"),
                     batch_in_chunks
                 ).await?))))
             }
@@ -833,13 +842,14 @@ pub fn apply_label_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwL
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
                &init.label_net_path,
                &Cuda(0),//TODO
-               init.quantize
+               init.quantize,
+                true
         )?;
 
         let stage: ApplyLabelNet<WokerRunCtx> = ApplyLabelNet::new_local(
            init.label,
            init.train_label_net_run_config_id,
-           net,
+           net.expect("net"),
            init.batch_in_chunks
         ).await?;
 

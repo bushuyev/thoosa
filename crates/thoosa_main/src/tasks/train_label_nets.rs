@@ -27,7 +27,7 @@ use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use thoosa_common::runner::oom_handler::{run_ctx_adjuster, Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
 use thoosa_shared::traits::MaxParallelCtx;
@@ -48,7 +48,7 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_s
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
-use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjuster, MAX_PARALLEL, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelAdjustContextImpl};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::stages_seq::ABStage;
@@ -69,6 +69,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
 use thoosa_store::Store;
 use tokio::{join, try_join};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
 pub(crate) const TRAIN_LABEL_STEP_ENDPOINT: &str = "TrainLabelStep";
@@ -323,14 +324,25 @@ where
         debug!("SyncLabelBatch::do_run: input={input:?}");
         let x_1 = input.x_1.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
         let x_0 = input.x_0.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
+
         if x_1.is_empty() || x_0.is_empty() {
             return Err(ThoError::new(format!("SyncLabelBatch: empty positive or negative resources for {}", input.label)));
         }
-        let max_input = x_1.iter().chain(x_0.iter()).map(|value| value.data().size().get(1).copied().ok_or_else(|| ThoError::new(format!("SyncLabelBatch: invalid motif output shape for {}", input.label)))).collect::<Result<Vec<_>, _>>()?.into_iter().max().ok_or_else(|| ThoError::new(format!("batch resources are empty for {}", input.label)))?;
+
+        let max_input = x_1.iter()
+            .chain(x_0.iter())
+            .map(|value| value.data().size().get(1).copied().ok_or_else(|| ThoError::new(format!("SyncLabelBatch: invalid motif output shape for {}", input.label))))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .ok_or_else(|| ThoError::new(format!("batch resources are empty for {}", input.label)))?;
+
         let x_1_refs = x_1.iter().map(|value| value.data()).collect::<Vec<_>>();
         let x_0_refs = x_0.iter().map(|value| value.data()).collect::<Vec<_>>();
+
         let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), input.num_nets, max_input)?;
         let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), input.num_nets, max_input)?;
+
         let (x, lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&BatchLengths::new(lengths_1)), &x_0_batch, Some(&BatchLengths::new(lengths_0)))?;
         let lengths = lengths.ok_or_else(|| ThoError::new("SyncLabelBatch: mixed batch did not return lengths"))?;
 
@@ -673,8 +685,22 @@ where
                                        let sync_label_batch = Arc::clone(&sync_label_batch);
                                        async move {
                                            let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
-                                           let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-                                           let output = track_await(oom_handler.run(&sync_label_batch, input, ctx.branch(false), NoContexts)).await?;
+                                           let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();//TODO fill with x_1_wrapped x_0_wrapped ids
+                                           let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(vec![
+                                               Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                                               Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
+                                           ], None);
+                                           let output = track_await(oom_handler.run(
+                                               &sync_label_batch,
+                                               input,
+                                               ctx.branch(false),
+                                               WithRunCtxContext::new(
+                                                   MaxParallelAndDumpToCpuAdjustableContex::new(
+                                                       MaxParallelAdjustContextImpl::new(),
+                                                       DumpToCpuContextImpl::new(&required_ids),
+                                                   ),
+                                               ),
+                                           )).await?;
                                            Ok(output.into_parts())
                                        }.boxed()
                                    })

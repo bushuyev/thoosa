@@ -216,20 +216,21 @@ impl FsWorkspace {
         net_path: &Path,
         device: &Device,
         quantize: bool,
-    ) -> Result<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>), ThoError> {
+        load_net: bool,
+    ) -> Result<(MotifNetParams, Option<ThoModuleWithStore<Batch<Slice>, MotifProbability>>), ThoError> {
         let base_path = resolve_net_base_path(&self.motifs_nets_path, net_path);
         let (model_path, params_path) = net_files_from_base(&base_path);
 
         let motif_node_params = MotifNetParams::from_file(&params_path)?;
         let params_for_builder = motif_node_params.clone();
 
-        let module = ThoModuleWithStore::load(
+        let module = if load_net {Some(ThoModuleWithStore::load(
             mono_key!(model_path.to_string_lossy().to_string(), "motif_model").into(),
             move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path),
             model_path,
             *device,
             quantize,
-        )?;
+        )?)} else {None};
 
         Ok((motif_node_params, module))
     }
@@ -239,11 +240,12 @@ impl FsWorkspace {
         net_path: &Path,
         device: &Device,
         quantize: bool,
+        load_net:bool
     ) -> Result<
         (
             RunConfigId,
             LabelNetParams,
-            ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
+            Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
         ),
         ThoError,
     > {
@@ -270,13 +272,13 @@ impl FsWorkspace {
         let label_node_params = LabelNetParams::from_file(&params_path)?;
         let params_for_builder = label_node_params.clone();
 
-        let module = ThoModuleWithStore::load(
+        let module = load_net.then_some(ThoModuleWithStore::load(
             mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
             model_path,
             *device,
             quantize,
-        )?;
+        )?);
 
         Ok((run_config_id, label_node_params, module))
     }
@@ -499,8 +501,9 @@ impl Workspace for FsWorkspace {
         net_path: &Path,
         device: &Device,
         quantize: bool,
-    ) -> Result<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>), ThoError> {
-        FsWorkspace::load_motif_net(self, net_path, device, quantize)
+        load_net:bool
+    ) -> Result<(MotifNetParams, Option<ThoModuleWithStore<Batch<Slice>, MotifProbability>>), ThoError> {
+        FsWorkspace::load_motif_net(self, net_path, device, quantize, load_net)
     }
 
     fn load_label_net(
@@ -508,15 +511,16 @@ impl Workspace for FsWorkspace {
         net_path: &Path,
         device: &Device,
         quantize: bool,
+        load_net:bool
     ) -> Result<
         (
             RunConfigId,
             LabelNetParams,
-            ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
+            Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
         ),
         ThoError,
     > {
-        FsWorkspace::load_label_net(self, net_path, device, quantize)
+        FsWorkspace::load_label_net(self, net_path, device, quantize, load_net)
     }
 
     fn load_final_net(
@@ -570,13 +574,14 @@ impl Workspace for FsWorkspace {
         train_label_nets_run_config_ids: Option<&[RunConfigId]>,
         device: &Device,
         quantize: bool,
+        load_net:bool
     ) -> Result<
         HashMap<
             String,
             Vec<(
                 RunConfigId,
                 LabelNetParams,
-                ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
+                Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
             )>,
         >,
         ThoError,
@@ -613,7 +618,7 @@ impl Workspace for FsWorkspace {
 
                         let params_for_builder = label_node_params.clone();
 
-                        let module = ThoModuleWithStore::load(
+                        let module = load_net.then_some(ThoModuleWithStore::load(
                             mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
                             move |path: &nn::Path| {
                                 LabelNetParams::label_net(&params_for_builder)?
@@ -622,7 +627,7 @@ impl Workspace for FsWorkspace {
                             model_path.clone(),
                             *device,
                             quantize,
-                        )?;
+                        )?);
 
                         debug!("load_label_nets: model={model_path:?} run_config_id={run_config_id} loaded");
 
@@ -902,19 +907,21 @@ pub trait Workspace: Sync + Send + Debug {
         &self,
         net_path: &Path,
         device: &Device,
-        quantize: bool
-    ) -> Result<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>), ThoError>;
+        quantize: bool,
+        load_net:bool
+    ) -> Result<(MotifNetParams, Option<ThoModuleWithStore<Batch<Slice>, MotifProbability>>), ThoError>;
 
     fn load_label_net(
         &self,
         net_path: &Path,
         device: &Device,
-        quantize: bool
+        quantize: bool,
+        load_net:bool
     ) -> Result<
         (
             RunConfigId,
             LabelNetParams,
-            ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
+            Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
         ),
         ThoError,
     >;
@@ -944,14 +951,15 @@ pub trait Workspace: Sync + Send + Debug {
         &self,
         train_label_nodes_run_config_ids: Option<&'a [RunConfigId]>,
         device: &'a Device,
-        quantize:bool
+        quantize:bool,
+        load_net:bool
     ) -> Result<
         HashMap<
             String,
             Vec<(
                 RunConfigId,
                 LabelNetParams,
-                ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
+                Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
             )>,
         >,
         ThoError,
@@ -1064,13 +1072,13 @@ impl WsMockBuilder {
         let nets = Arc::new(nets);
         self.mock
             .expect_load_motif_net()
-            .returning(move |net_path: &Path, _device, quantize| {
+            .returning(move |net_path: &Path, _device, quantize, _load_net| {
                 let net_path = net_path.to_path_buf();
                 let entry = nets
                     .iter()
                     .find(|(path, _, _)| *path == net_path)
                     .ok_or_else(|| ThoError::new(format!("Not found: {net_path:?}")))?;
-                Ok(((entry.1)(), (entry.2)()))
+                Ok(((entry.1)(), Some((entry.2)())))
             });
 
         self
@@ -1094,14 +1102,14 @@ impl WsMockBuilder {
     ) -> Self {
         self.mock
             .expect_load_label_nets()
-            .returning(move |_train_label_nodes_run_config_ids, _device, quantize| {
+            .returning(move |_train_label_nodes_run_config_ids, _device, quantize, load_net| {
                 Ok(HashMap::from_iter(label_nets.iter().map(
                     |(label, nodes)| {
                         (
                             label.clone(),
                             nodes
                                 .into_iter()
-                                .map(|(run_config_id, params, module)| (*run_config_id, params(), module()))
+                                .map(|(run_config_id, params, module)| (*run_config_id, params(), Some(module())))
                                 .collect::<Vec<_>>(),
                         )
                     },
@@ -1123,13 +1131,13 @@ impl WsMockBuilder {
         let nets = Arc::new(nets);
         self.mock
             .expect_load_label_net()
-            .returning(move |net_path: &Path, _device, _quantize| {
+            .returning(move |net_path: &Path, _device, _quantize, _load_net| {
                 let net_path = net_path.to_path_buf();
                 let entry = nets
                     .iter()
                     .find(|(path, _, _, _)| *path == net_path)
                     .ok_or_else(|| ThoError::new(format!("Not found: {net_path:?}")))?;
-                Ok((entry.1, (entry.2)(), (entry.3)()))
+                Ok((entry.1, (entry.2)(), Some((entry.3)())))
             });
 
         self
@@ -1267,7 +1275,9 @@ mod tests {
         let net_id = ws.save_motif_net(&0, &0, &0, (&vs).into(), &params)?;
         debug!("net_id={net_id:?}");
 
-        let (loaded_params, loaded_module) = ws.load_motif_net(&net_id, &Cpu, false)?;
+        let (loaded_params, Some(loaded_module)) = ws.load_motif_net(&net_id, &Cpu, false, true)? else {
+            panic!("ups")
+        };
 
         assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));
         assert_eq!(vs.variables(), loaded_module.var_store().variables());
@@ -1335,7 +1345,9 @@ mod tests {
         let net_id = ws.save_motif_net(&0, &0, &0, (&vs).into(), &params)?;
         debug!("net_id={net_id:?}");
 
-        let (loaded_params, loaded_module) = ws.load_motif_net(&net_id, &Cpu, false)?;
+        let (loaded_params, Some(loaded_module)) = ws.load_motif_net(&net_id, &Cpu, false, true)? else {
+            panic!("ups")
+        };
 
         assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));
         assert_eq!(vs.variables(), loaded_module.var_store().variables());
@@ -1361,7 +1373,9 @@ mod tests {
 
         debug!("test_load_label_net:net_id={net_id:?}");
 
-        let (run_config_id, loaded_params, loaded_module) = ws.load_label_net(&net_id, &Cpu, false)?;
+        let (run_config_id, loaded_params, Some(loaded_module)) = ws.load_label_net(&net_id, &Cpu, false, true)? else {
+            panic!("ups")
+        };
 
         assert_eq!(run_config_id, 7);
         assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));

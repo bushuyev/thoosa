@@ -124,11 +124,11 @@ where
     async fn run(self: Arc<Self>, input: LoadMotifNetInput, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
 
 
-        let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(ctx.tho_device_idx()).into(), input.quantize)?;
+        let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(ctx.tho_device_idx()).into(), input.quantize, true)?;
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
 
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(motif_id, channel, params)))))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module.expect("no module"), MotifNetMeta::new(motif_id, channel, params)))))
     }
 }
 
