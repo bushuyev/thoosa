@@ -147,18 +147,18 @@ where
     {
         debug!("Serialize for ThoTensor::serialize: self={self:?}");
         match &self.inner {
-            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+            ThoTensorInner::Ref { key, size, kind, selector } => {
 
                 // Postcard encodes struct fields positionally, so every field, including a None selector, must keep its slot.
                 let mut state = serializer.serialize_struct("ThoTensor", 6)?;
 
                 state.serialize_field("id", &self.id)?;
-                state.serialize_field("ref_key", key)?;
+                state.serialize_field("ref_key", &key.key)?;
                 state.serialize_field("size", size)?;
 
                 state.serialize_field("kind", kind_to_str(kind).map_err(S::Error::custom)?)?;
                 state.serialize_field("selector", selector)?;
-                state.serialize_field("tho_device_idx", tho_device_idx)?;
+                state.serialize_field("tho_device_idx", &key.device_idx)?;
                 state.end()
             }
             ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
@@ -192,28 +192,28 @@ mod tests {
 
         debug!("cuda_tensor={cuda_tensor:?}");
 
-        let ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } = cuda_tensor.inner else {
+        let ThoTensorInner::Ref { key, size, kind, selector } = cuda_tensor.inner else {
             panic!("should be ref");
         };
 
-        assert_eq!(key, 10);
+        assert_eq!(key.key, 10);
         assert_eq!(kind, Kind::Float);
         assert_eq!(size, vec![3,10]);
-        assert_eq!(tho_device_idx, 2);
+        assert_eq!(key.device_idx, 2);
 
         let cuda_tensor_bytes = postcard::to_allocvec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> =  postcard::from_bytes::<ThoTensor<AnyDims, SynKey>>(&cuda_tensor_bytes).unwrap();
         // let cuda_tensor:ThoTensor<AnyDims, ()> =  postcard::from_bytes::<ThoTensor<AnyDims, ()>>(&cuda_tensor_bytes).unwrap();
 
 
-        let ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } = cuda_tensor.inner else {
+        let ThoTensorInner::Ref { key, size, kind, selector } = cuda_tensor.inner else {
             panic!("should be ref");
         };
 
-        assert_eq!(key, 10);
+        assert_eq!(key.key, 10);
         assert_eq!(kind, Kind::Float);
         assert_eq!(size, vec![3,10]);
-        assert_eq!(tho_device_idx, 2);
+        assert_eq!(key.device_idx, 2);
 
     }
 

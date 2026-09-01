@@ -43,6 +43,13 @@ impl TestStageInitA {
 }
 
 impl WorkerStageInput for TestStageInitA {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        todo!()
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+        todo!()
+    }
 }
 
 #[typetag::serde]

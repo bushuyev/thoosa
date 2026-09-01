@@ -868,11 +868,6 @@ impl<'de> Deserialize<'de> for MotifStatsCalcInput<'static> {
 #[typetag::serde(name = "MotifStatsCalcInput")]
 impl WorkerInput for MotifStatsCalcInput<'static> {}
 
-impl MotifStatsCalcInput<'_> {
-    fn decode_motif(motif: MotifStatsIpcMotif, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<LoadedMotif, ThoError> {
-        Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, motif.tensor)?, motif.meta))
-    }
-}
 
 impl WorkerStageInput for MotifStatsCalcInput<'_> {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {

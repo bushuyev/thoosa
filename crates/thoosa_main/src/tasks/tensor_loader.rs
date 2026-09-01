@@ -50,13 +50,6 @@ impl Debug for DebugLoadFn {
     }
 }
 
-fn raw_tensor_ref_from_copy(input: ThoTensor, id: SynKey) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
-    match input.inner {
-        thoosa_common::tho_tensor::ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => Ok(ThoTensor::new_ref(id, key, size, kind, selector, tho_device_idx)),
-        thoosa_common::tho_tensor::ThoTensorInner::Val { .. } => Err(ThoError::new("SyncRawTensorLoader IPC copy must return a worker tensor reference")),
-    }
-}
-
 #[derive(Debug)]
 struct RawTensorLoaderInputWrapper {
     resource: Arc<Resource>,

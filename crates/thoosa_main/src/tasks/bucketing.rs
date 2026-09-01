@@ -1492,7 +1492,7 @@ mod tests {
                 ].concat().into_iter()))
             },
             |key: String| {
-                debug!("key={key}");
+                debug!("key={key:?}");
                 let num_motifs = 4; //random_range(5usize..9usize);
 
                 let motif_gap = 3*motif_len;
@@ -1742,7 +1742,7 @@ mod tests {
                 ].concat().into_iter()))
             },
             |key: String| {
-                debug!("key={key}");
+                debug!("key={key:?}");
                 let num_motifs = random_range(5usize..9usize);
                 let motif_len = 64usize;
                 let motif_gap = 64usize;

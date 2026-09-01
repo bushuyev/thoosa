@@ -762,7 +762,7 @@ where
     W: SelectRef<S> + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
 {
-    if tho_device_idx == 0 {
+    if tho_device_idx == 0 {//TODO remove?
         // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
         let state = if let Some(with_state) = task.as_with_state() {
             Some(with_state.pre_run(0).await?)
