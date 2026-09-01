@@ -88,7 +88,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         unreachable!()
     }
 
-    async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError>
+    async fn drop_tho_tensor(&self, key:u64)-> Result<(), ThoError>
     {
         Ok(())
     }

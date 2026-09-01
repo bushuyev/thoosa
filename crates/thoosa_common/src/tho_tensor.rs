@@ -165,6 +165,24 @@ impl Debug for ThoTensorInner {
     }
 }
 
+
+// impl Drop for ThoTensorInner {
+//     fn drop(&mut self) {
+//         if let ThoTensorInner::Ref { key, tho_device_idx, .. } = self {
+//             let device_idx = *tho_device_idx;
+//             let key = *key;
+//             tokio::spawn(async move {
+//
+//                 if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
+//                     error!("Can't drop tensor key={key}");
+//                 }
+//             });
+//         }
+//     }
+// }
+
+
+
 //D:Dims - is just a reminder of what dimensions a tensor has.
 pub struct ThoTensor<D = AnyDims, Id = ()>
 where
@@ -284,7 +302,7 @@ where
         };
 
         if let Some((tho_device_idx, key)) = tho_device_idx_key {
-            if let Err(e) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_tho_tensor(tensor).await {
+            if let Err(e) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_tho_tensor(key).await {
                 error!("Got error while dropping key={key} e={e:?} ");
             }
         }

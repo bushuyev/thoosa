@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, AtomicU8};
 use std::time::Instant;
-use tch::Device::Cuda;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
@@ -365,7 +365,6 @@ where
 
         let mut apply_motif_nets = vec![];
         for trained_net in trained_nets.into_iter() {
-            // let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&trained_net.net_path, &ThoDevice::from(1).into(), false).unwrap();
             let (channel, motif_id) = FsWorkspace::parse_motif_path(&trained_net.net_path)?;
 
             let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
@@ -529,7 +528,7 @@ where
                                         input.size().clone(),
                                         out_id.clone(),
                                         slices,
-                                        (Float, ThoDevice::from(device_idx).into()),
+                                        (Float, Cpu),
                                         motif_width_i64,
                                         slice_step as i64,
                                     )?,
@@ -1125,13 +1124,16 @@ where
     ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
         let trained_net_id = trained_net.id;
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
-            let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-                   &trained_net.net_path,
-                   &device,
-                   quantize
-            )?;
+
 
             if GlobalCtx::global().is_ipc() {
+                let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+                                                                                   &trained_net.net_path,
+                                                                                   &device,
+                                                                                   quantize,
+                                                                                   false
+                )?;
+
                 let init  = ApplyMotifNetInit::new(
                     slice_step,
                     trained_net.net_path,
@@ -1151,6 +1153,15 @@ where
                     init: MotifNetMeta::new(motif_id, channel, params),
                 }))
             } else {
+                let (params, Some(net)) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+                       &trained_net.net_path,
+                       &device,
+                       quantize,
+                       true
+                )? else {
+                    panic!("ups");
+                };
+
                 Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
                     slice_step,
                     params,
@@ -1204,13 +1215,14 @@ pub fn apply_motif_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwL
         let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
            &init.motif_net_path,
            &Cuda(0),//TODO
-           init.quantize
+           init.quantize,
+            true
         )?;
 
         let stage: ApplyMotifNet<WokerRunCtx> = ApplyMotifNet::new_local(
             init.slice_step,
             params,
-            net,
+            net.expect("net"),
             init.channel,
             init.motif_id,
             #[cfg(test)]

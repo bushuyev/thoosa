@@ -1026,11 +1026,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
 
 
-    async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
+    async fn drop_tho_tensor(&self, key:u64) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::DropThoTensor {
-                key: t.ref_key().ok_or_else(||ThoError::new(format!("Not a ref tensor: {t:?}")))?,
+                key,
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
@@ -1438,7 +1438,7 @@ mod tests {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }
 
-            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float, None, 1)).await?;
+            cuda_actor.drop_tho_tensor(reff).await?;
 
             debug!("run_main: drop ok");
 
