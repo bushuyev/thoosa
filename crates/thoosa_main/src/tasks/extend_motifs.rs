@@ -747,6 +747,21 @@ impl BorrowRef for SelectMotifsInputSelectorWrap {
             Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids.clone(), self.resource_offsets.clone(), ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Dump all cached components because each can independently retain GPU memory.
+        async move {
+            for tensor in &self.batch {
+                BorrowRef::dump_to_cpu(tensor, to_tho_device_idx).await?;
+            }
+            BorrowRef::dump_to_cpu(&self.stacked_motifs, to_tho_device_idx).await?;
+            BorrowRef::dump_to_cpu(&self.motifs_stats, to_tho_device_idx).await?;
+            Ok(())
+        }
+    }
 }
 
 impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {

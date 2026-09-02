@@ -48,7 +48,7 @@ where
         track_await(self.map.drop_gpu(device_idx, name)).await
     }
 
-    #[cfg(any(debug_assertions, tho_debug))]
+    // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         track_await(self.map.debug_gpu(device_idx)).await
     }
@@ -95,7 +95,7 @@ where
         }
     }
 
-    #[cfg(any(debug_assertions, tho_debug))]
+    // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         match self.map.upgrade() {
             Some(map) => track_await(map.debug_gpu(device_idx)).await,
@@ -129,7 +129,7 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO remove Sync + Sen
         name: &str,
     ) -> Result<(), ThoError>;
 
-    #[cfg(any(debug_assertions, tho_debug))]
+    // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(
         &self,
         _device_idx: usize,
@@ -235,7 +235,7 @@ where
         Ok(())
     }
 
-    #[cfg(any(debug_assertions, tho_debug))]
+    // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         let items: Vec<(K, CO)> = self
             .iter()

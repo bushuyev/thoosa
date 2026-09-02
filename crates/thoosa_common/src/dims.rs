@@ -1,9 +1,11 @@
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use crate::tho_tensor::{KeyHolder, ThoTensor, ThoTensorInner};
 use async_trait::async_trait;
 use log::{debug, trace};
 use std::cmp::min;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::ops::{Deref, Range};
+use std::sync::Arc;
 use tch::{IndexOp, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
@@ -29,7 +31,19 @@ where
                 Self::local_subview(self.id(), t, selector)
             }
             ThoTensorInner::Ref { key, size, kind, .. } => {//TODO compose with 'parent' selector ?
-                Ok(ThoTensor::new_ref(self.id().clone(), key.key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>), key.device_idx))
+                // Ok(ThoTensor::new_ref(self.id().clone(), key.key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>), key.device_idx))
+                Ok(Self {
+                    id:self.id().clone(),
+                    inner: ThoTensorInner::Ref {
+                        key:key.clone(),
+                        size: size.clone(),
+                        kind: kind.clone(),
+                        selector:Some(Box::new(selector) as Box<dyn ThoSelector>)
+                    },
+                    tracking: Default::default(),
+                    pd: PhantomData,
+                }
+                )
             }
         }
     }

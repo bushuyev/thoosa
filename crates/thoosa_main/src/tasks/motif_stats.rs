@@ -346,6 +346,24 @@ impl BorrowRef for MotifStatsCalcInputWrapper {
             Ok(MotifStatsCalcInput::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone()))
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Mirror the managed-input variants so every cached motif receives cleanup.
+        async move {
+            match &self.data {
+                MotifStatsCalcInputDataWrapper::Managed(motif) => BorrowRef::dump_to_cpu(motif, to_tho_device_idx).await?,
+                MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
+                    for motif in motifs {
+                        BorrowRef::dump_to_cpu(motif, to_tho_device_idx).await?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug)]

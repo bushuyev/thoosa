@@ -150,7 +150,7 @@ where
     fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
 
     {
-        debug!("SyncStageIpcWrapper::do_run_2: input={input:?}");
+        debug!("SyncStageIpcWrapper::do_run: input={input:?}");
 
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
@@ -158,7 +158,7 @@ where
         let a = (self.inpf)(input.as_ref());
         let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
 
-        debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
+        debug!("SyncStageIpcWrapper::do_run: out={out:?}");
 
         Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
     }
@@ -241,7 +241,7 @@ where
 
 
     fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
-        debug!("SyncStageIpcWrapper::do_run_2: input={input:?}");
+        debug!("SyncStageIpcWrapper::do_run_with_state: input={input:?}");
 
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
         let stage_ctx = St::Ctx::from_worker_ctx(&worker_ctx);
@@ -252,7 +252,7 @@ where
         let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
         let out = Arc::clone(&self.base).do_run_with_state(&a.ref_to_tensor(all_cuda_tensors, false)?, state, &stage_ctx)?;
 
-        debug!("SyncStageIpcWrapper::do_run_2: out={out:?}");
+        debug!("SyncStageIpcWrapper::do_run_with_state: out={out:?}");
 
         Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
     }

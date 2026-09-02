@@ -117,9 +117,9 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(msg) = reply_rx.recv().await {
-        debug!("worker_response_writer_loop: msg={msg:?}");
+        trace!("worker_response_writer_loop: msg={msg:?}");
         write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&msg)?/*TODO move to codec*/, "worker").await?;
-        debug!("worker_response_writer_loop: msg out ok");
+        trace!("worker_response_writer_loop: msg out ok");
     }
     Ok(())
 }
@@ -798,7 +798,7 @@ async fn reader_loop<R>(
                             continue
                         }
                         Some(v) => {
-                            debug!("reader_loop: pending response={v:?} for msg.request_id={}", msg.request_id);
+                            trace!("reader_loop: pending response={v:?} for msg.request_id={}", msg.request_id);
                             v
                         }
                     };
@@ -1116,7 +1116,7 @@ pub async fn write_frame<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    debug!("write_frame: descr={descr} payload.len={}", payload.len());
+    trace!("write_frame: descr={descr} payload.len={}", payload.len());
 
     if payload.len() > u32::MAX as usize {
         return Err(std::io::Error::new(
@@ -1131,7 +1131,7 @@ where
     writer.write_all(payload).await?;
     writer.flush().await?;
 
-    debug!("write_frame: descr={descr} done");
+    trace!("write_frame: descr={descr} done");
 
     Ok(())
 }
@@ -1427,7 +1427,7 @@ mod tests {
             let reff = cuda_ref.ref_key().unwrap();
 
             let cpu_tensor = track_await(cuda_actor.copy(
-                cuda_ref,
+                cuda_ref.shallow_clone(),//otherwise cuda_ref gets dropped and deleted from worker
                 0.into(),//Cpu
             )).await?;
 

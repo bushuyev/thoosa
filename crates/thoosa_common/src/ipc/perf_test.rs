@@ -49,6 +49,14 @@ impl BorrowRef for SimpInput {
         // Scalar-only input is device-independent, so IPC invocation can borrow it without a tensor copy.
         async move { Ok(ThoDataRef::Borrowed(self)) }
     }
+
+    fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Scalar-only performance-test input owns no device data.
+        async { Ok(()) }
+    }
 }
 
 #[typetag::serde]

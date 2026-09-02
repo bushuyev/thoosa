@@ -665,6 +665,11 @@ mod tests {
         fn borrow_to<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send where Self: 'a {
             std::future::ready(Ok(self.clone()))
         }
+
+        fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send where Self: 'o {
+            // This test helper carries paths and scalar metadata only.
+            async { Ok(()) }
+        }
     }
 
     #[derive(Debug)]

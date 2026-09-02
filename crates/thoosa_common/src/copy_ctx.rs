@@ -178,7 +178,7 @@ impl dyn CudaActorHandle + '_ {
         SL: ThoSelector + Clone + Debug + Send + 'static,
         W: Debug + Sync,
         for<'a> W: SelectRef<SL> + 'a,
-        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>>,
+        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>> + Debug,
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
@@ -188,8 +188,10 @@ impl dyn CudaActorHandle + '_ {
         } else {
             None
         };
-
+        let has_selector = selector.is_none();
         let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
+
+        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
 
         let mut handle_ctx = self.init_handle_ctx().await?;
 
@@ -199,8 +201,20 @@ impl dyn CudaActorHandle + '_ {
             Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx),
             None => Arc::clone(&stage).do_run(borrowed.borrow(), ctx),
         };
+        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} out={out:?}");
 
-        handle_ctx.on_after_run()?;
+        let sync_result  = handle_ctx.on_after_run();
+        drop(sync_ctx);
+        drop(borrowed);
+
+        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} sync_result={sync_result:?}");
+
+        //this causes is_resident_on_device to return false in DevicesWrap::borrow_to when called on a split when applying split adjuster.
+        //the subview creates split local view which is copied to the worker.
+        //The tensor is supposed to be dropped from  Drop for KeyHolder right after executing stage since it's not referenced from any caches
+        if has_selector {
+            input.dump_to_cpu(to_device_idx).await?;
+        }
 
         out
     }

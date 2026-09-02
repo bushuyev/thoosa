@@ -30,7 +30,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{AsyncStage, Stage, WithId};
-use thoosa_shared::traits::{Data, Named, OutId, RunCtx, Select, ThoSelector};
+use thoosa_shared::traits::{CachableIdTr, Data, Named, OutId, RunCtx, Select, ThoSelector};
 use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock};
 use thoosa_shims::stream::ThoStreamGuard;
 use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
@@ -51,25 +51,6 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct PlainDataGuard<'a, O>(&'a O)
-where
-    O: Data + WithId + Send + Sync;
-
-impl<'a, O> Deref for PlainDataGuard<'a, O>
-where
-    O: Data + WithId + Send + Sync,
-{
-    type Target = O;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-
-
-
-
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
@@ -89,7 +70,7 @@ pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
 
 impl<O> CachedPurgeOutput for Arc<DevicesWrap<O>>
 where
-    O: Data + WithId + Send + Sync + 'static,
+    O: Data + Send + Sync + 'static,
 {
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
@@ -277,9 +258,12 @@ where
 #[derive(Debug)]
 pub struct DevicesWrap<O>
 where
-    O: WithId + Data + Send + Sync,
+    O: Data + Send + Sync,
 {
-    id: <O as WithId>::ID,
+    // The old broad WithId requirement was a relic of an earlier caching design. DevicesWrap
+    // operations do not need it; this erased field only keeps the stable reference required
+    // by the conditional WithId impl when the wrapper is a Cached AsyncStage output.
+    id: Box<dyn CachableIdTr>,
 
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,//cached data never changes
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
@@ -349,7 +333,7 @@ where
 
 impl <O> BorrowRef for DevicesWrap<O>
 where
-    O: WithId + Data + CopyToDevice + Send + Sync,
+    O: Data + CopyToDevice + Send + Sync,
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a;
 
@@ -365,12 +349,19 @@ where
             )))
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, tho_device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
+    where
+        Self: 'o
+    {
+        DevicesWrap::dump_to_cpu(self, tho_device_idx)
+    }
 }
 
 impl <S, O> SelectRef<S> for DevicesWrap<O>
 where
     S:ThoSelector + Clone + Debug + Send,
-    O: Select<S, Output = O> + WithId + Data + CopyToDevice + Send + Sync,
+    O: Select<S, Output = O> + Data + CopyToDevice + Send + Sync,
 {
     fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
     where
@@ -416,7 +407,7 @@ where
                         if let Some(src) = source_read_guard.as_ref() {
                             let sub_t: O = src.subview(selector.clone())?;
 
-                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
+                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.copy_to_device={:?}", sub_t.size(), self.copy_to_device);
 
                             let data = match &self.copy_to_device {
                                 Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
@@ -475,7 +466,7 @@ fn initial_residency(num_devices: usize, resident_device_idx: usize) -> (Box<[At
 
 impl<O> DevicesWrap<O>
 where
-    O: WithId + Data + Send + Sync,
+    O: Data + Send + Sync,
 {
     fn is_resident_on_device(&self, device_idx: usize) -> bool {
         self.resident_devices[device_idx].load(Ordering::Acquire)
@@ -524,27 +515,28 @@ where
     type ID = O::ID;
 
     fn id(&self) -> &Self::ID {
-        &self.id
+        // wrap_inner stores O::ID, so this downcast is guaranteed by construction.
+        self.id.as_ref().downcast_ref::<O::ID>().expect("DevicesWrap stored an unexpected ID type")
     }
 }
 
 
 impl  <O> Output for DevicesWrap<O>
 where
-    O: WithId + Data + Send + Sync + Output {
+    O: Data + Send + Sync + Output {
 
 }
 
 impl  <O> Input for DevicesWrap<O>
 where
-    O: WithId + Data + Send + Sync + Input {
+    O: Data + Send + Sync + Input {
 
 }
 
 
 struct TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
     D: Deref<Target = O>,
 {
     o: D,
@@ -553,7 +545,7 @@ where
 
 impl<O, D> Debug for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
     D: Deref<Target = O>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -562,7 +554,7 @@ where
 }
 impl<O, D> TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
     D: Deref<Target = O>,
 {
     pub fn new(o: D, init_ctx: Option<&'static str>) -> Self {
@@ -576,7 +568,7 @@ where
 
 impl<O, D> Drop for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
     D: Deref<Target = O>,
 {
     fn drop(&mut self) {
@@ -588,7 +580,7 @@ where
 
 impl<O, D> Deref for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
     D: Deref<Target = O>,
 {
     type Target = O;
@@ -600,28 +592,34 @@ where
 
 unsafe impl<O, D> Send for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
     D: Deref<Target = O>,
 {
 }
 
 impl<O> DevicesWrap<O>
 where
-    O: Data + WithId + Send + Sync,
+    O: Data + Send + Sync,
 {
     pub fn wrap(o: O) -> Self
     where
-        O: CopyToDevice,
+        O: CopyToDevice + WithId,
     {
         Self::wrap_inner(o, Some(Arc::new(CopyToDeviceCopier)))
     }
 
-    pub fn wrap_plain(o: O) -> Self {
+    pub fn wrap_plain(o: O) -> Self
+    where
+        O: WithId,
+    {
         assert_eq!(o.device(), 0);
         Self::wrap_inner(o, None)
     }
 
-    fn wrap_inner(o: O, copy_to_device: Option<Arc<dyn DeviceCopier<O>>>) -> Self {
+    fn wrap_inner(o: O, copy_to_device: Option<Arc<dyn DeviceCopier<O>>>) -> Self
+    where
+        O: WithId,
+    {
         let id = o.id().clone();
         let size = o.size();
         let device_ordinal = o.device();
@@ -650,7 +648,7 @@ where
             .into_boxed_slice();
 
         Self {
-            id,
+            id: Box::new(id),
             cached_data: device_futures,
             inflights,
             size,
@@ -675,6 +673,8 @@ where
         }
 
         if self.is_all_on_cpu_resident() {
+            debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx} is_all_on_cpu_resident", self.id);
+
             self.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
             return Ok(());
         }
@@ -688,18 +688,20 @@ where
                 if let Some(data) = lock.as_ref() {
                     track_await(self.ensure_copied(0, data, false)).await?;
                 }
-                if let Some(o) = lock.take() {
-                    o.adrop().await;
-                    // drop(o);
-                }
+                let o = lock.take().expect(&format!("no locked {:?}", self.id));
+                    // o.adrop().await;
+                debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
+                drop(o);
+
 
                 self.mark_not_resident_on_device(device_idx);
 
-                debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", self.id);
             } else {
-                if let Some(o) = lock.take() {
-                    o.adrop().await;
-                }
+                let o = lock.take().expect(&format!("no locked {:?}", self.id));
+                debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?}", self.id);
+                // o.adrop().await;
+                drop(o);
+
                 self.mark_not_resident_on_device(device_idx);
             }
         } else {
@@ -837,11 +839,15 @@ where
 
 impl<O> DevicesWrap<O>
 where
-    O: Data + WithId + Send + Sync
+    O: Data + Send + Sync
 {
 
-    pub fn id(&self) -> &<O as WithId>::ID {
-        &self.id
+    pub fn id(&self) -> &<O as WithId>::ID
+    where
+        O: WithId,
+    {
+        // This mirrors the conditional WithId impl without imposing WithId on other operations.
+        self.id.as_ref().downcast_ref::<O::ID>().expect("DevicesWrap stored an unexpected ID type")
     }
 
 
@@ -871,7 +877,7 @@ where
         data: T,
     ) -> Result<R, ThoError>
     where
-        T: Data + WithId + Send + Sync,
+        T: Data + Send + Sync,
     {
         if trace_ctx.is_none() {
             do_run(&data)
@@ -1028,6 +1034,9 @@ pub trait BorrowRef
     where
         Self:'o;
 
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self:'o;
 }
 
 
@@ -1045,6 +1054,14 @@ where
             self.as_ref().borrow_to(to_tho_device_idx).await
         }
 
+    }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
+    where
+        Self: 'o
+    {
+        // Executor inputs are Arc-wrapped, so forwarding is required to reach DevicesWrap cleanup.
+        self.as_ref().dump_to_cpu(to_tho_device_idx)
     }
 }
 

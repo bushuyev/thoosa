@@ -1000,6 +1000,14 @@ impl BorrowRef for SyncLoadMotifResourcesInputWrapper {
             })
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Forward cleanup to the cached raw tensor borrowed by this wrapper.
+        BorrowRef::dump_to_cpu(&self.raw_tensor, to_tho_device_idx)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1293,6 +1301,14 @@ impl BorrowRef for SyncLoadRandomSlicesInputWrapper {
                 descr: self.descr.clone(),
             })
         }
+    }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Forward cleanup to the cached raw tensor borrowed by this wrapper.
+        BorrowRef::dump_to_cpu(&self.raw_tensor, to_tho_device_idx)
     }
 }
 

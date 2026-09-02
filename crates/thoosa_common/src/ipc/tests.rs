@@ -121,7 +121,7 @@ where
             info!("main perf:\n{}", format_perf_map(&PERF));
 
             // Preserve the original tests' behavior by propagating main-process assertion failures.
-            Ok::<_, ThoError>(())
+            r
         })?;
     }
 
@@ -385,19 +385,6 @@ mod tests {
         )
     }
 
-    impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
-        fn from(t: ThoTensor) -> Self {
-            let ThoTensor { id, inner, .. } = t;
-            match inner {
-                ThoTensorInner::Val { .. } => {
-                    todo!()
-                }
-                ThoTensorInner::Ref { key, size, kind, .. } => {
-                    ThoTensor::new_ref(mono_key!(0, "todo").into(), key.key, vec![], Float, None, 1)
-                }
-            }
-        }
-    }
 
     async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static str], use_matmul: bool) -> Result<(), ThoError> {
         debug!("run_load_and_clc_ipc_cuda_worker: test_name={test_name} resources={resources:?}");
@@ -428,7 +415,7 @@ mod tests {
                 let self_k = parse_numeric_part(resource).unwrap_or(1.0);
                 let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu)?;
 
-                let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.into();
+                let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.to_types(mono_key!(0, "todo").into())?;
                 debug!("run_load_and_clc_ipc_cuda_worker: worker_ref={worker_ref:?}");
 
                 let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
@@ -533,37 +520,35 @@ mod tests {
         run_ipc_test(
             module_path!(),
             async {
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let result = async {
-                const MUL_K: f64 = 2.;
-                let size = [3, 10];
-                let load_and_clc = Arc::new(LoadAndClcStage::new(
-                    LoadAndClcStageId("ipc_load_and_clc_oom_till_min_max_parallel_id"),
-                    MUL_K,
-                    vec![NaxParallel(20)],
-                    size.into(),
-                    ClcOOMRunner::new(
-                        OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
-                        Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
-                    ),
-                    Float,
-                    Device::Cuda(0).into(),
-                    false,
-                ).await);
-                run_mul_task_invocations(
-                    Arc::clone(&load_and_clc),
-                    &["resource_1", "resource_2", "resource_3"],
-                    tho_device_idx,
-                    0,
-                    |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-                    move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
-                    false,
-                ).await?;
-                Ok::<(), ThoError>(())
-            }.await;
-
-            Ok(())
+                let tho_device_idx = 1;
+                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                async {
+                    const MUL_K: f64 = 2.;
+                    let size = [3, 10];
+                    let load_and_clc = Arc::new(LoadAndClcStage::new(
+                        LoadAndClcStageId("ipc_load_and_clc_oom_till_min_max_parallel_id"),
+                        MUL_K,
+                        vec![NaxParallel(20)],
+                        size.into(),
+                        ClcOOMRunner::new(
+                            OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
+                            Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                        ),
+                        Float,
+                        Device::Cuda(0).into(),
+                        false,
+                    ).await);
+                    run_mul_task_invocations(
+                        Arc::clone(&load_and_clc),
+                        &["resource_1", "resource_2", "resource_3"],
+                        tho_device_idx,
+                        0,
+                        |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                        move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
+                        false,
+                    ).await?;
+                    Ok::<(), ThoError>(())
+                }.await
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
@@ -585,7 +570,7 @@ mod tests {
             async {
             let tho_device_idx = 1;
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let result = async {
+            async {
                 const MUL_K: f64 = 2.;
                 let size = [3, 10];
                 let load_and_clc = Arc::new(LoadAndClcStage::new(
@@ -611,9 +596,7 @@ mod tests {
                     false,
                 ).await?;
                 Ok::<(), ThoError>(())
-            }.await;
-
-            Ok(())
+            }.await
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
@@ -665,50 +648,48 @@ mod tests {
         run_ipc_test(
             module_path!(),
             async {
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let result = async {
-                const MUL_K: f64 = 2.;
-                let size = [3, 140];
-                let load_and_clc = Arc::new(LoadAndClcStage::new(
-                    LoadAndClcStageId("ipc_load_and_clc_oom_splits_id"),
-                    MUL_K,
-                    vec![FailUntil::MemLimit(40)],
-                    size.into(),
-                    ClcOOMRunner::new(
-                        OOMRunnerConfig::Splits {},
-                        Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
-                            id,
-                            1,
-                            &size,
-                            (Float, Device::Cpu),
-                            BuildAs::Sum
-                        ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
-                    ),
-                    Float,
-                    Device::Cuda(0).into(),
-                    true,
-                ).await);
+                let tho_device_idx = 1;
+                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                async {
+                    const MUL_K: f64 = 2.;
+                    let size = [3, 140];
+                    let load_and_clc = Arc::new(LoadAndClcStage::new(
+                        LoadAndClcStageId("ipc_load_and_clc_oom_splits_id"),
+                        MUL_K,
+                        vec![FailUntil::MemLimit(40)],
+                        size.into(),
+                        ClcOOMRunner::new(
+                            OOMRunnerConfig::Splits {},
+                            Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
+                                id,
+                                1,
+                                &size,
+                                (Float, Device::Cpu),
+                                BuildAs::Sum,
+                            ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                        ),
+                        Float,
+                        Device::Cuda(0).into(),
+                        true,
+                    ).await);
 
-                run_mul_task_invocations(
-                    Arc::clone(&load_and_clc),
-                    &["resource_1"],
-                    tho_device_idx,
-                    0,
-                    |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-                    move |res, out| {
-                        crate::torch_runner::tests::load_and_clc::mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
-                            Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
-                                .sum_dim_intlist(1, false, t.kind())
-                                .view((-1, 1)))
-                        })
-                    },
-                    false,
-                ).await?;
-                Ok::<(), ThoError>(())
-            }.await;
-
-            Ok(())
+                    run_mul_task_invocations(
+                        Arc::clone(&load_and_clc),
+                        &["resource_1"],
+                        tho_device_idx,
+                        0,
+                        |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                        move |res, out| {
+                            crate::torch_runner::tests::load_and_clc::mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
+                                Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
+                                    .sum_dim_intlist(1, false, t.kind())
+                                    .view((-1, 1)))
+                            })
+                        },
+                        false,
+                    ).await?;
+                    Ok::<(), ThoError>(())
+                }.await
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
@@ -734,7 +715,7 @@ mod tests {
 
                 let tho_device_idx = 1;
                 let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                let result = async {
+                async {
                     const MUL_K: f64 = 2.;
                     let size = [3, 100];
                     let load_and_clc = Arc::new(LoadAndClcStage::new(
@@ -775,9 +756,7 @@ mod tests {
                     cuda_actor.debug_worker().await?;
 
                     Ok::<(), ThoError>(())
-                }.await;
-
-                Ok(())
+                }.await
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
@@ -803,7 +782,7 @@ mod tests {
 
                 let tho_device_idx = 1;
                 let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                let result = async {
+                async {
                     const MUL_K: f64 = 2.;
                     let size = [3, 100];
                     let load_and_clc = Arc::new(LoadAndClcStage::new(
@@ -844,9 +823,7 @@ mod tests {
                     cuda_actor.debug_worker().await?;
 
                     Ok::<(), ThoError>(())
-                }.await;
-
-                Ok(())
+                }.await
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
@@ -867,38 +844,36 @@ mod tests {
         run_ipc_test(
             module_path!(),
             async {
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let result = async {
-                const MUL_K: f64 = 2.;
-                let size = [3, 100];
-                let load_and_clc = Arc::new(LoadAndClcStage::new(
-                    LoadAndClcStageId("ipc_load_and_clc_dump_to_cpu_id"),
-                    MUL_K,
-                    vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
-                    size.into(),
-                    ClcOOMRunner::new(
-                        OOMRunnerConfig::DumpedToCpu {},
-                        Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
-                    ),
-                    Float,
-                    Device::Cuda(0).into(),
-                    false,
-                ).await);
-                run_mul_task_invocations(
-                    Arc::clone(&load_and_clc),
-                    &["resource_1", "resource_2", "resource_3", "resource_4", "resource_5"],
-                    tho_device_idx,
-                    0,
-                    |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-                    move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
-                    false,
-                ).await?;
-                assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
-                Ok::<(), ThoError>(())
-            }.await;
-
-            Ok(())
+                let tho_device_idx = 1;
+                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                async {
+                    const MUL_K: f64 = 2.;
+                    let size = [3, 100];
+                    let load_and_clc = Arc::new(LoadAndClcStage::new(
+                        LoadAndClcStageId("ipc_load_and_clc_dump_to_cpu_id"),
+                        MUL_K,
+                        vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
+                        size.into(),
+                        ClcOOMRunner::new(
+                            OOMRunnerConfig::DumpedToCpu {},
+                            Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                        ),
+                        Float,
+                        Device::Cuda(0).into(),
+                        false,
+                    ).await);
+                    run_mul_task_invocations(
+                        Arc::clone(&load_and_clc),
+                        &["resource_1", "resource_2", "resource_3", "resource_4", "resource_5"],
+                        tho_device_idx,
+                        0,
+                        |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                        move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
+                        false,
+                    ).await?;
+                    assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
+                    Ok::<(), ThoError>(())
+                }.await
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
