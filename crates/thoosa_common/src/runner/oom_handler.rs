@@ -341,13 +341,13 @@ where
 
         match track_await(self.adjust(base_selector, contexts.input_context())).await {
             Ok(v) => {
-                debug!("OOMHandler::run, error, input adjuster ok: {v:?}");
+                debug!("InputAdjustment::adjust_input: input adjuster ok: {v:?}");
                 *input_select_adjusted = Some(v);
                 Ok(())
             }
             Err(adjuster_err) => {
                 let msg = format!("adjuster failed: {adjuster_err:?}");
-                debug!("OOMHandler::run, error, input adjuster failed: {msg:?}");
+                debug!("InputAdjustment::adjust_input: input adjuster failed: {msg:?}");
 
                 match adjuster_err {
                     AdjusterError::AdjustFailed(v) => {
@@ -687,10 +687,10 @@ async fn run_stage_borrowed<R, W>(
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+    for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
-    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
     if tho_device_idx == 0 {
         // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
@@ -727,7 +727,7 @@ where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>:Send + Sync,
-    R::Out: Send + Sync + 'static,
+    R::Out: Send + Sync + 'static + Debug,
     W: ConsumeData<O = R::In<'z>> + Debug + Send + Sync + 'static,
     R::In<'z>: 'static,
 {
@@ -756,11 +756,11 @@ async fn run_stage_selected<R, W, S>(
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
     W: SelectRef<S> + Debug + Send + Sync + 'static,
-    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
     if tho_device_idx == 0 {//TODO remove?
         // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
@@ -806,10 +806,10 @@ impl<R, W, S> InputRun<R, W, S> for NoInputAdjuster
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     W: BorrowRef + Debug + Send + Sync + 'static,
-    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
     async fn run_stage(
         task: Arc<R>,
@@ -828,11 +828,11 @@ impl<'adjuster, R, W, S, IC> InputRun<R, W, S> for Box<dyn Adjuster<IC, A = S> +
 where
     R: SyncStage + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     S: ThoSelector + Debug + Clone + Default + Send + 'static,
     W: SelectRef<S> + Debug + Send + Sync + 'static,
-    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
     async fn run_stage(
         task: Arc<R>,
@@ -879,11 +879,11 @@ where
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
-        for<'i> <R as Stage>::In<'i>:  Send + Sync,
+         for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
         R::Out: Send + Sync + 'static,
         S: Debug + Clone + Default + Send + 'static,
         W: BorrowRef + Debug + Send + Sync + 'static,
-        for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+        for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
     {
         if run_context.tho_device_idx() == 0 {
             return track_await(<IA as InputRun<R, W, S>>::run_stage(Arc::clone(task), input, None, 0, run_context, None)).await;
@@ -1065,7 +1065,7 @@ where
         let input = self.input.take().expect("ConsumeRunnerRetryAdapter::run: missing input");
         let runner = &self.runner;
 
-        let run_result = match track_await(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({
+        let run_result = match track_await(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO why not panic_to_err_async?
             runner(task, input, selector, device_idx, run_ctx, job_id_to_rerun)
         }))).await
         {
@@ -1100,7 +1100,7 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: TaskAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
     A: RunnerRetryAdapter<'z, R, S>,
@@ -1265,7 +1265,7 @@ where
     IA: InputAdjustment<'a, R, C, S>,
     TA: TaskAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
-    for<'i> <R as Stage>::In<'i>:  Send + Sync,
+     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
     W:Debug,
@@ -1775,6 +1775,14 @@ mod tests {
             Self: 'o,
         {
             async move { Ok(&self.inner) }
+        }
+
+        fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+        where
+            Self: 'o,
+        {
+            // This compile-path test input has no DevicesWrap cache to purge.
+            async { Ok(()) }
         }
     }
 

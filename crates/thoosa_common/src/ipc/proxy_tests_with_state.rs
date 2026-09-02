@@ -94,6 +94,14 @@ impl BorrowRef for TestInputB {
             }
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // This test input owns its tensor directly and has no DevicesWrap cache to purge.
+        async { Ok(()) }
+    }
 }
 
 impl WorkerStageInput for TestInputB {

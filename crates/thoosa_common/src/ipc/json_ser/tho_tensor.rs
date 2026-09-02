@@ -179,10 +179,15 @@ mod tests {
     use thoosa_shared::mono_key;
     use crate::dims::AnyDims;
     use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::global_ctx::MockGlobalCtx;
     use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
     #[test]
     fn test_postcard_tho_tensor_ref_test(){
+        let is_installed_ctx = MockGlobalCtx::is_installed_context();
+        is_installed_ctx.expect().return_const(false);
+
         let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, 2);
         // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, 2);
 
