@@ -205,6 +205,7 @@ impl dyn CudaActorHandle + '_ {
 
         let sync_result  = handle_ctx.on_after_run();
         drop(sync_ctx);
+        drop(borrowed);
 
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} sync_result={sync_result:?}");
 
