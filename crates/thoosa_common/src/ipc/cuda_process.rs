@@ -1427,7 +1427,7 @@ mod tests {
             let reff = cuda_ref.ref_key().unwrap();
 
             let cpu_tensor = track_await(cuda_actor.copy(
-                cuda_ref,
+                cuda_ref.shallow_clone(),//otherwise cuda_ref gets dropped and deleted from worker
                 0.into(),//Cpu
             )).await?;
 
