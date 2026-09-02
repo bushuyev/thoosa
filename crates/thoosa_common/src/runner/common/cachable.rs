@@ -1036,12 +1036,7 @@ pub trait BorrowRef
 
     fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
     where
-        Self:'o {
-        async {
-            todo!()
-            // Ok(())
-        }
-    }
+        Self:'o;
 }
 
 

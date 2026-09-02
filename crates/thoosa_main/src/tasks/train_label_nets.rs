@@ -140,6 +140,19 @@ impl BorrowRef for SyncLabelBatchInputWrapper {
             Ok(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Dump both label groups because every cached output can retain GPU memory.
+        async move {
+            for value in self.x_1.iter().chain(&self.x_0) {
+                BorrowRef::dump_to_cpu(value, to_tho_device_idx).await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

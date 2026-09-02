@@ -336,6 +336,19 @@ impl BorrowRef for SyncLogitsBatchInputWrapper {
             Ok(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Every logits output is independently cached and must receive the cleanup request.
+        async move {
+            for output in &self.outputs {
+                BorrowRef::dump_to_cpu(output, to_tho_device_idx).await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

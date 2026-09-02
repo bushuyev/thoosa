@@ -1015,6 +1015,14 @@ impl BorrowRef for ApplyMotifNetInputWrapper {
             Ok(ApplyMotifNetInput::from_data_ref(batch))
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Forward cleanup to the cached batch borrowed by this wrapper.
+        BorrowRef::dump_to_cpu(&self.batch, to_tho_device_idx)
+    }
 }
 
 impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {

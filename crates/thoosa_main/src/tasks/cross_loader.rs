@@ -964,6 +964,19 @@ impl BorrowRef for CrossInputSelectorWrap {
             ))
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        // Both resource batches own independent cached tensors that may remain GPU-resident.
+        async move {
+            for tensor in self.batch_0.iter().chain(&self.batch_1) {
+                BorrowRef::dump_to_cpu(tensor, to_tho_device_idx).await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
