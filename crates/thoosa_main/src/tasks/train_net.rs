@@ -453,7 +453,7 @@ where
 {
     type Ctx = C;
     type In<'a> = Arc<TrainNetInput>;
-    type Out = Arc<DevicesWrap<TrainNetOutput<NP, RC>>>;
+    type Out = TrainNetOutput<NP, RC>;
 }
 
 
@@ -507,7 +507,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            Ok(Arc::new(DevicesWrap::wrap_plain(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store_path, node_params, run_config, loss))))
+            Ok(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store_path, node_params, run_config, loss))
         }
     }
 }
@@ -708,10 +708,6 @@ pub mod tests {
                 Arc::new(TrainNetInput::new(SynKey::new([mono_key!("test", "test")]))),
                 ctx,
             )
-            .await?;
-        let _ = Arc::into_inner(output)
-            .expect("train_net output still shared")
-            .take_data(1)
             .await?;
 
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.

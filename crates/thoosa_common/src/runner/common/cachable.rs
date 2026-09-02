@@ -51,25 +51,6 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct PlainDataGuard<'a, O>(&'a O)
-where
-    O: Data + WithId + Send + Sync;
-
-impl<'a, O> Deref for PlainDataGuard<'a, O>
-where
-    O: Data + WithId + Send + Sync,
-{
-    type Target = O;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-
-
-
-
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
@@ -365,6 +346,13 @@ where
             )))
         }
     }
+
+    fn dump_to_cpu<'o>(&'o self, tho_device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
+    where
+        Self: 'o
+    {
+        DevicesWrap::dump_to_cpu(self, tho_device_idx)
+    }
 }
 
 impl <S, O> SelectRef<S> for DevicesWrap<O>
@@ -416,7 +404,7 @@ where
                         if let Some(src) = source_read_guard.as_ref() {
                             let sub_t: O = src.subview(selector.clone())?;
 
-                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
+                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.copy_to_device={:?}", sub_t.size(), self.copy_to_device);
 
                             let data = match &self.copy_to_device {
                                 Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
@@ -675,6 +663,8 @@ where
         }
 
         if self.is_all_on_cpu_resident() {
+            debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx} is_all_on_cpu_resident", self.id);
+
             self.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
             return Ok(());
         }
@@ -688,18 +678,20 @@ where
                 if let Some(data) = lock.as_ref() {
                     track_await(self.ensure_copied(0, data, false)).await?;
                 }
-                if let Some(o) = lock.take() {
-                    o.adrop().await;
-                    // drop(o);
-                }
+                let o = lock.take().expect(&format!("no locked {:?}", self.id));
+                    // o.adrop().await;
+                debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
+                drop(o);
+
 
                 self.mark_not_resident_on_device(device_idx);
 
-                debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", self.id);
             } else {
-                if let Some(o) = lock.take() {
-                    o.adrop().await;
-                }
+                let o = lock.take().expect(&format!("no locked {:?}", self.id));
+                debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?}", self.id);
+                // o.adrop().await;
+                drop(o);
+
                 self.mark_not_resident_on_device(device_idx);
             }
         } else {
@@ -1028,6 +1020,14 @@ pub trait BorrowRef
     where
         Self:'o;
 
+    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
+    where
+        Self:'o {
+        async {
+            todo!()
+            // Ok(())
+        }
+    }
 }
 
 

@@ -724,7 +724,6 @@ where
                     )).await?;
 
 
-                    let result = track_await(Arc::into_inner(result).expect("can't get result from train_net").take_data(0)).await?;
                     debug!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(

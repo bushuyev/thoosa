@@ -98,7 +98,7 @@ where
     ) -> Result<<R as Stage>::Out, ThoError>
     where
         W: SelectRef<S> + Debug,
-        for<'f> <W as BorrowRef>::Out<'f>: std::borrow::Borrow<<R as Stage>::In<'f>> + Send,
+        for<'f> <W as BorrowRef>::Out<'f>: std::borrow::Borrow<<R as Stage>::In<'f>> + Send + Debug,
 
         W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 

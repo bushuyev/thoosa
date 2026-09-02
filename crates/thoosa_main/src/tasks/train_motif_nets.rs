@@ -680,11 +680,11 @@ where
 
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
-                let train_net_output = track_await(Arc::into_inner(track_await(train_net.run(
+                let train_net_output = track_await(train_net.run(
                     Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
 
                     ctx_run
-                )).await?).unwrap().take_data(0)).await?;
+                )).await?;
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", train_net_output.min_loss);
 

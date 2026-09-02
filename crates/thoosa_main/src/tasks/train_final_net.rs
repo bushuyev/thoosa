@@ -246,11 +246,9 @@ where
                 "final".to_string(),
             ));
 
-            let result = track_await(Arc::into_inner(track_await(train_net.run(
+            let result = track_await(train_net.run(
                 Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
-                ctx.branch(false))).await?
-            ).unwrap()
-                .take_data(0)).await?;
+                ctx.branch(false))).await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store_path, result.node_params, result.run_config);
             info!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);

@@ -91,7 +91,7 @@ where
         }
     }
 
-    pub fn to_default(self) -> ThoTensor {
+    pub fn to_default(self) -> ThoTensor {//same as strip_types
         ThoTensor {
             id: (),
             inner: self.inner,
@@ -180,6 +180,7 @@ pub struct KeyHolder {
 
 impl Clone for KeyHolder {
     fn clone(&self) -> Self {
+        debug!("KeyHolder::clone: self={self:?} self.device_idx={} strong_count={:?}", self.device_idx, Arc::strong_count(&self.count) );
         KeyHolder {
             key:  self.key,
             device_idx: self.device_idx,
@@ -191,33 +192,18 @@ impl Clone for KeyHolder {
 impl Drop for KeyHolder {
     fn drop(&mut self) {
         debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?}", self.device_idx, Arc::strong_count(&self.count) );
-        // if GlobalCtx::is_installed() && self.device_idx != 0 && Arc::strong_count(&self.count) == 1 {
-        //     let device_idx = self.device_idx;
-        //     let key = self.key;
-        //     tokio::spawn(async move {
-        //         if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
-        //             error!("Can't drop tensor key={key:?}");
-        //         }
-        //     });
-        // }
+        if GlobalCtx::is_installed() && self.device_idx != 0 && Arc::strong_count(&self.count) == 1 {
+            let device_idx = self.device_idx;
+            let key = self.key;
+            tokio::spawn(async move {
+                if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
+                    error!("Can't drop tensor key={key:?}");
+                }
+            });
+        }
     }
 }
-//
-// impl Deref for KeyHolder {
-//     type Target = u64;
-//
-//     fn deref(&self) -> &Self::Target {
-//         &self.key
-//     }
-// }
-//
-// impl From<u64> for KeyHolder {
-//     fn from(key: u64) -> Self {
-//         Self {
-//             key
-//         }
-//     }
-// }
+
 
 pub /*TODO*/ enum ThoTensorInner {
     Val { t: Tensor },
@@ -271,9 +257,9 @@ where
     pub inner: ThoTensorInner, //TODO pub
 
     #[allow(dead_code)]
-    tracking: parking_lot::RwLock<Vec<&'static str>>,
+    pub tracking: parking_lot::RwLock<Vec<&'static str>>,
 
-    pd: PhantomData<D>,
+    pub pd: PhantomData<D>,//TODO pub
 }
 
 

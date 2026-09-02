@@ -401,6 +401,9 @@ impl GlobalCtx {
         #[cfg(tho_debug)]
         track_await(self.debug_caches(tho_device_idx, descr)).await;
 
+        #[cfg(tho_debug)]
+        self.cuda_actor(tho_device_idx).debug_worker().await?;
+
         Ok(())
     }
 
