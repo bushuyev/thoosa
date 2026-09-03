@@ -97,7 +97,7 @@ where
         let required_ids: std::collections::HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = std::collections::HashMap::new();
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, SyncStftSelector> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_stft"))),
             ],
             None,

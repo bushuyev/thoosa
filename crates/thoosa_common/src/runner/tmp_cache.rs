@@ -118,7 +118,12 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
             match track_await(devices_wrap.load_from_any_device_(tho_device_idx)).await.map(|guard| drop(guard)) {
                 Ok(()) => match devices_wrap.take_data_prefer_device_or_any(tho_device_idx) {
-                    Ok(value) => res.push(value),
+
+                    Ok(value) => {
+                        debug!("TmpCached::take_all: adding value={value:?}");
+
+                        res.push(value)
+                    },
                     Err(err) => {
                         let error = Self::contextualize_take_error(&key, err);
                         Self::recover_remaining_values(&mut res, entries, tho_device_idx);

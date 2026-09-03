@@ -211,7 +211,7 @@ where
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("batch_apply_cosine2d_motif_nets"))),
             ],
             None,

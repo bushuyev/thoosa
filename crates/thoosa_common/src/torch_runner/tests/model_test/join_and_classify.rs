@@ -98,7 +98,7 @@ impl AsyncStage for JoinAndClassifyTask {
         let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
             Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                 MAX_PARALLEL,
-                *MaxParallelStep::TEN,
+                *MaxParallelStep::SLOW,
             ))),
             Adjusters::Input(input_adjuster(SplitsAdjuster::<ABRange, ABMetrics>::new(
                 min_split_len,

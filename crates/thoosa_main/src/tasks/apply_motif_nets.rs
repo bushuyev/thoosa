@@ -511,7 +511,7 @@ where
 
                     let r = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
                             vec![
-                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
+                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::MID))),
                                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_moitf_net"))),
                                 Adjusters::Input(input_adjuster(StepAlignedSplitsAdjuster::new_with_overlap(
                                     [-1, min_split_len].into(),
@@ -574,7 +574,7 @@ where
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_motif_nets"))),
             ],
             None,

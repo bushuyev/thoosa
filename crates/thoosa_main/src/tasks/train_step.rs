@@ -194,7 +194,11 @@ where
             Ok::<_, ThoError>((predicted_y, loss))
 
         };
-        let (predicted_y, loss) = if input.train { calculate_loss()? } else { tch::no_grad(calculate_loss)? };
+        let (predicted_y, loss) = if input.train {
+            panic_to_err!(calculate_loss())?
+        } else {
+            panic_to_err!(tch::no_grad(calculate_loss))?
+        };
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
         trace!("TrainStep::do_run: x_t=\n{x_t}");
 

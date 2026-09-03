@@ -169,7 +169,7 @@ where
                 let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
-                        *MaxParallelStep::TWENTY,
+                        *MaxParallelStep::MID,
                     ))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                         min_split_len,
@@ -195,7 +195,7 @@ where
                 let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
-                        *MaxParallelStep::FIFTY,
+                        *MaxParallelStep::FAST,
                     ))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
@@ -1223,7 +1223,7 @@ mod tests {
             ClcOOMRunner::new(
                 OOMRunnerConfig::MaxParallel {
                     max: MAX_PARALLEL,
-                    step: *MaxParallelStep::TEN,
+                    step: *MaxParallelStep::SLOW,
                 },
                 Box::new(|id| DMulTaskOutputBuilder::new(id)),
             ),

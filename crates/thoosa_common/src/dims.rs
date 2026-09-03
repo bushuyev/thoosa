@@ -31,14 +31,14 @@ where
                 Self::local_subview(self.id(), t, selector)
             }
             ThoTensorInner::Ref { key, size, kind, .. } => {//TODO compose with 'parent' selector ?
-                // Ok(ThoTensor::new_ref(self.id().clone(), key.key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>), key.device_idx))
+                debug!("ThoTensor::subview: key={key:?} size={size:?} kind={kind:?}");
                 Ok(Self {
                     id:self.id().clone(),
                     inner: ThoTensorInner::Ref {
-                        key:key.clone(),
+                        key: key.clone(),
                         size: size.clone(),
                         kind: kind.clone(),
-                        selector:Some(Box::new(selector) as Box<dyn ThoSelector>)
+                        selector:Some(Box::new(selector) as Box<dyn ThoSelector>),
                     },
                     tracking: Default::default(),
                     pd: PhantomData,

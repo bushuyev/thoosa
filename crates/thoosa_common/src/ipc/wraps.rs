@@ -126,7 +126,7 @@ where
 {
 
     fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
-        debug!("SyncStageIpcWrapper::consume_2: input={input:?}");
+        debug!("SyncStageIpcWrapper::consume: input={input:?}");
 
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
@@ -137,8 +137,8 @@ where
         match Arc::clone(&self.base).consume(worker_input, stage_ctx) {
             ConsumeResult::Ok(out) => {
                 // Commit removal only after the stage accepts the input so a failed consume can be retried.
-                drop(a.ref_to_tensor(all_cuda_tensors, true)?);
-                debug!("SyncStageIpcWrapper::consume_2: out={out:?}");
+                drop(a.ref_to_tensor(all_cuda_tensors, false)?);
+                debug!("SyncStageIpcWrapper::consume: out={out:?}");
                 Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
             }
             ConsumeResult::Failed { error, .. } => Err(error),
