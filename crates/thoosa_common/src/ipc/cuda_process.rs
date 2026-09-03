@@ -36,6 +36,8 @@ use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operat
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 pub  const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
+// Shutdown normally completes immediately, but keep a bounded kill fallback for a worker stuck after acknowledging the request.
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
@@ -193,6 +195,29 @@ struct SpawnedState {
 }
 
 impl SpawnedState {
+
+    async fn wait_for_graceful_exit(&mut self) -> Result<(), ThoError> {
+        let wait_result = tokio::time::timeout(WORKER_SHUTDOWN_TIMEOUT, self.child.wait()).await;
+
+        // The child has either closed its socket or exceeded the shutdown deadline, so its I/O loops no longer serve useful work.
+        self.cancel.cancel();
+        self.reader_handle.abort();
+        self.writer_handle.abort();
+
+        match wait_result {
+            Ok(Ok(status)) if status.success() => {
+                debug!("CUDA worker exited cleanly after shutdown");
+                Ok(())
+            }
+            Ok(Ok(status)) => Err(ThoError::new(format!("CUDA worker exited with status {status} after shutdown"))),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_) => {
+                error!("CUDA worker did not exit within {WORKER_SHUTDOWN_TIMEOUT:?} after shutdown; killing it");
+                self.child.kill().await.map_err(|error| ThoError::new(format!("failed to kill CUDA worker after shutdown timeout: {error}")))?;
+                Err(ThoError::new(format!("CUDA worker did not exit within {WORKER_SHUTDOWN_TIMEOUT:?} after shutdown")))
+            }
+        }
+    }
 
     async fn shutdown(mut self, reason: impl Into<String>) {
         let reason = reason.into();
@@ -393,7 +418,7 @@ impl CudaIPCActor {
                     }
 
 
-                    Self::handle_reply(respond_to, id, reply_rx).await;
+                    let _ = respond_to.send(Self::await_unit_reply(id, reply_rx).await);
 
                 });
             }
@@ -412,14 +437,10 @@ impl CudaIPCActor {
                 let _ = respond_to.send(Ok(()));
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
-
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let pending = Arc::clone(&self.spawned_state.pending);
                 let self_tx = self.spawned_state.tx.clone();
-
-
-
                 {
                     let mut pending = pending.lock().await;
                     let old = pending.insert(next_id, reply_tx);
@@ -438,21 +459,16 @@ impl CudaIPCActor {
                     let mut pending = pending.lock().await;
                     pending.remove(&next_id);
                     let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
-                    // panic!("can't shutdown");
                     return Err(ThoError::new("can't shutdown"))
                 }
 
-
-
-                Self::handle_reply(respond_to, next_id, reply_rx).await;
+                let reply_result = Self::await_unit_reply(next_id, reply_rx).await;
+                // The acknowledgement only means the worker drained its requests. Waiting for process exit also preserves its final logs and timing output.
+                let exit_result = self.spawned_state.wait_for_graceful_exit().await;
+                let result = reply_result.and(exit_result);
+                let _ = respond_to.send(result);
 
                 debug!("CudaIPCActorMessage::Shutdown: final");
-
-                self.spawned_state.reader_handle.abort();
-                self.spawned_state.writer_handle.abort();
-                #[cfg(not(test))]
-                self.spawned_state.child.kill().await?;
-
             }
             CudaIPCActorMessage::SendMsg { mut input, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -480,28 +496,16 @@ impl CudaIPCActor {
         Ok(())
     }
 
-    async fn handle_reply(respond_to: oneshot::Sender<Result<(), ThoError>>, id: u64, reply_rx: tokio::sync::oneshot::Receiver<Result<CudaWorkerMsgOut, ThoError>>) {
-        match reply_rx
-            .await
-            .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped"))) {
-            Ok(Ok(reply)) => {
-                match reply.status {
-                    OpResult::Ok(_) => {
-                        debug!("handle_reply: id={id:?} send ok");
-
-                        let _ = respond_to.send(Ok(()));
-                    }
-                    OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
-                        debug!("handle_reply: id={id:?} send err {msg:?}");
-
-                        let _ = respond_to.send(Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset)));
-                    }
-                }
+    async fn await_unit_reply(id: u64, reply_rx: tokio::sync::oneshot::Receiver<Result<CudaWorkerMsgOut, ThoError>>) -> Result<(), ThoError> {
+        let reply = reply_rx.await.map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))??;
+        match reply.status {
+            OpResult::Ok(_) => {
+                debug!("await_unit_reply: id={id:?} ok");
+                Ok(())
             }
-            e => {
-                debug!("handle_reply: id={id:?} send err {e:?}");
-
-                let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {e:?}"))));
+            OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
+                debug!("await_unit_reply: id={id:?} error={msg:?}");
+                Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset))
             }
         }
     }

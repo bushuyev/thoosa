@@ -37,7 +37,7 @@ use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::field::debug;
 use tub::Pool;
@@ -81,16 +81,6 @@ struct WorkerRequestContext {
     installed_endpoints: InstalledEndpoints,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
-}
-
-enum WorkerReaderAction {
-    Ready,
-    Shutdown { request_id: u64 },
-}
-
-enum WorkerRequestControl {
-    Continue,
-    Shutdown { request_id: u64 },
 }
 
 pub trait Init {
@@ -279,46 +269,36 @@ impl CudaWorker {
         // Always finish each frame read once started: read_exact is not cancellation-safe, so selecting it against a completed request task can leave the stream cursor inside a frame.
         let shutdown_request_id = loop {
             let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
-            let (reader_action_tx, reader_action_rx) = oneshot::channel();
-            let task_context = request_context.clone();
-            request_tasks.spawn(async move { Self::process_worker_payload(payload, reader_action_tx, task_context).await });
-
-            let shutdown = match reader_action_rx.await.map_err(|_| ThoError::new("worker request task stopped before releasing the socket reader"))? {
-                WorkerReaderAction::Ready => None,
-                WorkerReaderAction::Shutdown { request_id } => Some(request_id),
+            let request = match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
+                Ok(request) => request,
+                Err(error) => {
+                    error!("postcard: e={error:?}");
+                    continue;
+                }
             };
+            debug!("run_worker: postcard: ok={request:?}");
 
-            if let Some(request_id) = shutdown {
+            // Shutdown is loop control rather than a request task: stop accepting frames, then drain all work accepted before it.
+            if matches!(&request.operation, Operation::Shutdown { .. }) {
+                let request_id = request.request_id;
+                info!("run_worker: Operation::Shutdown request_id={request_id}");
                 info!("run_worker: break loop on shutdown");
-                break request_id;//can't break loop from match
+                break request_id;
             }
+
+            let task_context = request_context.clone();
+            request_tasks.spawn(async move { Self::process_worker_request(request, task_context).await });
 
             // Reap tasks only between complete frames so doing so can never cancel an in-progress socket read.
             while let Some(joined) = request_tasks.try_join_next() {
-                let control = joined.map_err(|error| ThoError::new(format!("worker request task failed: {error}")))??;
-                if let WorkerRequestControl::Shutdown { request_id } = control {
-                    return Err(ThoError::new(format!("worker request {request_id} completed as shutdown without stopping the socket reader")));
-                }
+                joined.map_err(|error| ThoError::new(format!("worker request task failed: {error}")))??;
             }
         };
 
         // A shutdown response means every request accepted before shutdown has finished, not merely that shutdown was decoded.
-        let mut shutdown_task_finished = false;
         while let Some(joined) = request_tasks.join_next().await {
-            let control = joined.map_err(|error| ThoError::new(format!("worker request task failed during shutdown: {error}")))??;
-            if let WorkerRequestControl::Shutdown { request_id } = control {
-                if request_id != shutdown_request_id || shutdown_task_finished {
-                    return Err(ThoError::new(format!("worker received unexpected shutdown request {request_id}")));
-                }
-                shutdown_task_finished = true;
-            }
+            joined.map_err(|error| ThoError::new(format!("worker request task failed during shutdown: {error}")))??;
         }
-        info!("run_worker: shutdown_task_finished={shutdown_task_finished}");
-
-        if !shutdown_task_finished {
-            return Err(ThoError::new(format!("worker shutdown request {shutdown_request_id} did not finish")));
-        }
-
 
         reply_tx
             .send(CudaWorkerMsgOut { request_id: shutdown_request_id, status: OpResult::Ok(None) })
@@ -333,34 +313,9 @@ impl CudaWorker {
         Ok(())
     }
 
-    async fn process_worker_payload(payload: Vec<u8>, reader_action_tx: oneshot::Sender<WorkerReaderAction>, context: WorkerRequestContext) -> Result<WorkerRequestControl, ThoError> {
-        let request = match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
-            Ok(request) => request,
-            Err(error) => {
-                let _ = reader_action_tx.send(WorkerReaderAction::Ready);
-                error!("postcard: e={error:?}");
-                return Ok(WorkerRequestControl::Continue);
-            }
-        };
-        debug!("run_worker: postcard: ok={request:?}");
-
-        match &request.operation {
-            Operation::Shutdown { .. } => {
-                info!("run_worker: Operation::Shutdown");
-                // Stop the sole reader before it waits for another frame; the shutdown task itself is still drained with all previously accepted work.
-                reader_action_tx.send(WorkerReaderAction::Shutdown { request_id: request.request_id }).map_err(|_| ThoError::new("worker socket reader stopped before shutdown dispatch"))?;
-            }
-            _ => {
-                reader_action_tx.send(WorkerReaderAction::Ready).map_err(|_| ThoError::new("worker socket reader stopped before request dispatch"))?;
-            }
-        }
-
-        Self::process_worker_request(request, context).await
-    }
-
-    async fn process_worker_request(request: CudaWorkerMsgIn, context: WorkerRequestContext) -> Result<WorkerRequestControl, ThoError> {
+    async fn process_worker_request(request: CudaWorkerMsgIn, context: WorkerRequestContext) -> Result<(), ThoError> {
         let request_id = request.request_id;
-        let op_r: Result<WorkerRequestControl, ThoError> = (async || {
+        let op_r: Result<(), ThoError> = (async || {
             match request.operation {
                 Operation::DescribeRef { tensor_key } => {
                     let status = {
@@ -372,7 +327,7 @@ impl CudaWorker {
                     };
                     context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                     debug!("run_worker: DescribeRef response {request_id} sent");
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::H2dCopy { kind, shape, tensor_byte_len, arena_offset } => {
                     debug!("run_worker: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
@@ -391,7 +346,7 @@ impl CudaWorker {
                         status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)),
                     }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                     debug!("run_worker: Operation::H2dCopy done");
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::D2hCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
                     debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
@@ -408,12 +363,12 @@ impl CudaWorker {
                         request_id,
                         status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)),
                     }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::DropThoTensor { tensor_key } => {
                     debug!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
                     Self::drop_tensor(&context, request_id, &tensor_key).await?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
                     let init_fn = context.endpoint_inits.get(&key).ok_or_else(|| ThoError::new(format!("No init function for key={key:?} stage_id={stage_id}")))?;
@@ -429,7 +384,7 @@ impl CudaWorker {
                     };
                     if is_duplicate {
                         context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                        return Ok(WorkerRequestControl::Continue);
+                        return Ok(());
                     }
                     let endpoint_wrapper = match init_fn(init_data, Arc::clone(&context.ws), &context.all_cuda_tensors).await {
                         Ok(endpoint_wrapper) => endpoint_wrapper,
@@ -441,7 +396,7 @@ impl CudaWorker {
                     debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
                     context.installed_endpoints.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
                     context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::InvokeStage { endpoint_name, stage_id, input, consume } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
@@ -471,7 +426,7 @@ impl CudaWorker {
                     }?;
                     debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={result:?}");
                     context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(result)) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::PurgeStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
@@ -483,18 +438,17 @@ impl CudaWorker {
                         error!("no endpoint found");
                     }
                     context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::DropStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
                     let removed = context.installed_endpoints.remove(&endpoint_key).is_some();
                     debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
                     context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
                 Operation::Shutdown { dummy: _ } => {
-                    info!("run_worker: worker got shutdown command request_id={request_id}");
-                    Ok(WorkerRequestControl::Shutdown { request_id })
+                    Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop")))
                 }
                 Operation::Debug => {
                     info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.lock().len());
@@ -504,17 +458,17 @@ impl CudaWorker {
                     }
 
                     context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    Ok(WorkerRequestControl::Continue)
+                    Ok(())
                 }
             }
         })().await;
 
         match op_r {
-            Ok(control) => Ok(control),
+            Ok(()) => Ok(()),
             Err(error) => {
                 error!("run_worker: e={error:?}");
                 context.reply_tx.send(CudaWorkerMsgOut { request_id, status: error.into() }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                Ok(WorkerRequestControl::Continue)
+                Ok(())
             }
         }
     }
