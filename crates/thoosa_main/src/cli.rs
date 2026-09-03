@@ -1960,7 +1960,7 @@ where
     debug!("run_grid: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
-    info!("run_grid: run_configs.len={} ", run_configs.len());
+    
     debug!("run_grid: run_configs={run_configs:?}");
 
     let mut run_config_ids = track_await(save_run_configs(

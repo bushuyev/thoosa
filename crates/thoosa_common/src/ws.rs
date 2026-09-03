@@ -484,7 +484,7 @@ impl Workspace for FsWorkspace {
         fs::create_dir_all(&base_path)?;
         let vs_path = base_path.join(NET_WEIGHTS_FILE);
 
-        info!("FsWorkspace::save_motif_net:  motif_id={motif_id} motif_model_run_config_id={train_motif_net_run_config_id} saved to {vs_path:?}");
+        debug!("FsWorkspace::save_motif_net:  motif_id={motif_id} motif_model_run_config_id={train_motif_net_run_config_id} saved to {vs_path:?}");
 
         panic_to_err!(vs_or_path.save(&vs_path))?; //View for SafeView unwraps, it should be retried
 

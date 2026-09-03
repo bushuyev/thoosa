@@ -737,7 +737,7 @@ where
                     )).await?;
 
 
-                    debug!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
+                    info!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
                         TrainLabelNetRunConfigResult::new(

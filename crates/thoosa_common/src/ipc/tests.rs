@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{Device, Tensor};
+use tokio::sync::Notify;
 use tokio::task;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::test_utils::init_test_logging;
@@ -67,6 +68,7 @@ where
 
 
         let tho_cuda_context = ThoCudaContext::new(0)?;
+
 
         let worker_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(16)

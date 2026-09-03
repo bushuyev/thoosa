@@ -550,7 +550,7 @@ impl DistsMask {
             let size = tensor.size();
             let kind = tensor.kind();
             let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
-            info!("into_worker_ipc_refs: out_key={key:?} out_id={id:?}");
+            debug!("into_worker_ipc_refs: out_key={key:?} out_id={id:?}");
 
             Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.tho_device_idx()))
         }
@@ -1595,7 +1595,7 @@ where
             channels_groups.push((channel, groups_inserted));
         }
 
-        info!("groups inserted: {:?} find_motifs_run_config_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_config_id);
+        debug!("groups inserted: {:?} find_motifs_run_config_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_config_id);
         Ok(())
     }
 }
