@@ -268,7 +268,7 @@ where
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                     MAX_PARALLEL,
-                    *MaxParallelStep::FIFTY,
+                    *MaxParallelStep::FAST,
                 ))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("cross_unfold_clc"))),
                 Adjusters::Input(input_adjuster(CrossLoaderAdjuster::new())),

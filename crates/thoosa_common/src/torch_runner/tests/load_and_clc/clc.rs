@@ -98,7 +98,6 @@ impl SyncClcStage {
             ClcDynSyncStage {
                 id,
                 fail_until_dump_to_cpu: !dumped.is_empty(),
-                // ProxyStage2 installs the typed initializer and retains the existing endpoint stage id.
                 stage: Arc::new(DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_CLC_ENDPOINT,

@@ -689,9 +689,9 @@ where
                     track_await(self.ensure_copied(0, data, false)).await?;
                 }
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
-                    // o.adrop().await;
                 debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
-                drop(o);
+                o.adrop().await;
+                // drop(o);
 
 
                 self.mark_not_resident_on_device(device_idx);
@@ -699,8 +699,8 @@ where
             } else {
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
                 debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?}", self.id);
-                // o.adrop().await;
-                drop(o);
+                o.adrop().await;
+                // drop(o);
 
                 self.mark_not_resident_on_device(device_idx);
             }

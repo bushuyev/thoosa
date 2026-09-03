@@ -546,6 +546,7 @@ impl WorkerStageInput for SyncMotifLoaderInput {
             slices: resource.slices.clone(),
             raw_tensor: resource.raw_tensor.clone_ref()?,
         })).collect::<Result<Vec<_>, ThoError>>()?;
+
         Ok(Box::new(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone())))
     }
 
@@ -741,13 +742,13 @@ where
             channel,
             window,
             loaded_resources,
-            "motif loader".to_string(),
+            "motif loader wrapper".to_string(),
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("motif_loader"))),
             ],
             None,
@@ -908,7 +909,7 @@ where
         let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("random_slices_loader"))),
             ],
             None,

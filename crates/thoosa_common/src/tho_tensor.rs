@@ -25,7 +25,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, ThoSelector, WithId};
-use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::{n_trace_line, CopyToDevice, ThoError};
 use thoosa_shared::{panic_to_err, simple_id};
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
@@ -192,15 +192,17 @@ impl Clone for KeyHolder {
 impl Drop for KeyHolder {
     fn drop(&mut self) {
         debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?}", self.device_idx, Arc::strong_count(&self.count) );
-        if GlobalCtx::is_installed() && self.device_idx != 0 && Arc::strong_count(&self.count) == 1 {
-            let device_idx = self.device_idx;
-            let key = self.key;
-            tokio::spawn(async move {
-                if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
-                    error!("Can't drop tensor key={key:?}");
-                }
-            });
-        }
+        // if GlobalCtx::is_installed() && self.device_idx != 0 && Arc::strong_count(&self.count) == 1 {
+        //     info!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
+        //
+        //     let device_idx = self.device_idx;
+        //     let key = self.key;
+        //     tokio::spawn(async move {
+        //         if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
+        //             error!("Can't drop tensor key={key:?}");
+        //         }
+        //     });
+        // }
     }
 }
 

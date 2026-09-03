@@ -200,7 +200,7 @@ mod tests {
     use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
     use thoosa_shared::{ThoError, mono_key, os_thread_id};
     use tokio::task::JoinSet;
-
+    use tracing::field::debug;
     use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
     use crate::torch_runner::tests::load_and_clc::loader::{LoadedTensor, SyncTestTensorLoader};
     use crate::torch_runner::tests::load_and_clc::{do_real_oom_dump_and_split, mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
@@ -214,6 +214,7 @@ mod tests {
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shims::context::ThoCudaContext;
     use crate::cuda_utils::cuda_mem;
+    use crate::dims::AnyDims;
 
     fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) ->Result<(), ThoError>{
         let self_k = parse_numeric_part(resource).unwrap_or(1.0);
@@ -350,25 +351,30 @@ mod tests {
                 let stage = Arc::new(new_sync_consume_test_stage(1).await?);
                 let oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
 
-                let input_tensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?;
-                let input_ref = cuda_actor.copy(input_tensor.into(), ThoDevice::from(1)).await?;
+                let input_tensor:ThoTensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?.into();
+                let input_ref = cuda_actor.copy(input_tensor.shallow_clone(), ThoDevice::from(1)).await?;
                 let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected worker input ref"))?;
-                let input = ThoTensor::new_ref(mono_key!("consume-success", "input").into(), input_key, input_ref.size(), input_ref.kind(), None, 1);
+                let input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-success", "input").into(), input_key, input_ref.size(), input_ref.kind(), None, 1);
+
                 let output = oom_handler.consume(&stage, ConsumeTestInput::new(input), RunCtxImpl::new(1, "consume-success"), NoContexts).await?;
                 let output_key = output.ref_key().ok_or_else(|| ThoError::new("consume test expected worker output ref"))?;
-                let output_cpu = cuda_actor.copy(ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, 1), ThoDevice::from(0)).await?;
+                let new_ref = ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, 1);
+                let output_cpu = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
+
                 assert!(output_cpu.t_ref().f_allclose(&Tensor::f_from_slice(&[2.0f32, 4.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
 
                 let consumed_input = cuda_actor.copy(ThoTensor::new_ref((), input_key, vec![1, 2], Float, None, 1), ThoDevice::from(0)).await;
                 assert!(consumed_input.is_err(), "successful consume must remove the worker input tensor");
 
-                let failed_tensor = Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?;
-                let failed_ref = cuda_actor.copy(failed_tensor.into(), ThoDevice::from(1)).await?;
+                let failed_tensor:ThoTensor = Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?.into();
+                let failed_ref = cuda_actor.copy(failed_tensor, ThoDevice::from(1)).await?;
                 let failed_key = failed_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected failed worker input ref"))?;
-                let failed_input = ThoTensor::new_ref(mono_key!("consume-failure", "input").into(), failed_key, failed_ref.size(), failed_ref.kind(), None, 1);
-                let failed_result = oom_handler.consume(&stage, ConsumeTestInput::new(failed_input), RunCtxImpl::new(1, "consume-failure"), NoContexts).await;
+                let failed_input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-failure", "input").into(), failed_key, failed_ref.size(), failed_ref.kind(), None, 1);
+                let failed_result = oom_handler.consume(&stage, ConsumeTestInput::new(failed_input.shallow_clone()), RunCtxImpl::new(1, "consume-failure"), NoContexts).await;
                 assert!(failed_result.is_err());
-                let preserved_input = cuda_actor.copy(ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, 1), ThoDevice::from(0)).await?;
+                let new_ref = ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, 1);
+                let preserved_input = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
+                debug!("preserved_input=\n{}", preserved_input.t_ref());
                 assert!(preserved_input.t_ref().f_allclose(&Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
 
                 Ok(())
@@ -472,9 +478,10 @@ mod tests {
         run().await
     }
 
+    //no max_parallel tests in IPC mode since concurrency is handled in the main process
 
     #[test]
-    fn test_load_and_clc_cuda_worker_no_oom_tensor_ipc() -> Result<(), ThoError> {
+    fn test_load_and_clc_no_oom_tensor_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(
             module_path!(),
@@ -495,7 +502,7 @@ mod tests {
 
 
     #[test]
-    fn test_load_and_clc_cuda_worker_sum_no_oom_tensor_ipc() -> Result<(), ThoError> {
+    fn test_load_and_clc_sum_no_oom_tensor_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(
             module_path!(),
@@ -514,101 +521,7 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_load_and_clc_cuda_worker_oom_till_min_max_parallel_tensor_ipc() -> Result<(), ThoError> {
-        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(
-            module_path!(),
-            async {
-                let tho_device_idx = 1;
-                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                async {
-                    const MUL_K: f64 = 2.;
-                    let size = [3, 10];
-                    let load_and_clc = Arc::new(LoadAndClcStage::new(
-                        LoadAndClcStageId("ipc_load_and_clc_oom_till_min_max_parallel_id"),
-                        MUL_K,
-                        vec![NaxParallel(20)],
-                        size.into(),
-                        ClcOOMRunner::new(
-                            OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
-                            Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
-                        ),
-                        Float,
-                        Device::Cuda(0).into(),
-                        false,
-                    ).await);
-                    run_mul_task_invocations(
-                        Arc::clone(&load_and_clc),
-                        &["resource_1", "resource_2", "resource_3"],
-                        tho_device_idx,
-                        0,
-                        |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-                        move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
-                        false,
-                    ).await?;
-                    Ok::<(), ThoError>(())
-                }.await
-            },
-            async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(
-                    sock_path,
-                    &ws,
-                    sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
-                ).await
-            },
-        )
-    }
 
-    #[test]
-    fn test_load_and_clc_cuda_worker_oom_compete_for_max_parallel_tensor_ipc() -> Result<(), ThoError> {
-        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(
-            module_path!(),
-            async {
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            async {
-                const MUL_K: f64 = 2.;
-                let size = [3, 10];
-                let load_and_clc = Arc::new(LoadAndClcStage::new(
-                    LoadAndClcStageId("ipc_load_and_clc_oom_compete_for_max_parallel_id"),
-                    MUL_K,
-                    vec![NaxParallel(MAX_PARALLEL)],
-                    size.into(),
-                    ClcOOMRunner::new(
-                        OOMRunnerConfig::MaxParallel { max: MAX_PARALLEL, step: *MaxParallelStep::TEN },
-                        Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
-                    ),
-                    Float,
-                    Device::Cuda(0).into(),
-                    false,
-                ).await);
-                run_mul_task_invocations(
-                    Arc::clone(&load_and_clc),
-                    &["resource_1", "resource_2", "resource_3"],
-                    tho_device_idx,
-                    0,
-                    |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-                    move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
-                    false,
-                ).await?;
-                Ok::<(), ThoError>(())
-            }.await
-            },
-            async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(
-                    sock_path,
-                    &ws,
-                    sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
-                ).await
-            },
-        )
-    }
 
     #[test]
     fn test_simp_copy() -> Result<(), ThoError> {
@@ -643,7 +556,7 @@ mod tests {
 
 
     #[test]
-    fn test_load_and_clc_cuda_worker_oom_splits_tensor_ipc() -> Result<(), ThoError> {
+    fn test_load_and_clc_oom_splits_tensor_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(
             module_path!(),
@@ -704,74 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_and_clc_cuda_worker_oom_max_parallel_and_splits_tensor_ipc() -> Result<(), ThoError> {
-        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(
-            module_path!(),
-            async {
-                let resources = (0..1)//3
-                    .map(|i| &*format!("resource_{i}").leak())
-                    .collect::<Vec<_>>();
-
-                let tho_device_idx = 1;
-                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                async {
-                    const MUL_K: f64 = 2.;
-                    let size = [3, 100];
-                    let load_and_clc = Arc::new(LoadAndClcStage::new(
-                        LoadAndClcStageId("ipc_load_and_clc_oom_max_parallel_and_splits_id"),
-                        MUL_K,
-                        vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
-                        size.into(),
-                        ClcOOMRunner::new(
-                            OOMRunnerConfig::MaxParallelAndSplits { max: MAX_PARALLEL, step: *MaxParallelStep::TEN },
-                            Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
-                                id,
-                                0,
-                                &size,
-                                (Float, Device::Cpu),
-                                BuildAs::Sum,
-                            ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
-                        ),
-                        Float,
-                        Device::Cuda(0).into(),
-                        true,
-                    ).await);
-                    run_mul_task_invocations(
-                        Arc::clone(&load_and_clc),
-                        resources.as_slice(),
-                        tho_device_idx,
-                        0,
-                        |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-                        move |res, out| {
-                            mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
-                                Ok(lin_for_size(k, size, t.kind(), &t.device())? //same as in SyncTestTensorLoader::do_run
-                                    .sum_dim_intlist(1, false, t.kind())
-                                    .view((-1, 1)))
-                            });
-                        },
-                        false,
-                    ).await?;
-
-                    cuda_actor.debug_worker().await?;
-
-                    Ok::<(), ThoError>(())
-                }.await
-            },
-            async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(
-                    sock_path,
-                    &ws,
-                    sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
-                ).await
-            },
-        )
-    }
-
-    #[test]
-    fn test_load_and_clc_cuda_worker_oom_dump_to_cpu_and_splits_tensor_ipc() -> Result<(), ThoError> {
+    fn test_load_and_clc_oom_dump_to_cpu_and_splits_tensor_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(
             module_path!(),
@@ -839,7 +685,7 @@ mod tests {
 
 
     #[test]
-    fn test_load_and_clc_cuda_worker_oom_dump_to_cpu_ipc() -> Result<(), ThoError> {
+    fn test_load_and_clc_oom_dump_to_cpu_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(
             module_path!(),
@@ -852,7 +698,7 @@ mod tests {
                     let load_and_clc = Arc::new(LoadAndClcStage::new(
                         LoadAndClcStageId("ipc_load_and_clc_dump_to_cpu_id"),
                         MUL_K,
-                        vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
+                        vec![FailUntil::DumpedToCpu],
                         size.into(),
                         ClcOOMRunner::new(
                             OOMRunnerConfig::DumpedToCpu {},
@@ -943,48 +789,6 @@ mod tests {
                         100,
                         vec![FailUntil::Never],
                         0.8,
-                    ).await
-                }).await
-            },
-            async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(
-                    sock_path,
-                    &ws,
-                    sync_model_test_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
-                ).await
-            },
-        )
-    }
-
-    #[test]
-    fn test_classifier_cuda_worker_oom_max_parallel_escalates_ipc() -> Result<(), ThoError> {
-        log::set_max_level(LevelFilter::Debug);
-        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
-        run_ipc_test(
-            module_path!(),
-            async {
-                let files: Vec<(&'static str, f64)> = (0..16)
-                    .map(|i| {
-                        (
-                            Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str,
-                            if i % 2 == 0 { 1.0 } else { 0.0 },
-                        )
-                    })
-                    .collect();
-
-                run_model_test_ipc_cuda_worker("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates", || async move {
-                    run_model_test_pipeline(
-                        1,
-                        0,
-                        files,
-                        ModelTestId("ipc_files_oom_permits"),
-                        ModelTestId("ipc_lin_cls_oom"),
-                        16,
-                        50,
-                        vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(128)],
-                        0.5,
                     ).await
                 }).await
             },

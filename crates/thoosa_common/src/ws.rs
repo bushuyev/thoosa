@@ -272,13 +272,13 @@ impl FsWorkspace {
         let label_node_params = LabelNetParams::from_file(&params_path)?;
         let params_for_builder = label_node_params.clone();
 
-        let module = load_net.then_some(ThoModuleWithStore::load(
+        let module = load_net.then(||ThoModuleWithStore::load(
             mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-            model_path,
+            model_path.clone(),
             *device,
             quantize,
-        )?);
+        )).transpose()?;
 
         Ok((run_config_id, label_node_params, module))
     }
@@ -618,7 +618,7 @@ impl Workspace for FsWorkspace {
 
                         let params_for_builder = label_node_params.clone();
 
-                        let module = load_net.then_some(ThoModuleWithStore::load(
+                        let module = load_net.then(||ThoModuleWithStore::load(
                             mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
                             move |path: &nn::Path| {
                                 LabelNetParams::label_net(&params_for_builder)?
@@ -627,7 +627,7 @@ impl Workspace for FsWorkspace {
                             model_path.clone(),
                             *device,
                             quantize,
-                        )?);
+                        )).transpose()?;
 
                         debug!("load_label_nets: model={model_path:?} run_config_id={run_config_id} loaded");
 
