@@ -188,7 +188,7 @@ impl dyn CudaActorHandle + '_ {
         } else {
             None
         };
-        let has_selector = selector.is_none();
+        let has_selector = selector.is_some();
         let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
 
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
@@ -212,7 +212,7 @@ impl dyn CudaActorHandle + '_ {
         //this causes is_resident_on_device to return false in DevicesWrap::borrow_to when called on a split when applying split adjuster.
         //the subview creates split local view which is copied to the worker.
         //The tensor is supposed to be dropped from  Drop for KeyHolder right after executing stage since it's not referenced from any caches
-        if has_selector {
+        if !has_selector {
             input.dump_to_cpu(to_device_idx).await?;
         }
 

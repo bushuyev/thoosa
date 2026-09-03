@@ -914,6 +914,7 @@ where
             ],
             None,
         );
+        debug!("RandomSlicesLoader::run: motif_id={motif_id}: sync_input={sync_input:?}");
         let motif = track_await(oom_handler
         .consume(
             &sync_motif_loader,
@@ -1661,7 +1662,7 @@ where
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws, ctx.tho_device_idx()).await?;
     let sync_load_random_slices = Arc::new(SyncLoadRandomSlicesDynStage::new(ctx.tho_device_idx()).await?);
-    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);//TODO adjusters
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");
 
@@ -1683,11 +1684,13 @@ where
         ));
         let resource_slices = track_await(oom_handler.run(&sync_load_random_slices, sync_input, ctx.branch(false), NoContexts)).await?;
         if resource_slices.size()[1] > 0 {
+            debug!("load_random_slices: resource_slices={resource_slices:?} inserted into tmp cache");
+
             tmp_cache.insert(resource_slices);
         }
     }
-    debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} done_0");
-    debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} done_1");
+    debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} done");
+
 
     Ok((window, tmp_cache))
 }

@@ -467,7 +467,7 @@ impl Data for DistsMask {
     }
 
     fn device(&self) -> usize {
-        DistsMask::tensor_device(&self.mask)
+        self.mask.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -477,22 +477,12 @@ impl Data for DistsMask {
 
 impl DistsMask {
     fn from_local_tensors(mask: Tensor, dists: Option<Tensor>, mask_type: DistsMaskType) -> Result<Self, ThoError> {
+        debug!("DistsMask::from_local_tensors: mask={mask:?}");
         Ok(Self {
             mask: ThoTensor::new("DistsMask.mask".into(), mask)?,
             dists: dists.map(|dists| ThoTensor::new("DistsMask.dists".into(), dists)).transpose()?,
             mask_type,
         })
-    }
-
-    fn tensor_device(tensor: &DistsMaskTensor) -> usize {
-        match &tensor.inner {
-            ThoTensorInner::Val { t } => match t.device() {
-                Cpu => 0,
-                Cuda(idx) => idx as usize,
-                _ => 0,
-            },
-            ThoTensorInner::Ref { .. } => Data::device(tensor),
-        }
     }
 
     fn tensor_mem_size(tensor: &DistsMaskTensor) -> u64 {
@@ -650,7 +640,7 @@ impl DistsMask {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsMask::to_cpu"))]
     pub async fn to_cpu(self) -> Result<Self, ThoError>  {
-        debug!("DistsMask::to_cpu: self.mask.device={:?} self.mask_type={:?} self.mask={:?}", Self::tensor_device(&self.mask), self.mask_type, self.mask);
+        debug!("DistsMask::to_cpu: self.mask.device={:?} self.mask_type={:?} self.mask={:?}", self.mask.tho_device(), self.mask_type, self.mask);
 
         match self.mask_type {
             DistsMaskType::AsIs => {
@@ -1516,6 +1506,7 @@ impl CrossClcResultMerge for DistsMask {
     }
 }
 
+//CPU-side sync stage
 pub struct DistsTracker<C>
 where
     C: RunCtx + 'static,

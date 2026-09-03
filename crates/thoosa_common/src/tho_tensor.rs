@@ -11,15 +11,17 @@ use mockall_double::double;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering::Relaxed;
+use parking_lot::Mutex;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
@@ -123,6 +125,20 @@ where
         }
     }
 
+    pub fn clone_ref_fields(id: Id, key: &KeyHolder, size: &Vec<i64>, kind: &tch::Kind, selector: &Option<Box<dyn ThoSelector>>) -> Result<Self, ThoError> {
+        Ok(ThoTensor {
+            id,
+            inner: ThoTensorInner::Ref {
+                key:key.clone(),
+                size:size.clone(),
+                kind:kind.clone(),
+                selector:selector.as_ref().map(|v|v.clone_box()),
+            },
+            tracking: Default::default(),
+            pd: PhantomData,
+        })
+    }
+
     pub fn strip_types(self)->ThoTensor {
         ThoTensor {
             id: (),
@@ -175,6 +191,7 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 pub struct KeyHolder {
     pub key:u64,
     pub device_idx:usize,
+    drop_target:bool,
     count:Arc<()>
 }
 
@@ -184,6 +201,7 @@ impl Clone for KeyHolder {
         KeyHolder {
             key:  self.key,
             device_idx: self.device_idx,
+            drop_target: self.drop_target,
             count: Arc::clone(&self.count),
         }
     }
@@ -191,18 +209,18 @@ impl Clone for KeyHolder {
 
 impl Drop for KeyHolder {
     fn drop(&mut self) {
-        debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?}", self.device_idx, Arc::strong_count(&self.count) );
-        // if GlobalCtx::is_installed() && self.device_idx != 0 && Arc::strong_count(&self.count) == 1 {
-        //     info!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
-        //
-        //     let device_idx = self.device_idx;
-        //     let key = self.key;
-        //     tokio::spawn(async move {
-        //         if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
-        //             error!("Can't drop tensor key={key:?}");
-        //         }
-        //     });
-        // }
+        debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?} self.drop_target={} GlobalCtx::is_installed()={}", self.device_idx, Arc::strong_count(&self.count), self.drop_target, GlobalCtx::is_installed() );
+        if /*self.drop_target && */self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 1 { //is_installed is redundant - it's to check if it's main thread but drop_target should not be true on worker?
+            info!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
+
+            let device_idx = self.device_idx;
+            let key = self.key;
+            tokio::spawn(async move {
+                if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
+                    error!("Can't drop tensor key={key:?} e={e:?}");
+                }
+            });
+        }
     }
 }
 
@@ -424,19 +442,34 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     pub fn new_ref(id: Id, key: u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, tho_device_idx: usize) -> Self {
+
+        // #[cfg(tho_debug)]
+        // let key_holder = if GlobalCtx::is_installed(){
+        debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
+
+        // let trace = n_trace_line(&Backtrace::capture(), 200);
+        static KEYS:OnceLock<Mutex<HashMap<u64, Arc<()>>>> = OnceLock::new();
+        let count = Arc::clone(KEYS.get_or_init(||Mutex::new(HashMap::new())).lock().entry(key).or_insert(Arc::new(())));
+
+        debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
+
         Self {
             id,
             inner: ThoTensorInner::Ref {
-                key:KeyHolder{
+                key: KeyHolder {
                     key,
                     device_idx: tho_device_idx,
-                    count: Arc::new(()),
+                    count,
+                    drop_target: false,
                 },
-                size, kind, selector,
+                size,
+                kind,
+                selector,
             },
             tracking: Default::default(),
             pd: PhantomData,
         }
+
     }
 
     pub fn ref_key(&self) -> Option<u64> {
@@ -624,10 +657,10 @@ where
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
                 track_await(cuda_actor.copy(src.into(), dst_device)).await?
             }
-            ThoTensorInner::Ref { key, size, kind, selector } => {
+            ThoTensorInner::Ref { key, size, kind, selector, .. } => {
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key:?} dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
                 track_await(cuda_actor.copy(
-                    ThoTensor::new_ref((), key.key, size.clone(), *kind, selector.as_ref().map(|v| v.clone_box()), key.device_idx), //TODO remove extra ThoTensor::new_ref
+                    ThoTensor::clone_ref_fields((), key, size, kind, selector)?, //TODO remove extra ThoTensor::new_ref
                     dst_device,
                 ))
                 .await?
@@ -659,7 +692,7 @@ pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
 
 impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
-        Self { id: id, t, pd: Default::default() }
+        Self { id, t, pd: Default::default() }
     }
 
     pub fn zero_(&mut self) {

@@ -42,9 +42,10 @@ use tokio::task::JoinSet;
 use tracing::field::debug;
 use tub::Pool;
 use memmap2::{MmapMut, MmapOptions};
+use rand::{rng, Rng};
 
 const WORKER_EXEC_STREAMS: usize = 32;
-static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
+static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
 
 //1 cuda device per worker
 pub struct CudaWorker;
@@ -663,9 +664,10 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))
             .map_err(|_| ThoError::new("worker tensor key space exhausted"))?;
 
-        debug!("insert_worker_tensor: key={key:?} tensor={tensor:?}");
 
         if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {
+            debug!("insert_worker_tensor: key={key:?} tensor={tensor:?}");
+
             entry.insert(tensor);
             return Ok(key);
         }
