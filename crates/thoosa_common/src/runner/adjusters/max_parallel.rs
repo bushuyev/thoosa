@@ -16,9 +16,9 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr};
 
 #[derive(Debug)]
 pub enum MaxParallelStep {
-    TEN,
-    TWENTY,
-    FIFTY,
+    SLOW,
+    MID,
+    FAST,
 }
 
 impl Deref for MaxParallelStep {
@@ -26,9 +26,9 @@ impl Deref for MaxParallelStep {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            MaxParallelStep::TEN => &2,//TODO rename
-            MaxParallelStep::TWENTY => &4,
-            MaxParallelStep::FIFTY => &16,
+            MaxParallelStep::SLOW => &2,//TODO rename
+            MaxParallelStep::MID => &4,
+            MaxParallelStep::FAST => &16,
         }
     }
 }

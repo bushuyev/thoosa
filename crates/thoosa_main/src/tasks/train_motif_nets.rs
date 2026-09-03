@@ -686,7 +686,7 @@ where
                     ctx_run
                 )).await?;
 
-                debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", train_net_output.min_loss);
+                info!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", train_net_output.min_loss);
 
                 let (channel, _find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id_rate.0)).await?;
                 Ok(TrainMotifNetResult::new(

@@ -637,7 +637,7 @@ pub fn last_trace_line(backtrace: &Backtrace) -> Option<String> {
 }
 
 pub fn n_trace_line(backtrace: &Backtrace, n:usize) -> String {
-    backtrace.to_string().lines().rev().map(str::trim).filter(|line| !line.is_empty()).take(n).map(ToOwned::to_owned).collect()
+    backtrace.to_string().lines().rev().map(str::trim).filter(|line| !line.is_empty()).take(n).map(|v|format!("{v}\n")).collect()
 }
 
 

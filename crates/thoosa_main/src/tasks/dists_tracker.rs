@@ -467,7 +467,7 @@ impl Data for DistsMask {
     }
 
     fn device(&self) -> usize {
-        DistsMask::tensor_device(&self.mask)
+        self.mask.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -477,22 +477,12 @@ impl Data for DistsMask {
 
 impl DistsMask {
     fn from_local_tensors(mask: Tensor, dists: Option<Tensor>, mask_type: DistsMaskType) -> Result<Self, ThoError> {
+        debug!("DistsMask::from_local_tensors: mask={mask:?}");
         Ok(Self {
             mask: ThoTensor::new("DistsMask.mask".into(), mask)?,
             dists: dists.map(|dists| ThoTensor::new("DistsMask.dists".into(), dists)).transpose()?,
             mask_type,
         })
-    }
-
-    fn tensor_device(tensor: &DistsMaskTensor) -> usize {
-        match &tensor.inner {
-            ThoTensorInner::Val { t } => match t.device() {
-                Cpu => 0,
-                Cuda(idx) => idx as usize,
-                _ => 0,
-            },
-            ThoTensorInner::Ref { .. } => Data::device(tensor),
-        }
     }
 
     fn tensor_mem_size(tensor: &DistsMaskTensor) -> u64 {
@@ -560,7 +550,7 @@ impl DistsMask {
             let size = tensor.size();
             let kind = tensor.kind();
             let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
-            info!("into_worker_ipc_refs: out_key={key:?} out_id={id:?}");
+            debug!("into_worker_ipc_refs: out_key={key:?} out_id={id:?}");
 
             Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.tho_device_idx()))
         }
@@ -650,7 +640,7 @@ impl DistsMask {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsMask::to_cpu"))]
     pub async fn to_cpu(self) -> Result<Self, ThoError>  {
-        debug!("DistsMask::to_cpu: self.mask.device={:?} self.mask_type={:?} self.mask={:?}", Self::tensor_device(&self.mask), self.mask_type, self.mask);
+        debug!("DistsMask::to_cpu: self.mask.device={:?} self.mask_type={:?} self.mask={:?}", self.mask.tho_device(), self.mask_type, self.mask);
 
         match self.mask_type {
             DistsMaskType::AsIs => {
@@ -1516,6 +1506,7 @@ impl CrossClcResultMerge for DistsMask {
     }
 }
 
+//CPU-side sync stage
 pub struct DistsTracker<C>
 where
     C: RunCtx + 'static,
@@ -1604,7 +1595,7 @@ where
             channels_groups.push((channel, groups_inserted));
         }
 
-        info!("groups inserted: {:?} find_motifs_run_config_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_config_id);
+        debug!("groups inserted: {:?} find_motifs_run_config_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_config_id);
         Ok(())
     }
 }

@@ -700,7 +700,7 @@ where
                                            let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
                                            let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();//TODO fill with x_1_wrapped x_0_wrapped ids
                                            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(vec![
-                                               Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                                               Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                                                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
                                            ], None);
                                            let output = track_await(oom_handler.run(
@@ -737,7 +737,7 @@ where
                     )).await?;
 
 
-                    debug!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
+                    info!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
                         TrainLabelNetRunConfigResult::new(

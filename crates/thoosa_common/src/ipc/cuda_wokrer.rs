@@ -42,9 +42,10 @@ use tokio::task::JoinSet;
 use tracing::field::debug;
 use tub::Pool;
 use memmap2::{MmapMut, MmapOptions};
+use rand::{rng, Rng};
 
 const WORKER_EXEC_STREAMS: usize = 32;
-static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
+static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
 
 //1 cuda device per worker
 pub struct CudaWorker;
@@ -288,6 +289,7 @@ impl CudaWorker {
             };
 
             if let Some(request_id) = shutdown {
+                info!("run_worker: break loop on shutdown");
                 break request_id;//can't break loop from match
             }
 
@@ -311,6 +313,8 @@ impl CudaWorker {
                 shutdown_task_finished = true;
             }
         }
+        info!("run_worker: shutdown_task_finished={shutdown_task_finished}");
+
         if !shutdown_task_finished {
             return Err(ThoError::new(format!("worker shutdown request {shutdown_request_id} did not finish")));
         }
@@ -342,6 +346,7 @@ impl CudaWorker {
 
         match &request.operation {
             Operation::Shutdown { .. } => {
+                info!("run_worker: Operation::Shutdown");
                 // Stop the sole reader before it waits for another frame; the shutdown task itself is still drained with all previously accepted work.
                 reader_action_tx.send(WorkerReaderAction::Shutdown { request_id: request.request_id }).map_err(|_| ThoError::new("worker socket reader stopped before shutdown dispatch"))?;
             }
@@ -379,7 +384,7 @@ impl CudaWorker {
                     let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, 1, kind.into()).await?;
                     let tensor_ref = insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?;
 
-                    info!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref} request.request_id={:?}", request.request_id);
+                    debug!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref} request.request_id={:?}", request.request_id);
 
                     context.reply_tx.send(CudaWorkerMsgOut {
                         request_id,
@@ -406,11 +411,8 @@ impl CudaWorker {
                     Ok(WorkerRequestControl::Continue)
                 }
                 Operation::DropThoTensor { tensor_key } => {
-                    info!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
-                    let removed = context.all_cuda_tensors.lock().remove(&tensor_key);
-                    debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
-                    let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                    debug!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
+                    Self::drop_tensor(&context, request_id, &tensor_key).await?;
                     Ok(WorkerRequestControl::Continue)
                 }
                 Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
@@ -491,7 +493,7 @@ impl CudaWorker {
                     Ok(WorkerRequestControl::Continue)
                 }
                 Operation::Shutdown { dummy: _ } => {
-                    debug!("run_worker: worker got shutdown command request_id={request_id}");
+                    info!("run_worker: worker got shutdown command request_id={request_id}");
                     Ok(WorkerRequestControl::Shutdown { request_id })
                 }
                 Operation::Debug => {
@@ -515,6 +517,14 @@ impl CudaWorker {
                 Ok(WorkerRequestControl::Continue)
             }
         }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaWorker::drop_tensor"))]
+    async fn drop_tensor(context: &WorkerRequestContext, request_id: u64, tensor_key: &u64) ->Result<(), ThoError>{
+        let removed = context.all_cuda_tensors.lock().remove(&tensor_key);
+        debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
+        let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
+        context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.map_err(|_| ThoError::new("worker response writer is closed"))
     }
 }
 
@@ -577,6 +587,7 @@ where
     pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         Self::ref_to_tensor_(all_cuda_tensors, &input_ref, false)
     }
+
     pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
@@ -650,7 +661,7 @@ where
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
 
-        info!("worker_tensor_to_ref: out_key={out_key} out_id={out_id:?}");
+        debug!("worker_tensor_to_ref: out_key={out_key} out_id={out_id:?}");
 
         Ok(ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.tho_device_idx()))
     }
@@ -663,9 +674,10 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))
             .map_err(|_| ThoError::new("worker tensor key space exhausted"))?;
 
-        debug!("insert_worker_tensor: key={key:?} tensor={tensor:?}");
 
         if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {
+            debug!("insert_worker_tensor: key={key:?} tensor={tensor:?}");
+
             entry.insert(tensor);
             return Ok(key);
         }

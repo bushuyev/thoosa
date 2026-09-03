@@ -731,6 +731,8 @@ where
     W: ConsumeData<O = R::In<'z>> + Debug + Send + Sync + 'static,
     R::In<'z>: 'static,
 {
+    debug!("consume_stage_owned: task={task:?} input={input:?} tho_device_idx={tho_device_idx}");
+
     if tho_device_idx == 0 {
         return Ok(track_await(input.consume(0, run_ctx, None, |input, run_ctx| task.consume(input, run_ctx))).await);
     }

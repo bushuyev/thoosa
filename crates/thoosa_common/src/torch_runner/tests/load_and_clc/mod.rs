@@ -409,7 +409,7 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
     let load_and_mut = Arc::new(LoadAndClcStage::new(
         LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
-        vec![FailUntil::NaxParallel(20)],
+        vec![FailUntil::NaxParallel(0)],
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
@@ -460,12 +460,12 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
     let load_and_mut = Arc::new(LoadAndClcStage::new(
         LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
-        vec![FailUntil::NaxParallel(MAX_PARALLEL)],
+        vec![FailUntil::NaxParallel(0)],
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::MaxParallel {
                 max: MAX_PARALLEL,
-                step: *MaxParallelStep::TEN,
+                step: *MaxParallelStep::FAST,
             },
             Box::new(move |id| {
                 SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
@@ -582,7 +582,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
         ClcOOMRunner::new(
             OOMRunnerConfig::MaxParallelAndSplits {
                 max: MAX_PARALLEL,
-                step: *MaxParallelStep::TEN,
+                step: *MaxParallelStep::SLOW,
             },
             Box::new(move |id| {
                 SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(

@@ -39,6 +39,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
+use crate::tasks::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
 
 pub(crate) const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
@@ -583,6 +584,13 @@ where
                 }),
                 _pd: PhantomData,
             })))
+            //TODO try to avoid extra wrappers:
+            // Ok(
+            //     DynSyncStageEnum::Proxy {
+            //         stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+            //         init: (),
+            //     }
+            // )
         } else {
             Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(Self::new_for_find_motifs(init)?)))
         }
@@ -657,7 +665,9 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
     }
 
     pub async fn replace_clc_result<OnBatchDone>(mut self, f: &OnBatchDone) -> Result<Self, ThoError>
-    where OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static,{
+    where
+        OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static
+    {
         self.clc_result = track_await(f(self.clc_result)).await?;
         Ok(self)
     }
@@ -675,8 +685,13 @@ impl thoosa_common::ipc::cuda_wokrer::WorkerStageOutput for CrossUnfoldClcOutput
             iter_0,
             iter_1,
         } = self;
-        let clc_result = clc_result.encode_from_worker(all_cuda_tensors, tho_device)?;
-        Ok(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, id))
+
+        Ok(CrossUnfoldClcOutput::new(
+            clc_result.encode_from_worker(all_cuda_tensors, tho_device)?,
+            iter_0,
+            iter_1,
+            id
+        ))
     }
 }
 

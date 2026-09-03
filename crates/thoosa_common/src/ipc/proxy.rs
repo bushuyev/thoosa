@@ -12,7 +12,7 @@ use serde::Serialize;
 use tokio::sync::MutexGuard;
 use with_id::WithId;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage};
 use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{CudaIPCActorHandle};
@@ -342,6 +342,20 @@ where
     }
 
 
+}
+
+impl <St, Init> OutId for DynSyncStageEnum<St, Init>
+where
+    St:SyncStage+StageWithState+Send+Sync,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static,
+    <St as Stage>::Out: thoosa_shared::traits::WithId,
+    for<'a> <St as Stage>::In<'a>: thoosa_shared::traits::WithId
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as thoosa_shared::traits::WithId>::ID) -> <Self::Out as thoosa_shared::traits::WithId>::ID {
+        todo!()
+    }
 }
 
 impl <St, Init> StageWithState for DynSyncStageEnum<St, Init>

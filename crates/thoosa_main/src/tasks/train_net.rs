@@ -308,7 +308,7 @@ where
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
-                        *MaxParallelStep::FIFTY,
+                        *MaxParallelStep::FAST,
                     ))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("train_step"))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<TrainStepInputSelector, i64>::new(1))),

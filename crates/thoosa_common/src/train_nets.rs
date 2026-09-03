@@ -2009,7 +2009,7 @@ where
 
     let grid_runs = run_config_source.grid_to_vals_and_opt_params();
 
-    info!("opt_train: running opt train {descr} grid_runs={grid_runs:?}");
+    debug!("opt_train: running opt train {descr} grid_runs={grid_runs:?}");
 
     let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("grid_sets_{descr}"), grid_runs.len(), 1);
     for (grid_vals, opt_params) in grid_runs.into_iter() {

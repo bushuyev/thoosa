@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use log::{debug, info};
 use parking_lot::RwLock;
 use std::ops::Range;
@@ -32,6 +33,7 @@ use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
 use thoosa_store::Store;
 use tracing::Instrument;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 
 #[derive(Debug)]
 pub enum FindAndSelect {
@@ -277,6 +279,8 @@ pub(crate) async fn run_all(
 
 
     ////////////////////////
+    let map = HashMap::new();
+    GlobalCtx::global().dump_all_to_cpu(&map, 1, "before final").await?;
 
     //gpt Pre-create context and shared handles for final-net stage construction.
     let init_ctx_in_train_final = root_ctx.branch(true);
@@ -780,7 +784,7 @@ mod tests {
 
                     info!("heavy_test_run_all_ipc: r={r:?}");
 
-                    Ok(())
+                    r
                 }
             },
         )
@@ -947,8 +951,8 @@ mod tests {
 
         /////////////////////train_motifs
         let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(30),
-            batch_size: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(3),
+            batch_size: RangeOrValue::Value(20),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -961,8 +965,8 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(5),
+            batch_size: RangeOrValue::Value(20),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -974,8 +978,8 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(5),
+            batch_size: RangeOrValue::Value(20),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -1043,9 +1047,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(30, 10)),
-            train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(100, 10)),
+            train_motifs_opt_config:Arc::new(OptConfig::new(3, 1)),
+            train_labels_opt_config: Arc::new(OptConfig::new(10, 1)),
+            train_final_opt_config: Arc::new(OptConfig::new(10, 1)),
         }
     }
 

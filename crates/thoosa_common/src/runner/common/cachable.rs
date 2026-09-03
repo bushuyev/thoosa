@@ -414,6 +414,8 @@ where
                                 None => sub_t,
                             };
 
+                            debug!("DevicesWrap::with_selected_data_ref: data={data:?}");
+
                             return Ok(ThoDataRef::Owned(data))
 
                         }
@@ -689,8 +691,8 @@ where
                     track_await(self.ensure_copied(0, data, false)).await?;
                 }
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
-                    // o.adrop().await;
                 debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
+                // o.adrop().await;
                 drop(o);
 
 
@@ -798,21 +800,22 @@ where
         Err(Cause::NotFound.into())
     }
 
-    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
+    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {//_or_any does not make sense, remove
         let id = format!("{:?}", self.id);
         let mut cached_data = self.cached_data.into_vec();
 
         if preferred_device_idx < cached_data.len() {
-            if let Some(data) = cached_data.swap_remove(preferred_device_idx).into_inner() {
+            if let Some(data) = cached_data.remove(preferred_device_idx).into_inner() {
+                debug!("take_data_prefer_device_or_any: preferred_device_idx={preferred_device_idx} data={data:?}");
                 return Ok(data);
             }
         }
 
-        for slot in cached_data {
-            if let Some(data) = slot.into_inner() {
-                return Ok(data);
-            }
-        }
+        // for slot in cached_data {
+        //     if let Some(data) = slot.into_inner() {
+        //         return Ok(data);
+        //     }
+        // }
 
         Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
     }
