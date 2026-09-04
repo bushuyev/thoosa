@@ -1,7 +1,9 @@
 use crate as thoosa_common;
 use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
+use crate::ws::Workspace;
 use mockall_double::double;
+use parking_lot::RwLock;
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use thoosa_shared::traits::ConsumeResult;
@@ -292,6 +294,19 @@ where
     A: Adjuster<RCC, A = Ctx> + 'a,
 {
     Box::new(adjuster)
+}
+
+/// Constructs one concrete sync-stage wrapper from retryable initialization data.
+///
+/// The workspace is passed by `Arc` because construction may run in the same dynamic executor
+/// used for synchronous CUDA work and therefore must own everything held across the await.
+#[async_trait]
+pub trait SyncStageInit<RC, St>: Clone + Debug + Send + Sync + 'static
+where
+    RC: RunCtx,
+    St: SyncStage + Send + Sync + 'static,
+{
+    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<St>, ThoError>;
 }
 
 #[doc(hidden)]
@@ -645,6 +660,44 @@ pub struct OOMHandler<'a, 'z, IA = NoInputAdjuster, TA = NoTaskAdjuster, CA = No
     pd_rc: PhantomData<(&'z (), S)>,
 }
 
+// These private adapter types let stage construction reuse the established OOM retry loop without
+// pretending that an input or an already-created task can be adjusted before construction succeeds.
+#[derive(Debug)]
+struct SyncStageInitInput;
+
+impl thoosa_shared::applicables_runner::Input for SyncStageInitInput {}
+
+#[derive(Debug)]
+struct SyncStageInitOutput<St>(Arc<St>);
+
+impl<St> thoosa_shared::applicables_runner::Output for SyncStageInitOutput<St> where St: Debug {}
+
+struct SyncStageInitTask<I, RC, St> {
+    init: I,
+    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    pd: PhantomData<fn(RC) -> St>,
+}
+
+impl<I, RC, St> Debug for SyncStageInitTask<I, RC, St>
+where
+    I: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncStageInitTask").field("init", &self.init).finish_non_exhaustive()
+    }
+}
+
+impl<I, RC, St> Stage for SyncStageInitTask<I, RC, St>
+where
+    I: Debug,
+    RC: RunCtx,
+    St: SyncStage + Send + Sync + 'static,
+{
+    type Ctx = RC;
+    type In<'a> = SyncStageInitInput;
+    type Out = SyncStageInitOutput<St>;
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct OomFastPathKey {
     task: TypeId,
@@ -957,6 +1010,48 @@ where
 
 }
 
+impl<'a, 'z, CA> OOMHandler<'a, 'z, NoInputAdjuster, NoTaskAdjuster, CA, ()>
+where
+    CA: Debug,
+{
+    /// Constructs a sync stage with the same run-context adjustment and retry machinery used by execution.
+    /// Input and task adjusters are intentionally unavailable because neither exists before construction succeeds.
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::new_stage"))]
+    pub async fn new_stage<I, RC, St, C>(
+        &self,
+        sync_init: I,
+        run_context: RC,
+        contexts: C,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ) -> Result<Arc<St>, ThoError>
+    where
+        I: SyncStageInit<RC, St>,
+        RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
+        St: SyncStage + Send + Sync + 'static,
+        CA: RunContextAdjustment<RC, C>,
+        C: Debug,
+    {
+        if run_context.tho_device_idx() == 0 {
+            // Match do_run behavior: CPU construction does not enter CUDA OOM retry handling.
+            return panic_to_err_async!(sync_init.init(run_context, Arc::clone(ws)));
+        }
+
+        let task = Arc::new(SyncStageInitTask {
+            init: sync_init,
+            ws: Arc::clone(ws),
+            pd: PhantomData,
+        });
+        let output = track_await(run_with_runner_impl(
+            &self.adjusters,
+            task,
+            run_context,
+            contexts,
+            SyncStageInitRetryAdapter,
+        )).await?;
+        Ok(output.0)
+    }
+}
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="pref_oom_count"))]
 fn perf_oom_count(){
 
@@ -1015,6 +1110,38 @@ where
         job_id_to_rerun: Option<u64>,
     ) -> Result<R::Out, ThoError>;
 
+}
+
+struct SyncStageInitRetryAdapter;
+
+impl<'z, I, RC, St> RunnerRetryAdapter<'z, SyncStageInitTask<I, RC, St>, ()> for SyncStageInitRetryAdapter
+where
+    I: SyncStageInit<RC, St>,
+    RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
+    St: SyncStage + Send + Sync + 'static,
+{
+    async fn run(
+        &mut self,
+        task: Arc<SyncStageInitTask<I, RC, St>>,
+        _selector: Option<()>,
+        device_idx: usize,
+        run_ctx: RC,
+        job_id_to_rerun: Option<u64>,
+    ) -> Result<SyncStageInitOutput<St>, ThoError> {
+        let init = task.init.clone();
+        let ws = Arc::clone(&task.ws);
+        let max_other_parallel = run_ctx.max_other_parallel();
+
+        // Constructor work enters the same executor as do_run/consume so OOM retries retain job identity and can become exclusive.
+        track_await(oom_executor(device_idx).submit(
+            max_other_parallel.into(),
+            async move {
+                let stage = panic_to_err_async!(init.init(run_ctx, ws))?;
+                Ok(SyncStageInitOutput(stage))
+            },
+            job_id_to_rerun,
+        )).await
+    }
 }
 
 struct SharedRunnerRetryAdapter<W, Run> {

@@ -45,7 +45,7 @@ use thoosa_common::runner::common::DropIf;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, SyncStageInit, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore};
@@ -365,6 +365,7 @@ where
 
         let mut apply_motif_nets = vec![];
         for trained_net in trained_nets.into_iter() {
+            let trained_net_id = trained_net.id;
             let (channel, motif_id) = FsWorkspace::parse_motif_path(&trained_net.net_path)?;
 
             let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
@@ -378,21 +379,24 @@ where
                }
            };
 
+            let sync_init = ApplyMotifNetInit::new(
+                slice_step,
+                trained_net.net_path,
+                channel,
+                motif_id,
+                quantize,
+                #[cfg(test)]
+                fail_if_size_bigger_than,
+            );
             apply_motif_nets.push(
                 (
-                    trained_net.id,
+                    trained_net_id,
                     maybe_freq_filter,
                     ApplyMotifNet::new(
-                        slice_step, //TODO shouldn't be same as one used when training motif net
-                        trained_net,
-                        // trained_net.net_path,
-                        channel,
-                        motif_id,
-                        stage_ctx.tho_device_idx().into(),
+                        trained_net_id,
+                        sync_init,
+                        stage_ctx.branch(true),
                         ws,
-                        quantize,
-                        #[cfg(test)]
-                        fail_if_size_bigger_than,
                     ).await?
                 )
             );
@@ -893,7 +897,7 @@ where
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApplyMotifNetInit {
     slice_step:u32,
     motif_net_path:PathBuf,
@@ -931,6 +935,43 @@ impl WorkerStageInput for ApplyMotifNetInit {
 
 #[typetag::serde(name = "ApplyMotifNetInit")]
 impl WorkerInput for ApplyMotifNetInit {}
+
+#[async_trait]
+impl<C, RC> SyncStageInit<RC, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>> for ApplyMotifNetInit
+where
+    C: RunCtx + 'static,
+    RC: RunCtx + Send + Sync + 'static,
+{
+    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
+        let device: ThoDevice = run_context.tho_device_idx().into();
+
+        if GlobalCtx::global().is_ipc() {
+            let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, false)?;
+            static APPLY_STEP_GEN: AtomicU32 = AtomicU32::new(0);
+            let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            let motif_meta = MotifNetMeta::new(self.motif_id, self.channel, params);
+
+            // A failed worker installation is retried with a fresh endpoint id by OOMHandler::new_stage.
+            Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(self)).await?),
+                init: motif_meta,
+            }))
+        } else {
+            let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
+            let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load motif net from {:?}", self.motif_net_path)))?;
+
+            Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
+                self.slice_step,
+                params,
+                net,
+                self.channel,
+                self.motif_id,
+                #[cfg(test)]
+                self.fail_if_size_bigger_than,
+            ).await?))))
+        }
+    }
+}
 
 
 
@@ -1118,67 +1159,30 @@ impl <C> ApplyMotifNet<C>
 where
     C: RunCtx + 'static
 {
-    async fn new(
-        slice_step:u32,
-        trained_net:TrainedNet,
-        channel:u32,
-        motif_id:u32,
-        device: ThoDevice,
+    async fn new<RC>(
+        trained_net_id: u32,
+        sync_init: ApplyMotifNetInit,
+        run_context: RC,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        quantize: bool,
-        #[cfg(test)]
-        fail_if_size_bigger_than:Option<usize>,
-
-    ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
-        let trained_net_id = trained_net.id;
+    ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError>
+    where
+        RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
+    {
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
-
-            let init  = ApplyMotifNetInit::new(
-                slice_step,
-                trained_net.net_path.clone(),
-                channel,
-                motif_id,
-                quantize,
-                #[cfg(test)]
-                fail_if_size_bigger_than
+            let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+                vec![
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_motif_net_init"))),
+                ],
+                None,
             );
-
-            if GlobalCtx::global().is_ipc() {
-                let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-                   &trained_net.net_path,
-                   &device,
-                   quantize,
-                   false
-                )?;
-
-                static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
-                // Use the typed stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
-                let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
-                // The proxy must dispatch with the id used to install this particular apply stage.
-                Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(init)).await?),
-                    init: MotifNetMeta::new(motif_id, channel, params),
-                }))
-            } else {
-                let (params, Some(net)) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-                       &trained_net.net_path,
-                       &device,
-                       quantize,
-                       true
-                )? else {
-                    panic!("ups");
-                };
-
-                Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyMotifNet::new_local(
-                    slice_step,
-                    params,
-                    net,
-                    channel,
-                    motif_id,
-                    #[cfg(test)]
-                    fail_if_size_bigger_than,
-                ).await?))))
-            }
+            oom_handler.new_stage(
+                sync_init,
+                run_context,
+                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
+                ws,
+            ).await
         }).await
     }
 
