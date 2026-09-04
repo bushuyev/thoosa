@@ -201,8 +201,6 @@ where
                 }
             }
         }
-
-
     }
 
     fn clone_refs<'a>(&self, input: &<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> {

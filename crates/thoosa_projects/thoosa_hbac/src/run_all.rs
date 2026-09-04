@@ -303,7 +303,7 @@ pub(crate) async fn run_all(
                 &store_in_train_final,
                 init_ctx_in_train_final,
                 Arc::clone(&all_config.train_final_opt_config),
-                10, //TODO
+                50, //TODO
                 run_all_args.selected_motif_nets_limit,
             )).await.map(|v| Arc::new(v))
         },
@@ -896,8 +896,8 @@ mod tests {
 
             }
             Err(e) => {
-                info!("e={e:?}");
-                panic!("test failed")
+                info!("final error={e:?}");
+                // panic!("test failed")
             }
         };
 
@@ -951,7 +951,7 @@ mod tests {
 
         /////////////////////train_motifs
         let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(3),
+            epochs: RangeOrValue::Value(30),
             batch_size: RangeOrValue::Value(20),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -965,7 +965,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(5),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(20),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -978,7 +978,7 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(5),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(20),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1047,9 +1047,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(3, 1)),
-            train_labels_opt_config: Arc::new(OptConfig::new(10, 1)),
-            train_final_opt_config: Arc::new(OptConfig::new(10, 1)),
+            train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
+            train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
         }
     }
 

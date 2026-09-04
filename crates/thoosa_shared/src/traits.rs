@@ -804,15 +804,7 @@ where
 
 
 pub trait SyncStage: Stage + Debug {
-    type Init = ();
 
-
-    fn new_local(init: Self::Init) -> Self
-    where
-        Self:Sized
-    {
-        todo!()
-    }
 
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
     where
