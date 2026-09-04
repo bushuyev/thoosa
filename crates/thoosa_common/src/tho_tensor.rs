@@ -211,7 +211,7 @@ impl Drop for KeyHolder {
     fn drop(&mut self) {
         debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?} self.drop_target={} GlobalCtx::is_installed()={}", self.device_idx, Arc::strong_count(&self.count), self.drop_target, GlobalCtx::is_installed() );
         if /*self.drop_target && */self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 { //is_installed is redundant - it's to check if it's main thread but drop_target should not be true on worker?
-            info!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
+            debug!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
 
             let device_idx = self.device_idx;
             let key = self.key;

@@ -894,7 +894,7 @@ where
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ApplyMotifNetInit {
+pub struct ApplyMotifNetInit {
     slice_step:u32,
     motif_net_path:PathBuf,
     channel:u32,
@@ -1133,24 +1133,23 @@ where
         let trained_net_id = trained_net.id;
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
 
+            let init  = ApplyMotifNetInit::new(
+                slice_step,
+                trained_net.net_path.clone(),
+                channel,
+                motif_id,
+                quantize,
+                #[cfg(test)]
+                fail_if_size_bigger_than
+            );
 
             if GlobalCtx::global().is_ipc() {
                 let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
-                                                                                   &trained_net.net_path,
-                                                                                   &device,
-                                                                                   quantize,
-                                                                                   false
+                   &trained_net.net_path,
+                   &device,
+                   quantize,
+                   false
                 )?;
-
-                let init  = ApplyMotifNetInit::new(
-                    slice_step,
-                    trained_net.net_path,
-                    channel,
-                    motif_id,
-                    quantize,
-                    #[cfg(test)]
-                    fail_if_size_bigger_than
-                );
 
                 static APPLY_STEP_GEN:AtomicU32 = AtomicU32::new(0);
                 // Use the typed stateful proxy path so client dispatch and worker state handling stay in thoosa_common.
@@ -1271,9 +1270,12 @@ where
 impl <C> SyncStage for ApplyMotifNet<C> where
     C: RunCtx + 'static
 {
+
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         Some(self)
     }
+
+
 }
 
 impl<C> StageWithState for ApplyMotifNet<C>
