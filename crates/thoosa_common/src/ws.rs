@@ -1389,7 +1389,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = FsWorkspace::new(test_dir, WsConfigs::new(2, 684400, 32000))?;
 
-        let params = FinalNetParams::new(8, 2, 1);
+        let params = FinalNetParams::new(8, 100, 2, 1);
         let mut vs = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = crate::train_nets::final_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();

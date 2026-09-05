@@ -1724,14 +1724,16 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct FinalNetParams {
     in_features: u32,
+    mid_features: u32,
     out_features: u32,
     num_layers: u32,
 }
 
 impl FinalNetParams {
-    pub fn new(in_features: u32, out_features: u32, num_layers: u32) -> Self {
+    pub fn new(in_features: u32, mid_features: u32, out_features: u32, num_layers: u32) -> Self {
         Self {
             in_features,
+            mid_features,
             out_features,
             num_layers,
         }
@@ -1758,7 +1760,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
             None,
         )?
         .linear_s(
-            100 * params.in_features,
+            20 * params.in_features,
             "final_net_first_layer".to_string(),
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -1766,7 +1768,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     for i in 0..params.num_layers {
         net = net
             .linear_s(
-                100 * params.in_features,
+                20 * params.in_features,
                 format!("final_net_{i}th_layer"),
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -2149,6 +2151,10 @@ pub struct FinalNetArgs {
     #[in_map]
     #[run_config]
     pub num_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    pub mid_features: u32,
 }
 
 impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
@@ -2159,8 +2165,8 @@ impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
 
 impl FinalNetArgs {
     #[cfg(test)]
-    pub fn new(num_layers: u32) -> Self {
-        Self { num_layers }
+    pub fn new(num_layers: u32, mid_features: u32) -> Self {
+        Self { num_layers, mid_features }
     }
 }
 
@@ -3574,7 +3580,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::final_net(&FinalNetParams::new(features, 0, 1))?
+            train_nets::final_net(&FinalNetParams::new(features, 100, 0, 1))?
                 .build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
@@ -3984,8 +3990,8 @@ mod train_tests {
             Some(&vec![label_run_config_id_0, label_run_config_id_1]),
             0.125,
             thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
-            FinalNetParams::new(4, 2, 3),
-            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
+            FinalNetParams::new(4, 100, 2, 3),
+            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3, 100)),
         );
 
         let run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
