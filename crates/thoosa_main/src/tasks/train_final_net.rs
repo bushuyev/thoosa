@@ -895,6 +895,7 @@ mod tests {
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(0.02)),
                     NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::NumLayers), Val::Int(1)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::MidFeatures), Val::Int(100)),
                 ]),
                 vec![],
             ),

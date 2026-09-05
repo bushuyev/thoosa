@@ -395,9 +395,9 @@ where
             Arc::new(DevicesWrap::wrap(input)),
             ctx.branch(false),
         )).await?;
-    let specs = track_await(Arc::into_inner(specs)
+    let specs = Arc::into_inner(specs)
         .ok_or_else(|| ThoError::new("run_stft_as_motif_slices: stft output should not be shared"))?
-        .take_data(device_idx)).await?;
+        .take_data(device_idx)?;
     ThoTensor::new(out_id, specs.t())
 }
 

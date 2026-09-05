@@ -1463,7 +1463,7 @@ mod tests {
 
 
             assert_eq!("Worker", what_msg);//TODO err code
-            assert_eq!("worker tensor tensor_key=1 not found", msg);//TODO err code
+            assert_eq!("worker tensor tensor_key=1000000 not found", msg);//TODO err code
 
 
             info!("main: \n{}", format_perf_map(&PERF));

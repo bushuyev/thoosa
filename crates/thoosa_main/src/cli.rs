@@ -444,18 +444,17 @@ where
         }
     };
 
-    /*
+
     let store = match &cli.command {
-        Some(Infer(InferArgs{ sql_store_file: Some(sql_store_file), .. })) => {
-            info!("reqd-only SqlStore: sql_store_file={sql_store_file:?}");
-            Arc::new(SqlStore::from_path_readonly(sql_store_file).await?)
+        Some(Infer(..)) => {
+            info!("reqd-only SqlStore");
+            Arc::new(SqlStore::from_path_readonly(ws.read().store_path()).await?)
         }
         _=> {
             Arc::new(SqlStore::from_path(ws.read().store_path()).await?)
         }
     };
-     */
-    let store = Arc::new(track_await(SqlStore::from_path(ws.read().store_path())).await?);
+
 
     RUN_ID.set(match cli.run_id{
         None => {
@@ -1960,7 +1959,7 @@ where
     debug!("run_grid: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
-    
+
     debug!("run_grid: run_configs={run_configs:?}");
 
     let mut run_config_ids = track_await(save_run_configs(

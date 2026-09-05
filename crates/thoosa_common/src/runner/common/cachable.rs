@@ -742,11 +742,42 @@ where
         r
     }
 
-    pub async fn take_data(
+    pub fn take_data(
         self,
         to_device_idx: usize,
     ) -> Result<O, ThoError> {
-        self.take_data_prefer_device_or_any(to_device_idx)
+        let id = format!("{:?}", self.id);
+        let mut cached_data = self.cached_data.into_vec();
+
+        if to_device_idx < cached_data.len() {
+            if let Some(data) = cached_data.remove(to_device_idx).into_inner() {//instance is being consumed, cached_data state doesn't matter
+                debug!("take_data_prefer_device_or_any: to_device_idx={to_device_idx} data={data:?}");
+                return Ok(data);
+            }
+        }
+
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
+    }
+
+    //needed only for TmpCached to return not yet loaded data retrieving TmpCached after dump to cpu.
+    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {//_or_any does not make sense, remove
+        let id = format!("{:?}", self.id);
+        let mut cached_data = self.cached_data.into_vec();
+
+        if preferred_device_idx < cached_data.len() {
+            if let Some(data) = cached_data.remove(preferred_device_idx).into_inner() {
+                debug!("take_data_prefer_device_or_any: preferred_device_idx={preferred_device_idx} data={data:?}");
+                return Ok(data);
+            }
+        }
+
+        for slot in cached_data {
+            if let Some(data) = slot.into_inner() {
+                return Ok(data);
+            }
+        }
+
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
     }
 
     pub async fn load_from_any_device_(
@@ -798,26 +829,6 @@ where
         }
 
         Err(Cause::NotFound.into())
-    }
-
-    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {//_or_any does not make sense, remove
-        let id = format!("{:?}", self.id);
-        let mut cached_data = self.cached_data.into_vec();
-
-        if preferred_device_idx < cached_data.len() {
-            if let Some(data) = cached_data.remove(preferred_device_idx).into_inner() {
-                debug!("take_data_prefer_device_or_any: preferred_device_idx={preferred_device_idx} data={data:?}");
-                return Ok(data);
-            }
-        }
-
-        // for slot in cached_data {
-        //     if let Some(data) = slot.into_inner() {
-        //         return Ok(data);
-        //     }
-        // }
-
-        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
     }
 
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
