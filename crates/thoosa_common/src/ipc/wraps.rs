@@ -137,7 +137,7 @@ where
         match Arc::clone(&self.base).consume(worker_input, stage_ctx) {
             ConsumeResult::Ok(out) => {
                 // Commit removal only after the stage accepts the input so a failed consume can be retried.
-                drop(a.ref_to_tensor(all_cuda_tensors, false)?);
+                drop(a.ref_to_tensor(all_cuda_tensors, true)?);
                 debug!("SyncStageIpcWrapper::consume: out={out:?}");
                 Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
             }

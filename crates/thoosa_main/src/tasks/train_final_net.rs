@@ -660,7 +660,7 @@ where
     C: RunCtx + 'static,
 {
     async fn new(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
-        let node_params = FinalNetParams::new(self.num_label_nets, self.labels_len, run_config.net.num_layers);
+        let node_params = FinalNetParams::new(self.num_label_nets, run_config.net.mid_features, self.labels_len, run_config.net.num_layers);
         if GlobalCtx::global().is_ipc() {
             static TRAIN_FINAL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_FINAL_STEP_ID.fetch_add(1, Ordering::AcqRel);
@@ -895,6 +895,7 @@ mod tests {
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(0.02)),
                     NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::NumLayers), Val::Int(1)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::MidFeatures), Val::Int(100)),
                 ]),
                 vec![],
             ),
