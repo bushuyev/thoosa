@@ -25,7 +25,7 @@ use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
@@ -450,7 +450,7 @@ impl WithId for SyncMotifLoaderOutput {
 impl Output for SyncMotifLoaderOutput {}
 
 impl WorkerStageOutput for SyncMotifLoaderOutput {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         // Convert the tensor field first so the wrapper can encode this output exactly once.
         Ok(Self::new(self.motif.encode_from_worker(all_cuda_tensors, tho_device)?, self.motif_meta))
     }
@@ -550,7 +550,7 @@ impl WorkerStageInput for SyncMotifLoaderInput {
         Ok(Box::new(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone())))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let loaded_resources = self.loaded_resources.iter().map(|resource| Ok(LoadedMotifResource {
             id: resource.id.clone(),
             resource_id: resource.resource_id,
@@ -606,7 +606,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifLoaderOutput{}
 
-pub fn sync_motif_loader_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_motif_loader_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
@@ -1102,7 +1102,7 @@ impl WorkerStageInput for SyncLoadMotifResourcesInput<'_> {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(Self {
             id: self.id.clone(),
             raw_tensor: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.raw_tensor.as_ref(), all_cuda_tensors, remove)?),
@@ -1225,7 +1225,7 @@ where
 }
 
 
-pub fn sync_load_motif_resources_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_motif_resources_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput converts the tensor reference into an owned worker-side input.
@@ -1399,7 +1399,7 @@ impl WorkerStageInput for SyncLoadRandomSlicesInput<'_> {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(Self {
             id: self.id.clone(),
             raw_tensor: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.raw_tensor.as_ref(), all_cuda_tensors, remove)?),
@@ -1521,7 +1521,7 @@ where
     }
 }
 
-pub fn sync_load_random_slices_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_random_slices_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared worker wrapper reconstructs the borrowed raw tensor as owned worker data.

@@ -163,7 +163,7 @@ fn get_test_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::run_ipc_test;
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::worker_msg::WorkerInput;
     use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
@@ -300,7 +300,7 @@ mod tests {
         })
     }
 
-    fn sync_consume_test_endpoint_init(_init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    fn sync_consume_test_endpoint_init(_init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
         use futures_util::FutureExt;
         async move {
             // This stage has no initializer fields, but still uses the typed install message.

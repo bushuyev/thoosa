@@ -254,7 +254,7 @@ impl WorkerOutput for ThoTensor<ClsOut, ModelTestId> {}
 #[typetag::serde(name = "ThoTensor_ABData_ModelTestId_Input")]
 impl WorkerInput for ThoTensor<ABData, ModelTestId> {}
 
-pub(crate) fn sync_classifier_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_classifier_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &crate::ipc::cuda_wokrer::AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncClassifierStageInit>().expect("SyncClassifierStage endpoint received an unexpected initializer type");

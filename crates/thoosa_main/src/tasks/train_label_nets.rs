@@ -21,7 +21,7 @@ use tch::{Reduction, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
@@ -184,7 +184,7 @@ impl WithId for SyncLabelBatchOutput {
 impl Output for SyncLabelBatchOutput {}
 
 impl WorkerStageOutput for SyncLabelBatchOutput {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, x, lengths, y } = self;
         // Convert tensor fields first so the wrapper can encode this output exactly once.
         let x = x.encode_from_worker(all_cuda_tensors, tho_device)?;
@@ -265,7 +265,7 @@ impl WorkerStageInput for SyncLabelBatchInput<'_> {
         Ok(Box::new(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let materialize = |value: &AppliedMotifOutput| -> Result<AppliedMotifOutput, ThoError> { Ok(DataWithExtra::new(WorkerStageInput::ref_to_tensor(value.data(), all_cuda_tensors, remove)?, value.extra().clone())) };
         let x_1 = self.x_1.iter().map(|value| Ok(ThoDataRef::Owned(materialize(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
         let x_0 = self.x_0.iter().map(|value| Ok(ThoDataRef::Owned(materialize(value.as_ref())?))).collect::<Result<Vec<_>, ThoError>>()?;
@@ -374,7 +374,7 @@ where
 impl WorkerOutput for SyncLabelBatchOutput{}
 
 
-pub fn sync_label_batch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_label_batch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // WorkerStageInput reconstructs owned tensor-plus-length values for the borrowed stage API.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::<WokerRunCtx>::new_local().await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1011,7 +1011,7 @@ impl WorkerInput for TrainLabelStepIpcInit {}
 #[typetag::serde(name = "TrainLabelStepInput")]
 impl WorkerInput for crate::tasks::train_step::TrainStepInput<MotifProbability, LabelProbability> {}
 
-fn train_label_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_label_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>().map_err(|_| ThoError::new("TrainLabelStep endpoint received invalid initializer"))?;
         let params = init.params.clone();

@@ -30,7 +30,7 @@ use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
@@ -273,7 +273,7 @@ impl WorkerStageInput for SyncLogitsBatchInput<'_> {
         Ok(Box::new(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let outputs = self.outputs.iter().map(|output| Ok(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(output.as_ref(), all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?;
         Ok(Self { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
     }
@@ -365,7 +365,7 @@ impl SyncLogitsBatchOutput {
 }
 
 impl WorkerStageOutput for SyncLogitsBatchOutput {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(SyncLogitsBatchOutput{
             id: self.id,
             x: self.x.encode_from_worker(all_cuda_tensors, tho_device)?,
@@ -425,7 +425,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncLogitsBatchOutput{}
 
-pub fn sync_logits_batch_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_logits_batch_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
 
@@ -616,7 +616,7 @@ impl WorkerInput for TrainFinalStepIpcInit {}
 #[typetag::serde(name = "TrainFinalStepInput")]
 impl WorkerInput for crate::tasks::train_step::TrainStepInput<LabelProbability, LabelsProbabilities> {}
 
-fn train_final_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_final_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>().map_err(|_| ThoError::new("TrainFinalStep endpoint received invalid initializer"))?;
         let params = init.params.clone();

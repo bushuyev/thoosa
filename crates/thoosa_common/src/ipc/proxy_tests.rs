@@ -2,7 +2,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{ CudaIPCActorHandle};
-use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
@@ -47,7 +47,7 @@ impl WorkerStageInput for TestStageInitA {
         todo!()
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         todo!()
     }
 }
@@ -118,7 +118,7 @@ impl <'a> WorkerStageInput for TestInputA<'a> {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(TestInputA {
             value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
             fail_with_oom: self.fail_with_oom,
@@ -148,7 +148,7 @@ impl WithId for TestOutputA {
 
 
 impl WorkerStageOutput for TestOutputA {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(TestOutputA { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
     }
 }
@@ -260,7 +260,7 @@ where
 const TEST_ENDPOINT: &str = "TestStage";
 
 
-pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     debug!("test_simp_init_2: 0");
     let init: Box<dyn Any> = init;
 

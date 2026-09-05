@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -8,17 +8,15 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use log::{debug, error};
-use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tch::Tensor;
 use tokio::sync::MutexGuard;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{ CudaIPCActorHandle};
-use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcConsumeResponse, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 use crate::runner::common::cachable::ThoDataRef;
@@ -125,7 +123,7 @@ where
     O: WorkerStageOutput + WorkerOutput+ 'static,
 {
 
-    fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+    fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::consume: input={input:?}");
 
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
@@ -147,7 +145,7 @@ where
 
 
 
-    fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
+    fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
 
     {
         debug!("SyncStageIpcWrapper::do_run: input={input:?}");
@@ -240,7 +238,7 @@ where
     }
 
 
-    fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+    fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::do_run_with_state: input={input:?}");
 
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit

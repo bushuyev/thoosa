@@ -18,7 +18,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{TchError, Tensor};
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
@@ -192,7 +192,7 @@ impl WorkerStageInput for CrossInput<'_, Arc<Resource>> {
         )))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(CrossInput::from_decoded_parts(
             self.tensors.iter().map(|tensor| Ok(ThoDataRef::Owned(tensor.as_ref().ref_to_tensor(all_cuda_tensors, remove)?))).collect::<Result<Vec<_>, ThoError>>()?,
             self.resources_0.clone(),
@@ -600,7 +600,7 @@ where
 #[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
 impl WorkerOutput for CrossUnfoldClcOutput<DistsMask>{}
 
-pub fn sync_cross_unfold_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_cross_unfold_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let init = *init.downcast::<crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit>().map_err(|_| ThoError::new("CrossUnfoldClc endpoint received an unexpected initializer type"))?;
@@ -676,7 +676,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 impl thoosa_common::ipc::cuda_wokrer::WorkerStageOutput for CrossUnfoldClcOutput<DistsMask> {
     fn encode_from_worker(
         self,
-        all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
+        all_cuda_tensors: &AllTensors,
         tho_device: &ThoDevice,
     ) -> Result<Self, ThoError> {
         let Self {

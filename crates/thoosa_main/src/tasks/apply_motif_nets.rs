@@ -31,7 +31,7 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
@@ -638,7 +638,7 @@ impl WorkerStageInput for StackAppliedMotifNetsInput {
         Ok(Box::new(Self::new(self.id.clone(), tensors, self.device_idx)))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let tensors = self.motif_nets_applied.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(self.id.clone(), tensors, self.device_idx))
     }
@@ -785,7 +785,7 @@ where
 
 
 
-pub fn stack_applied_motif_nets(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_motif_nets(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput>().map_err(|_| ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"))?;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedMotifNets::<WokerRunCtx>::new_local(init.id).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
@@ -986,7 +986,7 @@ impl WorkerStageInput for ApplyMotifNetInput<'_> {
         Ok(Box::new(ApplyMotifNetInput::from_data_ref(ThoDataRef::Owned(self.batch.as_ref().clone_ref()?))))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(Self::from_data_ref(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.batch.as_ref(), all_cuda_tensors, remove)?)))
     }
 
@@ -1218,7 +1218,7 @@ where
 
 }
 
-pub fn apply_motif_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_motif_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>().map_err(|_| ThoError::new("ApplyMotifNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
