@@ -5,7 +5,7 @@ use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef,
 use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
-use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::tho_device::ThoDevice;
@@ -439,7 +439,7 @@ impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         // Rebuild owned stage inputs so no worker tensor reference escapes this conversion.
         Ok(Self {
             id: self.id.clone(),
@@ -489,7 +489,7 @@ impl SyncStage for ABClcSyncStage {
 }
 
 impl WorkerStageOutput for ABClcStageOutput {
-    fn encode_from_worker(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(self)
     }
 }
@@ -515,7 +515,7 @@ impl SyncStage for ProxyABClcSyncStage {
     }
 }
 
-pub fn sync_ab_clc_endpoint_init(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_ab_clc_endpoint_init(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.

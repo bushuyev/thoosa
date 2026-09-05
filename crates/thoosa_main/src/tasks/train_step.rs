@@ -15,7 +15,7 @@ use tch::Tensor;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::codec::IpcCodec;
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::my_tch::LossFp;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, ThoDataRef};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -582,7 +582,7 @@ where
         todo!()
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         // Materialize both batch references together immediately before the worker-side run.
         Ok(Self {
             id: self.id.clone(),
@@ -597,7 +597,7 @@ where
 }
 
 impl WorkerStageOutput for TrainStepOutput {
-    fn encode_from_worker(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(self)
     }
 }

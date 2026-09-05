@@ -22,7 +22,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use crate::ipc::codec::IpcCodec;
-use crate::ipc::cuda_wokrer::WorkerStageInput;
+use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
 use crate::ipc::worker_msg::WorkerInput;
 use crate::torch_runner::tests::composite_input::loader_a::AStageOutput;
 
@@ -98,7 +98,7 @@ impl WorkerStageInput for BStageOutput {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(BStageOutput{
             id: self.id.clone(),
             value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,

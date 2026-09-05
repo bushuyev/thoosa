@@ -16,7 +16,7 @@ use tch::{Kind, Tensor};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::dims::AnyDims;
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageOutput, insert_worker_tensor};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageOutput, insert_worker_tensor};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
@@ -544,8 +544,8 @@ impl DistsMask {
         }
     }
 
-    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {//TODO replace with worker_tensor_to_ref
-        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<DistsMaskTensor, ThoError> {
+    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {//TODO replace with worker_tensor_to_ref
+        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<DistsMaskTensor, ThoError> {
             let tensor = DistsMask::into_local_tensor(tensor, "into_worker_ipc_refs")?;
             let size = tensor.size();
             let kind = tensor.kind();
@@ -865,7 +865,7 @@ impl<'de> Deserialize<'de> for DistsMask {
 }
 
 impl WorkerStageOutput for DistsMask {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         self.into_worker_ipc_refs(all_cuda_tensors, tho_device)
     }
 }

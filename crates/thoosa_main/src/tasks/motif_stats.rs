@@ -22,7 +22,7 @@ use thoosa_common::copy_ctx;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
@@ -898,7 +898,7 @@ impl WorkerStageInput for MotifStatsCalcInput<'_> {
         Ok(Box::new(MotifStatsCalcInput::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone())))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let materialize = |motif: &LoadedMotif| -> Result<LoadedMotif, ThoError> {
             Ok(DataWithExtra::new(WorkerStageInput::ref_to_tensor(motif.data(), all_cuda_tensors, remove)?, motif.extra().clone()))
         };
@@ -911,7 +911,7 @@ impl WorkerStageInput for MotifStatsCalcInput<'_> {
 }
 
 impl WorkerStageOutput for MotifStatsOutput {
-    fn encode_from_worker(self, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(self)
     }
 }
@@ -1036,7 +1036,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for MotifStatsOutput{}
 
-pub fn motif_stats_sync_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_sync_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput owns decoded motifs while the generic shared wrapper runs the calculation.
@@ -1106,7 +1106,7 @@ impl WorkerStageInput for MotifStatsLoadedChannelsInput {
         Ok(Box::new(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone())))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let tensors = self.channels_motifs_slices.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone()))
     }
@@ -1148,7 +1148,7 @@ where
     }
 }
 
-pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.

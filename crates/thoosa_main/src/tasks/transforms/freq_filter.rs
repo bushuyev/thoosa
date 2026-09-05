@@ -34,7 +34,7 @@ use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_r
 use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcWrapper};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
@@ -99,7 +99,7 @@ where
 
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-pub fn sync_freq_filter_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_freq_filter_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"))?;
