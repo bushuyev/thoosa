@@ -247,7 +247,7 @@ where
             ));
 
             let result = track_await(train_net.run(
-                Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
+                Arc::new(TrainNetInput::new()),
                 ctx.branch(false))).await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store_path, result.node_params, result.run_config);
