@@ -732,7 +732,7 @@ where
                     ));
 
                     let result = track_await(train_net.run(
-                        Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
+                        Arc::new(TrainNetInput::new()),
                         ctx_for_task
                     )).await?;
 
