@@ -18,7 +18,7 @@ use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
 use log::{debug, error, info, trace, LevelFilter};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Serializer;
@@ -50,7 +50,7 @@ static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
 //1 cuda device per worker
 pub struct CudaWorker;
 
-pub type InitFn = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
+pub type InitFn = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
 type InstalledEndpoints = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
 
@@ -68,12 +68,26 @@ impl WorkerSharedArena {
     }
 }
 
+#[derive(Debug)]
+pub struct AllTensors {
+    // Tensor values and their aliases are treated as read-only while stored; the write lock only protects map membership.
+    tensors: RwLock<HashMap<u64, Tensor>>,
+}
+
+impl AllTensors {
+    pub fn new() -> Self {
+        Self { tensors: RwLock::new(HashMap::new()) }
+    }
+}
+
+// SAFETY: every map access is synchronized, no mutable tensor reference is exposed, and callers preserve the read-only-storage invariant when using aliases.
+unsafe impl Sync for AllTensors {}
 #[derive(Clone)]
 struct WorkerRequestContext {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     endpoint_inits: Arc<HashMap<String, InitFn>>,
     exec_stream_pool: Arc<Pool<ThoCudaStream>>,
-    all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
+    all_cuda_tensors: Arc<AllTensors>,
     // Retaining the mapping in every request context keeps all arena-derived pointers valid until in-flight copies finish.
     shared_arena: Arc<WorkerSharedArena>,
     // CUDA copies still use the worker's pinned-buffer implementation; only the old per-transfer IPC memfds are replaced by arena offsets.
@@ -96,8 +110,8 @@ fn validate_arena_tensor_metadata(kind: IpcTensorKind, shape: &[i64], tensor_byt
     Ok(())
 }
 
-fn prepare_d2h_source(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor_key: u64, kind: IpcTensorKind, shape: &[i64], cuda_device: usize) -> Result<Tensor, ThoError> {
-    let tensors = all_cuda_tensors.lock();
+fn prepare_d2h_source(all_cuda_tensors: &AllTensors, tensor_key: u64, kind: IpcTensorKind, shape: &[i64], cuda_device: usize) -> Result<Tensor, ThoError> {
+    let tensors = all_cuda_tensors.tensors.read();
     let source = tensors.get(&tensor_key).ok_or_else(|| ThoError::new(format!("worker tensor tensor_key={tensor_key} not found")))?;
     let tensor_kind = kind.into();
     if source.kind() != tensor_kind || source.size() != shape {
@@ -252,7 +266,7 @@ impl CudaWorker {
         let (reply_tx, reply_rx) = mpsc::channel::<CudaWorkerMsgOut>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
-        let all_cuda_tensors = Arc::new(parking_lot::Mutex::new(HashMap::new()));//TODO to RwLock?
+        let all_cuda_tensors = Arc::new(AllTensors::new());
         let request_context = WorkerRequestContext {
             ws: Arc::clone(ws),
             endpoint_inits: Arc::new(endpoint_inits),
@@ -319,7 +333,7 @@ impl CudaWorker {
             match request.operation {
                 Operation::DescribeRef { tensor_key } => {
                     let status = {
-                        let tensors = context.all_cuda_tensors.lock();
+                        let tensors = context.all_cuda_tensors.tensors.read();
                         match tensors.get(&tensor_key) {
                             None => OpResult::failed(format!("worker tensor tensor_key={tensor_key} not found")),
                             Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key, tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
@@ -451,9 +465,9 @@ impl CudaWorker {
                     Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop")))
                 }
                 Operation::Debug => {
-                    info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.lock().len());
+                    info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.tensors.read().len());
 
-                    for (key, tensor) in context.all_cuda_tensors.lock().iter() {
+                    for (key, tensor) in context.all_cuda_tensors.tensors.read().iter() {
                         info!("run_worker: key={key:?} tensor={tensor:?}");
                     }
 
@@ -475,7 +489,7 @@ impl CudaWorker {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaWorker::drop_tensor"))]
     async fn drop_tensor(context: &WorkerRequestContext, request_id: u64, tensor_key: &u64) ->Result<(), ThoError>{
-        let removed = context.all_cuda_tensors.lock().remove(&tensor_key);
+        let removed = context.all_cuda_tensors.tensors.write().remove(&tensor_key);
         debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
         let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
         context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.map_err(|_| ThoError::new("worker response writer is closed"))
@@ -490,7 +504,7 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
         todo!()
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {//on worker side
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {//on worker side
         error!("WorkerStageInput::ref_to_tensor: self={self:?}");
         todo!()
     }
@@ -498,7 +512,7 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
 }
 
 pub trait WorkerStageOutput: Debug + Sized + Serialize {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError>;
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError>;
 }
 
 impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
@@ -512,7 +526,7 @@ where
     // }
 
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         // Typed worker wrappers receive the tensor reference as a trait object and materialize it only inside the worker.
         Self::ref_to_tensor_(all_cuda_tensors, self, remove)
     }
@@ -526,7 +540,7 @@ where
     D: WorkerStageOutput + Data + CopyToDevice + WithId + Sync,
     E: Clone + Serialize + Debug + Send + Sync,
 {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         // Convert the nested worker output before the IPC wrapper serializes the complete value.
         let extra = self.extra().clone();
         Ok(DataWithExtra::new(self.data.encode_from_worker(all_cuda_tensors, tho_device)?, extra))
@@ -538,25 +552,26 @@ where
     D: Dims,
     Id: Clone + Debug + Named,
 {
-    pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
+    pub fn ref_to_tensor(all_cuda_tensors: &AllTensors, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         Self::ref_to_tensor_(all_cuda_tensors, &input_ref, false)
     }
 
-    pub fn ref_to_tensor_(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
+    pub fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
-        let mut tensors = all_cuda_tensors.lock();
-
         debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} selector={:?} remove={remove}", input_ref.selector());
-        debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
 
         if remove {
+            let mut tensors = all_cuda_tensors.tensors.write();
+            debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
             let tensor  = tensors
                 .remove(&input_key)
                 .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
 
             ThoTensor::new(input_ref.id().clone(), tensor)
         } else {
+            let tensors = all_cuda_tensors.tensors.read();
+            debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
             let source = tensors
                 .get(&input_key)
                 .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
@@ -598,7 +613,7 @@ where
     D: Dims,
     Id: Named + Debug + Clone + Serialize,
 {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         self.worker_tensor_to_ref(all_cuda_tensors, tho_device)
     }
 }
@@ -608,7 +623,7 @@ where
     D: Dims,
     Id: Clone + Debug + Named + Serialize,
 {
-    pub fn worker_tensor_to_ref(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<ThoTensor<D, Id>, ThoError> {
+    pub fn worker_tensor_to_ref(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<ThoTensor<D, Id>, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let size = out_tensor.size();
@@ -621,8 +636,8 @@ where
     }
 }
 
-pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
-    let mut tensors = all_cuda_tensors.lock();
+pub fn insert_worker_tensor(all_cuda_tensors: &AllTensors, tensor: Tensor) -> Result<u64, ThoError> {
+    let mut tensors = all_cuda_tensors.tensors.write();
     loop {
         let key = NEXT_WORKER_TENSOR_KEY
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))

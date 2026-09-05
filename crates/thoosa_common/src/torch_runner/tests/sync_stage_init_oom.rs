@@ -9,7 +9,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Stage, SyncStage};
 use thoosa_shared::ThoError;
 
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::DynSyncStageEnum;
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -30,7 +30,7 @@ struct ConstructorOutput;
 impl Output for ConstructorOutput {}
 
 impl WorkerStageOutput for ConstructorOutput {
-    fn encode_from_worker(self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(self)
     }
 }

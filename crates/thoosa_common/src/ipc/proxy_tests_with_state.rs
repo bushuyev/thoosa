@@ -2,7 +2,7 @@ use std::any::Any;
 use crate::dims::{Batch, Dims};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::{CudaIPCActorHandle};
-use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
 use crate::ipc::wraps::WorkerWrapperWithState;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
@@ -57,7 +57,7 @@ impl WorkerStageInput for TestStageInitB {
         todo!()
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         todo!()
     }
 }
@@ -111,7 +111,7 @@ impl WorkerStageInput for TestInputB {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(TestInputB {
             value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
         })
@@ -147,7 +147,7 @@ impl WorkerOutput for TestOutputB {
 }
 
 impl WorkerStageOutput for TestOutputB {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         Ok(TestOutputB { value: self.value.encode_from_worker(all_cuda_tensors, tho_device)? })
     }
 }
@@ -312,7 +312,7 @@ where
 const TEST_ENDPOINT: &str = "TestStageB";
 
 
-pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn Any> = init;
     let init = init.downcast::<TestStageInitB>().unwrap();
     async move {

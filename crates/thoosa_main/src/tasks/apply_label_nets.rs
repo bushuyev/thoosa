@@ -47,7 +47,7 @@ use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
@@ -425,7 +425,7 @@ impl WorkerStageInput for StackAppliedLabelNetsInput {
         Ok(Box::new(Self::new(self.id.clone(), outputs, self.device_idx)))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let outputs = self.label_outputs.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(self.id.clone(), outputs, self.device_idx))
     }
@@ -571,7 +571,7 @@ where
 
 }
 
-pub fn stack_applied_label_nets(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_label_nets(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>().map_err(|_| ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"))?;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
@@ -686,7 +686,7 @@ impl WorkerStageInput for ApplyLabelNetInput<'_> {
         Ok(Box::new(ApplyLabelNetInput { id: self.id.clone(), input: ThoDataRef::Owned(DataWithExtra::new(input.data().clone_ref()?, input.extra().clone())) }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let input = self.input.as_ref();
         Ok(Self { id: self.id.clone(), input: ThoDataRef::Owned(DataWithExtra::new(WorkerStageInput::ref_to_tensor(input.data(), all_cuda_tensors, remove)?, input.extra().clone())) })
     }
@@ -841,7 +841,7 @@ where
     }
 }
 
-pub fn apply_label_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_label_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<ApplyLabelNetInit>().map_err(|_| ThoError::new("ApplyLabelNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");

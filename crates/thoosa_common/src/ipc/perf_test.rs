@@ -1,7 +1,7 @@
 //! Tensor-free IPC fixture for measuring the sync-stage invocation path without tensor transfer work.
 
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
-use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::tests::{init_ipc_test, run_ipc_test};
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
@@ -68,7 +68,7 @@ impl WorkerStageInput for SimpInput {
         Ok(Box::new(self.clone()))
     }
 
-    fn ref_to_tensor(&self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, _all_cuda_tensors: &AllTensors, _remove: bool) -> Result<Self, ThoError> {
         // Keep this conversion explicit so the test covers the normal worker wrapper without touching tensor storage.
         Ok(self.clone())
     }
@@ -86,7 +86,7 @@ impl Output for SimpOutput {}
 impl WorkerOutput for SimpOutput {}
 
 impl WorkerStageOutput for SimpOutput {
-    fn encode_from_worker(self, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<Self, ThoError> {
         // Scalar-only output needs no conversion into a worker tensor reference.
         Ok(self)
     }
@@ -144,7 +144,7 @@ where
     }
 }
 
-fn simp_stage_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn simp_stage_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let _init = init.downcast::<()>().map_err(|_| ThoError::new("SimpStage expected unit initialization data"))?;

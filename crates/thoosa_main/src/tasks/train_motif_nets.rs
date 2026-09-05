@@ -22,7 +22,7 @@ use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
@@ -126,7 +126,7 @@ impl WorkerInput for TrainMotifStepIpcInit {}
 #[typetag::serde(name = "TrainMotifStepInput")]
 impl WorkerInput for crate::tasks::train_step::TrainStepInput<Slice, MotifProbability> {}
 
-fn train_motif_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_motif_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainMotifStepIpcInit>().map_err(|_| ThoError::new("TrainMotifStep endpoint received invalid initializer"))?;
         let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, init.motif)?;
@@ -807,7 +807,7 @@ impl WithId for SyncMotifBatchOutput {
 impl Output for SyncMotifBatchOutput {}
 
 impl WorkerStageOutput for SyncMotifBatchOutput {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, x, y } = self;
         // Convert tensor fields first so the wrapper can encode this output exactly once.
         let x = x.encode_from_worker(all_cuda_tensors, tho_device)?;
@@ -880,7 +880,7 @@ impl WorkerStageInput for SyncMotifBatchInput<'_> {
         }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(Self {
             id: self.id.clone(),
             motifs: ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.motifs.as_ref(), all_cuda_tensors, remove)?),
@@ -1004,7 +1004,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifBatchOutput{}
 
-pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1097,7 +1097,7 @@ impl WithId for SplitMotifIntoTrainValidOutput {
 impl Output for SplitMotifIntoTrainValidOutput {}
 
 impl WorkerStageOutput for SplitMotifIntoTrainValidOutput {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+    fn encode_from_worker(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {
         let Self { id, train_motifs, valid_motifs, num_motif_slices } = self;
         // Convert tensor fields first so the wrapper can encode this output exactly once.
         let train_motifs = train_motifs.encode_from_worker(all_cuda_tensors, tho_device)?;
@@ -1152,7 +1152,7 @@ impl WorkerStageInput for SplitMotifIntoTrainValidInput<'_> {
         Ok(Box::new(SplitMotifIntoTrainValidInput { id: self.id.clone(), motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(self.motif.motif().clone_ref()?)) }))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(Self { id: self.id.clone(), motif: SplitMotifTensorRef::Plain(ThoDataRef::Owned(WorkerStageInput::ref_to_tensor(self.motif.motif(), all_cuda_tensors, remove)?)) })
     }
 }
@@ -1267,7 +1267,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SplitMotifIntoTrainValidOutput{}
 
-pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Decode borrowed motif input into worker-owned storage before running the shared stage.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SplitMotifIntoTrainValid::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1464,7 +1464,7 @@ mod tests {
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-    use thoosa_common::ipc::cuda_wokrer::WorkerStageInput;
+    use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
     use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
@@ -1720,7 +1720,7 @@ mod tests {
             net.linear_s(1, "final_net_last_layer")?.end_seq()
         }
 
-        fn train_test_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        fn train_test_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
             async move {
                 let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainTestStepInit>().map_err(|_| ThoError::new("TrainTestStep endpoint received invalid initializer"))?;
                 let params = TestNetParams { in_features: 100, layers: 2 };

@@ -1,7 +1,7 @@
 use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
-use crate::ipc::cuda_wokrer::WorkerStageInput;
+use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
@@ -137,7 +137,7 @@ impl WorkerStageInput for LoaderInput {
         Ok(Box::new(self.clone()))
     }
 
-    fn ref_to_tensor(&self, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _remove: bool) -> Result<Self, ThoError> {
+    fn ref_to_tensor(&self, _all_cuda_tensors: &AllTensors, _remove: bool) -> Result<Self, ThoError> {
         Ok(self.clone())
     }
 
@@ -330,7 +330,7 @@ impl WorkerOutput for ThoTensor<LoadedTensor, SynKey> {}
 #[typetag::serde(name = "ThoTensor_LoadedTensor_Input")]
 impl WorkerInput for ThoTensor<LoadedTensor, SynKey> {}
 
-pub(crate) fn sync_test_tensor_loader_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_test_tensor_loader_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncTestTensorLoaderInit>().expect("SyncTestTensorLoader endpoint received an unexpected initializer type");
