@@ -957,7 +957,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(50),
             batch_size: RangeOrValue::Value(40),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -970,8 +970,8 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(40),
+            epochs: RangeOrValue::Value(150),
+            batch_size: RangeOrValue::Range { range: Range { start: 10, end: 40 }, step: None },
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -1030,8 +1030,8 @@ mod tests {
             id: None,
             common_training_args: common_training_args_for_final,
             net: FinalNetArgsRangeOrValue {
-                num_layers: RangeOrValue::Range { range: Range { start: 20, end: 60 }, step: None },
-                mid_features: RangeOrValue::Range { range: Range { start: 20, end: 1000 }, step: None },
+                num_layers: RangeOrValue::Range { range: Range { start: 20, end: 100 }, step: None },
+                mid_features: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
             },
         };
 
@@ -1042,7 +1042,7 @@ mod tests {
             train_final_net_run_config_range_or_value,
             train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
             train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_final_opt_config: Arc::new(OptConfig::new(100, 30)),
         }
     }
 

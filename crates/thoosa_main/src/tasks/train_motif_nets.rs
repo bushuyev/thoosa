@@ -681,7 +681,7 @@ where
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
                 let train_net_output = track_await(train_net.run(
-                    Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
+                    Arc::new(TrainNetInput::new()),
 
                     ctx_run
                 )).await?;

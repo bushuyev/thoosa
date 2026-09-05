@@ -125,25 +125,17 @@ where
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainNetInput{
-    id: SynKey
 }
 
 impl TrainNetInput {
-    pub fn new(id: SynKey) -> Self {
-        Self { id }
+    pub fn new() -> Self {
+        Self {  }
     }
 }
 impl Input for TrainNetInput {
 
 }
 
-impl WithId for TrainNetInput {
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 
 #[derive(Debug, DummyData)]
@@ -705,7 +697,7 @@ pub mod tests {
 
         let output = train_net
             .run(
-                Arc::new(TrainNetInput::new(SynKey::new([mono_key!("test", "test")]))),
+                Arc::new(TrainNetInput::new()),
                 ctx,
             )
             .await?;
