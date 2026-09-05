@@ -437,6 +437,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         },
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            mid_features: RangeOrValue::Range { range: Range { start: 20, end: 1000 }, step: None },
         },
     };
     AllConfigs{
@@ -815,7 +816,7 @@ mod tests {
 
 
         let prepare_stage = Arc::new(PrepareRunAllData);
-        let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), 30));
+        let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), 300));
         let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
         let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
 
@@ -842,7 +843,7 @@ mod tests {
             None,
             true,
             |t: &Transaction|{
-                for pure_sets_len in [(10, true), (20, true)] {
+                for pure_sets_len in [(100, true), (200, true)] {
                     SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
                 }
 
@@ -867,11 +868,11 @@ mod tests {
         let mut ctx = RunCtxImpl::new(1, "test_run_all");
 
         let run_all_args = RunAllArgs{
-            find_resources: "group:pure group 10".to_string(),
-            select_resources: "group:pure group 20".to_string(),
+            find_resources: "group:pure group 100".to_string(),
+            select_resources: "group:pure group 200".to_string(),
             max_chunk_size: 100000,
-            train_resource_group: "pure group 20".to_string(),
-            valid_resource_group: "pure group 10".to_string(),
+            train_resource_group: "pure group 200".to_string(),
+            valid_resource_group: "pure group 100".to_string(),
             train_motifs_epoch_size: 10,
             max_motif_net_loss: 0.4,
             selected_motif_nets_limit: None,
@@ -883,30 +884,21 @@ mod tests {
 
         let all_configs = run_all_config_test_1(&run_all_args);
 
-        match panic_to_err_async!({run_all(
+        let r = panic_to_err_async!({run_all(
             &ws,
             &store,
             &loader,
             ctx,
             &run_all_args,
             all_configs,
-        )}){
-            Ok(_) => {
-                debug!("run_all done");
-
-            }
-            Err(e) => {
-                info!("final error={e:?}");
-                // panic!("test failed")
-            }
-        };
+        )});
 
         let final_nets = store.list_trained_nets_loss_gt(0.0, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE).await?;
         let final_nets =store.list_trained_nets(TrainedNetsBy::TrainNetId(final_nets.into_iter().map(|tne|tne.id).collect()), None, None).await?;
 
         info!("heavy_test_run_all: final_nets={final_nets:?}");
 
-        Ok(())
+        r
     }
 
     fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
@@ -966,7 +958,7 @@ mod tests {
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(20),
+            batch_size: RangeOrValue::Value(40),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -979,12 +971,12 @@ mod tests {
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(20),
+            batch_size: RangeOrValue::Value(40),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
             optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Value(0.9),
+                beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
                 amsgrad: RangeOrValue::Value(false),
@@ -1011,12 +1003,12 @@ mod tests {
             common_training_args: common_training_args_for_labels,
 
             net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-                // num_conv_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-                num_conv_layers: RangeOrValue::Value(8),
-                hidden_conv_channels: RangeOrValue::Value(64),
-                num_head_layers: RangeOrValue::Value(10),
+                num_conv_layers: RangeOrValue::Range { range: Range { start: 8, end: 16 }, step: None },
+                // num_conv_layers: RangeOrValue::Value(8),
+                hidden_conv_channels: RangeOrValue::Range { range: Range { start: 32, end: 128 }, step: None },
+                num_head_layers: RangeOrValue::Range { range: Range { start: 10, end: 20 }, step: None },
                 num_head_features: RangeOrValue::Value(256),
-                kernel: RangeOrValue::Value(10),
+                kernel: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
                 // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
                 // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
                 joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
@@ -1038,7 +1030,8 @@ mod tests {
             id: None,
             common_training_args: common_training_args_for_final,
             net: FinalNetArgsRangeOrValue {
-                num_layers: RangeOrValue::Range { range: Range { start: 3, end: 10 }, step: None },
+                num_layers: RangeOrValue::Range { range: Range { start: 20, end: 60 }, step: None },
+                mid_features: RangeOrValue::Range { range: Range { start: 20, end: 1000 }, step: None },
             },
         };
 
@@ -1048,7 +1041,7 @@ mod tests {
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
             train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
             train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
         }
     }

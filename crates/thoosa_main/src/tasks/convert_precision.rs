@@ -516,7 +516,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
         let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
 
-        let params = FinalNetParams::new(8, 2, 1);
+        let params = FinalNetParams::new(8, 100, 2, 1);
         let mut vs = VarStore::new(Device::Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = final_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();

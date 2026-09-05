@@ -430,7 +430,9 @@ mod tests {
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
-        let first_cpu = cuda_actor.copy(first_result.value, 0.into()).await?;
+        debug!("do_test_distinct_stateful_endpoints: first_result={first_result:?}");
+
+        let first_cpu = cuda_actor.copy(first_result.value.shallow_clone(), 0.into()).await?;//shallow_clone to avoid id being dropped before copy starts
 
         debug!("do_test_distinct_stateful_endpoints: first_cpu=\n{}", first_cpu.t_ref());
         assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(first_cpu.t_ref(), 0.01, 0.01, false)?);

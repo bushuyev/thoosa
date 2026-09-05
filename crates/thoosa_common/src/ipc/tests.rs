@@ -71,7 +71,7 @@ where
 
 
         let worker_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(16)
+            .worker_threads(32)
             .enable_all()
             .on_thread_start(move || {
 
