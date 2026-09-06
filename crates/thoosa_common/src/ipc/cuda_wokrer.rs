@@ -8,7 +8,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, WorkerTensorInfoPayload
 use crate::ipc::ipc_cuda_utils::{IpcTensorKind, recv_fd};
 use crate::ipc::json_ser::{ErasedWithState, PostcardToFromBytes, SyncStageIpcResponse, SyncStageIpcWrapper, ToFromBytes};
 use crate::ipc::proxy_tests::TestOutputA;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -18,7 +18,7 @@ use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
 use log::{debug, error, info, trace, LevelFilter};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Serializer;
@@ -28,7 +28,7 @@ use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tch::{Device, Tensor};
 use thoosa_shared::perf_logging::init_tracing;
@@ -46,6 +46,9 @@ use rand::{rng, Rng};
 
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
+
+#[cfg(test)]
+pub static DEBUG_DATA:LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(vec![])));
 
 //1 cuda device per worker
 pub struct CudaWorker;
@@ -465,13 +468,19 @@ impl CudaWorker {
                     Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop")))
                 }
                 Operation::Debug => {
+
                     info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.tensors.read().len());
 
                     for (key, tensor) in context.all_cuda_tensors.tensors.read().iter() {
                         info!("run_worker: key={key:?} tensor={tensor:?}");
                     }
 
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                    #[cfg(test)]{
+                        let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));
+                        context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(out)) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                    }
+
                     Ok(())
                 }
             }
