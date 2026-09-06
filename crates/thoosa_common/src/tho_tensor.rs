@@ -148,7 +148,13 @@ where
         }
     }
 
+    pub fn no_drop(&mut self) {
 
+        if let ThoTensorInner::Ref { key, .. } = &mut self.inner {
+            debug!("ThoTensor::no_drop: key={key:?}");
+            key.do_drop = false;
+        }
+    }
 }
 
 impl ThoTensor {
@@ -191,7 +197,8 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 pub struct KeyHolder {
     pub key:u64,
     pub device_idx:usize,
-    count:Arc<()>
+    count:Arc<()>,
+    pub do_drop:bool,
 }
 
 impl Clone for KeyHolder {
@@ -201,6 +208,7 @@ impl Clone for KeyHolder {
             key:  self.key,
             device_idx: self.device_idx,
             count: Arc::clone(&self.count),
+            do_drop: self.do_drop,
         }
     }
 }
@@ -208,7 +216,7 @@ impl Clone for KeyHolder {
 impl Drop for KeyHolder {
     fn drop(&mut self) {
         debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?} GlobalCtx::is_installed()={}", self.device_idx, Arc::strong_count(&self.count), GlobalCtx::is_installed() );
-        if self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 {
+        if self.do_drop && self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 {
             debug!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
 
             let device_idx = self.device_idx;
@@ -458,6 +466,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
                     key,
                     device_idx: tho_device_idx,
                     count,
+                    do_drop: true,
                 },
                 size,
                 kind,

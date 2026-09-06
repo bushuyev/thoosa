@@ -905,6 +905,8 @@ where
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ResourcesBatch::build_batch_stream"))]
     fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>, descr: &'static str) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 

@@ -20,6 +20,26 @@ pub trait WorkerOutput:Any + Send + Sync + Debug{
 
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DebugOutput {
+    debug_data_snap:Vec<String>
+}
+
+impl DebugOutput {
+    pub fn new(debug_data_snap: &Vec<String>) -> Self {
+        Self { debug_data_snap:debug_data_snap.clone() }
+    }
+
+    pub fn debug_data_snap(&self) -> &Vec<String> {
+        &self.debug_data_snap
+    }
+}
+
+#[typetag::serde]
+impl WorkerOutput for DebugOutput {
+
+}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
