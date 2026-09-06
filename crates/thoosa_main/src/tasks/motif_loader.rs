@@ -253,9 +253,13 @@ impl SyncMotifLoaderInput {
         find_motifs_run_config_id: RunConfigId,
         channel: i64,
         window: u32,
-        loaded_resources: Vec<LoadedMotifResource>,
+        mut loaded_resources: Vec<LoadedMotifResource>,
         descr: String,
     ) -> Self {
+        for loaded_resource in &mut loaded_resources {
+            loaded_resource.raw_tensor.no_drop();
+        }
+
         Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr }
     }
 }
@@ -1468,7 +1472,7 @@ impl SyncStage for SyncLoadRandomSlices {
 }
 
 #[derive(Debug)]
-struct SyncLoadRandomSlicesDynStage<C> {
+struct SyncLoadRandomSlicesDynStage<C> {//TODO remove, use SyncLoadRandomSlices directly
     stage: Arc<DynSyncStageEnum<SyncLoadRandomSlices>>,
     pd: PhantomData<C>,
 }

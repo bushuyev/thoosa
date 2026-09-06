@@ -413,7 +413,10 @@ pub struct StackAppliedLabelNetsInput {
 }
 
 impl StackAppliedLabelNetsInput {
-    fn new(id: SynKey, label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>, device_idx: usize) -> Self {
+    fn new(id: SynKey, mut label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>, device_idx: usize) -> Self {
+        for t in &mut label_outputs {
+            t.no_drop();
+        }
         Self { id, device_idx, label_outputs }
     }
 }
