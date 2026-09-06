@@ -191,7 +191,6 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 pub struct KeyHolder {
     pub key:u64,
     pub device_idx:usize,
-    drop_target:bool,
     count:Arc<()>
 }
 
@@ -201,7 +200,6 @@ impl Clone for KeyHolder {
         KeyHolder {
             key:  self.key,
             device_idx: self.device_idx,
-            drop_target: self.drop_target,
             count: Arc::clone(&self.count),
         }
     }
@@ -209,8 +207,8 @@ impl Clone for KeyHolder {
 
 impl Drop for KeyHolder {
     fn drop(&mut self) {
-        debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?} self.drop_target={} GlobalCtx::is_installed()={}", self.device_idx, Arc::strong_count(&self.count), self.drop_target, GlobalCtx::is_installed() );
-        if /*self.drop_target && */self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 { //is_installed is redundant - it's to check if it's main thread but drop_target should not be true on worker?
+        debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?} GlobalCtx::is_installed()={}", self.device_idx, Arc::strong_count(&self.count), GlobalCtx::is_installed() );
+        if self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 {
             debug!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
 
             let device_idx = self.device_idx;
@@ -460,7 +458,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
                     key,
                     device_idx: tho_device_idx,
                     count,
-                    drop_target: false,
                 },
                 size,
                 kind,
