@@ -162,10 +162,11 @@ fn get_test_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
     use super::run_ipc_test;
     use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
-    use crate::ipc::worker_msg::WorkerInput;
+    use crate::ipc::worker_msg::{DebugOutput, OpResult, WorkerInput};
     use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
     use crate::runner::global_ctx::GlobalCtx;
@@ -652,6 +653,7 @@ mod tests {
                         Device::Cuda(0).into(),
                         true,
                     ).await);
+
                     run_mul_task_invocations(
                         Arc::clone(&load_and_clc),
                         resources.as_slice(),
@@ -668,7 +670,42 @@ mod tests {
                         false,
                     ).await?;
 
-                    cuda_actor.debug_worker().await?;
+                    let msg = cuda_actor.debug_worker().await?;
+                    debug!("test_load_and_clc_oom_dump_to_cpu_and_splits_tensor_ipc: msg={msg:?}");
+
+                    let OpResult::Ok(Some(debug_data)) = msg.status else {
+                        panic!("no debug data");
+                    };
+
+                    let Ok(debug_data) = (debug_data as Box<dyn Any>).downcast::<DebugOutput>() else {
+                        panic!("Can't downcast to DebugOutput");
+                    };
+
+                    //checking that worker stage receives data splits
+                    let expected_debug_data = [
+                            "SyncClcStage::do_run_with_state: input.size=[3, 100]",//original call without adjuster
+                            "SyncClcStage::do_run_with_state: input.size=[3, 100]",//call after dump_all_to_cpu with full size input
+                            "SyncClcStage::do_run_with_state: input.size=[3, 50]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 25]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 12]",
+                            "SyncClcStage::do_run_with_state: input.size=[3, 4]",
+                    ];
+                    let debug_data_snap = debug_data.debug_data_snap();
+                    assert_eq!(expected_debug_data.len(), debug_data_snap.len());
+
+
+                    for (expected, actual) in expected_debug_data.into_iter().zip(debug_data_snap.into_iter()) {
+                        assert_eq!(expected, actual);
+                    }
+
+
 
                     Ok::<(), ThoError>(())
                 }.await

@@ -377,10 +377,14 @@ pub struct MotifStatsLoadedChannelsInput {
 impl MotifStatsLoadedChannelsInput {
     fn new(
         id: SynKey,
-        channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
+        mut channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
         metrics: Vec<Metrics>,
         quantiles: Option<Vec<f32>>,
     ) -> Self {
+        // MotifStatsLoadedChannelsInput is to be consumed
+        for t in &mut channels_motifs_slices {
+            t.no_drop();
+        }
         Self { id, channels_motifs_slices, metrics, quantiles }
     }
 

@@ -623,7 +623,10 @@ pub struct StackAppliedMotifNetsInput {
 }
 
 impl StackAppliedMotifNetsInput {
-    pub fn new(id: SynKey, motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>, device_idx: usize) -> Self {
+    pub fn new(id: SynKey,mut motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>, device_idx: usize) -> Self {
+        for t in &mut motif_nets_applied {
+            t.no_drop();
+        }
         Self {
             id,
             device_idx,
