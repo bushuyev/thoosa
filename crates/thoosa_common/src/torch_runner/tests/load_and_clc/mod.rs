@@ -18,7 +18,7 @@ use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder
 use crate::utils::lin_for_size;
 use async_trait::async_trait;
 pub(crate) use clc::sync_clc_endpoint_init;
-use clc::{ClcDynSyncStage, ClcStage, ClcStageOutput, SyncClcStage, SyncClcTaskInit};
+use clc::{ClcDynSyncStage, ClcStage, ClcStageOutput, SyncClcStage, SyncClcStageInit};
 use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};

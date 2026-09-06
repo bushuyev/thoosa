@@ -294,7 +294,7 @@ impl GlobalCtx {
         GLOBAL_CTX.get().expect("call `init_devices` first")
     }
 
-    pub fn is_installed() -> bool {//used to check if it's not worker
+    pub fn is_installed() -> bool {//used to check if it's not worker in KeyHolder::drop, replace with KeyHolder::is_main bool field?
         GLOBAL_CTX.get().is_some()
     }
 

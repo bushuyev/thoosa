@@ -791,7 +791,37 @@ mod tests {
         )
     }
 
+    struct RunAllSettings {
+        resources_per_label:usize,
+        pure_sets_len: [(usize, bool); 2],
+        train_resource_group: String,
+        valid_resource_group: String,
+        motifs_epochs: u32,
+        labels_epochs: u32,
+        final_epochs: u32,
+        train_motifs_opt_config: Arc<OptConfig>,
+        train_labels_opt_config: Arc<OptConfig>,
+        train_final_opt_config: Arc<OptConfig>,
+        max_batch_size: u32,
+    }
+
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
+        let settings = RunAllSettings {
+            resources_per_label: 30,
+            pure_sets_len: [(10, true), (20, true)],
+            train_resource_group: "pure group 20".to_string(),
+            valid_resource_group: "pure group 10".to_string(),
+
+            motifs_epochs : 3,
+            labels_epochs : 5,
+            final_epochs : 5,
+            train_motifs_opt_config : Arc::new(OptConfig::new(5, 3)),
+            train_labels_opt_config : Arc::new(OptConfig::new(5, 3)),
+            train_final_opt_config : Arc::new(OptConfig::new(5, 3)),
+            max_batch_size : 10,
+        };
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let test_dir = Path::new("/tmp").join(test_name);
@@ -816,7 +846,7 @@ mod tests {
 
 
         let prepare_stage = Arc::new(PrepareRunAllData);
-        let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), 300));
+        let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), settings.resources_per_label));
         let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
         let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
 
@@ -843,7 +873,7 @@ mod tests {
             None,
             true,
             |t: &Transaction|{
-                for pure_sets_len in [(100, true), (200, true)] {
+                for pure_sets_len in settings.pure_sets_len {
                     SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
                 }
 
@@ -868,11 +898,11 @@ mod tests {
         let mut ctx = RunCtxImpl::new(1, "test_run_all");
 
         let run_all_args = RunAllArgs{
-            find_resources: "group:pure group 100".to_string(),
-            select_resources: "group:pure group 200".to_string(),
+            find_resources: format!("group:{}", settings.train_resource_group),
+            select_resources: format!("group:{}", settings.valid_resource_group),
             max_chunk_size: 100000,
-            train_resource_group: "pure group 200".to_string(),
-            valid_resource_group: "pure group 100".to_string(),
+            train_resource_group: settings.train_resource_group.to_string(),
+            valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
             max_motif_net_loss: 0.4,
             selected_motif_nets_limit: None,
@@ -882,7 +912,7 @@ mod tests {
             labels: None,
         };
 
-        let all_configs = run_all_config_test_1(&run_all_args);
+        let all_configs = run_all_config_test_1(&run_all_args, &settings);
 
         let r = panic_to_err_async!({run_all(
             &ws,
@@ -919,7 +949,24 @@ mod tests {
         Ok((r.0, r.1))
     }
 
-    fn run_all_config_test_1(run_all_args: &RunAllArgs) -> AllConfigs {
+    fn run_all_config_test_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
+        // let motifs_epochs = 10;
+        // let labels_epochs = 50;
+        // let labels_epochs = 150;
+        // let train_motifs_opt_config = OptConfig::new(10, 3);
+        // let train_labels_opt_config = OptConfig::new(30, 10);
+        // let train_final_opt_config = OptConfig::new(200, 30);
+        //let max_batch_size = 40;
+
+        // let motifs_epochs = 3;
+        // let labels_epochs = 5;
+        // let labels_epochs = 5;
+        // let train_motifs_opt_config = OptConfig::new(5, 3);
+        // let train_labels_opt_config = OptConfig::new(5, 3);
+        // let train_final_opt_config = OptConfig::new(5, 3);
+        // let max_batch_size = 40;
+
+
         let find_motifs_run_config_range_or_value = run_all_find_motifs_config_test_1::<FindMotifsRunConfigFields>();
         let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
         let select_motifs_run_config = run_all_select_motifs_config_test_1::<SelectMotifsRunConfigFields>();
@@ -942,50 +989,25 @@ mod tests {
         };
 
         /////////////////////train_motifs
-        let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(30),
-            batch_size: RangeOrValue::Value(20),
-            // lr: RangeOrValue::Value(0.0001),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
-            min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Value(0.9),
-                beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
-            })),
-        };
-        let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(50),
-            batch_size: RangeOrValue::Value(40),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
-            min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Value(0.9),
-                beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
-            })),
-        };
-        let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(150),
-            batch_size: RangeOrValue::Range { range: Range { start: 10, end: 40 }, step: None },
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
-            min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
-                beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
-            })),
-        };
+
+
 
         let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
             id: None,
-            common_training_args: common_training_args_for_motifs,
+            common_training_args: CommonTrainingRunConfigRangeOrValue {
+                epochs: RangeOrValue::Value(profile.motifs_epochs),
+                batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
+                // lr: RangeOrValue::Value(0.0001),
+                lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+                patience: RangeOrValue::Value(10),
+                min_delta: RangeOrValue::Value(1e-4_f32),
+                optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                    beta1: RangeOrValue::Value(0.9),
+                    beta2: RangeOrValue::Value(0.999),
+                    wd: RangeOrValue::Value(0.01),
+                    amsgrad: RangeOrValue::Value(false),
+                })),
+            },
             // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
             net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
                 a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
@@ -1000,7 +1022,19 @@ mod tests {
         //////////////////////train labels
         let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
             id: None,
-            common_training_args: common_training_args_for_labels,
+            common_training_args: CommonTrainingRunConfigRangeOrValue {
+                epochs: RangeOrValue::Value(profile.labels_epochs),
+                batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
+                lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+                patience: RangeOrValue::Value(10),
+                min_delta: RangeOrValue::Value(1e-4_f32),
+                optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                    beta1: RangeOrValue::Value(0.9),
+                    beta2: RangeOrValue::Value(0.999),
+                    wd: RangeOrValue::Value(0.01),
+                    amsgrad: RangeOrValue::Value(false),
+                })),
+            },
 
             net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
                 num_conv_layers: RangeOrValue::Range { range: Range { start: 8, end: 16 }, step: None },
@@ -1028,10 +1062,22 @@ mod tests {
         //////////////////////train final
         let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
             id: None,
-            common_training_args: common_training_args_for_final,
+            common_training_args: CommonTrainingRunConfigRangeOrValue {
+                epochs: RangeOrValue::Value(profile.final_epochs),
+                batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
+                lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+                patience: RangeOrValue::Value(10),
+                min_delta: RangeOrValue::Value(1e-4_f32),
+                optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                    beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
+                    beta2: RangeOrValue::Value(0.999),
+                    wd: RangeOrValue::Value(0.01),
+                    amsgrad: RangeOrValue::Value(false),
+                })),
+            },
             net: FinalNetArgsRangeOrValue {
-                num_layers: RangeOrValue::Range { range: Range { start: 20, end: 100 }, step: None },
-                mid_features: RangeOrValue::Range { range: Range { start: 10, end: 1000 }, step: None },
+                num_layers: RangeOrValue::Range { range: Range { start: 2, end: 100 }, step: None },
+                mid_features: RangeOrValue::Range { range: Range { start: 2, end: 100 }, step: None },
             },
         };
 
@@ -1040,9 +1086,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(100, 30)),
+            train_motifs_opt_config:Arc::clone(&profile.train_motifs_opt_config),
+            train_labels_opt_config: Arc::clone(&profile.train_labels_opt_config),
+            train_final_opt_config: Arc::clone(&profile.train_final_opt_config),
         }
     }
 
