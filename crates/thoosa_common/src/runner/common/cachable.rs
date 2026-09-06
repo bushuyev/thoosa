@@ -1,6 +1,7 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
 
+use std::backtrace::Backtrace;
 use crate as thoosa_common;
 use std::borrow::Borrow;
 
@@ -24,7 +25,7 @@ use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use thoosa_shared::Cause;
+use thoosa_shared::{n_trace_line, Cause};
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
@@ -675,7 +676,7 @@ where
         }
 
         if self.is_all_on_cpu_resident() {
-            debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx} is_all_on_cpu_resident", self.id);
+            debug!("DevicesWrap::dump_to_cpu: 0.  id={:?} device_idx={device_idx} is_all_on_cpu_resident", self.id);
 
             self.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
             return Ok(());
@@ -683,7 +684,7 @@ where
 
         assert_ne!(device_idx, 0);
 
-        debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}", self.id);
+        debug!("DevicesWrap::dump_to_cpu: 0.  id={:?} device_idx={device_idx}", self.id);
 
         if let Some(Ok(mut lock)) = self.cached_data.get(device_idx).map(|v| v.try_write()) {
             if track_await(self.cached_data[0].read()).await.is_none() {
@@ -691,7 +692,7 @@ where
                     track_await(self.ensure_copied(0, data, false)).await?;
                 }
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
-                debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
+                debug!("DevicesWrap::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
                 // o.adrop().await;
                 drop(o);
 
@@ -700,7 +701,7 @@ where
 
             } else {
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
-                debug!("DataCacheWrapper::dump_to_cpu: id={:?} dropping {o:?}", self.id);
+                debug!("DevicesWrap::dump_to_cpu: id={:?} dropping {o:?}", self.id);
                 // o.adrop().await;
                 drop(o);
 
@@ -709,7 +710,8 @@ where
         } else {
             // If it's locked, assume it's the current task's input. DumpToCpu only runs with
             // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
-            warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data)
+            warn!("DevicesWrap::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data);
+            debug!("DevicesWrap::dump_to_cpu: id={:?} trace: {}", self.id, n_trace_line(&Backtrace::capture(), 50));
         }
 
         let is_all_on_cpu = self.is_all_on_cpu_resident();
@@ -718,7 +720,7 @@ where
             self.mark_on_cpu_since_if_all_on_cpu(age);
         }
 
-        debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}", self.id);
+        debug!("DevicesWrap::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}", self.id);
 
         Ok(())
     }
@@ -737,7 +739,7 @@ where
         let on_cpu_since = perf_log!(sync_read_lock!(&self.on_cpu_since), "DevicesWrap::is_on_cpu_before on_cpu_since.read");
         let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age).unwrap_or(false);
 
-        debug!("DataCacheWrapper::is_on_cpu_before: self.id={:?} self.on_cpu_since={:?} r={r} threshold_age={threshold_age}", self.id, self.on_cpu_since);
+        debug!("DevicesWrap::is_on_cpu_before: self.id={:?} self.on_cpu_since={:?} r={r} threshold_age={threshold_age}", self.id, self.on_cpu_since);
 
         r
     }
@@ -786,8 +788,8 @@ where
     ) -> Result<RwLockReadGuard<'_, O>, ThoError>
     {
         //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
-        debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
-        trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
+        debug!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
+        trace!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
         assert!(self.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", self.cached_data.len(), self.id);
 
         //dump_to_cpu can only be executed either from DumpToCpu::adjust, but it's running with set_max_other_parallel(0) so nobody should be loading anything at the momemnt, or from run_cached clean-up at thoosa_common/src/runner/common/cachable.rs:95 when the context being dropped is the last one holding
@@ -805,7 +807,7 @@ where
             self.mark_not_resident_on_device(to_tho_device_idx);
         }
 
-        debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
+        debug!("DevicesWrap::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
 
         for (source_device_idx, op) in self.cached_data.iter().enumerate() {
             if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
@@ -833,10 +835,10 @@ where
 
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
         async move {
-            trace!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", self.id);
+            trace!("DevicesWrap::is_all_on_cpu: self.id={:?}", self.id);
 
             let is_all_on_cpu = self.is_all_on_cpu_resident();
-            debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?} is_all_on_cpu={is_all_on_cpu}", self.id);
+            debug!("DevicesWrap::is_all_on_cpu: self.id={:?} is_all_on_cpu={is_all_on_cpu}", self.id);
             is_all_on_cpu
         }
     }

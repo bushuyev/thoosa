@@ -82,6 +82,7 @@ impl BorrowRef for RawTensorLoaderInputWrapper {
 
 
 ///it always loads data into CPU tensors which are copied to gpu cells of its DevicesWrap output when BorrowRef::borrow_to is invoked from thoosa_common::runner::oom_handler::run_stage_borrowed
+/// it needs to be on main side to retain CPU tensors when worker is restarted
 #[derive(cached_derive::Cached, Named)]
 #[cache_name = "RawTensors"]
 pub struct RawTensorLoader<C>

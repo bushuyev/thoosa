@@ -61,22 +61,22 @@ pub(crate) struct ClcDynSyncStage {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncClcTaskInit {
+pub struct SyncClcStageInit {
     id: SynKey, k: f64, k_i64: Option<i64>, dim: i64, kind: String, fail_until: Vec<FailUntil>, use_matmul: bool
 }
 
 // Register the CLC configuration for postcard's typed install message.
 #[typetag::serde]
-impl WorkerInput for SyncClcTaskInit {}
+impl WorkerInput for SyncClcStageInit {}
 
-impl SyncClcTaskInit {
+impl SyncClcStageInit {
     pub fn new<K>(id: SynKey, k: K, dim: i64, kind: Kind, fail_until: Vec<FailUntil>, use_matmul: bool) ->Self
     where
         K: ToPrimitive + Copy,
     {
         Self {
             id,
-            k: k.to_f64().expect("SyncClcTaskInit::new: multiplier must convert to f64"),
+            k: k.to_f64().expect("SyncClcStageInit::new: multiplier must convert to f64"),
             k_i64: k.to_i64(),
             dim,
             kind: kind_to_worker_name(kind).to_string(),
@@ -94,7 +94,7 @@ impl SyncClcStage {
         if GlobalCtx::global().is_ipc() {
             let (dumped, fail_until): (Vec<_>, Vec<_>) = fail_until.into_iter().partition(|value| *value == FailUntil::DumpedToCpu);
             // Preserve the caller's tensor kind so IPC reconstructs the same multiplier state as local execution.
-            let init = SyncClcTaskInit::new(id.clone(), k, dim, kind, fail_until, use_matmul);
+            let init = SyncClcStageInit::new(id.clone(), k, dim, kind, fail_until, use_matmul);
             ClcDynSyncStage {
                 id,
                 fail_until_dump_to_cpu: !dumped.is_empty(),
@@ -143,13 +143,13 @@ impl SyncClcStage {
 
         Self { id, k: Mutex::new(k), fail_until, use_matmul }
     }
-    pub fn init(init: SyncClcTaskInit) -> Result<SyncClcStage, ThoError> {
-        let SyncClcTaskInit{id, k, k_i64, dim, kind, fail_until, use_matmul} = init;
+    pub fn init(init: SyncClcStageInit) -> Result<SyncClcStage, ThoError> {
+        let SyncClcStageInit {id, k, k_i64, dim, kind, fail_until, use_matmul} = init;
         let kind = kind_from_worker_name(&kind)?;
         // Integer tensors require an integer scalar; using the postcard f64 value would make LibTorch reject an in-place Float-to-Long multiplication.
         match kind {
             Kind::Int | Kind::Int64 => Ok(SyncClcStage::new_local(
-                id, k_i64.ok_or_else(|| ThoError::new("SyncClcTaskInit integer multiplier cannot convert to i64"))?, fail_until, dim, kind, Cuda(0).into(), use_matmul
+                id, k_i64.ok_or_else(|| ThoError::new("SyncClcStageInit integer multiplier cannot convert to i64"))?, fail_until, dim, kind, Cuda(0).into(), use_matmul
             )),
             _ => Ok(SyncClcStage::new_local(
                 id, k, fail_until, dim, kind, Cuda(0).into(), use_matmul
@@ -348,7 +348,7 @@ impl StageWithState for ClcDynSyncStage {
 
 pub(crate) fn sync_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &crate::ipc::cuda_wokrer::AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn std::any::Any> = init;
-    let init = init.downcast::<SyncClcTaskInit>().expect("SyncClcStage endpoint received an unexpected initializer type");
+    let init = init.downcast::<SyncClcStageInit>().expect("SyncClcStage endpoint received an unexpected initializer type");
     async move {
         // WorkerWrapperWithState keeps the multiplier on the worker across calls.
         Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncClcStage::init(*init)?), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)

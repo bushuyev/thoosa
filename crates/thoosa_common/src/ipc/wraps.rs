@@ -150,7 +150,7 @@ where
     {
         debug!("SyncStageIpcWrapper::do_run: input={input:?}");
 
-        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
+        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
 
         let a = (self.inpf)(input.as_ref());
