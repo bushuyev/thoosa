@@ -93,7 +93,7 @@ fn main() -> Result<(), ThoError> {
     let cdt = cdt_for_dir();
     let app_configs = WsConfigs::new(20, 684400, 200);
 
-    CudaWorker::run_if_sock(&cdt, &app_configs, cuda_worker_endpoint_inits())?;
+    // CudaWorker::run_if_sock(&cdt, &app_configs, cuda_worker_endpoint_inits())?;
 
     println!("CudaWorker::run_if_sock: running main");
 
@@ -127,13 +127,13 @@ fn main() -> Result<(), ThoError> {
         .enable_all()
         .build()
         .map_err(|err| {
-            error!("main: {err:?}");
+            // error!("main: {err:?}");
             ThoError::from_error("tokio runtime build failed", err)
         })?;
 
 
     let run_result = rt.block_on(async move {
-        let cdt = cdt_for_dir();
+        // let cdt = cdt_for_dir();
 
         track_await(run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
