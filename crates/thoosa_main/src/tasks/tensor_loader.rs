@@ -71,13 +71,6 @@ impl BorrowRef for RawTensorLoaderInputWrapper {
         std::future::ready(Ok(self.resource.as_ref().clone()))
     }
 
-    fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Resource metadata has no tensor cache to move back to CPU.
-        async { Ok(()) }
-    }
 }
 
 

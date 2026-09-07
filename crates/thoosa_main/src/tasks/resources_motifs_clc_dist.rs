@@ -287,20 +287,6 @@ impl BorrowRef for ClcResourcesMotifsDistInputDeviceWrapper {
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Dump all cached components because each can independently retain GPU memory.
-        async move {
-            for tensor in &self.batch {
-                BorrowRef::dump_to_cpu(tensor, to_tho_device_idx).await?;
-            }
-            BorrowRef::dump_to_cpu(&self.stacked_motifs, to_tho_device_idx).await?;
-            BorrowRef::dump_to_cpu(&self.motifs_stats, to_tho_device_idx).await?;
-            Ok(())
-        }
-    }
 }
 
 impl SelectRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {

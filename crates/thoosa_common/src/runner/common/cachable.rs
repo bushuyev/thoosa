@@ -350,13 +350,6 @@ where
             )))
         }
     }
-
-    fn dump_to_cpu<'o>(&'o self, tho_device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
-    where
-        Self: 'o
-    {
-        DevicesWrap::dump_to_cpu(self, tho_device_idx)
-    }
 }
 
 impl <S, O> SelectRef<S> for DevicesWrap<O>
@@ -1050,9 +1043,6 @@ pub trait BorrowRef
     where
         Self:'o;
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self:'o;
 }
 
 
@@ -1070,14 +1060,6 @@ where
             self.as_ref().borrow_to(to_tho_device_idx).await
         }
 
-    }
-
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
-    where
-        Self: 'o
-    {
-        // Executor inputs are Arc-wrapped, so forwarding is required to reach DevicesWrap cleanup.
-        self.as_ref().dump_to_cpu(to_tho_device_idx)
     }
 }
 

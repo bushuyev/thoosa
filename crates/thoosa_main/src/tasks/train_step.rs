@@ -474,13 +474,6 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Direct tensor inputs are not backed by DevicesWrap caches to purge.
-        async { Ok(()) }
-    }
 }
 
 #[derive(Debug)]
@@ -516,13 +509,6 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
         self.input.borrow_to(to_tho_device_idx)
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Keep wrapper cleanup behavior identical to its direct input.
-        BorrowRef::dump_to_cpu(&self.input, to_tho_device_idx)
-    }
 }
 
 impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWrapper<DI, DO> {
