@@ -767,17 +767,6 @@ impl thoosa_common::runner::common::cachable::BorrowRef for SyncMotifBatchInputW
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Both cached inputs can retain GPU tensors after the sync stage completes.
-        async move {
-            thoosa_common::runner::common::cachable::BorrowRef::dump_to_cpu(&self.motifs, to_tho_device_idx).await?;
-            thoosa_common::runner::common::cachable::BorrowRef::dump_to_cpu(&self.random_slices, to_tho_device_idx).await?;
-            Ok(())
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1043,13 +1032,6 @@ impl thoosa_common::runner::common::cachable::BorrowRef for SplitMotifIntoTrainV
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Forward cleanup to the cached motif borrowed by this wrapper.
-        thoosa_common::runner::common::cachable::BorrowRef::dump_to_cpu(&self.motif, to_tho_device_idx)
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

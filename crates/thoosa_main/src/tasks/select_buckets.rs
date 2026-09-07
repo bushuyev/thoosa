@@ -375,13 +375,6 @@ impl BorrowRef for SelectBucketsSyncInputWrapper {
         async move { Ok(SelectBucketsSyncInput::new(&self.select_config)) }
     }
 
-    fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // This wrapper contains configuration only and owns no device-cached data.
-        async { Ok(()) }
-    }
 }
 
 #[derive(Debug)]
