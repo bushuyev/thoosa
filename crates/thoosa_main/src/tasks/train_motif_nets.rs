@@ -595,9 +595,6 @@ where
                 let motif_meta = track_await(motif.extra()).await?;
                 let motif_width = motif_meta.window;
 
-
-
-
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
 
                 debug!("TrainMotifNets::run: motif={motif:?}");
@@ -1704,7 +1701,7 @@ mod tests {
                 let params_for_module = params.clone();
                 let x_f: Arc<TrainStepXFn<InDims>> = Arc::new(Box::new(|batch| batch));
                 let (stage, _): (TrainStep<TrainStepXFn<InDims>, InDims, OutDims, WokerRunCtx>, ()) = TrainStep::new_local(
-                    Cuda(0).into(),
+                    tho_device.clone(),
                     move |(), device| async move {
                         let config = ModConfig::new(
                             AdamW::default().into(),
