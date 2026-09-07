@@ -113,6 +113,7 @@ use thoosa_shared::perf_logging::{PERF, SyncMakeWriter, format_perf_map, init_tr
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use thoosa_shared::tracked_await::snapshot_not_ready;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shims::context::tho_cu_reset;
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 
@@ -368,9 +369,9 @@ where
     ) -> Result<(), ThoError>
 {
     // console_subscriber::init();
-    if log::log_enabled!(log::Level::Trace) {
-        reset_print_options();
-    }
+    // if log::log_enabled!(log::Level::Trace) {
+    //     reset_print_options();
+    // }
     //set_oom_score_adj(-1000);//TODO conf, needs sudo
 
     //gpt Navigation note: project binaries such as thoosa_bird_clef provide the closures above.
@@ -949,7 +950,11 @@ where
 
         //gdb --args target/x86_64-unknown-linux-gnu/debug/thoosa_hbac --term-logger-level=DEBUG --base-path=/tmp/ --resource-pattern=xxx say-hello
         Some(SayHello(args)) => {
-            debug!("args={:?}", args);
+            debug!("args={:?} cudnn_is_available={}", args, tch::Cuda::cudnn_is_available());
+
+            unsafe {
+                tho_cu_reset(0);
+            }
 
             // let dir = read_dir(ws.read().tensors_path())?;
             //
