@@ -6,7 +6,7 @@ use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterCon
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
 
 use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use futures_util::{StreamExt, future::BoxFuture};
@@ -196,6 +196,15 @@ where
     async fn new(&self, run_config: RC, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, NP), ThoError>;
 }
 
+// A trial must release the registry's strong stage reference even when it errors or is cancelled.
+struct TrainStepCacheGuard(RegisteredCacheHandle);
+
+impl Drop for TrainStepCacheGuard {
+    fn drop(&mut self) {
+        GlobalCtx::global().remove_cache(self.0.name());
+    }
+}
+
 pub struct TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + Adjustable + 'static,
@@ -280,7 +289,7 @@ where
             let train_step = Arc::new(train_step);
             static STEP_COUNT:AtomicU32 = AtomicU32::new(0);//TODO
             let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
-            GlobalCtx::global().register_cache((step_id, Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>));
+            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((step_id, Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
 
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
@@ -323,9 +332,11 @@ where
 
                 // debug!("TrainNet::run_inner, train: descr={descr}  next={:?}", batches.next().await);
 
-                while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next())
+                while let Some(batch_result) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
+                    // A failed batch invalidates the trial instead of ending this epoch early.
+                    let (x_t_0, lengths, expected_y) = batch_result?;
                     let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, saved_best)));
                     saved_best = false;
 
@@ -361,9 +372,11 @@ where
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
 
-                    while let Some(Ok((x_t_0, lengths, y_t))) = batches.next()
+                    while let Some(batch_result) = batches.next()
                         .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
                         .await {
+                        // Never score a configuration using only the validation batches before an error.
+                        let (x_t_0, lengths, y_t) = batch_result?;
                         let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false, false)));
                         let input_context = TrainStepSplitsContext::new(input.batch_len()?);
                         let output = oom_handler.run(
@@ -416,7 +429,6 @@ where
                 collect_eta_record_completion(epochs_eta_guard.id());
             }
 
-            GlobalCtx::global().remove_cache(step_id);
             if saved_best {
                 // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO
                 // vs_guard.load(&best_checkpoint_path)?;
@@ -636,6 +648,140 @@ pub mod tests {
             ).await?;
             Ok((DynSyncStageWithStateEnum::Local(Arc::new(stage)), ()))
         }
+    }
+
+    type TestTrainStep = TrainStep<TrainStepXFn<DummyX>, DummyX, DummyY, MockRunCtx>;
+    type TestBatch = mock_async_data_batch::MockTestBatch<DummyX, DummyY, MockRunCtx>;
+    type TestBatchFactory = Box<dyn for<'a> Fn(MockRunCtx, &'a DummyRunConfig) -> BoxFuture<'a, Result<Arc<TestBatch>, ThoError>> + Send + Sync>;
+    type TestTrial = BoxFuture<'static, Result<(thoosa_shared::tmp_file::TmpFile, f32, ()), ThoError>>;
+
+    mod mock_train_step_factory {
+        use super::*;
+
+        mockall::mock! {
+            #[derive(Debug)]
+            pub TrainStepFactory {}
+
+            #[async_trait]
+            impl TrainStepFactory<DummyX, DummyY, MockRunCtx, (), DummyRunConfig> for TrainStepFactory {
+                async fn new(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TestTrainStep>, ()), ThoError>;
+            }
+        }
+
+        pub struct MockTrainStepFactoryBuilder {
+            mock: MockTrainStepFactory,
+        }
+
+        impl MockTrainStepFactoryBuilder {
+            pub fn new(stage: DynSyncStageWithStateEnum<TestTrainStep>) -> Self {
+                let mut mock = MockTrainStepFactory::default();
+                // Transfer the only strong stage reference to the trial so a leaked cache keeps the weak probe alive.
+                mock.expect_new().times(1).return_once(move |_, _, _| Ok((stage, ())));
+                Self { mock }
+            }
+
+            pub fn finish(self) -> MockTrainStepFactory {
+                self.mock
+            }
+        }
+    }
+
+    async fn trial_with_batch_factory(batch: TestBatchFactory) -> Result<(TestTrial, std::sync::Weak<TestTrainStep>), ThoError> {
+        let run_config = DummyRunConfig::new(None, 1);
+        let (stage, ()) = DummyTrainStepFactory.new(run_config.clone(), mock_run_ctx::default(1), PathBuf::from("/tmp/thoosa_train_net_cleanup.safetensors")).await?;
+        let DynSyncStageWithStateEnum::Local(local_stage) = &stage else {
+            panic!("test factory must return a local stage");
+        };
+        let stage_ref = Arc::downgrade(local_stage);
+        let factory = mock_train_step_factory::MockTrainStepFactoryBuilder::new(stage).finish();
+        let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
+            thoosa_shared::run_configs::GridRunConfigs::new(
+                thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()),
+                vec![],
+            ),
+            vec![],
+        );
+        let train_net = Arc::new(TrainNet::new(batch, Arc::new(factory), Arc::new(OptConfig::new(1, 1)), Arc::new(run_configs), |_rc: &DummyRunConfig| 1, 1, "cleanup regression".to_string()));
+        // Exercise the trial directly: opt_train intentionally converts failed trials to a penalty score.
+        Ok((train_net.run_inner(mock_run_ctx::default(1), 1, run_config, 1, "cleanup regression".to_string()), stage_ref))
+    }
+
+    fn batch_factory_with_stream_errors(train_error: Option<&'static str>, valid_error: Option<&'static str>) -> TestBatchFactory {
+        let make_batches = |error: Option<&'static str>| {
+            // Include a successful batch first so an error cannot silently return a partial epoch or validation score.
+            make_stream().chain(stream::iter(error.into_iter().map(|msg| Err(ThoError::new(msg))))).boxed()
+        };
+        let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
+            .with_train_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(train_error))
+            .with_valid_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(valid_error))
+            .finish());
+        Box::new(move |_ctx, _rc| ready(Ok(Arc::clone(&batch))).boxed())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_releases_stage_after_success() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let (trial, stage_ref) = trial_with_batch_factory(batch_factory_with_stream_errors(None, None)).await?;
+        trial.await?;
+        assert!(stage_ref.upgrade().is_none(), "successful trial retained its training stage");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_releases_stage_after_batch_factory_error() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let (trial, stage_ref) = trial_with_batch_factory(Box::new(|_ctx, _rc| ready(Err(ThoError::new("batch factory failed"))).boxed())).await?;
+        assert_eq!(trial.await.unwrap_err().msg, "batch factory failed");
+        assert!(stage_ref.upgrade().is_none(), "failed batch factory retained its training stage");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_propagates_training_batch_error() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let (trial, stage_ref) = trial_with_batch_factory(batch_factory_with_stream_errors(Some("training batch failed"), None)).await?;
+        assert_eq!(trial.await.unwrap_err().msg, "training batch failed");
+        assert!(stage_ref.upgrade().is_none(), "training batch error retained its training stage");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_propagates_validation_batch_error() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let (trial, stage_ref) = trial_with_batch_factory(batch_factory_with_stream_errors(None, Some("validation batch failed"))).await?;
+        assert_eq!(trial.await.unwrap_err().msg, "validation batch failed");
+        assert!(stage_ref.upgrade().is_none(), "validation batch error retained its training stage");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_releases_stage_after_cancellation() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let started_for_batch = Arc::clone(&started);
+        let (mut trial, stage_ref) = trial_with_batch_factory(Box::new(move |_ctx, _rc| {
+            let started = Arc::clone(&started_for_batch);
+            async move {
+                started.notify_one();
+                std::future::pending().await
+            }.boxed()
+        })).await?;
+        // Cancel only after registration, while the batch factory is suspended at an await.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::select! {
+                _ = started.notified() => {},
+                result = &mut trial => panic!("trial finished before cancellation: {result:?}"),
+            }
+        }).await.expect("batch factory was not reached");
+        assert!(stage_ref.upgrade().is_some(), "trial must still own its stage before cancellation");
+        drop(trial);
+        assert!(stage_ref.upgrade().is_none(), "cancelled trial retained its training stage");
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
