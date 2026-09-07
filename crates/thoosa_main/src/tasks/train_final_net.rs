@@ -45,7 +45,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
+use thoosa_common::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
 use thoosa_common::train_nets::final_net;
 use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetsRunConfigResult};
 use thoosa_common::ws::Workspace;
@@ -61,6 +61,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
 use thoosa_store::Store;
+use crate::tasks::instance_cache::InstanceCache;
 
 pub(crate) const TRAIN_FINAL_STEP_ENDPOINT: &str = "TrainFinalStep";
 
@@ -127,20 +128,7 @@ where
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
         debug!("TrainFinalNet::new: train_label_nets_run_config_ids={train_label_nets_run_config_ids:?}");
-        //gpt Collect all label-net output run ids produced by the input train_label_nets runs.
-        // let label_net_run_config_ids = {
-        //     let store_guard = store;
-        //     let mut run_config_ids = HashSet::new();
-        //     for run_config_id in &train_label_nets_run_config_ids {
-        //         run_config_ids.extend(track_await(store_guard.list_output_run_config_ids(*run_config_id)).await?);
-        //     }
-        //     let mut run_config_ids = run_config_ids.into_iter().collect::<Vec<_>>();
-        //     run_config_ids.sort();
-        //     run_config_ids
-        // };
-        // if label_net_run_config_ids.is_empty() {
-        //     return Err(ThoError::new("TrainFinalNet::new: no label nets found"));
-        // }
+
 
         Ok(Self {
             train_label_nets_run_config_ids,
@@ -211,7 +199,7 @@ where
         let store = Arc::clone(&self.store);
 
         async move {
-            //gpt Load train/valid logits resources and validate label vector sizes.
+            //Load train/valid logits resources and validate label vector sizes.
             let resources_config = input.resources_config().clone();
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
                 track_await(resources_config.to_resources(&store)).await?;
@@ -225,7 +213,6 @@ where
                     return Err(ThoError::new("TrainFinalNet::run: inconsistent label vector sizes"));
                 }
             }
-            let labels_len_u32 = u32::try_from(labels_len).map_err(|error| ThoError::new(format!("TrainFinalNet::run: label vector is too large: {error}")))?;
 
             let train_resources = Arc::new(train_resources);
             let valid_resources = Arc::new(valid_resources);
@@ -238,7 +225,7 @@ where
 
                     ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len)).boxed()
                 },
-                Arc::new(TrainFinalStepFactory::new(num_label_nets, labels_len_u32)),
+                Arc::new(TrainFinalStepFactory::new(num_label_nets, labels_len as u32)),
                 opt_config,
                 train_final_run_configs,
                 |rc: &TrainFinalNetRunConfig| rc.common_training_args.epochs,
@@ -373,6 +360,7 @@ impl Output for SyncLogitsBatchOutput {}
 
 
 pub const SYNC_LOGITS_BATCH_ENDPOINT: &str = "SYNC_LOGITS_BATCH_ENDPOINT";
+static SYNC_LOGITS_BATCH_INSTANCES: InstanceCache = InstanceCache::new();
 
 #[derive(Debug)]
 struct SyncLogitsBatch<C>
@@ -386,19 +374,21 @@ impl<C> SyncLogitsBatch<C>
 where
     C: RunCtx  + 'static
 {
-    async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLogitsBatch<C>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
-            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
-                init: (),
-            })
-        } else {
-            Ok(
-                DynSyncStageEnum::Local(Arc::new(SyncLogitsBatch::new_local().await?))
-            )
-        }
+    async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncLogitsBatch<C>>>, ThoError> {
+        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+                if GlobalCtx::global().is_ipc() {
+                static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
+                let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+                Ok(Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                    init: (),
+                }))
+            } else {
+                Ok(
+                    Arc::new(DynSyncStageEnum::Local(Arc::new(SyncLogitsBatch::new_local().await?)))
+                )
+            }
+        }).await
     }
 
     async fn new_local()-> Result<Self, ThoError>{
@@ -451,12 +441,14 @@ where
         let x_values = input.outputs.iter().map(|output| output.as_ref().t_ref().f_flatten(0, 1)).collect::<Result<Vec<_>, _>>()?;
         let x = Tensor::f_stack(x_values.as_slice(), 0)?.f_squeeze()?;
         let device = input.outputs[0].as_ref().t_ref().device();
+
         let y_values = input.labels.iter().map(|labels| {
             if labels.len() != input.labels_len {
                 return Err(ThoError::new("SyncLogitsBatch: bad label size"));
             }
             Ok(Tensor::f_from_slice(labels.as_slice())?.f_to_device(device)?)
         }).collect::<Result<Vec<_>, ThoError>>()?;
+
         let y = Tensor::f_stack(y_values.as_slice(), 0)?;
         Ok(SyncLogitsBatchOutput {
             id: input.id.clone(),
@@ -553,7 +545,7 @@ where
                     a
                 });
 
-                let stage = Arc::new(SyncLogitsBatch::<C>::new(1.into()).await?);
+                let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                 let output = track_await(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
@@ -657,15 +649,18 @@ where
             Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
-            let training_config = run_config.common_training_args.clone();
+
             let (train_step, _) = TrainStep::new_local(
                 ctx.tho_device_idx().into(),
-                move |_run_config, device| async move {
+                move |run_config, device| async move {
+
                     let config = ModConfig::new(
-                        AdamW::default().amsgrad(true).into(),
+                        run_config.common_training_args.tho_optimizer(),
+
                         move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
-                        training_config.lr,
+                        run_config.common_training_args.lr,
                     );
+
                     Ok((ThoTrainModule::new_on_device(config, device)?, ()))
                 },
                 Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),

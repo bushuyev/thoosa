@@ -55,6 +55,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, O
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_store::Store;
 use tracing::error;
+use crate::tasks::instance_cache::InstanceCache;
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
 
@@ -903,12 +904,14 @@ impl WorkerStageOutput for MotifStatsOutput {
 }
 
 
+static MOTIF_STATS_SYNC_STAGE_INSTANCES: InstanceCache = InstanceCache::new();
+
 #[derive(Debug, Named)]
 pub struct MotifStatsSyncStage<C>
 where
     C: RunCtx + 'static,
 {
-    id: SynKey,
+    id: SynKey,//same for all instances, remove?
     _ctx: PhantomData<C>,
 }
 
@@ -916,15 +919,18 @@ impl<C> MotifStatsSyncStage<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<MotifStatsSyncStage<C>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Shared proxy dispatch separates the run context throttle from the motif payload.
-            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<C>::new_local())))
-        }
+    async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsSyncStage<C>>>, ThoError> {
+        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+            if GlobalCtx::global().is_ipc() {
+                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+                let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+                // Shared proxy dispatch separates the run context throttle from the motif payload.
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<C>::new_local()))))
+            }
+
+        }).await
     }
 
     fn new_local() -> Self {
@@ -1233,7 +1239,7 @@ where
                     )).await?;
 
                 debug!("MotifStats::run: motif={motif:?}");
-                let clc_stats_run = Arc::new(MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?);
+                let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), motif, metrics.clone(), quantiles.clone()));
                 let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
@@ -1292,7 +1298,7 @@ where
                     motifs.push(motif);
                 }
 
-                let clc_stats_run = Arc::new(MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?);
+                let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs, metrics.clone(), quantiles.clone()));
                 let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(

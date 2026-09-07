@@ -26,7 +26,7 @@ use ambassador::Delegate;
 use futures_util::future::BoxFuture;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
@@ -1403,29 +1403,67 @@ impl WorkerStageInput for SyncLoadRandomSlicesInput<'_> {
 }
 
 #[derive(Debug)]
-pub struct SyncLoadRandomSlices;
+pub struct SyncLoadRandomSlices<C>
+where
+    C:RunCtx + 'static
+{
+    pd:PhantomData<C>
+}
 
-impl SyncLoadRandomSlices {
-    fn new() -> Self {
-        Self
+static SYNC_LOAD_RANDOM_SLICES_INSTANCES: InstanceCache = InstanceCache::new();
+
+impl <C> SyncLoadRandomSlices<C>
+where
+    C:RunCtx + 'static
+{
+    async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLoadRandomSlices<C>>>, ThoError> {
+        SYNC_LOAD_RANDOM_SLICES_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+            if GlobalCtx::global().is_ipc() {
+                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+                let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+                // Shared typed dispatch keeps tensor-reference decoding consistent with other loaders.
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(SyncLoadRandomSlices::new_local()))))
+            }
+
+        }).await
+    }
+
+    fn new_local()->Self {
+        Self {
+            pd: Default::default(),
+        }
     }
 }
 
-impl Adjustable for SyncLoadRandomSlices {}
+impl <C> Adjustable for SyncLoadRandomSlices<C>
+where
+    C:RunCtx + 'static
+{}
 
-impl OutId for SyncLoadRandomSlices {
+impl <C> OutId for SyncLoadRandomSlices<C>
+where
+    C:RunCtx + 'static
+{
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
     }
 }
 
-impl Stage for SyncLoadRandomSlices {
-    type Ctx = RunCtxImpl;
+impl <C>Stage for SyncLoadRandomSlices <C>
+where
+    C:RunCtx + 'static
+{
+    type Ctx = C;
     type In<'a> = SyncLoadRandomSlicesInput<'a>;
     type Out = ThoTensor<ChannelsMotifsSlices, SynKey>;
 }
 
-impl SyncStage for SyncLoadRandomSlices {
+impl <C>SyncStage for SyncLoadRandomSlices<C>
+where
+    C:RunCtx + 'static
+{
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncLoadRandomSlices::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let size = input.raw_tensor.size();
@@ -1456,65 +1494,15 @@ impl SyncStage for SyncLoadRandomSlices {
     }
 }
 
-#[derive(Debug)]
-struct SyncLoadRandomSlicesDynStage<C> {//TODO remove, use SyncLoadRandomSlices directly
-    stage: Arc<DynSyncStageEnum<SyncLoadRandomSlices>>,
-    pd: PhantomData<C>,
-}
 
-impl<C> SyncLoadRandomSlicesDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
-        let stage = if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Shared typed dispatch keeps tensor-reference decoding consistent with other loaders.
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
-        } else {
-            DynSyncStageEnum::Local(Arc::new(SyncLoadRandomSlices::new()))
-        };
-        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
-    }
-}
 
-impl<C> Adjustable for SyncLoadRandomSlicesDynStage<C> where C: RunCtx + Adjustable + 'static {}
 
-impl<C> OutId for SyncLoadRandomSlicesDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
-    }
-}
-
-impl<C> Stage for SyncLoadRandomSlicesDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = SyncLoadRandomSlicesInput<'a>;
-    type Out = ThoTensor<ChannelsMotifsSlices, SynKey>;
-}
-
-impl<C> SyncStage for SyncLoadRandomSlicesDynStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT);
-        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        Arc::clone(&self.stage).do_run(input, &stage_ctx)
-    }
-}
 
 pub fn sync_load_random_slices_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared worker wrapper reconstructs the borrowed raw tensor as owned worker data.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLoadRandomSlices::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLoadRandomSlices::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1650,7 +1638,7 @@ where
     let tmp_cache = track_await(TmpCached::new(&format!("tmp_random_slices_{descr}"))).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws, ctx.tho_device_idx()).await?;
-    let sync_load_random_slices = Arc::new(SyncLoadRandomSlicesDynStage::new(ctx.tho_device_idx()).await?);
+    let sync_load_random_slices = SyncLoadRandomSlices::new(ctx.tho_device_idx()).await?;
     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);//TODO adjusters
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");

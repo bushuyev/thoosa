@@ -106,6 +106,10 @@ impl TrainLabelNetsArgs {
     }
 }
 
+pub trait WithCommonTrainingRunConfig {
+    fn config(&self)->&CommonTrainingRunConfig;
+}
+
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
@@ -120,6 +124,16 @@ pub struct TrainLabelNetRunConfig {//TODO rename to TrainLabelNetRunConfig
     #[in_map]
     #[run_config]
     pub net: LabelNetTypeArgs,
+
+    #[in_map]
+    #[run_config]
+    pub validation_step: u32,
+}
+
+impl WithCommonTrainingRunConfig for TrainLabelNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
 }
 
 impl AsRef<CommonTrainingRunConfig> for TrainLabelNetRunConfig {
@@ -133,11 +147,13 @@ impl TrainLabelNetRunConfig {
         id: Option<RunConfigId>,
         common_training_args: CommonTrainingRunConfig,
         net: LabelNetTypeArgs,
+        validation_step: u32,
     ) -> Self {
         Self {
             id,
             common_training_args,
             net,
+            validation_step,
         }
     }
 }
@@ -797,6 +813,13 @@ pub struct TrainMotifNetRunConfig {
 
 
 }
+
+impl WithCommonTrainingRunConfig for TrainMotifNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
 
 impl TrainMotifNetRunConfig {
     pub fn new(id: Option<RunConfigId>, common_training_args: CommonTrainingRunConfig, net: MotifNetTypeArgs) -> Self {
@@ -2145,6 +2168,13 @@ pub struct TrainFinalNetRunConfig {
     #[run_config]
     pub net: FinalNetArgs,
 }
+
+impl WithCommonTrainingRunConfig for TrainFinalNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct FinalNetArgs {
@@ -3958,7 +3988,7 @@ mod train_tests {
             "alpha".to_string(),
             0.125,
             LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
-            TrainLabelNetRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16))),
+            TrainLabelNetRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16)), 1),
             thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
         );
 

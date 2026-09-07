@@ -556,8 +556,9 @@ pub(crate) fn run_labels_config_0(run_all_params: &RunAllArgs) -> RunMode {
                 // num_layers: RangeOrValue::Value(4),
                 num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
                 features: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: None },
-            })
+            }),
 
+            validation_step: RangeOrValue::Value(2),
         },
         train_labels_opt_config: Arc::new(OptConfig::new_with_early_stopping(100, 10, 5, 10e-5)),
     }}
@@ -745,8 +746,9 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
                 // num_layers: RangeOrValue::Value(4),
                 num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
                 features: RangeOrValue::Range { range: Range { start: 64, end: 512 }, step: None },
-            })
+            }),
 
+            validation_step: RangeOrValue::Value(2),
         },
         train_labels_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
     }
