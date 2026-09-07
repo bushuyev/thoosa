@@ -22,7 +22,7 @@ use thoosa_common::copy_ctx;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsDists, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
@@ -920,13 +920,6 @@ impl WorkerStageOutput for MotifStatsOutput {
     }
 }
 
-#[derive(Debug)]
-enum MotifStatsDynSyncStage<C>//TODO remove
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    Shared(Arc<DynSyncStageEnum<MotifStatsSyncStage<RunCtxImpl>>>, PhantomData<C>),
-}
 
 #[derive(Debug, Named)]
 pub struct MotifStatsSyncStage<C>
@@ -941,14 +934,14 @@ impl<C> MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    async fn new(tho_device_idx: usize) -> Result<MotifStatsDynSyncStage<C>, ThoError> {
+    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<MotifStatsSyncStage<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Shared proxy dispatch separates the run context throttle from the motif payload.
-            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }), PhantomData))
+            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
         } else {
-            Ok(MotifStatsDynSyncStage::Shared(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<RunCtxImpl>::new_local()))), PhantomData))
+            Ok(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<C>::new_local())))
         }
     }
 
@@ -968,22 +961,9 @@ where
     }
 }
 
-impl<C> Adjustable for MotifStatsDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-}
 
 impl<C> Adjustable for MotifStatsSyncStage<C> where C: RunCtx + Adjustable + 'static {}
 
-impl<C> OutId for MotifStatsDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &motif_stats_stage_id() + input_id
-    }
-}
 
 impl<C> OutId for MotifStatsSyncStage<C>
 where
@@ -1003,15 +983,6 @@ where
     type Out = MotifStatsOutput;
 }
 
-impl<C> Stage for MotifStatsDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = MotifStatsCalcInput<'a>;
-    type Out = MotifStatsOutput;
-}
-
 impl<C> SyncStage for MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -1022,18 +993,6 @@ where
         let output = self.run_input(input)?;
         debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
         Ok(output)
-    }
-}
-
-impl<C> SyncStage for MotifStatsDynSyncStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), MOTIF_STATS_SYNC_ENDPOINT);
-        proxy_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        let Self::Shared(stage, _) = self.as_ref();
-        Arc::clone(stage).do_run(input, &proxy_ctx)
     }
 }
 
