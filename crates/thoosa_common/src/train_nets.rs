@@ -2478,7 +2478,7 @@ mod train_tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::perf_logging::set_panic_hook;
+    use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId};
     use thoosa_shared::traits::SimpleId;
@@ -2732,6 +2732,8 @@ mod train_tests {
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        info!("worker perf:\n{}", format_perf_map(&PERF));
 
         Ok(())
     }

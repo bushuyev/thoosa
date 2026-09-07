@@ -46,6 +46,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::perf_logging::{PERF, format_perf_map};
 use thoosa_shims::context::ThoCudaContext;
 
+#[cfg(test)]
 #[ctor::ctor]
 pub fn init() {
     thoosa_shared::test_utils::init_test_logging();
