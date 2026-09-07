@@ -479,19 +479,6 @@ impl BorrowRef for ApplyCosine2DMotifNetsSyncInputWrapper {
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Release every cached tensor used to assemble the composite sync-stage input.
-        async move {
-            BorrowRef::dump_to_cpu(&self.input, to_tho_device_idx).await?;
-            for tensor in self.kernels.iter().chain(&self.alphas).chain(&self.betas) {
-                BorrowRef::dump_to_cpu(tensor, to_tho_device_idx).await?;
-            }
-            Ok(())
-        }
-    }
 }
 
 #[derive(Debug)]

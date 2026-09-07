@@ -185,17 +185,6 @@ impl BorrowRef for ABClcSyncStageInputWrapper {
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // Forward cleanup to both cached test-stage outputs used by this composite input.
-        async move {
-            BorrowRef::dump_to_cpu(&self.a_out, to_tho_device_idx).await?;
-            BorrowRef::dump_to_cpu(&self.b_out, to_tho_device_idx).await?;
-            Ok(())
-        }
-    }
 }
 
 impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {

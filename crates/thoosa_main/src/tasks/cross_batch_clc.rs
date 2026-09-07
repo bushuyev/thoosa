@@ -268,13 +268,6 @@ where
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<(), ThoError>> + Send
-    where
-        Self: 'o,
-    {
-        // CrossInput contains direct tensor references rather than DevicesWrap-managed caches.
-        async { Ok(()) }
-    }
 }
 
 impl<'a, R> SelectRef<CrossInputBatch1Selector> for CrossInput<'a, R>

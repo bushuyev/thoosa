@@ -723,12 +723,6 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
         }
     }
 
-    fn dump_to_cpu<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
-    where
-        Self: 'o
-    {
-        self.input.dump_to_cpu(to_tho_device_idx)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

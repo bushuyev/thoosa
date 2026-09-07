@@ -671,10 +671,6 @@ mod tests {
             std::future::ready(Ok(self.clone()))
         }
 
-        fn dump_to_cpu<'o>(&'o self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + Send where Self: 'o {
-            // This test helper carries paths and scalar metadata only.
-            async { Ok(()) }
-        }
     }
 
     #[derive(Debug)]
