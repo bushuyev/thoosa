@@ -255,7 +255,7 @@ pub fn train_motif_step_endpoint_inits() -> HashMap<String, InitFn> {
         ),
         (
             SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
-            Box::new(sync_motif_bastch_endpoint_init) as InitFn,
+            Box::new(sync_motif_batch_endpoint_init) as InitFn,
         ),
         (
             SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT.to_string(),
@@ -893,29 +893,57 @@ impl WorkerStageInput for SyncMotifBatchInput<'_> {
 }
 
 #[derive(Debug)]
-pub struct SyncMotifBatch;
+pub struct SyncMotifBatch<C>
+where
+    C:RunCtx {
+    pb:PhantomData<C>
+}
 
-impl SyncMotifBatch {
-    fn new() -> Self {
-        Self
+impl<C> SyncMotifBatch<C>
+where
+    C:RunCtx
+{
+    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<SyncMotifBatch<C>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+            // Install one typed-wrapper endpoint per proxy so worker tensor ownership stays isolated.
+            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
+        } else {
+            Ok(DynSyncStageEnum::Local(Arc::new(SyncMotifBatch{
+                pb: Default::default(),
+            })))
+        }
     }
 }
 
-impl Adjustable for SyncMotifBatch {}
+impl <C> Adjustable for SyncMotifBatch<C>
+where
+    C:RunCtx
+{}
 
-impl OutId for SyncMotifBatch {
+impl <C> OutId for SyncMotifBatch<C>
+where
+    C:RunCtx
+{
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
     }
 }
 
-impl Stage for SyncMotifBatch {
-    type Ctx = RunCtxImpl;
+impl <C> Stage for SyncMotifBatch<C>
+where
+    C:RunCtx
+{
+    type Ctx = C;
     type In<'a> = SyncMotifBatchInput<'a>;
     type Out = SyncMotifBatchOutput;
 }
 
-impl SyncStage for SyncMotifBatch {
+impl <C> SyncStage for SyncMotifBatch<C>
+where
+    C:RunCtx
+{
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifBatch::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("SyncMotifBatch::do_run: descr={} num_slices={}", input.descr, input.num_slices);
@@ -929,10 +957,13 @@ impl SyncStage for SyncMotifBatch {
         #[cfg(tho_debug_plots)]
         plot_spectrogram(&random.i((0, .., ..)), format!("/tmp/plots/spectrogram_random_{}.png", input.id), 1200, 600)?;
 
-        let motif_plot_label = format!("motifs_batch_make_batch_{}_{}", input.id, input.descr);
-        let random_plot_label = format!("motifs_batch_make_batch_random_{}_{}", input.id, input.descr);
-        debug_plot!(&motifs.as_ref(), motif_plot_label, plot_repeats=11)?;
-        debug_plot!(&random.as_ref(), random_plot_label, plot_repeats=11)?;
+        #[cfg(tho_debug_plots)]
+        {
+            let motif_plot_label = format!("motifs_batch_make_batch_{}_{}", input.id, input.descr);
+            let random_plot_label = format!("motifs_batch_make_batch_random_{}_{}", input.id, input.descr);
+            debug_plot!(&motifs.as_ref(), motif_plot_label, plot_repeats=11)?;
+            debug_plot!(&random.as_ref(), random_plot_label, plot_repeats=11)?;
+        }
 
         let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
 
@@ -947,67 +978,13 @@ impl SyncStage for SyncMotifBatch {
     }
 }
 
-#[derive(Debug)]
-struct SyncMotifBatchDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SyncMotifBatch>>,
-    pd: PhantomData<C>,
-}
-
-impl<C> SyncMotifBatchDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
-        let stage = if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Install one typed-wrapper endpoint per proxy so worker tensor ownership stays isolated.
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
-        } else {
-            DynSyncStageEnum::Local(Arc::new(SyncMotifBatch::new()))
-        };
-        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
-    }
-}
-
-impl<C> Adjustable for SyncMotifBatchDynStage<C> where C: RunCtx + Adjustable + 'static {}
-
-impl<C> OutId for SyncMotifBatchDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
-    }
-}
-
-impl<C> Stage for SyncMotifBatchDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = SyncMotifBatchInput<'a>;
-    type Out = SyncMotifBatchOutput;
-}
-
-impl<C> SyncStage for SyncMotifBatchDynStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
-        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        Arc::clone(&self.stage).do_run(input, &stage_ctx)
-    }
-}
-
 #[typetag::serde]
 impl WorkerOutput for SyncMotifBatchOutput{}
 
-pub(crate) fn sync_motif_bastch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_motif_batch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::<WokerRunCtx>::new(1/*TODO*/).await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1290,7 +1267,7 @@ where
     random_slices: Mutex<CurrentRandomSlices>,
     random_slices_limit: u32,
     motif_meta: MotifMeta,
-    sync_motif_batch: Arc<SyncMotifBatchDynStage<C>>,
+    sync_motif_batch: Arc<DynSyncStageEnum<SyncMotifBatch<C>>>,
 }
 
 impl<L, C> MotifsBatch<L, C>
@@ -1307,7 +1284,7 @@ where
         epoch_size: u32,
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
-        let sync_motif_batch = Arc::new(SyncMotifBatchDynStage::new(ctx.tho_device_idx()).await?);
+        let sync_motif_batch = Arc::new(SyncMotifBatch::new(ctx.tho_device_idx()).await?);
         let motif_meta = track_await(motif.extra()).await?;
         let split_motif = Arc::new(SplitMotifIntoTrainValidDynStage::<C>::new(ctx.tho_device_idx()).await?);
         let split_input = Arc::new(SplitMotifIntoTrainValidInputWrapper::new(motif));
@@ -1438,7 +1415,7 @@ mod tests {
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::motif_loader::{MotifMeta, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, SYNC_MOTIF_LOADER_ENDPOINT, sync_load_motif_resources_endpoint_init, sync_motif_loader_endpoint_init};
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_motif_nets::{SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT, TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult, split_motif_into_train_valid_endpoint_init, sync_motif_bastch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits};
+    use crate::tasks::train_motif_nets::{SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT, TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult, split_motif_into_train_valid_endpoint_init, sync_motif_batch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits};
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
     use async_trait::async_trait;
     use futures_util::FutureExt;
