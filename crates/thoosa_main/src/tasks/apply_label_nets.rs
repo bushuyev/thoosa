@@ -797,10 +797,8 @@ where
                     false
                 )?;
 
-                static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
-                let stage_id = STAGE_ID.fetch_add(1, Relaxed);
                 Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init.clone())).await?),
+                    stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, trained_net_id, device.tho_device_idx(), Box::new(init.clone())).await?),
                     init,
                 }))
             } else {

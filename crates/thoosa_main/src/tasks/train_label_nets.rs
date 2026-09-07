@@ -1052,14 +1052,15 @@ where
             Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
-            let training_config = run_config.common_training_args.clone();
+
             let (train_step, _) = TrainStep::new_local(
                 ctx.tho_device_idx().into(),
-                move |_run_config, device| async move {
+                move |run_config, device| async move {
+
                     let config = ModConfig::new(
-                        training_config.tho_optimizer(),
+                        run_config.common_training_args.tho_optimizer(),
                         move |var_store| params_for_module.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.root()),
-                        training_config.lr,
+                        run_config.common_training_args.lr,
                     );
                     Ok((ThoTrainModule::new_on_device(config, device)?, ()))
                 },

@@ -416,8 +416,9 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
             dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
-        })
+        }),
 
+        validation_step: RangeOrValue::Value(10),
     };
     //////////////////////train final
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
@@ -819,10 +820,10 @@ mod tests {
         //     max_batch_size : 10,
         // };
         let settings = RunAllSettings {
-            resources_per_label: 300,
-            pure_sets_len: [(100, true), (200, true)],
-            train_resource_group: "pure group 200".to_string(),
-            valid_resource_group: "pure group 100".to_string(),
+            resources_per_label: 90,
+            pure_sets_len: [(30, true), (60, true)],
+            train_resource_group: "pure group 60".to_string(),
+            valid_resource_group: "pure group 30".to_string(),
 
             motifs_epochs : 30,
             labels_epochs : 50,
@@ -830,8 +831,22 @@ mod tests {
             train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
             train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
             train_final_opt_config : Arc::new(OptConfig::new(100, 10)),
-            max_batch_size : 40,
+            max_batch_size : 20,
         };
+        // let settings = RunAllSettings {
+        //     resources_per_label: 300,
+        //     pure_sets_len: [(100, true), (200, true)],
+        //     train_resource_group: "pure group 200".to_string(),
+        //     valid_resource_group: "pure group 100".to_string(),
+        //
+        //     motifs_epochs : 30,
+        //     labels_epochs : 50,
+        //     final_epochs : 100,
+        //     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
+        //     train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
+        //     train_final_opt_config : Arc::new(OptConfig::new(100, 10)),
+        //     max_batch_size : 40,
+        // };
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let test_dir = Path::new("/tmp").join(test_name);
@@ -914,8 +929,8 @@ mod tests {
             train_resource_group: settings.train_resource_group.to_string(),
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
-            max_motif_net_loss: 0.4,
-            selected_motif_nets_limit: None,
+            max_motif_net_loss: 0.01,
+            selected_motif_nets_limit: Some(10),
             motif_slices_step: 10,
             with_plots: false,
             resolution: Resolution::Normal,
@@ -960,22 +975,6 @@ mod tests {
     }
 
     fn run_all_config_test_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
-        // let motifs_epochs = 10;
-        // let labels_epochs = 50;
-        // let labels_epochs = 150;
-        // let train_motifs_opt_config = OptConfig::new(10, 3);
-        // let train_labels_opt_config = OptConfig::new(30, 10);
-        // let train_final_opt_config = OptConfig::new(200, 30);
-        //let max_batch_size = 40;
-
-        // let motifs_epochs = 3;
-        // let labels_epochs = 5;
-        // let labels_epochs = 5;
-        // let train_motifs_opt_config = OptConfig::new(5, 3);
-        // let train_labels_opt_config = OptConfig::new(5, 3);
-        // let train_final_opt_config = OptConfig::new(5, 3);
-        // let max_batch_size = 40;
-
 
         let find_motifs_run_config_range_or_value = run_all_find_motifs_config_test_1::<FindMotifsRunConfigFields>();
         let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
@@ -1068,13 +1067,14 @@ mod tests {
             //     num_layers:  RangeOrValue::Value(4),
             //     features:  RangeOrValue::Value(100),
             // })
+            validation_step: RangeOrValue::Value(2),
         };
         //////////////////////train final
         let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
             id: None,
             common_training_args: CommonTrainingRunConfigRangeOrValue {
                 epochs: RangeOrValue::Value(profile.final_epochs),
-                batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
+                batch_size: RangeOrValue::Range { range: Range { start: 2, end: profile.max_batch_size }, step: None },
                 lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
                 patience: RangeOrValue::Value(10),
                 min_delta: RangeOrValue::Value(1e-4_f32),
@@ -1082,7 +1082,7 @@ mod tests {
                     beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
                     beta2: RangeOrValue::Value(0.999),
                     wd: RangeOrValue::Value(0.01),
-                    amsgrad: RangeOrValue::Value(false),
+                    amsgrad: RangeOrValue::Value(true),
                 })),
             },
             net: FinalNetArgsRangeOrValue {
@@ -1151,7 +1151,7 @@ mod tests {
             motif_criteria: vec![
                 MotifCriterionConstraintRangeOrValue {
                     metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
-                    min: RangeOrValue::Value(0.9),
+                    min: RangeOrValue::Value(0.95),
                 },
                 MotifCriterionConstraintRangeOrValue {
                     metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
