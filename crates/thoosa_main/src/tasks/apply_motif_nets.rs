@@ -379,22 +379,22 @@ where
                }
            };
 
-            let sync_init = ApplyMotifNetInit::new(
-                slice_step,
-                trained_net.net_path,
-                channel,
-                motif_id,
-                quantize,
-                #[cfg(test)]
-                fail_if_size_bigger_than,
-            );
             apply_motif_nets.push(
                 (
                     trained_net_id,
                     maybe_freq_filter,
                     ApplyMotifNet::new(
                         trained_net_id,
-                        sync_init,
+                        ApplyMotifNetInit::new(
+                            trained_net_id,
+                            slice_step,
+                            trained_net.net_path,
+                            channel,
+                            motif_id,
+                            quantize,
+                            #[cfg(test)]
+                            fail_if_size_bigger_than,
+                        ),
                         stage_ctx.branch(true),
                         ws,
                     ).await?
@@ -900,6 +900,7 @@ where
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApplyMotifNetInit {
+    trained_net_id:u32,
     slice_step:u32,
     motif_net_path:PathBuf,
     channel:u32,
@@ -911,6 +912,7 @@ pub struct ApplyMotifNetInit {
 
 impl ApplyMotifNetInit {
     pub fn new(
+        trained_net_id:u32,
         slice_step: u32,
         motif_net_path: PathBuf,
         channel: u32,
@@ -920,6 +922,7 @@ impl ApplyMotifNetInit {
         fail_if_size_bigger_than: Option<usize>,
     ) -> Self {
         Self {
+            trained_net_id,
             slice_step,
             motif_net_path,
             channel,
@@ -948,13 +951,11 @@ where
 
         if GlobalCtx::global().is_ipc() {
             let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, false)?;
-            static APPLY_STEP_GEN: AtomicU32 = AtomicU32::new(0);
-            let apply_id = APPLY_STEP_GEN.fetch_add(1, std::sync::atomic::Ordering::Acquire);
             let motif_meta = MotifNetMeta::new(self.motif_id, self.channel, params);
 
             // A failed worker installation is retried with a fresh endpoint id by OOMHandler::new_stage.
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, apply_id, device.tho_device_idx(), Box::new(self)).await?),
+                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, self.trained_net_id, device.tho_device_idx(), Box::new(self)).await?),
                 init: motif_meta,
             }))
         } else {

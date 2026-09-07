@@ -35,7 +35,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRu
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigResult, TrainMotifNetRunConfig, opt_train};
+use thoosa_common::train_nets::{opt_train, CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigResult, TrainMotifNetRunConfig, WithCommonTrainingRunConfig};
 use thoosa_common::utils::{TrainListener, optimizer_mem_size};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_properties_map::ToHashmap;
@@ -253,7 +253,7 @@ where
     B: AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + WithCommonTrainingRunConfig+ From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -459,7 +459,7 @@ where
     B:AsyncDataBatch<DX, DY, C>,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + WithCommonTrainingRunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -477,7 +477,7 @@ where
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
+    RC: RunConfig + WithCommonTrainingRunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -558,7 +558,7 @@ pub mod tests {
     use mockall::PredicateBoxExt;
     use parking_lot::Mutex;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::train_nets::AdamWRangeOrValue;
+    use thoosa_common::train_nets::{AdamWRangeOrValue, WithCommonTrainingRunConfig};
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -628,6 +628,12 @@ pub mod tests {
 
     impl AsRef<CommonTrainingRunConfig> for DummyRunConfig {
         fn as_ref(&self) -> &CommonTrainingRunConfig {
+            &self.common_config
+        }
+    }
+
+    impl WithCommonTrainingRunConfig for DummyRunConfig {
+        fn config(&self) -> &CommonTrainingRunConfig {
             &self.common_config
         }
     }

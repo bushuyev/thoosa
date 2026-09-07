@@ -225,15 +225,16 @@ where
             };
             let params_for_module = node_params.clone();
             let cosine_for_module = cosine_motif.clone();
-            let learning_rate = run_config.common_training_args.lr;
+
             let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
             let (train_step, _) = TrainStep::new_local(
                 ctx.tho_device_idx().into(),
-                move |_run_config, device| async move {
+                move |run_config, device| async move {
+
                     let config = ModConfig::new(
-                        AdamW::default().amsgrad(true).into(),
+                        run_config.common_training_args.tho_optimizer(),
                         move |var_store| params_for_module.motif_net(cosine_for_module.clone())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
-                        learning_rate,
+                        run_config.common_training_args.lr,
                     );
                     Ok((ThoTrainModule::new_on_device(config, device)?, ()))
                 },
@@ -521,7 +522,6 @@ where
 
         let device_idx = ctx.tho_device_idx();
 
-
         let channels = perf_log!(sync_read_lock!(self.ws)).channels();
 
         debug!("TrainMotifNets::run: input={input:?}");
@@ -549,6 +549,7 @@ where
                     Some(select_motifs_run_config_ids) => select_motifs_run_config_ids,
                     None => track_await(self.store.list_output_run_config_ids(find_motifs_run_config_id)).await?,
                 };
+
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
                 for select_motifs_run_config_id in &select_motifs_run_config_ids {
                     let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels)).await?;
@@ -896,9 +897,13 @@ where
             // Install one typed-wrapper endpoint per proxy so worker tensor ownership stays isolated.
             Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
         } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(SyncMotifBatch{
-                pb: Default::default(),
-            })))
+            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local())))
+        }
+    }
+
+    fn new_local() -> SyncMotifBatch<C> {
+        SyncMotifBatch {
+            pb: Default::default(),
         }
     }
 }
@@ -970,7 +975,7 @@ impl WorkerOutput for SyncMotifBatchOutput{}
 pub(crate) fn sync_motif_batch_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::<WokerRunCtx>::new(1/*TODO*/).await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
