@@ -1114,29 +1114,70 @@ impl WorkerStageInput for SplitMotifIntoTrainValidInput<'_> {
 }
 
 #[derive(Debug)]
-pub struct SplitMotifIntoTrainValid;
+pub struct SplitMotifIntoTrainValid<C>
+where
+    C: RunCtx  + 'static
+{
+    pd:PhantomData<C>
+}
 
-impl SplitMotifIntoTrainValid {
-    fn new() -> Self {
-        Self
+impl <C> SplitMotifIntoTrainValid<C>
+where
+    C: RunCtx  + 'static
+{
+    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<SplitMotifIntoTrainValid<C>>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+            // The typed proxy carries throttling separately from the borrowed tensor payload.
+            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
+        } else {
+            Ok(DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new_local())))
+        }
+    }
+
+    pub fn new_local()->Self {
+        SplitMotifIntoTrainValid{
+            pd: Default::default(),
+        }
     }
 }
 
-impl Adjustable for SplitMotifIntoTrainValid {}
+pub(crate) fn split_motif_into_train_valid_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        // Decode borrowed motif input into worker-owned storage before running the shared stage.
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SplitMotifIntoTrainValid::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
 
-impl OutId for SplitMotifIntoTrainValid {
+
+impl <C> Adjustable for SplitMotifIntoTrainValid<C>
+where
+    C: RunCtx  + 'static
+{}
+
+impl <C>OutId for SplitMotifIntoTrainValid<C>
+where
+    C: RunCtx  + 'static
+{
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
     }
 }
 
-impl Stage for SplitMotifIntoTrainValid {
-    type Ctx = RunCtxImpl;
+impl <C> Stage for SplitMotifIntoTrainValid<C>
+where
+    C: RunCtx  + 'static
+{
+    type Ctx = C;
     type In<'a> = SplitMotifIntoTrainValidInput<'a>;
     type Out = SplitMotifIntoTrainValidOutput;
 }
 
-impl SyncStage for SplitMotifIntoTrainValid {
+impl <C> SyncStage for SplitMotifIntoTrainValid<C>
+where
+    C: RunCtx  + 'static
+{
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SplitMotifIntoTrainValid::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif = input.motif.motif();
@@ -1166,69 +1207,8 @@ impl SyncStage for SplitMotifIntoTrainValid {
     }
 }
 
-#[derive(Debug)]
-struct SplitMotifIntoTrainValidDynStage<C> {
-    stage: Arc<DynSyncStageEnum<SplitMotifIntoTrainValid>>,
-    pd: PhantomData<C>,
-}
-
-impl<C> SplitMotifIntoTrainValidDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
-        let stage = if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // The typed proxy carries throttling separately from the borrowed tensor payload.
-            DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }
-        } else {
-            DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new()))
-        };
-        Ok(Self { stage: Arc::new(stage), pd: PhantomData })
-    }
-}
-
-impl<C> Adjustable for SplitMotifIntoTrainValidDynStage<C> where C: RunCtx + Adjustable + 'static {}
-
-impl<C> OutId for SplitMotifIntoTrainValidDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
-    }
-}
-
-impl<C> Stage for SplitMotifIntoTrainValidDynStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = SplitMotifIntoTrainValidInput<'a>;
-    type Out = SplitMotifIntoTrainValidOutput;
-}
-
-impl<C> SyncStage for SplitMotifIntoTrainValidDynStage<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
-        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
-        Arc::clone(&self.stage).do_run(input, &stage_ctx)
-    }
-}
-
 #[typetag::serde]
 impl WorkerOutput for SplitMotifIntoTrainValidOutput{}
-
-pub(crate) fn split_motif_into_train_valid_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    async move {
-        // Decode borrowed motif input into worker-owned storage before running the shared stage.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SplitMotifIntoTrainValid::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
 
 
 #[derive(Debug)]
@@ -1265,7 +1245,7 @@ where
         debug!("MotifsBatch::new: motif={motif:?}");
         let sync_motif_batch = Arc::new(SyncMotifBatch::new(ctx.tho_device_idx()).await?);
         let motif_meta = track_await(motif.extra()).await?;
-        let split_motif = Arc::new(SplitMotifIntoTrainValidDynStage::<C>::new(ctx.tho_device_idx()).await?);
+        let split_motif = Arc::new(SplitMotifIntoTrainValid::<C>::new(ctx.tho_device_idx()).await?);
         let split_input = Arc::new(SplitMotifIntoTrainValidInputWrapper::new(motif));
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
         let split_output = track_await(oom_handler.run(&split_motif, split_input, ctx.branch(false), NoContexts)).await?;
