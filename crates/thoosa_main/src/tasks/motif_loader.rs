@@ -23,6 +23,7 @@ use crate::tasks::cross_dims::ChannelsDataVec;
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
+use futures_util::future::BoxFuture;
 use thoosa_common::dims::{ChannelsData, ChannelsMotifsSlices, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
@@ -610,7 +611,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifLoaderOutput{}
 
-pub fn sync_motif_loader_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_motif_loader_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         let id = (MOTIF_LOADER_SYNC_STAGE, "SyncMotifLoader").into();
@@ -1228,8 +1229,7 @@ where
     }
 }
 
-
-pub fn sync_load_motif_resources_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_motif_resources_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput converts the tensor reference into an owned worker-side input.
@@ -1525,7 +1525,7 @@ where
     }
 }
 
-pub fn sync_load_random_slices_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_random_slices_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared worker wrapper reconstructs the borrowed raw tensor as owned worker data.

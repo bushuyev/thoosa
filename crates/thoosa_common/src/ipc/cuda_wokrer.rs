@@ -53,7 +53,7 @@ pub static DEBUG_DATA:LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::
 //1 cuda device per worker
 pub struct CudaWorker;
 
-pub type InitFn = Box<dyn Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
+pub type InitFn = Box<dyn for <'a> Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
 type InstalledEndpoints = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
 
@@ -403,7 +403,7 @@ impl CudaWorker {
                         context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
                         return Ok(());
                     }
-                    let endpoint_wrapper = match init_fn(init_data, Arc::clone(&context.ws), &context.all_cuda_tensors).await {
+                    let endpoint_wrapper = match init_fn(init_data, Arc::clone(&context.ws), &context.all_cuda_tensors, &context.tho_device).await {
                         Ok(endpoint_wrapper) => endpoint_wrapper,
                         Err(error) => {
                             context.installed_endpoints.remove(&endpoint_key);

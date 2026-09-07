@@ -13,7 +13,7 @@ use crate::tho_tensor::ThoTensor;
 use futures_util::future::{BoxFuture, FutureExt, ready};
 use futures_util::{StreamExt, ready};
 use log::debug;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -30,6 +30,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
+use crate::ws::Workspace;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TestStageInitA {
@@ -260,7 +261,7 @@ where
 const TEST_ENDPOINT: &str = "TestStage";
 
 
-pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn test_simp_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     debug!("test_simp_init_2: 0");
     let init: Box<dyn Any> = init;
 
@@ -281,7 +282,7 @@ pub fn test_simp_init_2(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<B
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests::{test_simp_init_2, TestOutputA, TestStageInitA, TEST_ENDPOINT};
+    use crate::ipc::proxy_tests::{test_simp_init, TestOutputA, TestStageInitA, TEST_ENDPOINT};
     use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
@@ -335,7 +336,7 @@ mod tests {
                         HashMap::from([
                             (
                                 TEST_ENDPOINT.to_string(),
-                                Box::new(test_simp_init_2) as InitFn,
+                                Box::new(test_simp_init) as InitFn,
                             ),
                         ]),
                         ThoDevice::from(Cuda(0)),
@@ -424,7 +425,7 @@ mod tests {
                     HashMap::from([
                         (
                             TEST_ENDPOINT.to_string(),
-                            Box::new(test_simp_init_2) as InitFn,
+                            Box::new(test_simp_init) as InitFn,
                         ),
                     ]),
                     ThoDevice::from(Cuda(0)),
