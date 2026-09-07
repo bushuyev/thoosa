@@ -24,7 +24,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
-use parking_lot::Mutex;
+use futures_util::future::BoxFuture;
+use parking_lot::{Mutex, RwLock};
 use tch::{Kind, Tensor};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
@@ -37,6 +38,7 @@ use thoosa_shared::{ThoError, mono_key};
 use tracing::debug;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use crate::ws::Workspace;
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
@@ -515,7 +517,7 @@ impl SyncStage for ProxyABClcSyncStage {
     }
 }
 
-pub fn sync_ab_clc_endpoint_init(init:Box<dyn WorkerInput>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_ab_clc_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.

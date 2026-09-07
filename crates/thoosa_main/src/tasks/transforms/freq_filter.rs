@@ -47,6 +47,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::MutexGuard;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_digest_id::DigestHash;
 
 use crate::tasks::motif_loader::SyncMotifLoader;
@@ -99,7 +100,7 @@ where
 
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-pub fn sync_freq_filter_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_freq_filter_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"))?;

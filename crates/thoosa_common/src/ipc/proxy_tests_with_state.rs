@@ -34,6 +34,7 @@ use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use crate::ws::Workspace;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
@@ -312,7 +313,7 @@ where
 const TEST_ENDPOINT: &str = "TestStageB";
 
 
-pub fn with_state_init(init:Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn Any> = init;
     let init = init.downcast::<TestStageInitB>().unwrap();
     async move {

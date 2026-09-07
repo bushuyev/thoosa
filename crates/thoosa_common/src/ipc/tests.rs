@@ -212,7 +212,7 @@ mod tests {
     use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
    
     use crate::utils::lin_for_size;
-    use crate::ws::mock_ws_simp;
+    use crate::ws::{mock_ws_simp, Workspace};
     use thoosa_named_derive::Named;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
@@ -302,7 +302,7 @@ mod tests {
         })
     }
 
-    fn sync_consume_test_endpoint_init(_init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    fn sync_consume_test_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
         use futures_util::FutureExt;
         async move {
             // This stage has no initializer fields, but still uses the typed install message.

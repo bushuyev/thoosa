@@ -786,11 +786,9 @@ where
 
 }
 
-
-
-pub fn stack_applied_motif_nets(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_motif_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput>().map_err(|_| ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"))?;
+        let init = *(init as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput>().map_err(|_| ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"))?;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedMotifNets::<WokerRunCtx>::new_local(init.id).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
@@ -1221,9 +1219,9 @@ where
 
 }
 
-pub fn apply_motif_net_endpoint_init(init_msg: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_motif_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>().map_err(|_| ThoError::new("ApplyMotifNet endpoint received invalid initializer"))?;
+        let init = *(init as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>().map_err(|_| ThoError::new("ApplyMotifNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
         let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module

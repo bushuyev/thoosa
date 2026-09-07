@@ -257,7 +257,15 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    pub fn new(batch: BF, train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>, opt_config: Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>, epochs: FC, validation_step: u32, descr: String) -> Self {
+    pub fn new(
+        batch: BF,
+        train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
+        opt_config: Arc<OptConfig>,
+        run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>,
+        epochs: FC,
+        validation_step: u32,
+        descr: String
+    ) -> Self {
         Self { batch, train_step_factory, pd: PhantomData, opt_config, run_config_source, epochs, validation_step, descr, reusable_completed_trials: vec![] }
     }
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
-
+use futures_util::future::BoxFuture;
 use log::debug;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tch::{Kind, Tensor, nn, nn::OptimizerConfig};
 use thoosa_named_derive::Named;
@@ -16,11 +17,12 @@ use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ipc::codec::JsonIpcCodec;
+use crate::ipc::cuda_wokrer::AllTensors;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use crate::ipc::wraps::WorkerWrapper;
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-
+use crate::ws::Workspace;
 use super::common::{ABData, ClsOut, ModelTestId};
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
@@ -254,7 +256,7 @@ impl WorkerOutput for ThoTensor<ClsOut, ModelTestId> {}
 #[typetag::serde(name = "ThoTensor_ABData_ModelTestId_Input")]
 impl WorkerInput for ThoTensor<ABData, ModelTestId> {}
 
-pub(crate) fn sync_classifier_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &crate::ipc::cuda_wokrer::AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_classifier_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncClassifierStageInit>().expect("SyncClassifierStage endpoint received an unexpected initializer type");
