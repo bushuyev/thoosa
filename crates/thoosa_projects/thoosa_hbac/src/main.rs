@@ -25,8 +25,8 @@ use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::cli::{Cli, RunAllArgs, run_cli};
-use thoosa_main::tasks::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets};
-use thoosa_main::tasks::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets};
+use thoosa_main::tasks::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
+use thoosa_main::tasks::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
 use thoosa_main::tasks::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use thoosa_main::tasks::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
 use thoosa_main::tasks::train_final_net::{train_final_step_endpoint_inits, SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init};
@@ -71,11 +71,11 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
         ),
         (
             STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_motif_nets) as InitFn,
+            Box::new(stack_applied_motif_nets_init) as InitFn,
         ),
         (
             STACK_APPLIED_LABEL_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_label_nets) as InitFn,
+            Box::new(stack_applied_label_nets_init) as InitFn,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),

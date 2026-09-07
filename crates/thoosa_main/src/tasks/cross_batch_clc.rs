@@ -18,7 +18,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{TchError, Tensor};
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
@@ -31,6 +31,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
+use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::clc_dist_d2;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
@@ -600,11 +601,11 @@ where
 #[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
 impl WorkerOutput for CrossUnfoldClcOutput<DistsMask>{}
 
-pub fn sync_cross_unfold_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_cross_unfold_clc_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let init = *init.downcast::<crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit>().map_err(|_| ThoError::new("CrossUnfoldClc endpoint received an unexpected initializer type"))?;
-        let stage = CrossUnfoldClc::<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>::new_for_find_motifs(init)?;
+        let stage = CrossUnfoldClc::<CrossUnfoldMaskFn<WokerRunCtx>, DistsMask, MasksCtx, WokerRunCtx>::new_for_find_motifs(init)?;
         // WorkerStageInput owns the decoded resource lists and tensor references for this run.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(stage), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()

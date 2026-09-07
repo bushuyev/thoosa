@@ -21,6 +21,8 @@ use log::debug;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::sync::Arc;
+use futures_util::future::BoxFuture;
+use parking_lot::RwLock;
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
@@ -32,6 +34,7 @@ use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::Mutex;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
+use crate::ws::Workspace;
 
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -330,7 +333,7 @@ impl WorkerOutput for ThoTensor<LoadedTensor, SynKey> {}
 #[typetag::serde(name = "ThoTensor_LoadedTensor_Input")]
 impl WorkerInput for ThoTensor<LoadedTensor, SynKey> {}
 
-pub(crate) fn sync_test_tensor_loader_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncTestTensorLoaderInit>().expect("SyncTestTensorLoader endpoint received an unexpected initializer type");

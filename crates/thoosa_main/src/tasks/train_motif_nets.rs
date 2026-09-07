@@ -126,9 +126,9 @@ impl WorkerInput for TrainMotifStepIpcInit {}
 #[typetag::serde(name = "TrainMotifStepInput")]
 impl WorkerInput for crate::tasks::train_step::TrainStepInput<Slice, MotifProbability> {}
 
-fn train_motif_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_motif_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainMotifStepIpcInit>().map_err(|_| ThoError::new("TrainMotifStep endpoint received invalid initializer"))?;
+        let init = *(init as Box<dyn std::any::Any>).downcast::<TrainMotifStepIpcInit>().map_err(|_| ThoError::new("TrainMotifStep endpoint received invalid initializer"))?;
         let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, init.motif)?;
         let cosine_motif = match &init.params.net_type {
             MotifNetTypeParams::CosineNetParams(_) => Some(Arc::new(copy_motif(&motif)?)),
@@ -981,7 +981,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifBatchOutput{}
 
-pub(crate) fn sync_motif_batch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_motif_batch_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Stateless motif batching uses the same codec and dispatch path as every shared proxy.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncMotifBatch::<WokerRunCtx>::new(1/*TODO*/).await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1244,7 +1244,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SplitMotifIntoTrainValidOutput{}
 
-pub(crate) fn split_motif_into_train_valid_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn split_motif_into_train_valid_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // Decode borrowed motif input into worker-owned storage before running the shared stage.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SplitMotifIntoTrainValid::new()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1463,7 +1463,7 @@ mod tests {
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, final_net};
     use thoosa_common::utils::{reset_print_options, test_net};
-    use thoosa_common::ws::mock_ws_simp;
+    use thoosa_common::ws::{mock_ws_simp, Workspace};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -1697,9 +1697,9 @@ mod tests {
             net.linear_s(1, "final_net_last_layer")?.end_seq()
         }
 
-        fn train_test_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn thoosa_common::ws::Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        fn train_test_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
             async move {
-                let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainTestStepInit>().map_err(|_| ThoError::new("TrainTestStep endpoint received invalid initializer"))?;
+                let init = *(init as Box<dyn std::any::Any>).downcast::<TrainTestStepInit>().map_err(|_| ThoError::new("TrainTestStep endpoint received invalid initializer"))?;
                 let params = TestNetParams { in_features: 100, layers: 2 };
                 let params_for_module = params.clone();
                 let x_f: Arc<TrainStepXFn<InDims>> = Arc::new(Box::new(|batch| batch));

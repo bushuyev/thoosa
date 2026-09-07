@@ -374,7 +374,7 @@ where
 impl WorkerOutput for SyncLabelBatchOutput{}
 
 
-pub fn sync_label_batch_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_label_batch_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         // WorkerStageInput reconstructs owned tensor-plus-length values for the borrowed stage API.
         Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(SyncLabelBatch::<WokerRunCtx>::new_local().await?), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
@@ -1013,9 +1013,9 @@ impl WorkerInput for TrainLabelStepIpcInit {}
 #[typetag::serde(name = "TrainLabelStepInput")]
 impl WorkerInput for crate::tasks::train_step::TrainStepInput<MotifProbability, LabelProbability> {}
 
-fn train_label_step_endpoint_init(init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_label_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init_msg as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>().map_err(|_| ThoError::new("TrainLabelStep endpoint received invalid initializer"))?;
+        let init = *(init as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>().map_err(|_| ThoError::new("TrainLabelStep endpoint received invalid initializer"))?;
         let params = init.params.clone();
         let params_for_module = params.clone();
         let training_config = init.training_config.clone();

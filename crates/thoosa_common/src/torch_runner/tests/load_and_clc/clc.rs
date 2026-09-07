@@ -20,6 +20,7 @@ use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use parking_lot::RwLock;
 use tch::Device::Cuda;
 use tch::{Device, Kind, Scalar, Tensor};
 use thoosa_named_derive::Named;
@@ -27,8 +28,9 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, simple_id};
 use tokio::sync::{Mutex, MutexGuard};
-use crate::ipc::cuda_wokrer::DEBUG_DATA;
+use crate::ipc::cuda_wokrer::{AllTensors, DEBUG_DATA};
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ws::Workspace;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -350,7 +352,7 @@ impl StageWithState for ClcDynSyncStage {
     }
 }
 
-pub(crate) fn sync_clc_endpoint_init(init: Box<dyn WorkerInput>, _ws: Arc<parking_lot::RwLock<Box<dyn crate::ws::Workspace>>>, _all_cuda_tensors: &crate::ipc::cuda_wokrer::AllTensors) -> BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_clc_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncClcStageInit>().expect("SyncClcStage endpoint received an unexpected initializer type");
     async move {

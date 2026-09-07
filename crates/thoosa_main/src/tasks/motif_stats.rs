@@ -12,7 +12,7 @@ use crate::tasks::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
 use crate::tasks::stft::SyncStftSelector;
 use async_trait::async_trait;
 use cached_derive::Cached;
-use futures_util::future::try_join_all;
+use futures_util::future::{try_join_all, BoxFuture};
 use log::debug;
 use parking_lot::RwLock;
 use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
@@ -924,7 +924,7 @@ impl WorkerStageOutput for MotifStatsOutput {
 #[derive(Debug, Named)]
 pub struct MotifStatsSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     id: SynKey,
     _ctx: PhantomData<C>,
@@ -932,7 +932,7 @@ where
 
 impl<C> MotifStatsSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<MotifStatsSyncStage<C>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
@@ -967,7 +967,7 @@ impl<C> Adjustable for MotifStatsSyncStage<C> where C: RunCtx + Adjustable + 'st
 
 impl<C> OutId for MotifStatsSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -976,7 +976,7 @@ where
 
 impl<C> Stage for MotifStatsSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     type Ctx = C;
     type In<'a> = MotifStatsCalcInput<'a>;
@@ -985,7 +985,7 @@ where
 
 impl<C> SyncStage for MotifStatsSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsSyncStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
@@ -999,11 +999,11 @@ where
 #[typetag::serde]
 impl WorkerOutput for MotifStatsOutput{}
 
-pub fn motif_stats_sync_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_sync_stage_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput owns decoded motifs while the generic shared wrapper runs the calculation.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsSyncStage::<RunCtxImpl>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsSyncStage::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1111,11 +1111,11 @@ where
     }
 }
 
-pub fn motif_stats_consume_stage_endpoint_init(_init_msg: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &AllTensors) -> futures_util::future::BoxFuture<'_, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_consume_stage_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsConsumeStage::<RunCtxImpl>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsConsumeStage::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
