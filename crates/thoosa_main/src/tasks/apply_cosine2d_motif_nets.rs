@@ -1033,7 +1033,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_cosine_kernel_bank_to_batched_spectrogram() -> Result<(), ThoError>{
-        set_max_level(Trace);
+        // set_max_level(Trace);
         let mut vs_0 = VarStore::new(Cpu);
         let motif_width = 100;
         //stft - n_fft - 50, hop - 10, win - 20 , (100-20/10) + 1 = 9

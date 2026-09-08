@@ -1860,7 +1860,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_load_random_slices() -> Result<(), ThoError> {
-        set_max_level(Trace);
+        // set_max_level(Trace);
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
