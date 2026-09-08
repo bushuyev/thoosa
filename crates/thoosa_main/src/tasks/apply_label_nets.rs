@@ -1,4 +1,5 @@
 use cached_derive::Cached;
+use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, trace, warn};
@@ -24,7 +25,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAd
 use thoosa_common::runner::common::DropIf;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -190,7 +191,7 @@ where
         mut build_motif_nets: F,
     ) -> Result<Self, ThoError>
     where
-        R: RunCtx + Adjustable + 'static,
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
         F: FnMut(R, Vec<TrainedNet>) -> Fut,
         Fut: Future<Output = Result<AMN, ThoError>>,
     {
@@ -227,9 +228,17 @@ where
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
+                let apply_label_net_init = ApplyLabelNetInit::new(
+                    label_net.id,
+                    label.clone(),
+                    train_label_net_run_config_id,
+                    label_net.net_path.clone(),
+                    batch_in_chunks,
+                    false,
+                );
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: track_await(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, label_net, 1.into(), batch_in_chunks, ws, false)).await?,
+                    apply_label_net: track_await(ApplyLabelNet::new(label_net.id, apply_label_net_init, stage_ctx.branch(true), ws)).await?,
                 });
             }
         }
@@ -727,6 +736,7 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyLabelNetInit {
+    trained_net_id: u32,
     label: String,
     train_label_net_run_config_id: RunConfigId,
     label_net_path:PathBuf,
@@ -735,8 +745,8 @@ pub struct ApplyLabelNetInit {
 }
 
 impl ApplyLabelNetInit {
-    pub fn new(label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, batch_in_chunks: usize, quantize:bool) -> Self {
-        Self { label, train_label_net_run_config_id, label_net_path, batch_in_chunks, quantize }
+    pub fn new(trained_net_id: u32, label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, batch_in_chunks: usize, quantize:bool) -> Self {
+        Self { trained_net_id, label, train_label_net_run_config_id, label_net_path, batch_in_chunks, quantize }
     }
 }
 
@@ -745,6 +755,37 @@ impl WorkerStageInput for ApplyLabelNetInit {
 
 #[typetag::serde(name = "ApplyLabelNetInit")]
 impl WorkerInput for ApplyLabelNetInit {}
+
+#[async_trait]
+impl<C, RC> SyncStageInit<RC, DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>> for ApplyLabelNetInit
+where
+    C: RunCtx + 'static,
+    RC: RunCtx + Send + Sync + 'static,
+{
+    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
+        let device: ThoDevice = run_context.tho_device_idx().into();
+
+        if GlobalCtx::global().is_ipc() {
+            let (_run_config_id, _params, _net) = perf_log!(sync_read_lock!(ws)).load_label_net(&self.label_net_path, &device, self.quantize, false)?;
+
+            // Keep a cloned initializer as proxy metadata because worker installation consumes its serialized copy.
+            Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, self.trained_net_id, device.tho_device_idx(), Box::new(self.clone())).await?),
+                init: self,
+            }))
+        } else {
+            let (_run_config_id, _params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(&self.label_net_path, &device, self.quantize, true)?;
+            let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load label net from {:?}", self.label_net_path)))?;
+
+            Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
+                self.label,
+                self.train_label_net_run_config_id,
+                net,
+                self.batch_in_chunks,
+            ).await?))))
+        }
+    }
+}
 
 
 #[derive(Debug)]
@@ -768,54 +809,31 @@ impl<C> ApplyLabelNet<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(
-        label: String,
-        train_label_net_run_config_id: RunConfigId,
-        trained_net:&TrainedNet,
-        device: ThoDevice,
-        batch_in_chunks: usize,
+    async fn new<RC>(
+        trained_net_id: u32,
+        sync_init: ApplyLabelNetInit,
+        run_context: RC,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        quantize: bool,
-    ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
-        let trained_net_id = trained_net.id;
+    ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError>
+    where
+        RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
+    {
         APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
-
-
-            let init = ApplyLabelNetInit::new(
-                label.clone(),
-                train_label_net_run_config_id,
-                trained_net.net_path.clone(),
-                batch_in_chunks,
-                quantize
+            // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
+            let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+                vec![
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_label_net_init"))),
+                ],
+                None,
             );
-
-            if GlobalCtx::global().is_ipc() {
-                let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
-                    &trained_net.net_path,
-                    &device,
-                    quantize,
-                    false
-                )?;
-
-                Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, trained_net_id, device.tho_device_idx(), Box::new(init.clone())).await?),
-                    init,
-                }))
-            } else {
-                let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(
-                    &trained_net.net_path,
-                    &device,
-                    quantize,
-                    true
-                )?;
-
-                Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
-                    label,
-                    train_label_net_run_config_id,
-                    net.expect("net"),
-                    batch_in_chunks
-                ).await?))))
-            }
+            oom_handler.new_stage(
+                sync_init,
+                run_context,
+                WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
+                ws,
+            ).await
         }).await
     }
 
