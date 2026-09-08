@@ -145,7 +145,6 @@ where
     N:Debug + Send + Sync + 'static,
     R:Debug + Send + Sync + 'static,
 {
-    id: SynKey,
     // The worker saves weights directly; only the temporary path crosses back
     // into the async orchestration and result-saving layers.
     pub var_store_path: TmpFile,
@@ -159,22 +158,11 @@ where
     N:Debug + Send + Sync + 'static,
     R:Debug + Send + Sync + 'static,
 {
-    pub fn new(id: SynKey, var_store_path: TmpFile, node_params: N, run_config: R, min_loss:f32) -> Self {
-        Self { id, var_store_path, node_params, run_config, min_loss }
+    pub fn new(var_store_path: TmpFile, node_params: N, run_config: R, min_loss:f32) -> Self {
+        Self {  var_store_path, node_params, run_config, min_loss }
     }
 }
 
-impl<N, R> WithId for TrainNetOutput<N, R>
-where
-    N:Debug + Send + Sync + 'static,
-    R:Debug + Send + Sync + 'static,
-{
-    type ID = SynKey;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
 
 impl<N, R> Output for TrainNetOutput<N, R>
 where
@@ -519,7 +507,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            Ok(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store_path, node_params, run_config, loss))
+            Ok(TrainNetOutput::new(var_store_path, node_params, run_config, loss))
         }
     }
 }

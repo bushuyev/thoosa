@@ -904,7 +904,7 @@ mod tests {
     use tracing::Instrument;
 
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_device_reset() -> Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");

@@ -811,10 +811,10 @@ mod tests {
         //     train_resource_group: "pure group 20".to_string(),
         //     valid_resource_group: "pure group 10".to_string(),
         //
-        //     motifs_epochs : 10,
+        //     motifs_epochs : 30,
         //     labels_epochs : 30,
         //     final_epochs : 30,
-        //     train_motifs_opt_config : Arc::new(OptConfig::new(5, 3)),
+        //     train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
         //     train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
         //     train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
         //     max_batch_size : 10,
@@ -1079,15 +1079,17 @@ mod tests {
                 patience: RangeOrValue::Value(10),
                 min_delta: RangeOrValue::Value(1e-4_f32),
                 optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                    beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
+                    // beta1: RangeOrValue::Range { range: Range { start: 0.85, end: 0.95 }, step: None },
+                    beta1: RangeOrValue::Value(0.9),
                     beta2: RangeOrValue::Value(0.999),
                     wd: RangeOrValue::Value(0.01),
                     amsgrad: RangeOrValue::Value(true),
                 })),
             },
             net: FinalNetArgsRangeOrValue {
-                num_layers: RangeOrValue::Range { range: Range { start: 2, end: 100 }, step: None },
-                mid_features: RangeOrValue::Range { range: Range { start: 2, end: 100 }, step: None },
+                num_layers: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
+                // mid_features: RangeOrValue::Range { range: Range { start: 2, end: 100 }, step: None },
+                mid_features: RangeOrValue::Value(20),
             },
         };
 

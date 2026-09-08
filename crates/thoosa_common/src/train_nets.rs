@@ -1777,7 +1777,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     let mut net = builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("final_net: input={t:?}");
+                trace!("final_net: input=\n{t}");
                 Ok(t.shallow_clone())
             })),
             None,
@@ -2058,7 +2058,7 @@ where
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
-                debug!("opt_train: opt_vals={opt_vals:?}  "); //descr={descr}
+                debug!("opt_train: opt_vals={opt_vals:?}  ");
 
                 let run_config: R = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals]
                     .concat()

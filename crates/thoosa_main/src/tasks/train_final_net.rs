@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use futures_util::future::try_join_all;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use log::{debug, info, trace};
+use log::{debug, info, log_enabled, trace};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
+use log::Level::Debug as DebugLevel;
 use thoosa_common::dims::{ChannelsData, MotifProbability};
 use thoosa_common::stages_seq::ABStage;
 
@@ -26,7 +27,8 @@ use crate::tasks::stft::SyncStftSelector;
 use crate::tasks::train_step::{TrainStep, TrainStepXFn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
-use tch::{Reduction, Tensor};
+use tch::{Kind, Reduction, Tensor};
+use tracing::field::debug;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
@@ -433,10 +435,14 @@ where
     C: RunCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+
         if input.outputs.is_empty() {
             return Err(ThoError::new("SyncLogitsBatch: empty outputs"));
         }
-        let x_values = input.outputs.iter().map(|output| output.as_ref().t_ref().f_flatten(0, 1)).collect::<Result<Vec<_>, _>>()?;
+        let x_values = input.outputs.iter()
+            .map(|output| output.as_ref().t_ref().f_flatten(0, 1))
+            .collect::<Result<Vec<_>, _>>()?;
+
         let x = Tensor::f_stack(x_values.as_slice(), 0)?.f_squeeze()?;
         let device = input.outputs[0].as_ref().t_ref().device();
 
@@ -448,6 +454,9 @@ where
         }).collect::<Result<Vec<_>, ThoError>>()?;
 
         let y = Tensor::f_stack(y_values.as_slice(), 0)?;
+
+        trace!("SyncLogitsBatch::do_run: x=\n{x} \ny=\n{y}");
+
         Ok(SyncLogitsBatchOutput {
             id: input.id.clone(),
             x: ThoTensor::new(thoosa_shared::simple_id!("sync_logits_batch_x"), x)?,
@@ -522,7 +531,10 @@ where
 
                         let out = track_await(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
 
-                        debug!("LogitsResourcesBatch::build_batch_stream: out={out:?}");
+                        if log_enabled!(DebugLevel) {
+                            let val = BorrowRef::borrow_to(&out, 1).await?;
+                            debug!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.t_ref());
+                        }
 
                         Ok::<_, ThoError>((out, labels))
                     }
@@ -543,10 +555,16 @@ where
                     a
                 });
 
+                debug!("LogitsResourcesBatch::build_batch_stream: loader.outputs={outputs:?} labels={labels:?}");
+
                 let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                 let output = track_await(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
+
+                debug!("LogitsResourcesBatch::build_batch_stream: SyncLogitsBatch::outputs={output:?}");
+
+
                 Ok::<_, ThoError>(output.into_parts())
             }
         });
@@ -581,8 +599,36 @@ pub(crate) struct TrainFinalStepIpcInit {
 
 type SyncTrainFinalStep<C> = TrainStep<TrainStepXFn<LabelProbability>, LabelProbability, LabelsProbabilities, C>;
 
+
+/// Cross-entropy for soft/probabilistic targets.
+///
+/// For each sample batch and class c:
+///   p[b,c] = softmax(logits[b,*])[c]
+///
+/// Loss:
+///   L = -(1 / B) * sum_b sum_c y[b,c] * log(p[b,c])
+///
+/// `log_softmax` computes log(p) directly and more numerically stably than
+/// `softmax(...).log()`.
+///
+/// Shapes:
+///   logits:    [B, C]  raw model logits
+///   ys:        [B, C]  target class probabilities, sum_c ys[b,c] = 1
+///   log_probs: [B, C]
+///
+/// `sum_dim_intlist(-1)` sums the per-class cross-entropy for each sample,
+/// producing [B], and `mean()` averages it over the batch.
 fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
-    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).map_err(ThoError::from)
+    debug!("train_final_loss: pred_y=\n{pred_y} target=\n{target}");
+
+
+    let log_probs = pred_y.f_log_softmax(-1, Kind::Float)?;
+
+    (target * log_probs)
+        .f_sum_dim_intlist(&[-1i64][..], false, Kind::Float)?
+        .f_mean(Kind::Float)?
+        .f_multiply_scalar(-1.)
+        .map_err(ThoError::from)
 }
 
 impl WorkerStageInput for TrainFinalStepIpcInit {
@@ -680,12 +726,12 @@ pub fn train_final_step_endpoint_inits() -> HashMap<String, InitFn> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tasks::apply_motif_nets::motif_test_net_;
+    use crate::tasks::apply_motif_nets::{motif_sum_net_, motif_test_net_};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_final_net::{TrainFinalNetOutput, new_train_final_net};
-    use log::LevelFilter::Debug;
+    use log::LevelFilter::{Debug, Trace};
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -731,7 +777,7 @@ mod tests {
                         // let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;
 
-                        debug!("const_label_net: t={t:?} out={out:?}");
+                        debug!("const_label_net: t=\n{t} out={out:?}");
                         Ok(out)
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
@@ -743,8 +789,10 @@ mod tests {
         )
     }
 
+    //all nets sum up their inputs and final net classifies odd/even
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_train_final_net_smoke() -> Result<(), ThoError> {
+        // log::set_max_level(Trace);
         reset_print_options();
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -759,10 +807,12 @@ mod tests {
         let motif_t_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0", "motif_id")]), Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device))?)?);
         let motif_t_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1", "motif_id")]), Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device))?)?);
 
-        let (motif_0_params, motif_0_net) = motif_test_net_(device, Arc::clone(&motif_t_0), step, motif_width);
-        let (motif_1_params, motif_1_net) = motif_test_net_(device, Arc::clone(&motif_t_1), step, motif_width);
-        let net_id_0 = PathBuf::from("0/0_2");
-        let net_id_1 = PathBuf::from("0/1_2");
+        let (motif_0_params, motif_0_net) = motif_sum_net_(device, Arc::clone(&motif_t_0), step, motif_width);
+        let (motif_1_params, motif_1_net) = motif_sum_net_(device, Arc::clone(&motif_t_1), step, motif_width);
+        let motif_net_0_path = PathBuf::from("0/0_2");
+        let motif_net_0_id = 100;
+        let motif_net_1_path = PathBuf::from("0/1_2");
+        let motif_net_1_id = 101;
 
         let label_a_run_config_id = 111;
         let label_b_run_config_id = 222;
@@ -770,12 +820,12 @@ mod tests {
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, 1000)
                 .with_load_motif_net(vec![
-                    (net_id_0.clone(), motif_0_params, motif_0_net),
-                    (net_id_1.clone(), motif_1_params, motif_1_net),
+                    (motif_net_0_path.clone(), motif_0_params, motif_0_net),
+                    (motif_net_1_path.clone(), motif_1_params, motif_1_net),
                 ])
                 .with_load_label_nets(HashMap::from([
-                    ("A".to_string(), vec![(label_a_run_config_id, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
-                    ("B".to_string(), vec![(label_b_run_config_id, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
+                    ("aaa".to_string(), vec![(label_a_run_config_id, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
+                    ("bbb".to_string(), vec![(label_b_run_config_id, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
                 ]))
                 // Final-net training reloads each selected label checkpoint after listing the available nets.
                 .with_load_label_net(vec![
@@ -812,8 +862,8 @@ mod tests {
                         Some(0.3),
                         Some(2),
                         Ok(vec![
-                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_0.clone(), loss: 0.1f32 },
-                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_1.clone(), loss: 0.2f32 },
+                            TrainedNet { id: motif_net_0_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_0_path.clone(), loss: 0.1f32 },
+                            TrainedNet { id: motif_net_1_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_1_path.clone(), loss: 0.2f32 },
                         ]),
                     ),
                     (
@@ -821,8 +871,8 @@ mod tests {
                         None,
                         None,
                         Ok(vec![
-                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_0, loss: 0.1f32 },
-                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_1, loss: 0.2f32 },
+                            TrainedNet { id: motif_net_0_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_0_path, loss: 0.1f32 },
+                            TrainedNet { id: motif_net_1_id, run_config_id: train_motif_nets_run_config_id, net_path: motif_net_1_path, loss: 0.2f32 },
                         ]),
                     ),
                     (
@@ -871,12 +921,13 @@ mod tests {
         let run_configs = OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(2)),
-                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(2)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(10)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(4)),
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(2)),
                     NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(0.02)),
-                    NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::NumLayers), Val::Int(1)),
-                    NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::MidFeatures), Val::Int(100)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.001)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::NumLayers), Val::Int(10)),
+                    NamedVal::new(TrainFinalNetRunConfigFields::Net(FinalNetArgsFields::MidFeatures), Val::Int(20)),
                 ]),
                 vec![],
             ),
@@ -894,7 +945,7 @@ mod tests {
 
         let r = train_final_net.run(input, run_ctx.branch(false)).await?;
         debug!("test_train_final_net_smoke: result={r:?}");
-        assert!(r.result.loss < 1.0);//TODO < 0.2
+        assert!(r.result.loss < 0.2);
 
         Ok(())
     }

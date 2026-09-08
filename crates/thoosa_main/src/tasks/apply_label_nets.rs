@@ -289,14 +289,12 @@ where
         debug!("ApplyLabelNets::run: input={input:?}");
         let input_id = input.id().clone();
 
-        #[cfg(debug_assertions)]
-        let input_debug = input.clone();
 
-        debug!("ApplyLabelNets::run: self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
+        debug!("ApplyLabelNets::run: input={input:?} self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
 
         let tmp_cache = track_await(TmpCached::new("tmp_stack_applied_label_nets")).await;
         let tmp_cache_name = tmp_cache.registered_name();
-        let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<LabelProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
+        let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
         let label_output_order = Arc::new(Mutex::new(vec![None; self.apply_nets.len()]));
 
         let futures = self.apply_nets
@@ -337,7 +335,7 @@ where
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-                    let result: ThoTensor<LabelProbability, SynKey> = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?;
+                    let result: ThoTensor<Batch<LabelProbability>, SynKey> = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?;
 
                     debug!("ApplyLabelNets::run: result={result:?}");
 
@@ -396,8 +394,7 @@ where
             ),
         )).await?;
 
-        #[cfg(debug_assertions)]
-        debug!("ApplyLabelNets::run: done, input={input_debug:?}");
+
 
         Ok(Arc::new(DevicesWrap::wrap(label_outputs)))
     }
@@ -418,11 +415,11 @@ where
 pub struct StackAppliedLabelNetsInput {
     id: SynKey,
     device_idx: usize,
-    label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>,
+    label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>,
 }
 
 impl StackAppliedLabelNetsInput {
-    fn new(id: SynKey, mut label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>, device_idx: usize) -> Self {
+    fn new(id: SynKey, mut label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>, device_idx: usize) -> Self {
         for t in &mut label_outputs {
             t.no_drop();
         }
@@ -478,11 +475,11 @@ impl Adjustable for StackAppliedLabelNetsInput {}
 #[derive(Debug)]
 struct StackAppliedLabelNetsInputWrapper {
     id: SynKey,
-    tmp_cache: TmpCached<ThoTensor<LabelProbability, SynKey>>,
+    tmp_cache: TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>,
 }
 
 impl StackAppliedLabelNetsInputWrapper {
-    fn new(id: SynKey, tmp_cache: TmpCached<ThoTensor<LabelProbability, SynKey>>) -> Self {
+    fn new(id: SynKey, tmp_cache: TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>) -> Self {
         Self { id, tmp_cache }
     }
 }
@@ -636,9 +633,10 @@ where
             }
         } else {
             let stacked = label_outputs.iter().map(|label_output| {
-                debug!("StackAppliedLabelNets::consume: label_output.size={:?}", label_output.t_ref().size());
-                label_output.t_ref().f_sigmoid()
+                trace!("StackAppliedLabelNets::consume: label_output.size=\n{}", label_output.t_ref());
+                Ok(label_output.t_ref())//.f_sigmoid()
             }).collect::<Result<Vec<_>, _>>();
+
             match stacked.and_then(|stacked| Tensor::f_stack(stacked.as_slice(), 0)) {
                 Ok(tensor) => tensor,
                 Err(error) => {
@@ -890,7 +888,7 @@ where
 {
     type Ctx = C;
     type In<'a> = ApplyLabelNetInput<'a>;
-    type Out = ThoTensor<LabelProbability, SynKey>;//TODO it's Batch<LabelProbability>
+    type Out = ThoTensor<Batch<LabelProbability>, SynKey>;//TODO it's Batch<LabelProbability>
 }
 
 impl<C> SyncStage for ApplyLabelNet<C>
@@ -920,7 +918,7 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
     fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("ApplyLabelNet::run: id={:?} input={input:?}", self.id);
+        trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data().t_ref());
         let out_id = self.out_id(input.id());
         let input = input.input.as_ref();
         let batch_input_parts = split_padded_motif_scores(input.data().t_ref(), input.extra(), self.batch_in_chunks as i64, 0.0)?;
@@ -928,6 +926,9 @@ where
         let batch_input: ThoTensor<ChannelsMotifsData, SimpleId> = batch_input.into();
         let mut lengths = BatchLengths::new(batch_input_parts.1.iter().map(|value| value[0]).collect());
         let out = net.tho_forward(&batch_input, Some(&mut lengths), false)?;
+
+        debug!("ApplyLabelNet::do_run_with_state: id={:?} out={}", self.id, out.t_ref());
+
         ThoTensor::new(out_id, out.t())
     }
 }
