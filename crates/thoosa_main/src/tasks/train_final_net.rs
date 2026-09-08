@@ -377,10 +377,8 @@ where
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncLogitsBatch<C>>>, ThoError> {
         SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
                 if GlobalCtx::global().is_ipc() {
-                static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
-                let stage_id = STAGE_ID.fetch_add(1, Relaxed);
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                    stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, 0, device.tho_device_idx(), Box::new(())).await?),
                     init: (),
                 }))
             } else {

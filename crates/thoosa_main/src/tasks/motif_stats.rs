@@ -496,10 +496,6 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
     }
 }
 
-fn motif_stats_stage_id() -> SynKey {
-    (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into()
-}
-
 fn merged_motifs_tensor(input_id: &SynKey, motifs: &[&LoadedMotif]) -> Result<ThoTensor<ChannelsMotifsSlices, SynKey>, ThoError> {
     if motifs.is_empty() {
         return Err(ThoError::new("MotifStatsSyncStage::merged_motifs_tensor: empty motifs"));
@@ -911,7 +907,7 @@ pub struct MotifStatsSyncStage<C>
 where
     C: RunCtx + 'static,
 {
-    id: SynKey,//same for all instances, remove?
+    id: SynKey,//for OutId to have different Ids for motifs and their stats
     _ctx: PhantomData<C>,
 }
 
@@ -922,10 +918,8 @@ where
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsSyncStage<C>>>, ThoError> {
         MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
             if GlobalCtx::global().is_ipc() {
-                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-                let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-                // Shared proxy dispatch separates the run context throttle from the motif payload.
-                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () }))
+
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?), init: () }))
             } else {
                 Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<C>::new_local()))))
             }
@@ -934,7 +928,7 @@ where
     }
 
     fn new_local() -> Self {
-        Self { id: motif_stats_stage_id(), _ctx: PhantomData }
+        Self { id: (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into(), _ctx: PhantomData }
     }
 
     fn run_input(&self, input: &MotifStatsCalcInput<'_>) -> Result<MotifStatsOutput, ThoError> {
@@ -1070,7 +1064,6 @@ pub struct MotifStatsConsumeStage<C>
 where
     C: RunCtx + 'static,
 {
-    id: SynKey,
     _ctx: PhantomData<C>,
 }
 
@@ -1083,14 +1076,17 @@ where
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Use shared consuming dispatch so tensor references are deleted only after success.
-            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?), init: () })
+            Ok(DynSyncStageEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?),
+                init: ()
+            })
         } else {
             Ok(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<C>::new_local())))
         }
     }
 
     fn new_local() -> Self {
-        Self { id: motif_stats_stage_id(), _ctx: PhantomData }
+        Self {  _ctx: PhantomData }
     }
 
     fn run_input(&self, input: &MotifStatsLoadedChannelsInput) -> Result<MotifStatsOutput, ThoError> {
@@ -1114,7 +1110,7 @@ where
     C: RunCtx  + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.id + input_id
+        input_id.clone()
     }
 }
 
