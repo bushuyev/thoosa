@@ -27,7 +27,7 @@ where
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-    id: SynKey,
+    id: SynKey,//TOOD remove
     stage_a: Arc<A>,
     stage_b: Arc<B>,
 

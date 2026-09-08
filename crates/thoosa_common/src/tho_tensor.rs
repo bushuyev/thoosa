@@ -1,5 +1,5 @@
 use std::backtrace::Backtrace;
-use crate::dims::{AnyDims, ChannelsData, ChannelsMotifsSlices, Dims, LabelProbability, MotifProbability, MotifSlices};
+use crate::dims::{AnyDims, Batch, ChannelsData, ChannelsMotifsSlices, Dims, LabelProbability, MotifProbability, MotifSlices};
 use crate::runner::common::cachable::ThoDataRef;
 use thoosa_shared::traits::RunCtx;
 #[double]
@@ -738,6 +738,8 @@ impl WorkerOutput for ThoTensor<MotifSlices, SynKey> {}
 #[typetag::serde(name = "ThoTensor_LabelProbability")]
 impl WorkerOutput for ThoTensor<LabelProbability, SynKey> {}
 
+#[typetag::serde(name = "ThoTensor_Batch_LabelProbability")]
+impl WorkerOutput for ThoTensor<Batch<LabelProbability>, SynKey> {}
 
 #[typetag::serde(name = "ThoTensor_MotifProbability")]
 impl WorkerOutput for ThoTensor<MotifProbability, SynKey>{}
