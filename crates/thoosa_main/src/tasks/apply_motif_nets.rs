@@ -1296,7 +1296,7 @@ where
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = motif_net.extra().motif_id();
 
-        debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t={:?}", self.id, input.batch.t_ref());
+        debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input={:?}", self.id, input);
         trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t_ref());
 
         #[cfg(test)]
@@ -1309,7 +1309,7 @@ where
 
         let out = apply_motif_net_forward(out_id, &input.batch, &motif_net, self.slice_step, input.id())?;
 
-        trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t_ref());
+        trace!("ApplyMotifNet::do_run, self.id={:?} input={input:?} \nout=\n{}", self.id, out.t_ref());
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
 
         Ok(out)
@@ -1351,7 +1351,7 @@ pub fn apply_motif_net_forward(
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
-    let out_t = out.as_ref().f_view([-1])?.f_sigmoid()?;
+    let out_t = out.as_ref().f_view([-1])?; //.f_sigmoid()?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
     trace!("ApplyMotifNet::do_run: out_t=\n{out_t}");
 
@@ -1380,6 +1380,26 @@ pub fn motif_test_net_(
         }),
     )
 }
+
+#[cfg(test)]
+pub fn motif_sum_net_(
+    device: Device,
+    motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>,
+    step: u32, kernel: u32,
+) -> (
+    Box<dyn Fn() -> MotifNetParams + Sync + Send>,
+    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
+) {
+    let id = motif_t.id().clone();
+    let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
+    (
+        Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, kernel)),
+        Box::new(move || {
+            *sum_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
+        }),
+    )
+}
+
 
 #[cfg(test)]
 ///builds net initialized to detect provided pattern
@@ -1415,7 +1435,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
 
                 let r = t.unsqueeze(1);//dummy channel
 
-                // debug!("dummy_motif_net: t=\n{t}");
+                trace!("dummy_motif_net: t=\n{t}");
 
                 Ok(r)
             })),
@@ -1455,7 +1475,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
 
-                // debug!("dummy_motif_net: out=\n{t}");
+                trace!("dummy_motif_net: out=\n{t}");
 
                 Ok(t.shallow_clone())
             })),
@@ -1476,6 +1496,67 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
     )))
 
 }
+
+
+#[cfg(test)]
+//sums inputs
+pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Into<SynKey>>(
+    id: I,
+    num_features: u32,
+    k: f64,
+    device: Device,
+    descr: &str,
+    pattern:&Tensor,
+    stride: i64
+) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
+    assert_eq!(pattern.size().len(), 1, "template must be 1-D");
+    let l = pattern.size()[0];
+
+    // mean-center and unit-norm the template (helps with DC/scale variations)
+    let t = pattern
+        .to_device(device)
+        .to_kind(Kind::Float);
+    let t = &t - t.mean(Kind::Float);
+    let t = &t / (t.pow_tensor_scalar(2).sum(Kind::Float).sqrt() + 1e-12);
+
+    let vs = VarStore::new(device);
+    let mut cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
+
+
+    let tho_tensor: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(t));
+    let ones: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
+
+    let node = SeqBuilder::new(num_features, None)?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+
+                let r = t.unsqueeze(1);//dummy channel
+                let r = r.f_sum_dim_intlist(1, false, None)?;
+
+                debug!("sum_motif_net: t=\n{t} \n r=\n{r}");
+
+
+
+                Ok(r)
+            })),
+            None,
+        )?
+        .end_seq()?;
+
+
+
+    let module = node.clone().build_tch_module(&vs.root())?;
+    Ok(Box::new(ThoModuleWithStore::with_factory(
+        id,
+        module,
+        vs,
+        Some(Arc::new( move |path:&nn::Path| {
+            node.clone().build_tch_module(path)
+        }))
+    )))
+
+}
+
 
 
 #[cfg(test)]

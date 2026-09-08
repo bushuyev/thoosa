@@ -2476,10 +2476,10 @@ impl Store for SqlStore {
         }).await
     }
 
-    //TODO test
+    //TODO rename list_input_nets_run_configs?
     async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError> {
         self.with_reader_conn("list_input_nets", move |conn| {
-            let mut stmt = conn.prepare("SELECT tn.run_config_id, tn.net_path, tn.loss FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
+            let mut stmt = conn.prepare("SELECT tn.run_config_id FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
 
             stmt.query_map(params![net_id], |row| {
                 row.get::<usize, u32>(0)
