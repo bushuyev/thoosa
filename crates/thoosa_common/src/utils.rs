@@ -2704,7 +2704,7 @@ pub mod tests {
 
     #[test]
     fn test_mix_masks_align_with_rows_2() -> Result<(), ThoError> {
-        set_max_level(Trace);
+        // set_max_level(Trace);
         //resource lengths (resources are the net's inputs, i.e. what needs to be classified)
         let resource_0_len = 100;
         let resource_1_len = 150;

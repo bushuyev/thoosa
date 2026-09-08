@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_write_birdclef_submission_csv() -> Result<(), ThoError>{
-        set_max_level(Trace);
+        // set_max_level(Trace);
         let inputs = ["input_a".into(), "input_b".into()];
         write_birdclef_submission_csv(
             &inputs,

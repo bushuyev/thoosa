@@ -634,7 +634,8 @@ where
         } else {
             let stacked = label_outputs.iter().map(|label_output| {
                 trace!("StackAppliedLabelNets::consume: label_output.size=\n{}", label_output.t_ref());
-                Ok(label_output.t_ref())//.f_sigmoid()
+                // Ok(label_output.t_ref().f_sigmoid()?)
+                Ok(label_output.t_ref())
             }).collect::<Result<Vec<_>, _>>();
 
             match stacked.and_then(|stacked| Tensor::f_stack(stacked.as_slice(), 0)) {
@@ -1191,7 +1192,7 @@ mod tests {
             .zip(label.weights.iter())
             .map(|(motif, weight)| {
 
-                let motif_p = sigmoid(motif.value) * weight;
+                let motif_p = motif.value * weight;
                 debug!("expected_label_value: motif={motif:?} motif_p={motif_p}");
                 motif_p
 
@@ -1205,7 +1206,9 @@ mod tests {
 
         debug!("expected_label_value: per_slice={per_slice} slices={slices} r={r}");
 
-        sigmoid(r as f64) as f32
+        // r
+        // sigmoid(r as f64) as f32
+        r
     }
 
     fn assert_values_close(actual: &[f32], expected: &[f32]) {
@@ -1349,6 +1352,7 @@ mod tests {
             SynKey::new([mono_key!("input", "input")]),
             Tensor::f_ones(&[channels as i64, (motif_width as i64) * 3], (Kind::Float, device))?,
         )?;
+        trace!("run_apply_label_case: input=\n{}", input.t_ref());
 
         let mut run_ctx = mock_run_ctx::default(0);
         let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input)), run_ctx.branch(false)).await?;
@@ -1356,7 +1360,7 @@ mod tests {
 
         {
             let out = SelectRef::borrow_to(&out, run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            debug!("t=\n{}", out.t_ref());
+            trace!("run_apply_label_case: out=\n{}", out.t_ref());
             let out = out.as_ref().as_ref().f_squeeze_dim(-1)?;
             Ok::<_, ThoError>((out.size(), to_vec_f32(&out.totype(Float))))
         }
@@ -1391,7 +1395,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_apply_label_nets_orders_and_values_two_chunks() -> Result<(), ThoError> {
-        set_max_level(Trace);
+        // set_max_level(Trace);
+        debug!("test_apply_label_nets_orders_and_values_two_chunks: logit(0.1)={}, logit(0.2)={}", logit(0.1)?, logit(0.2)?);
         let motif_width = 4;
         let step = 1;
         let motifs = vec![
@@ -1426,7 +1431,7 @@ mod tests {
         ]
        */
         assert_eq!(vec![1, 2], size);
-        assert_values_close(&values, &[sigmoid(0.12) as f32, sigmoid(0.15) as f32]);
+        assert_values_close(&[values[0] + values[1]], &expected);
 
         Ok(())
     }

@@ -1352,6 +1352,7 @@ pub fn apply_motif_net_forward(
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
     let out_t = out.as_ref().f_view([-1])?; //.f_sigmoid()?;
+    // let out_t = out_t.f_sigmoid()?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
     trace!("ApplyMotifNet::do_run: out_t=\n{out_t}");
 
