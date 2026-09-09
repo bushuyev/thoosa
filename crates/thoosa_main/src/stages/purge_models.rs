@@ -451,7 +451,7 @@ mod tests {
     fn test_purge_models_command_parses() {
         let cli = Cli::parse_from(["thoosa_main", "purge-models", "--purge-mode", "label:loss:0.1"]);
 
-        match cli.command {
+        match cli.old_command {
             Some(Commands::PurgeModels(args)) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),
             other => panic!("unexpected command: {other:?}"),
         }
