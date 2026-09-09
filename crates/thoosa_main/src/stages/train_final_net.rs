@@ -41,7 +41,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Logits, NetResources, SavableResult};
@@ -559,7 +559,7 @@ where
 
                 let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                 let output = track_await(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
 
                 debug!("LogitsResourcesBatch::build_batch_stream: SyncLogitsBatch::outputs={output:?}");

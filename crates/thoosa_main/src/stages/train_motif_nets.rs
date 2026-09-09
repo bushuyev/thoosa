@@ -28,7 +28,7 @@ use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, Pro
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_shared::traits::MaxParallelCtx;
 
@@ -1252,7 +1252,7 @@ where
         let motif_meta = track_await(motif.extra()).await?;
         let split_motif = Arc::new(SplitMotifIntoTrainValid::<C>::new(ctx.tho_device_idx()).await?);
         let split_input = Arc::new(SplitMotifIntoTrainValidInputWrapper::new(motif));
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
         let split_output = track_await(oom_handler.run(&split_motif, split_input, ctx.branch(false), NoContexts)).await?;
 
         Ok(Self {
@@ -1276,7 +1276,7 @@ where
 
         debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
         let input = Arc::new(SyncMotifBatchInputWrapper::new(motif_id.clone(), motifs, random_slices, num_slices, descr.to_string()));
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
         let output = track_await(oom_handler.run(&self.sync_motif_batch, input, ctx.branch(false), NoContexts)).await?;
         Ok(output.into_parts())
     }

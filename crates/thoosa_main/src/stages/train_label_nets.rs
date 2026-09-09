@@ -27,7 +27,7 @@ use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{run_ctx_adjuster, Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::oom_handler::{run_ctx_adjuster, Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
 use thoosa_shared::traits::MaxParallelCtx;
@@ -686,7 +686,7 @@ where
                                        async move {
                                            let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
                                            let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();//TODO fill with x_1_wrapped x_0_wrapped ids
-                                           let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(vec![
+                                           let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
                                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                                                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
                                            ], None);

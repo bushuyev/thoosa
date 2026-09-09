@@ -35,7 +35,7 @@ use thoosa_shared::{CopyToDevice, ThoError, simple_id};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::slices_iter::SlicesIter;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
 use thoosa_dummy_data_derive::DummyData;
@@ -264,7 +264,7 @@ where
         debug!("CrossLoader::run_loaded_batch: input={input:?}");
 
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        match track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, CrossInputSelector>::new(
+        match track_await(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                     MAX_PARALLEL,

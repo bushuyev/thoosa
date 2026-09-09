@@ -22,7 +22,7 @@ use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d, co
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -209,7 +209,7 @@ where
         let batch_input = BatchCosineConv2dTensorsInputWrapper::new(id.clone(), Arc::into_inner(tmp_cache).expect("Arc::into_inner(tmp_cache) failed").into_inner());
         let required_tmp_cache_ids = std::collections::HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("batch_apply_cosine2d_motif_nets"))),
@@ -280,7 +280,7 @@ where
                 self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>(),
                 self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>(),
             ));
-            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
             let res = track_await(oom_handler.run(&apply_sync, apply_sync_input, ctx.branch(false), NoContexts)).await?.motifs_applied;
 
             //TODO stretch motifs in StackAppliedMotifNets

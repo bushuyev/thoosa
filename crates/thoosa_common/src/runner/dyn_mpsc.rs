@@ -299,7 +299,7 @@ impl Drop for ParentSuspendGuard {
 /// All per-device executor instances share BufferLimits execution permits. The aggregate number of
 /// active jobs is bounded by that adaptive limit.
 /// Currently, it's used from OOMHandler only.
-pub struct DynamicTaskExecutor {
+pub struct StageExecutor {
     tx: mpsc::Sender<Job>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
     accepting_tx: watch::Sender<bool>,
@@ -309,7 +309,7 @@ pub struct DynamicTaskExecutor {
     tho_device_idx: usize,
 }
 
-impl Debug for DynamicTaskExecutor {
+impl Debug for StageExecutor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DynamicTaskExecutor")
             .field("tx", &self.tx)
@@ -323,7 +323,7 @@ impl Debug for DynamicTaskExecutor {
     }
 }
 
-impl DynamicTaskExecutor {
+impl StageExecutor {
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn new(queue_capacity: usize) -> Self {
@@ -1556,7 +1556,7 @@ mod tests {
         drop(queued_tx);
         let mut input_closed = false;
 
-        DynamicTaskExecutor::purge_pending_jobs(&mut pending, &mut queued_rx, &mut input_closed);
+        StageExecutor::purge_pending_jobs(&mut pending, &mut queued_rx, &mut input_closed);
 
         assert!(pending.is_empty());
         assert!(input_closed);
@@ -1571,7 +1571,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_pending_job_is_purged_before_reset() -> Result<(), ThoError> {
         cuda_activity_gate().wait_if_paused().await;
-        let exec = Arc::new(DynamicTaskExecutor::new(8));
+        let exec = Arc::new(StageExecutor::new(8));
         let pending_ran = Arc::new(AtomicBool::new(false));
         let (running_started_tx, running_started_rx) = oneshot::channel();
         let (release_running_tx, release_running_rx) = oneshot::channel();
@@ -1620,7 +1620,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_reset_waits_for_running_jobs() -> Result<(), ThoError> {
         let reset_calls = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(DynamicTaskExecutor::new_with_reset_hook(
+        let exec = Arc::new(StageExecutor::new_with_reset_hook(
             64,
             1,
             {
@@ -1701,7 +1701,7 @@ mod tests {
     async fn test_running_reset_failures_are_coalesced() -> Result<(), ThoError> {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let finished_jobs = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(DynamicTaskExecutor::new_with_reset_hook(
+        let exec = Arc::new(StageExecutor::new_with_reset_hook(
             64,
             1,
             {
@@ -1780,7 +1780,7 @@ mod tests {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let parent_exited = Arc::new(AtomicBool::new(false));
 
-        let exec = Arc::new(DynamicTaskExecutor::new_with_reset_hook(
+        let exec = Arc::new(StageExecutor::new_with_reset_hook(
             64,
             1,
             {
@@ -1857,7 +1857,7 @@ mod tests {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let parent_exited = Arc::new(AtomicBool::new(false));
 
-        let exec = Arc::new(DynamicTaskExecutor::new_with_reset_hook(
+        let exec = Arc::new(StageExecutor::new_with_reset_hook(
             64,
             1,
             {
@@ -1938,7 +1938,7 @@ mod tests {
         let mut pending_reset = None;
         let limits = FuturesLimits::new();
 
-        DynamicTaskExecutor::process_command(
+        StageExecutor::process_command(
             ManagerCmd::RequestCudaReset {
                 pause_ticket: non_owner_ticket,
                 source: "test",
@@ -1958,7 +1958,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nested_exclusive_oom_does_not_deadlock_parent_resume() -> Result<(), ThoError> {
-        let exec = Arc::new(DynamicTaskExecutor::new(64));
+        let exec = Arc::new(StageExecutor::new(64));
 
         let result = tokio::time::timeout(Duration::from_secs(2), {
             let exec_for_parent = Arc::clone(&exec);
@@ -1993,7 +1993,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_max_other_parallel_is_observed() -> Result<(), ThoError> {
-        let exec = Arc::new(DynamicTaskExecutor::new(64));
+        let exec = Arc::new(StageExecutor::new(64));
         let active = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));
 

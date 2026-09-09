@@ -11,7 +11,7 @@ use thoosa_common::dims::{Dims, LocalSelect};
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use thoosa_common::ws::Workspace;
@@ -351,7 +351,7 @@ where
 
             debug!("WelchPSD::run: resource_id={} welch_input_size={welch_input_size:?} nperseg={nperseg} noverlap={noverlap}", resource.id());
 
-            let resource_psd = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(
+            let resource_psd = track_await(OOMHandler::<'_, '_, _, NoStageAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(
                 vec![Adjusters::Input(input_adjuster(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))],
                 None,
             )

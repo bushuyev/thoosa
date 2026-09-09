@@ -260,15 +260,15 @@ impl RunCtxContext for NoopRunCtxContext {}
 pub enum NoInputAdjuster {}
 
 #[derive(Debug)]
-pub enum NoTaskAdjuster {}
+pub enum NoStageAdjuster {}
 
 #[derive(Debug)]
 pub enum NoRunCtxAdjuster {}
 
 #[derive(Debug)]
-pub enum Adjusters<IA = NoInputAdjuster, TA = NoTaskAdjuster, CA = NoRunCtxAdjuster> {
+pub enum Adjusters<IA = NoInputAdjuster, SA = NoStageAdjuster, CA = NoRunCtxAdjuster> {
     Input(IA),//it adjusts Selector used to fetch chunk of input
-    Task(TA),
+    Stage(SA),
     RunContext(CA),
 }
 
@@ -394,7 +394,7 @@ where
 
 #[doc(hidden)]
 #[allow(async_fn_in_trait)]
-pub trait TaskAdjustment<'a, R, C>: Debug
+pub trait StageAdjustment<'a, R, C>: Debug
 where
     R: Stage + 'a,
 {
@@ -402,7 +402,7 @@ where
     fn degrade_task(&self, contexts: &mut C) -> bool;
 }
 
-impl<'a, R, C> TaskAdjustment<'a, R, C> for NoTaskAdjuster
+impl<'a, R, C> StageAdjustment<'a, R, C> for NoStageAdjuster
 where
     R: Stage + 'a,
 {
@@ -415,7 +415,7 @@ where
     }
 }
 
-impl<'stage, 'adjuster, R, C, RC> TaskAdjustment<'stage, R, C> for Box<dyn Adjuster<RC, A = Arc<R>> + 'adjuster>
+impl<'stage, 'adjuster, R, C, RC> StageAdjustment<'stage, R, C> for Box<dyn Adjuster<RC, A = Arc<R>> + 'adjuster>
 where
     R: Stage + Adjustable + 'stage,
     RC: RunnableContext,
@@ -503,12 +503,12 @@ impl<IA, TA, CA> Adjusters<IA, TA, CA> {
     where
         R: Stage + 'a,
         IA: InputAdjustment<'a, R, C, S>,
-        TA: TaskAdjustment<'a, R, C>,
+        TA: StageAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
     {
         match self {
             Adjusters::Input(v) => track_await(v.adjust_input(input_select_adjusted, contexts)).await,
-            Adjusters::Task(v) => track_await(v.adjust_task(task, contexts)).await,
+            Adjusters::Stage(v) => track_await(v.adjust_task(task, contexts)).await,
             Adjusters::RunContext(v) => track_await(v.adjust_run_ctx(run_context, contexts)).await,
         }
     }
@@ -517,12 +517,12 @@ impl<IA, TA, CA> Adjusters<IA, TA, CA> {
     where
         R: Stage + 'a,
         IA: InputAdjustment<'a, R, C, S>,
-        TA: TaskAdjustment<'a, R, C>,
+        TA: StageAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
     {
         match self {
             Adjusters::Input(v) => v.degrade_input(contexts),
-            Adjusters::Task(v) => v.degrade_task(contexts),
+            Adjusters::Stage(v) => v.degrade_task(contexts),
             Adjusters::RunContext(v) => v.degrade_run_ctx(contexts),
         }
     }
@@ -653,7 +653,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct OOMHandler<'a, 'z, IA = NoInputAdjuster, TA = NoTaskAdjuster, CA = NoRunCtxAdjuster, S = ()> {
+pub struct OOMHandler<'a, 'z, IA = NoInputAdjuster, TA = NoStageAdjuster, CA = NoRunCtxAdjuster, S = ()> {
     adjusters: Vec<Adjusters<IA, TA, CA>>,
     #[allow(dead_code)]
     statistics: Option<&'a Arc<Statistics>>,
@@ -672,13 +672,13 @@ struct SyncStageInitOutput<St>(Arc<St>);
 
 impl<St> thoosa_shared::applicables_runner::Output for SyncStageInitOutput<St> where St: Debug {}
 
-struct SyncStageInitTask<I, RC, St> {
+struct SyncStageInitImpl<I, RC, St> {
     init: I,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<fn(RC) -> St>,
 }
 
-impl<I, RC, St> Debug for SyncStageInitTask<I, RC, St>
+impl<I, RC, St> Debug for SyncStageInitImpl<I, RC, St>
 where
     I: Debug,
 {
@@ -687,7 +687,7 @@ where
     }
 }
 
-impl<I, RC, St> Stage for SyncStageInitTask<I, RC, St>
+impl<I, RC, St> Stage for SyncStageInitImpl<I, RC, St>
 where
     I: Debug,
     RC: RunCtx,
@@ -726,7 +726,7 @@ where
     }
 }
 
-fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
+fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::StageExecutor {
     GlobalCtx::global().get_executor(tho_device_idx)
 }
 
@@ -931,7 +931,7 @@ where
         R::Ctx: MaxParallelCtx + Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
         IA: InputRun<R, W, S>,
-        TA: TaskAdjustment<'a, R, C>,
+        TA: StageAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
          for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
@@ -983,7 +983,7 @@ where
         R: SyncStage + Send + Sync + 'static + 'a,
         R::Ctx: MaxParallelCtx + Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
-        TA: TaskAdjustment<'a, R, C>,
+        TA: StageAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
         for<'i> <R as Stage>::In<'i>:Send + Sync,
@@ -1010,7 +1010,7 @@ where
 
 }
 
-impl<'a, 'z, CA> OOMHandler<'a, 'z, NoInputAdjuster, NoTaskAdjuster, CA, ()>
+impl<'a, 'z, CA> OOMHandler<'a, 'z, NoInputAdjuster, NoStageAdjuster, CA, ()>
 where
     CA: Debug,
 {
@@ -1036,7 +1036,7 @@ where
             return panic_to_err_async!(sync_init.init(run_context, Arc::clone(ws)));
         }
 
-        let task = Arc::new(SyncStageInitTask {
+        let task = Arc::new(SyncStageInitImpl {
             init: sync_init,
             ws: Arc::clone(ws),
             pd: PhantomData,
@@ -1114,7 +1114,7 @@ where
 
 struct SyncStageInitRetryAdapter;
 
-impl<'z, I, RC, St> RunnerRetryAdapter<'z, SyncStageInitTask<I, RC, St>, ()> for SyncStageInitRetryAdapter
+impl<'z, I, RC, St> RunnerRetryAdapter<'z, SyncStageInitImpl<I, RC, St>, ()> for SyncStageInitRetryAdapter
 where
     I: SyncStageInit<RC, St>,
     RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
@@ -1122,7 +1122,7 @@ where
 {
     async fn run(
         &mut self,
-        task: Arc<SyncStageInitTask<I, RC, St>>,
+        task: Arc<SyncStageInitImpl<I, RC, St>>,
         _selector: Option<()>,
         device_idx: usize,
         run_ctx: RC,
@@ -1227,7 +1227,7 @@ where
     S: Debug + Clone + Default + 'static,
     C: Debug,
     IA: InputAdjustment<'a, R, C, S>,
-    TA: TaskAdjustment<'a, R, C>,
+    TA: StageAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
      for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
@@ -1392,7 +1392,7 @@ where
     S: Debug + Clone + Default + 'static,
     C: Debug,
     IA: InputAdjustment<'a, R, C, S>,
-    TA: TaskAdjustment<'a, R, C>,
+    TA: StageAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
      for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
@@ -1429,7 +1429,7 @@ where
     S: Debug + Clone + Default + 'static,
     C: Debug,
     IA: InputAdjustment<'a, R, C, S>,
-    TA: TaskAdjustment<'a, R, C>,
+    TA: StageAdjustment<'a, R, C>,
     CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: Send + Sync,
     R::Out: Send + Sync + 'static,
@@ -1727,20 +1727,20 @@ pub mod mock_task_adjuster {
 
     mock! {
         #[derive(Debug)]
-        pub TaskAdjuster {}
+        pub StageAdjuster {}
         #[async_trait]
-        impl Adjuster<MockRunnableContext> for TaskAdjuster {
+        impl Adjuster<MockRunnableContext> for StageAdjuster {
             type A = Arc<MockRunnable>;
             async fn adjust(&self, adjustable: <Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, AdjusterError<<Self as Adjuster<MockRunnableContext>>::A>>;
             fn degrade(&self, adjust_context: &mut MockRunnableContext) -> bool;
         }
     }
 
-    pub fn build<I>(tasks: I) -> (MockTaskAdjuster, Arc<AtomicUsize>)
+    pub fn build<I>(tasks: I) -> (MockStageAdjuster, Arc<AtomicUsize>)
     where
         I: IntoIterator<Item = MockRunnable>,
     {
-        let mut adj = MockTaskAdjuster::new();
+        let mut adj = MockStageAdjuster::new();
         let calls = Arc::new(AtomicUsize::new(0));
 
         for task in tasks.into_iter().map(Some) {
@@ -1797,7 +1797,7 @@ mod tests {
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestId, TestInput, TestOutput};
     use super::{Adjusters, Contexts, OOMHandler};
-    use super::{InputContext, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext, input_adjuster, run_ctx_adjuster, task_adjuster};
+    use super::{InputContext, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext, input_adjuster, run_ctx_adjuster, task_adjuster};
     // use crate::common::runnable::Runnable;
     use crate::runner::common::MockRunCtx;
     use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
@@ -1810,11 +1810,11 @@ mod tests {
     // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
-    struct AsyncTestTask {
+    struct AsyncTestStage {
         results: Arc<Mutex<VecDeque<Result<TestOutput, ThoError>>>>,
     }
 
-    impl AsyncTestTask {
+    impl AsyncTestStage {
         fn new(results: VecDeque<Result<TestOutput, ThoError>>) -> Self {
             Self {
                 results: Arc::new(Mutex::new(results)),
@@ -1822,15 +1822,15 @@ mod tests {
         }
     }
 
-    impl Adjustable for AsyncTestTask {}
+    impl Adjustable for AsyncTestStage {}
 
-    impl Stage for AsyncTestTask {
+    impl Stage for AsyncTestStage {
         type In<'a> = Arc<DevicesWrap<TestInput>>;
         type Out = Arc<DevicesWrap<TestOutput>>;
         type Ctx = MockRunCtx;
     }
 
-    impl AsyncStage for AsyncTestTask {
+    impl AsyncStage for AsyncTestStage {
         // // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
         // // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
@@ -1855,7 +1855,7 @@ mod tests {
         }
     }
 
-    impl OutId for AsyncTestTask {
+    impl OutId for AsyncTestStage {
         fn out_id(
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
@@ -1869,7 +1869,7 @@ mod tests {
         outputs: Vec<Arc<DevicesWrap<TestOutput>>>,
     }
 
-    impl InputContext<'static, AsyncTestTask> for AsyncInputCtx {
+    impl InputContext<'static, AsyncTestStage> for AsyncInputCtx {
         async fn add_partial_output(&mut self, o: Arc<DevicesWrap<TestOutput>>) {
             self.outputs.push(o);
         }
@@ -1911,7 +1911,7 @@ mod tests {
     #[tokio::test]
     async fn test_no_input_adjuster_accepts_borrow_ref_only_input() {
         let (task, task_calls) = mock_runnable([Ok(TestOutput::new(12.))]);
-        let oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
+        let oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_device_idx(0)
             .finish();
@@ -1971,7 +1971,7 @@ mod tests {
         let oom_handler = OOMHandler::new(
             vec![
                 Adjusters::Input(input_adjuster(input_adj)),
-                Adjusters::Task(task_adjuster(task_adj)),
+                Adjusters::Stage(task_adjuster(task_adj)),
                 Adjusters::RunContext(run_ctx_adjuster(ctx_adj)),
             ],
             None,
@@ -2012,7 +2012,7 @@ mod tests {
         let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
-        let adjusters: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Task(task_adjuster(task_adj))];
+        let adjusters: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Stage(task_adjuster(task_adj))];
         let oom_handler: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters, None);
 
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
@@ -2046,7 +2046,7 @@ mod tests {
             Ok(TestOutput::new(10.)),
         ]);
         let (input_adj, input_calls) = mock_input_adjuster([RangeSelector([0]..[1])]);
-        let adjusters: Vec<Adjusters<_, NoTaskAdjuster, NoRunCtxAdjuster>> = vec![Adjusters::Input(input_adjuster(input_adj))];
+        let adjusters: Vec<Adjusters<_, NoStageAdjuster, NoRunCtxAdjuster>> = vec![Adjusters::Input(input_adjuster(input_adj))];
         let oom_handler = OOMHandler::new(adjusters, None);
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
@@ -2085,7 +2085,7 @@ mod tests {
         ]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
-        let adjusters: Vec<Adjusters<NoInputAdjuster, NoTaskAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(ctx_adj))];
+        let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(ctx_adj))];
         let oom_handler: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters, None);
 
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
@@ -2141,7 +2141,7 @@ mod tests {
             .with_branch(4)
             .finish();
 
-        let adjusters1: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Task(task_adjuster(task_adj1))];
+        let adjusters1: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Stage(task_adjuster(task_adj1))];
         let oom1: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters1, None);
         let h1 = oom1.run(
             &init_task1_arc,
@@ -2151,7 +2151,7 @@ mod tests {
         );
         let init_task2_arc = Arc::new(init_task2);
 
-        let adjusters2: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Task(task_adjuster(task_adj2))];
+        let adjusters2: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Stage(task_adjuster(task_adj2))];
         let oom2: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters2, None);
         let h2 = oom2.run(
             &init_task2_arc,

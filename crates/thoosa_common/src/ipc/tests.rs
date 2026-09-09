@@ -5,7 +5,7 @@ use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
-use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
@@ -172,7 +172,7 @@ mod tests {
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
-    use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+    use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
     use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::test::FailUntil::NaxParallel;
     use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
@@ -353,7 +353,7 @@ mod tests {
 
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
                 let stage = Arc::new(new_sync_consume_test_stage(1).await?);
-                let oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
+                let oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
 
                 let input_tensor:ThoTensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?.into();
                 let input_ref = cuda_actor.copy(input_tensor.shallow_clone(), ThoDevice::from(1)).await?;
