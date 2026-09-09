@@ -159,76 +159,9 @@ impl TrainLabelNetRunConfig {
 }
 
 #[derive(Debug)]
-pub struct TrainLabelNetRunConfigResult {
-    train_label_nets_run_config_id: Option<RunConfigId>,
-    pub label: String,
-    pub loss: f32,
-    label_node_params: LabelNetParams,
-    train_label_nets_run_config: TrainLabelNetRunConfig,
-    var_store_path: TmpFile,
-    motif_nets_ids:Vec<u32>
-}
-
-impl TrainLabelNetRunConfigResult {
-    pub fn new(
-        label: String,
-        loss: f32,
-        label_node_params: LabelNetParams,
-        train_label_nets_run_config: TrainLabelNetRunConfig,
-        var_store_path: TmpFile,
-    ) -> Self {
-        Self {
-            train_label_nets_run_config_id: None,
-            label,
-            loss,
-            label_node_params,
-            train_label_nets_run_config,
-            var_store_path,
-            motif_nets_ids: vec![],
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct TrainLabelNetRunConfigResultParams<'a> {
     pub train_motif_nets_run_config_ids: &'a Vec<RunConfigId>,
     pub motif_nets_ids: &'a Vec<u32>,
-}
-
-#[async_trait]
-impl SavableResult for TrainLabelNetRunConfigResult {
-    type P<'a> = TrainLabelNetRunConfigResultParams<'a>;
-
-    type R = u32;
-
-    async fn save(
-        &mut self,
-        store: &Arc<Box<dyn Store>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
-
-        let run_config_id = track_await(store.save_run_config(
-            Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput
-            &TrainLabelNetRunConfig::type_name(),
-            "Label",
-            self.train_label_nets_run_config.to_properties_iter(None).collect(),
-        )).await?;
-
-        let path = panic_to_err!(ws.read()
-            .save_label_net(
-                run_config_id,
-                &self.label,
-                (&self.var_store_path).into(),
-                &self.label_node_params,
-            ))?;
-
-        debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
-
-        track_await(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).await?;
-
-        Ok(run_config_id)
-    }
 }
 
 #[derive(Debug)]
@@ -2508,7 +2441,7 @@ mod train_tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
+    use thoosa_shared::perf_logging::{PERF, format_perf_map, set_panic_hook};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId};
     use thoosa_shared::traits::SimpleId;
@@ -3971,41 +3904,6 @@ mod train_tests {
         assert_eq!(ys, vec![batch_len as i64]);
     }
 
-    #[tokio::test]
-    async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
-        let store = Arc::new(SqlStore::in_mem().await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
-
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
-        let train_motif_nets_run_config_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
-        // Trained results now own a worker-written checkpoint rather than an in-memory VarStore.
-        let checkpoint_path = test_dir.join("train_label_checkpoint.safetensors");
-        VarStore::new(Cpu).save(&checkpoint_path)?;
-
-        let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
-            // vec![source_run_config_id],
-            "alpha".to_string(),
-            0.125,
-            LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
-            TrainLabelNetRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16)), 1),
-            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
-        );
-
-        let train_motif_nets_run_config_id_vec = vec![train_motif_nets_run_config_id];
-        let motif_nets_ids= vec![];
-        let train_label_nets_run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
-            train_motif_nets_run_config_ids: &train_motif_nets_run_config_id_vec,
-            motif_nets_ids: &motif_nets_ids,
-        }).await?;
-        let run_config_values = store.list_run_config_values(train_label_nets_run_config_id).await?;
-        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_nets_run_config_id]), None, None).await?;
-
-        assert_eq!(vec![train_label_nets_run_config_id], store.list_output_run_config_ids(train_motif_nets_run_config_id).await?);
-        assert_eq!(vec![TrainedNet { id: 1, run_config_id: train_label_nets_run_config_id, net_path: PathBuf::from(format!("alpha/{train_label_nets_run_config_id}")), loss: 0.125 }], trained_nets);
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
