@@ -57,10 +57,11 @@ use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, lin_motif_node};
+use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, lin_motif_node};
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
@@ -68,10 +69,11 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
+use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, val};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err, perf_log, sync_read_lock, val};
 use thoosa_store::Store;
 
 pub(crate) const TRAIN_MOTIF_STEP_ENDPOINT: &str = "TrainMotifStep";
@@ -1427,7 +1429,7 @@ mod tests {
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, final_net};
     use thoosa_common::utils::{reset_print_options, test_net};
-    use thoosa_common::ws::{mock_ws_simp, Workspace};
+    use thoosa_common::ws::{Workspace, mock_ws_simp};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -1807,4 +1809,79 @@ impl SavableResult for TrainMotifNetsResult {
 
 #[async_trait]
 impl Output for TrainMotifNetsResult {
+}
+
+#[derive(Debug)]
+pub struct TrainMotifNetResult {
+    pub loss: f32, //TODO pub
+    channel: u32,
+    motif_id: u32,
+    pub vs: TmpFile,
+    pub params: MotifNetParams,
+    run_config_values: TrainMotifNetRunConfig,
+    #[allow(dead_code)]
+    select_motifs_run_config_id: RunConfigId,
+    descr: Option<String>
+}
+
+impl TrainMotifNetResult {
+    pub fn new(
+        loss: f32,
+        channel: u32,
+        motif_id: u32,
+        vs: TmpFile,
+        select_motifs_run_config_id: RunConfigId,
+        params: MotifNetParams,
+        run_config_values: TrainMotifNetRunConfig,
+        descr: Option<String>,
+    ) -> Self {
+        Self {
+            loss,
+            channel,
+            motif_id,
+            vs,
+            params,
+            run_config_values,
+            select_motifs_run_config_id,
+            descr
+        }
+    }
+
+
+}
+
+#[async_trait]
+impl SavableResult for TrainMotifNetResult {
+    type P<'a> =  &'a [RunConfigId];
+    type R = u32;
+
+    async fn save(
+        &mut self,
+        store: &Arc<Box<dyn Store>>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Self::P<'_>
+    ) -> Result<u32, ThoError> {
+
+        debug!("TrainMotifNetResult::save: self={:?}", self);
+
+        let train_motif_net_run_config_id = track_await(store.save_run_config(
+            Some(p),
+            &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
+            self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
+            self.run_config_values.to_properties_iter(None).collect(),
+        )).await?;
+
+        let path = panic_to_err!(ws.read().save_motif_net(
+            &self.channel,
+            &train_motif_net_run_config_id,
+            &self.motif_id,
+           (&self.vs).into(),
+            &self.params,
+        ))?;
+
+        track_await(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).await?;
+
+        Ok(train_motif_net_run_config_id)
+
+    }
 }
