@@ -1,12 +1,13 @@
-use crate::stages::apply_label_nets::{ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput, APPLY_LABEL_NET_ENDPOINT};
+use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures_util::StreamExt;
-use futures_util::future::try_join_all;
 use futures_util::future::BoxFuture;
+use futures_util::future::try_join_all;
 use futures_util::stream::BoxStream;
+use log::Level::Debug as DebugLevel;
 use log::{debug, info, log_enabled, trace};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -16,29 +17,27 @@ use std::future::ready;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
-use log::Level::Debug as DebugLevel;
+use std::sync::atomic::{AtomicU32, Ordering};
 use thoosa_common::dims::{ChannelsData, MotifProbability};
 use thoosa_common::stages_seq::ABStage;
 
 use crate::ApplyMotifNets;
+use crate::stages::instance_cache::InstanceCache;
 use crate::stages::stft::SyncStftSelector;
 use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{Kind, Reduction, Tensor};
-use tracing::field::debug;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
@@ -49,21 +48,24 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
 use thoosa_common::train_nets::final_net;
-use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetsRunConfigResult};
+use thoosa_common::train_nets::{CommonTrainingRunConfig, FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_properties_map::ToHashmap;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
+use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
 use thoosa_store::Store;
-use crate::stages::instance_cache::InstanceCache;
+use tracing::field::debug;
 
 pub(crate) const TRAIN_FINAL_STEP_ENDPOINT: &str = "TrainFinalStep";
 
@@ -730,15 +732,16 @@ mod tests {
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::tensor_loader::mock_tensor_loader;
-    use crate::stages::train_final_net::{TrainFinalNetOutput, new_train_final_net};
+    use crate::stages::train_final_net::{new_train_final_net, TrainFinalNetOutput, TrainFinalNetsRunConfigResult};
     use log::LevelFilter::{Debug, Trace};
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
+    use tch::Device::Cpu;
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, Slice};
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
@@ -747,24 +750,24 @@ mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runs::{Logits, NetResources};
+    use thoosa_common::runs::{Logits, NetResources, SavableResult};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, FinalNetArgsFields, OptConfig, TrainFinalNetRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetArgs, FinalNetArgsFields, FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainLabelNetRunConfig};
     use thoosa_common::train_nets::{ConvNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::utils::reset_print_options;
-    use thoosa_common::ws::WsMockBuilder;
+    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs, WsMockBuilder};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::OptRunConfigs;
+    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RUN_ID};
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::val::NamedVal;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{ThoError, mono_key};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
+    use thoosa_shared::{cdt_for_dir, mono_key, ThoError};
+    use thoosa_store::{MockStoreBuilder, RunConfigRow, SqlStore, TrainedNet, TrainedNetsBy};
 
     fn const_label_net(motif_nets: u32, slices_len: u32, k: f64, device: Device) -> (Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>) {
         (
@@ -948,5 +951,88 @@ mod tests {
         assert!(r.result.loss < 0.2);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
+        let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
+        let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
+        let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
+        // Exercise the same checkpoint handoff used by local and IPC training.
+        let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
+        VarStore::new(Cpu).save(&checkpoint_path)?;
+        let mut result = TrainFinalNetsRunConfigResult::new(
+            Some(&vec![label_run_config_id_0, label_run_config_id_1]),
+            0.125,
+            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
+            FinalNetParams::new(4, 100, 2, 3),
+            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3, 100)),
+        );
+
+        let run_config_id = SavableResult::save(&mut result, &store, &ws, ()).await?;
+        let run_config_values = store.list_run_config_values(run_config_id).await?;
+        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
+
+        assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
+        Ok(())
+    }
+
+}
+
+#[derive(Debug)]
+pub struct TrainFinalNetsRunConfigResult {
+    train_label_nets_run_config_ids: Vec<RunConfigId>,
+    pub loss: f32,
+    var_store_path: TmpFile,
+    final_node_params: FinalNetParams,
+    train_final_net_run_config: TrainFinalNetRunConfig,
+}
+
+impl TrainFinalNetsRunConfigResult {
+    pub fn new(
+        train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>,
+        loss: f32,
+        var_store_path: TmpFile,
+        final_node_params: FinalNetParams,
+        train_final_nodes_values: TrainFinalNetRunConfig,
+    ) -> Self {
+        Self {
+            train_label_nets_run_config_ids: train_label_nets_run_config_ids
+                .expect("train_label_nodes_run_config_ids")
+                .clone(),
+            loss,
+            var_store_path,
+            final_node_params,
+            train_final_net_run_config: train_final_nodes_values,
+        }
+    }
+}
+
+#[async_trait]
+impl SavableResult for TrainFinalNetsRunConfigResult {
+    type R = u32;
+
+    async fn save(
+        &mut self,
+        store: &Arc<Box<dyn Store>>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Self::P<'_>
+    ) -> Result<u32, ThoError> {
+        let run_config_id = track_await(store.save_run_config(
+            Some(&self.train_label_nets_run_config_ids),
+            &TrainFinalNetRunConfig::type_name(),
+            "Final",
+            self.train_final_net_run_config.to_properties_iter(None).collect(),
+        )).await?;
+
+        let path = ws.read()
+            .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
+
+        track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
+
+        Ok(run_config_id)
     }
 }

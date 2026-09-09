@@ -61,7 +61,7 @@ use crate::stages::select_buckets::SelectBucketsRunConfigRangeOrValue;
 use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::stages::seq_scan::SeqScanStage;
 use crate::stages::slices_stats::{Aggr, Metrics};
-use crate::stages::train_final_net::new_train_final_net;
+use crate::stages::train_final_net::{TrainFinalNetsRunConfigResult, new_train_final_net};
 use crate::stages::train_label_nets::{TrainLabelNetRunConfigResult, TrainLabelNets, new_train_label_nets};
 use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult};
 use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
@@ -76,7 +76,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, Se
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, load_final_model, opt_train};
+use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, load_final_model, opt_train};
 use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_motifs::find;
