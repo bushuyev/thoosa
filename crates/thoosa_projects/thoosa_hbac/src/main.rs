@@ -112,7 +112,7 @@ fn main() -> Result<(), ThoError> {
     */
     let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
 
-    //Cli::parse();
+    let cli = Cli::parse();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
@@ -136,6 +136,8 @@ fn main() -> Result<(), ThoError> {
         // let cdt = cdt_for_dir();
 
         track_await(run_cli(
+            cli.common_args,
+            cli.old_command,
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
                 thoosa_main::data::parquet_to_tensor_by_path(

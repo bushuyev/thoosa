@@ -35,7 +35,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::{Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{RunAllArgs, run_cli};
+use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
 use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_main::stages::apply_label_nets::ApplyLabelNets;
 use thoosa_main::stages::stft::SyncStftSelector;
@@ -70,6 +70,8 @@ fn main() -> Result<(), ThoError>{
     CudaWorker::run_if_sock(&cdt, &app_configs, HashMap::new())?;
     // tch::set_num_threads(1);
     // tch::set_num_interop_threads(1);
+
+    let cli = Cli::parse();
 
     info!("bird_clef main");
     if let Ok(thoosa_num_interop_threads)= std::env::var("THOOSA_NUM_INTEROP_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<u32>().map_err(|e|ThoError::from(e))){
@@ -169,6 +171,8 @@ fn main() -> Result<(), ThoError>{
         //gpt BirdCLEF adapters: label import, OGG->tensor loading, dataset-set seeding, run-all orchestration, and optional inference.
 
         track_await(run_cli(
+            cli.common_args,
+            cli.old_command,
             |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
             |t: &Transaction|{
