@@ -225,7 +225,10 @@ mod tests {
 
     #[test]
     fn test_pdf() {
-        let _g = Gaussian::new(Tensor::from_slice(&[0.]), Tensor::from_slice(&[3.]));
+        let g = Gaussian::new(Tensor::from_slice(&[0.]), Tensor::from_slice(&[3.]));
+        let pdf = g.pdf(&Tensor::from_slice(&[0.])).double_value(&[0]);
+        let expected = 1.0 / (3.0 * (2.0 * std::f64::consts::PI).sqrt());
+        assert!((pdf - expected).abs() < 1e-6, "pdf={pdf}, expected={expected}");
     }
 
     #[test]

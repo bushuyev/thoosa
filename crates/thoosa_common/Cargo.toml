@@ -9,6 +9,9 @@ edition.workspace = true
 path = "src/lib.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+"mock_global_ctx" = []
+
 [dependencies]
 cust = "0.3.2"
 rand.workspace = true
@@ -27,23 +30,25 @@ clap.workspace = true
 rayon.workspace = true
 serde.workspace = true
 lazy_static.workspace = true
-cudarc.workspace = true
+
 libloading.workspace = true
 rand_distr.workspace = true
-thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shared = {path = "../thoosa_shared", features = ["tch-error", "serde-json-error", "serde-json5-error"] }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shims = {path = "../thoosa_shims" }
 
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
 cached_derive = {path = "../thoosa_macros/cached_derive" }
-thoosa_with_data = {path = "../thoosa_macros/thoosa_with_data" }
 thoosa_named_derive = {path = "../thoosa_macros/thoosa_named_derive" }
 
 
 thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
 thoosa_dummy_data_derive = { path = "../thoosa_macros/thoosa_dummy_data_derive" }
+
+thoosa_digest_id = {path = "../thoosa_macros/thoosa_digest_id" }
+thoosa_digest_id_derive = {path = "../thoosa_macros/thoosa_digest_id_derive" }
 
 plotters.workspace = true
 
@@ -66,12 +71,21 @@ mockall.workspace = true
 mockall_double.workspace = true
 ambassador.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tokio-utils.workspace = true
 
 anyhow = "1.0.99"
 tracing.workspace = true
-tracing-subscriber = "0.3.22"
+console-subscriber.workspace = true
+tracing-subscriber.workspace = true
 with-id = "1.0.2"
+tub = "0.3"
+sha2.workspace = true
+tempfile = "3.27.0"
+libc.workspace = true
+typetag.workspace = true
+postcard.workspace = true
+memmap2.workspace = true
 [build-dependencies]
 chrono.workspace = true
 

@@ -1,16 +1,18 @@
 use log::{debug, trace};
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 // use rand_distr::{Uniform, Distribution};
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-use tch::{IndexOp, Tensor};
+use tch::Tensor;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::val::{NamedVal, Val};
+use crate::train_nets::OptConfig;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone)]
 struct RunResult {
@@ -495,157 +497,88 @@ mod tree_structured_parzen_estimator_tests {
         );
     }
 }
-#[allow(dead_code)]
-pub struct AsyncTPEOptimizer<F, T>
-where
-    F: AsyncFnMut(&[NamedVal<T>]) -> f32,
-    T: FieldName,
-{
-    obj_func: F,
-    cs: ConfigurationSpace<T>,
-    n_init: u32,
-    max_evals: u32,
-    tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
-    _pd: PhantomData<T>,
-    descr: String
+
+const TPE_LOSS_METRIC: &str = "loss";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StudyDirection {
+    Minimize,
+    Maximize,
 }
 
-impl<F, T: FieldName> AsyncTPEOptimizer<F, T>
-where
-    F: AsyncFnMut(&[NamedVal<T>]) -> f32,
-{
-    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, max_evals: u32, n_init: u32, descr: &str) -> Self {
-        debug!("TPEOptimizer:new: cs={cs:?}");
+#[derive(Debug, Clone)]
+pub struct CompletedTrial {
+    pub objective: f32,
+    pub params: HashMap<String, Val>,
+}
 
-        let estimator = TreeStructuredParzenEstimator::new(&cs);
-        Self {
-            obj_func,
-            cs,
-            n_init,
-            max_evals,
-            tpe_samplers: HashMap::from([("loss".to_string(), estimator)]),
-            _pd: PhantomData::default(),
-            descr: descr.to_string()
-        }
-    }
-
-    pub async fn optimize(&mut self) -> Vec<Val> {
-        let mut best_loss = f32::MAX;
-        let mut best_config: Option<Vec<Val>> = None;
-
-        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.max_evals as usize, 1);
-        for i in 0..self.max_evals {
-            let eval_config = if i < self.n_init {
-                debug!("TPEOptimizer::optimize: i={i} random sample");
-                self.cs.random_sample()
-            } else {
-                debug!("TPEOptimizer::optimize: i={i} sample");
-                self.sample()
-            };
-
-            debug!("TPEOptimizer::optimize: i={i} eval_config={eval_config:?}");
-
-            let loss = self
-                .obj_func
-                .async_call_mut((&eval_config
-                    .iter()
-                    .zip(self.cs.hyperparameters.iter())
-                    .map(|(val, hp)| {
-                        NamedVal::from((hp.name().clone(), val.clone()))
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),))
-                .await;
-            debug!("TPEOptimizer::optimize: i={i} loss={loss:?}");
-
-            if loss < best_loss {
-                best_loss = loss;
-                best_config.replace(eval_config.clone());
-            }
-            debug!("TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}",eval_config);
-
-            for (_key, tpe) in &mut self.tpe_samplers {
-                tpe.update_observations(loss, &eval_config, None)
-            }
-
-            collect_eta_record_completion(grids_eta_guard.id());
-        }
-
-        best_config.unwrap_or(vec![]) //TODO
-    }
-
-    fn sample(&self) -> Vec<Val> {
-        debug!("TPEOptimizer::sample: self.tpe_samplers.len={}", self.tpe_samplers.len());
-
-        //TODO if always loss only - merge get_config_candidates & compute_probability_improvement
-        let config_conds = stack_params(
-            self.tpe_samplers
-                .values()
-                .map(|tpe| {
-                    tpe.get_config_candidates(24) //TODO to param
-                })
-                .collect::<Vec<Vec<Vec<Val>>>>(), //tpe(only loss)/params/candidates
-        );
-
-        debug!("TPEOptimizer::sample: config_conds={config_conds:?}");
-
-        //TODO weights? loss only
-        let pi_config = Tensor::stack(
-            self.tpe_samplers
-                .values()
-                .map(|tpe| tpe.compute_probability_improvement(&config_conds))
-                .collect::<Vec<Tensor>>()
-                .as_slice(),
-            0,
-        );
-
-        trace!("TPEOptimizer::sample: config_cands={config_conds:?}");
-        trace!("TPEOptimizer::sample: pi_config={pi_config}");
-
-        debug!("TPEOptimizer::sample: max={}", pi_config.max());
-
-        let max_i = pi_config.argmax(1, true).i(0).double_value(&[]);
-
-        config_conds
-            .into_iter()
-            .map(|p| p[max_i as usize].clone())
-            .collect() // return weights @ pi_config_array
+impl CompletedTrial {
+    pub fn new(objective: f32, params: HashMap<String, Val>) -> Self {
+        Self { objective, params }
     }
 }
 
-#[allow(dead_code)]
-pub struct AsyncCTPEOptimizer<F, T>
+trait TPEObjectiveResult: Debug {
+    fn loss(&self) -> f32;
+    fn constraint_loss(&self, constraint_name: &str) -> Option<f32>;
+}
+
+impl TPEObjectiveResult for f32 {
+    fn loss(&self) -> f32 {
+        *self
+    }
+
+    fn constraint_loss(&self, _constraint_name: &str) -> Option<f32> {
+        None
+    }
+}
+
+impl TPEObjectiveResult for HashMap<String, f32> {
+    fn loss(&self) -> f32 {
+        self
+            .get(TPE_LOSS_METRIC)
+            .copied()
+            .unwrap_or(f32::MAX)
+    }
+
+    fn constraint_loss(&self, constraint_name: &str) -> Option<f32> {
+        self.get(constraint_name).copied()
+    }
+}
+
+struct AsyncTPEOptimizerImpl<F, T, R>
 where
-    F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
+    F: AsyncFnMut(&[NamedVal<T>]) -> R,
     T: FieldName,
+    R: TPEObjectiveResult,
 {
     obj_func: F,
     cs: ConfigurationSpace<T>,
     constraints: HashMap<String, f32>,
     constraint_keys: Vec<String>,
-    n_init: u32,
-    max_evals: u32,
+    config: OptConfig,
+    queued_configs: VecDeque<Vec<Val>>,
     tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
-    _pd: PhantomData<T>,
-    descr:String,
+    _pd: PhantomData<(T, R)>,
+    descr: String
 }
 
-impl<F, T: FieldName> AsyncCTPEOptimizer<F, T>
+impl<F, T: FieldName, R> AsyncTPEOptimizerImpl<F, T, R>
 where
-    F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
+    F: AsyncFnMut(&[NamedVal<T>]) -> R,
+    R: TPEObjectiveResult,
 {
-    const LOSS_METRIC: &str = "loss";
+    const LOSS_METRIC: &str = TPE_LOSS_METRIC;
     const N_EI_CANDIDATES: usize = 24;
 
-    pub fn new(
+    fn new(
         obj_func: F,
         cs: ConfigurationSpace<T>,
         constraints: HashMap<String, f32>,
-        max_evals: u32,
-        n_init: u32,
+        config: OptConfig,
         descr: &str,
     ) -> Self {
-        debug!("AsyncCTPEOptimizer:new: cs={cs:?} constraints={constraints:?}");
+        debug!("AsyncTPEOptimizerImpl:new: cs={cs:?} constraints={constraints:?}");
 
         let mut tpe_samplers = HashMap::from([(
             Self::LOSS_METRIC.to_string(),
@@ -668,25 +601,41 @@ where
             cs,
             constraints,
             constraint_keys,
-            n_init,
-            max_evals,
+            config,
+            queued_configs: VecDeque::new(),
             tpe_samplers,
             descr: descr.to_string(),
             _pd: PhantomData::default(),
         }
     }
 
-    pub async fn optimize(&mut self) -> Vec<Val> {
+    fn enqueue_configs<I>(&mut self, configs: I)
+    where
+        I: IntoIterator<Item = Vec<Val>>,
+    {
+        for config in configs {
+            match self.cs.normalize_ordered_config(&config) {
+                Some(config) => self.queued_configs.push_back(config),
+                None => debug!("AsyncTPEOptimizerImpl::enqueue_configs: dropping incompatible config={config:?}"),
+            }
+        }
+    }
+
+    async fn optimize(&mut self) -> Vec<Val> {
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
+        let mut bad_evals = 0_u32;
 
-        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.max_evals as usize, 1);
-        for i in 0..self.max_evals {
-            let eval_config = if i < self.n_init {
-                debug!("AsyncCTPEOptimizer::optimize: i={i} random sample");
+        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.config.opt_max_evals as usize, 1);
+        for i in 0..self.config.opt_max_evals {
+            let eval_config = if let Some(config) = self.queued_configs.pop_front() {
+                debug!("AsyncTPEOptimizerImpl::optimize: queued sample i={i} ");
+                config
+            } else if i < self.config.opt_num_init {
+                debug!("AsyncTPEOptimizerImpl::optimize: random sample i={i} ");
                 self.cs.random_sample()
             } else {
-                debug!("AsyncCTPEOptimizer::optimize: i={i} sample");
+                debug!("AsyncTPEOptimizerImpl::optimize: sample i={i} ");
                 self.sample()
             };
 
@@ -695,36 +644,41 @@ where
                 .zip(self.cs.hyperparameters.iter())
                 .map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone())))
                 .collect::<Vec<_>>();
-            let results = self.obj_func.async_call_mut((&eval_config_named.as_slice(),)).await;
-            let loss = results
-                .get(Self::LOSS_METRIC)
-                .copied()
-                .unwrap_or(f32::MAX);
+
+            debug!("AsyncTPEOptimizerImpl::optimize:sample about to call obj_func  i={i} ");
+            let results = track_await(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
+            debug!("AsyncTPEOptimizerImpl::optimize:sample got results from obj_func results={results:?} i={i} ");
+
+            let loss = results.loss();
             let is_satisfied = self.constraint_keys.iter().all(|constraint_name| {
                 let upper_bound = self.constraints[constraint_name];
                 upper_bound.is_infinite()
                     || results
-                        .get(constraint_name)
-                        .map(|constraint_value| *constraint_value <= upper_bound)
+                        .constraint_loss(constraint_name)
+                        .map(|constraint_value| constraint_value <= upper_bound)
                         .unwrap_or(false)
             });
+            let is_satisfied_opt = (!self.constraint_keys.is_empty()).then_some(is_satisfied);
 
-            debug!("AsyncCTPEOptimizer::optimize: i={i} eval_config={eval_config:?} results={results:?} is_satisfied={is_satisfied}");
+            debug!("AsyncTPEOptimizerImpl::optimize: i={i} eval_config={eval_config:?} results={results:?} is_satisfied={is_satisfied}");
 
-            if is_satisfied && loss < best_loss {
+            let early_stopping_started = i + 1 > self.config.opt_num_init;
+            if is_satisfied && loss < best_loss - self.config.min_delta {
                 best_loss = loss;
                 best_config.replace(eval_config.clone());
+                bad_evals = 0;
+            } else if early_stopping_started && best_config.is_some() {
+                bad_evals += 1;
             }
 
             self.tpe_samplers
                 .get_mut(Self::LOSS_METRIC)
                 .expect("loss sampler missing")
-                .update_observations(loss, &eval_config, Some(is_satisfied));
+                .update_observations(loss, &eval_config, is_satisfied_opt);
 
             for constraint_name in &self.constraint_keys {
                 let constraint_loss = results
-                    .get(constraint_name)
-                    .copied()
+                    .constraint_loss(constraint_name)
                     .unwrap_or(f32::INFINITY);
                 self.tpe_samplers
                     .get_mut(constraint_name)
@@ -732,6 +686,12 @@ where
                     .update_observations(constraint_loss, &eval_config, None);
             }
             collect_eta_record_completion(grids_eta_guard.id());
+
+            if self.config.patience > 0 && early_stopping_started && bad_evals >= self.config.patience {
+                debug!("AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}", self.descr, self.config.patience, self.config.min_delta);
+                break;
+            }
+            debug!("AsyncTPEOptimizerImpl::optimize:sample done  i={i} ");
         }
 
         best_config.unwrap_or(vec![]) //TODO
@@ -763,6 +723,9 @@ where
             pi_config += self.tpe_samplers[constraint_name].compute_probability_improvement(&config_cands);
         }
 
+        trace!("AsyncTPEOptimizerImpl::sample: config_cands={config_cands:?}");
+        trace!("AsyncTPEOptimizerImpl::sample: pi_config={pi_config}");
+
         let max_i = pi_config.argmax(0, false).double_value(&[]);
         config_cands
             .into_iter()
@@ -771,6 +734,89 @@ where
     }
 }
 
+#[allow(dead_code)]
+pub struct AsyncTPEOptimizer<F, T>
+where
+    F: AsyncFnMut(&[NamedVal<T>]) -> f32,
+    T: FieldName,
+{
+    inner: AsyncTPEOptimizerImpl<F, T, f32>,
+}
+
+impl<F, T: FieldName> AsyncTPEOptimizer<F, T>
+where
+    F: AsyncFnMut(&[NamedVal<T>]) -> f32,
+{
+    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, config: OptConfig, descr: &str) -> Self {
+        debug!("AsyncTPEOptimizer:new: cs={cs:?}");
+
+        Self {
+            inner: AsyncTPEOptimizerImpl::new(
+                obj_func,
+                cs,
+                HashMap::new(),
+                config,
+                descr,
+            ),
+        }
+    }
+
+    pub async fn optimize(&mut self) -> Vec<Val> {
+        track_await(self.inner.optimize()).await
+    }
+
+    pub fn enqueue_configs<I>(&mut self, configs: I)
+    where
+        I: IntoIterator<Item = Vec<Val>>,
+    {
+        self.inner.enqueue_configs(configs);
+    }
+}
+
+#[allow(dead_code)]
+pub struct AsyncCTPEOptimizer<F, T>
+where
+    F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
+    T: FieldName,
+{
+    inner: AsyncTPEOptimizerImpl<F, T, HashMap<String, f32>>,
+}
+
+impl<F, T: FieldName> AsyncCTPEOptimizer<F, T>
+where
+    F: AsyncFnMut(&[NamedVal<T>]) -> HashMap<String, f32>,
+{
+    pub fn new(
+        obj_func: F,
+        cs: ConfigurationSpace<T>,
+        constraints: HashMap<String, f32>,
+        config: OptConfig,
+        descr: &str,
+    ) -> Self {
+        debug!("AsyncCTPEOptimizer:new: cs={cs:?} constraints={constraints:?}");
+
+        Self {
+            inner: AsyncTPEOptimizerImpl::new(
+                obj_func,
+                cs,
+                constraints,
+                config,
+                descr,
+            ),
+        }
+    }
+
+    pub async fn optimize(&mut self) -> Vec<Val> {
+        track_await(self.inner.optimize()).await
+    }
+
+    pub fn enqueue_configs<I>(&mut self, configs: I)
+    where
+        I: IntoIterator<Item = Vec<Val>>,
+    {
+        self.inner.enqueue_configs(configs);
+    }
+}
 fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     let num_rows = input[0].len();
     let mut result = vec![vec![]; num_rows];
@@ -787,9 +833,11 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tpe_optimizer_tests {
     use crate::parzen::optimizer::Val::Int;
-    use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, ConfigurationSpace, Val, stack_params};
+    use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection, Val, stack_params};
+    use crate::train_nets::OptConfig;
     use log::debug;
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use tch::Tensor;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
@@ -830,7 +878,7 @@ mod tpe_optimizer_tests {
     #[tokio::test]
     async fn test_optimize_numeric() {
         let sphere = sphere(300);
-        let mut opt = AsyncTPEOptimizer::new(
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
             ConfigurationSpace::new(
                 (0..3)
@@ -841,8 +889,7 @@ mod tpe_optimizer_tests {
                     })
                     .collect(),
             ),
-            500,
-            10,
+            OptConfig::new(500, 10),
             "n/a",
         );
 
@@ -857,7 +904,7 @@ mod tpe_optimizer_tests {
     #[tokio::test]
     async fn test_optimize_numeric_int() {
         let sphere = sphere(300);
-        let mut opt = AsyncTPEOptimizer::new(
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
             ConfigurationSpace::new(
                 (0..3)
@@ -868,17 +915,16 @@ mod tpe_optimizer_tests {
                     })
                     .collect(),
             ),
-            500,
-            10,
+            OptConfig::new(500, 10),
             "n/a",
         );
 
         let best_config = opt.optimize().await;
 
         debug!("best_config={best_config:?}");
-        // assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
-        // assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
-        // assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[2]).unwrap()).abs() < 3.);
     }
 
     #[tokio::test]
@@ -926,8 +972,7 @@ mod tpe_optimizer_tests {
                     },
                 ],
             ),
-            500,
-            10,
+            OptConfig::new(500, 10),
             "n/a",
         );
 
@@ -965,8 +1010,7 @@ mod tpe_optimizer_tests {
                 },
             ]),
             HashMap::from([("c1".to_string(), 0.0), ("c2".to_string(), 0.0)]),
-            300,
-            10,
+            OptConfig::new(300, 10),
             "n/a",
         );
 
@@ -977,18 +1021,152 @@ mod tpe_optimizer_tests {
         assert!((<&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()) <= 1.0);
     }
 
+    #[tokio::test]
+    async fn test_enqueued_configs_are_evaluated() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_obj = Arc::clone(&calls);
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |params| {
+                calls_for_obj
+                    .lock()
+                    .unwrap()
+                    .push(params.iter().map(|param| param.val().clone()).collect::<Vec<_>>());
+                0.0
+            },
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 10.0,
+            }]),
+            OptConfig::new(2, 0),
+            "n/a",
+        );
+        opt.enqueue_configs(vec![vec![Val::Real(1.0)], vec![Val::Real(2.0)]]);
+
+        let _best_config = opt.optimize().await;
+
+        assert_eq!(vec![vec![Val::Real(1.0)], vec![Val::Real(2.0)]], *calls.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_optimize_stops_after_patience_without_improvement() {
+        let calls = Arc::new(Mutex::new(0_u32));
+        let calls_for_obj = Arc::clone(&calls);
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |_params| {
+                *calls_for_obj.lock().unwrap() += 1;
+                1.0
+            },
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 10.0,
+            }]),
+            OptConfig::new_with_early_stopping(20, 1, 3, 0.001),
+            "n/a",
+        );
+
+        let _best_config = opt.optimize().await;
+
+        assert_eq!(4, *calls.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_optimize_early_stopping_waits_for_initial_samples() {
+        let calls = Arc::new(Mutex::new(0_u32));
+        let calls_for_obj = Arc::clone(&calls);
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |_params| {
+                *calls_for_obj.lock().unwrap() += 1;
+                1.0
+            },
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 10.0,
+            }]),
+            OptConfig::new_with_early_stopping(20, 5, 2, 0.001),
+            "n/a",
+        );
+
+        let _best_config = opt.optimize().await;
+
+        assert_eq!(7, *calls.lock().unwrap());
+    }
+
+    #[test]
+    fn test_reusable_configs_validate_sort_dedupe_and_cap() {
+        let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
+            Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 1.0,
+            },
+            Hyperparameter::UniformInt {
+                name: "layers".into(),
+                lower: 1,
+                upper: 4,
+            },
+            Hyperparameter::Categorical {
+                name: "kind".into(),
+                values: vec!["a", "b"],
+            },
+        ]);
+        let trials = vec![
+            CompletedTrial::new(0.0, HashMap::from([
+                ("lr".to_string(), Val::Real(2.0)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Int(0)),
+            ])),
+            CompletedTrial::new(0.05, HashMap::from([
+                ("lr".to_string(), Val::Real(0.4)),
+                ("kind".to_string(), Val::Int(0)),
+            ])),
+            CompletedTrial::new(0.07, HashMap::from([
+                ("lr".to_string(), Val::Real(0.4)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Str("z".to_string())),
+            ])),
+            CompletedTrial::new(0.1, HashMap::from([
+                ("lr".to_string(), Val::Real(0.2)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Int(0)),
+                ("unused_old_param".to_string(), Val::Bool(true)),
+            ])),
+            CompletedTrial::new(0.2, HashMap::from([
+                ("lr".to_string(), Val::Real(0.2)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Int(0)),
+            ])),
+            CompletedTrial::new(0.3, HashMap::from([
+                ("lr".to_string(), Val::Int(0)),
+                ("layers".to_string(), Val::Str("3".to_string())),
+                ("kind".to_string(), Val::Str("b".to_string())),
+            ])),
+        ];
+
+        let reusable_configs = cs.reusable_configs_from_completed_trials(trials, StudyDirection::Minimize, 2);
+
+        assert_eq!(
+            vec![
+                vec![Val::Real(0.2), Val::Int(2), Val::Int(0)],
+                vec![Val::Real(0.0), Val::Int(3), Val::Int(1)],
+            ],
+            reusable_configs
+        );
+    }
+
     fn sphere(d_x: i64) -> impl Fn(&[NamedVal<String>]) -> f32 {
         move |params| {
             debug!("params={params:?}");
 
-            let t: Tensor = ThoTensor::new((), Tensor::from_slice(
+            let t: Tensor = Tensor::from_slice(
                 params
                     .into_iter()
                     .map(|v| <&NamedVal<String> as TryInto<f64>>::try_into(v).unwrap())
                     .collect::<Vec<f64>>()
                     .as_slice(),
-            )).unwrap()
-            .into();
+            );
             let loss = t
                 .subtract_scalar(d_x)
                 .pow_tensor_scalar(2)
@@ -1056,6 +1234,139 @@ impl<T: FieldName> ConfigurationSpace<T> {
             .iter()
             .map(|hp| hp.random_sample())
             .collect()
+    }
+
+    pub fn reusable_configs_from_completed_trials<I>(&self, trials: I, direction: StudyDirection, max_total: usize) -> Vec<Vec<Val>>
+    where
+        I: IntoIterator<Item = CompletedTrial>,
+    {
+        let param_keys = self.hyperparameters.iter().map(|hp| hp.name().to_string()).collect::<Vec<_>>();
+        self.reusable_configs_from_completed_trials_with_param_keys(trials, direction, max_total, &param_keys)
+    }
+
+    pub fn reusable_configs_from_completed_trials_with_param_keys<I>(&self, trials: I, direction: StudyDirection, max_total: usize, param_keys: &[String]) -> Vec<Vec<Val>>
+    where
+        I: IntoIterator<Item = CompletedTrial>,
+    {
+        if max_total == 0 {
+            return vec![];
+        }
+        if param_keys.len() != self.hyperparameters.len() {
+            debug!("ConfigurationSpace::reusable_configs_from_completed_trials_with_param_keys: param_keys.len={} search_space.len={}", param_keys.len(), self.hyperparameters.len());
+            return vec![];
+        }
+
+        let mut trials = trials
+            .into_iter()
+            .filter(|trial| trial.objective.is_finite())
+            .collect::<Vec<_>>();
+        match direction {
+            StudyDirection::Minimize => trials.sort_by(|left, right| left.objective.partial_cmp(&right.objective).unwrap_or(Ordering::Equal)),
+            StudyDirection::Maximize => trials.sort_by(|left, right| right.objective.partial_cmp(&left.objective).unwrap_or(Ordering::Equal)),
+        }
+
+        let mut seen = HashSet::new();
+        let mut configs = Vec::new();
+        for trial in trials {
+            let Some(config) = self.normalize_trial_config(&trial.params, param_keys) else {
+                continue;
+            };
+            let key = Self::config_dedupe_key(&config);
+            if seen.insert(key) {
+                configs.push(config);
+                if configs.len() >= max_total {
+                    break;
+                }
+            }
+        }
+
+        configs
+    }
+
+    fn normalize_trial_config(&self, params: &HashMap<String, Val>, param_keys: &[String]) -> Option<Vec<Val>> {
+        let mut config = Vec::with_capacity(self.hyperparameters.len());
+        for (hp, param_key) in self.hyperparameters.iter().zip(param_keys) {
+            let val = params.get(param_key)?;
+            config.push(Self::normalize_hyperparameter_value(hp, val)?);
+        }
+        Some(config)
+    }
+
+    fn normalize_ordered_config(&self, config: &[Val]) -> Option<Vec<Val>> {
+        if config.len() != self.hyperparameters.len() {
+            return None;
+        }
+
+        self.hyperparameters
+            .iter()
+            .zip(config)
+            .map(|(hp, val)| Self::normalize_hyperparameter_value(hp, val))
+            .collect()
+    }
+
+    fn normalize_hyperparameter_value(hp: &Hyperparameter<T>, val: &Val) -> Option<Val> {
+        match hp {
+            Hyperparameter::UniformFloat { lower, upper, .. } => {
+                let v = Self::val_to_f64(val)?;
+                (v.is_finite() && *lower <= v && v <= *upper).then_some(Val::Real(v))
+            }
+            Hyperparameter::UniformInt { lower, upper, .. } => {
+                let v = Self::val_to_i64_exact(val)?;
+                (*lower <= v && v <= *upper).then_some(Val::Int(v))
+            }
+            Hyperparameter::Categorical { values, .. } => {
+                let idx = Self::categorical_index(values, val)?;
+                (idx < values.len()).then_some(Val::Int(idx as i64))
+            }
+        }
+    }
+
+    fn val_to_f64(val: &Val) -> Option<f64> {
+        match val {
+            Val::Real(v) => Some(*v),
+            Val::Int(v) => Some(*v as f64),
+            Val::UInt(v) => Some(*v as f64),
+            Val::Str(v) => v.parse().ok(),
+            Val::Bool(_) => None,
+        }
+    }
+
+    fn val_to_i64_exact(val: &Val) -> Option<i64> {
+        match val {
+            Val::Real(v) if v.is_finite() && (*v - v.trunc()).abs() <= f64::EPSILON => Some(*v as i64),
+            Val::Int(v) => Some(*v),
+            Val::UInt(v) => (*v).try_into().ok(),
+            Val::Str(v) => v.parse().ok(),
+            _ => None,
+        }
+    }
+
+    fn categorical_index(values: &[&'static str], val: &Val) -> Option<usize> {
+        match val {
+            Val::Int(v) => (*v >= 0).then_some(*v as usize),
+            Val::UInt(v) => Some(*v as usize),
+            Val::Real(v) if v.is_finite() && *v >= 0.0 && (*v - v.trunc()).abs() <= f64::EPSILON => Some(*v as usize),
+            Val::Str(v) => values.iter().position(|candidate| *candidate == v).or_else(|| v.parse().ok()),
+            Val::Bool(v) => {
+                let label = if *v { "TRUE_CAT" } else { "FALSE_CAT" };
+                values.iter().position(|candidate| *candidate == label)
+            }
+            _ => None,
+        }
+    }
+
+    fn config_dedupe_key(config: &[Val]) -> String {
+        config.iter().map(Self::val_dedupe_key).collect::<Vec<_>>().join("\u{1f}")
+    }
+
+    fn val_dedupe_key(val: &Val) -> String {
+        match val {
+            Val::Real(v) => format!("r:{}", v.to_bits()),
+            Val::Int(v) => format!("i:{v}"),
+            Val::UInt(v) => format!("u:{v}"),
+            Val::Str(v) => format!("s:{v}"),
+            Val::Bool(v) => format!("b:{v}"),
+        }
     }
 
     fn len(&self) -> usize {

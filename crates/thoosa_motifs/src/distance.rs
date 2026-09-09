@@ -8,17 +8,21 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind;
-use tch::Kind::Bool;
+use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
-use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2, z_norm_dims};
+use serde::{Deserialize, Serialize};
+use thoosa_common::debug_plot;
+use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_norm_dims};
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{panic_to_err, ThoError};
 use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
-    Ok(z_norm_2(t_0, 1)?
-        .f_sub(&z_norm_2(t_1, 1)?)?
+    Ok(z_norm(t_0, 1)?
+        .f_sub(&z_norm(t_1, 1)?)?
         .f_pow_tensor_scalar(2)?
         .f_sum_dim_intlist(dim, true, Kind::Float)?
         .f_pow_tensor_scalar(0.5)?)
@@ -53,7 +57,7 @@ pub enum MaskMaker<'a> {
     Diagonal,
     Tril,
     Le {
-        v: Tensor,
+        v: &'a Tensor,
     }, //channels x thresholds
     Gt {
         v: Tensor,
@@ -154,17 +158,69 @@ impl<'a> MaskMaker<'a> {
 /*
     t_0, t_1 - channels x slices x slice_len
 */
-/// returns bool mask and if with_distances is true distances
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="distance::clc_dist_d2_and_mask"))]
-pub fn clc_dist_d2_and_mask(
-    t_0: Tensor,
-    t_1: Tensor,
+/// returns bool mask and, if with_distances is true, distances
+pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> Result<Tensor, ThoError> {
+    match similarity_metric {
+        SimilarityMetric::EucDist(config) => {
+            if config.z_normalize {
+                let t_0 = z_norm_dims(t_0, &[2], 1e-8)?;
+                let t_1 = z_norm_dims(t_1, &[2], 1e-8)?;
+                Ok(Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?)
+            } else {
+                Ok(Tensor::f_cdist(t_0, t_1, 2.0, 0)?)
+            }
+        }
+        SimilarityMetric::PearsonCorr(_) => Ok(pearson_corr_distance_matrix_0_2(t_0, t_1, 1e-8)?),
+        SimilarityMetric::DotProduct(DotProductConfig { with_rfft }) => {
+            debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?}");
+
+            for slice in 0..t_0.size()[1] {
+                debug_plot!(&t_0.i((0..1, slice, ..)), "rfft_input_t_0", plot_repeats=t_0.size()[1] as u64)?;
+            }
+            for slice in 0..t_1.size()[1] {
+                debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1", plot_repeats=t_1.size()[1] as u64)?;
+            }
+
+            let (t_0, t_1) = if with_rfft {
+                let freqs_t_0 = t_0.f_totype(Float)?.f_fft_rfft(None, 2, "backward")?.f_abs()?;
+                let freqs_t_1 = t_1.f_totype(Float)?.f_fft_rfft(None, 2, "backward")?.f_abs()?;
+
+                debug!("clc_d2_similarity: freqs_t_0={freqs_t_0:?} freqs_t_0={freqs_t_0:?}");
+
+                (&z_norm(&freqs_t_0, 2)?, &z_norm(&freqs_t_1, 2)?)//TODO when dim param in z_norm_2 was not used the dim value was hardcoded to 1
+            } else {
+                (t_0, t_1)
+            };
+
+            debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?} /z_norm_2");
+
+            for slice in 0..t_0.size()[1] {
+                debug_plot!(&t_0.i((0..1, slice, ..)), "rfft_input_t_0_rfft", plot_repeats=t_0.size()[1] as u64)?;
+            }
+            for slice in 0..t_1.size()[1] {
+                debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1_rfft", plot_repeats=t_1.size()[1] as u64)?;
+            }
+
+            let dp = t_0.f_matmul(&t_1.f_transpose(1, 2)?)?.f_neg()?;
+
+            debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?} rfft, dp=\n{dp}");
+
+            Ok(dp)
+        },
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="distance::clc_d2_similarity_and_mask"))]
+pub fn clc_d2_similarity_and_mask(
+    t_0: &Tensor,
+    t_1: &Tensor,
+    similarity_metric: SimilarityMetric,
     with_distances: bool,
     mask_makers: &mut [MaskMaker],
 ) -> Result<(Tensor, Option<Tensor>), ThoError> {
     let device = t_0.device();
 
-    if t_0.size()[1] < 2 /*|| t_1.size()[1] < 2 TODO - when calculating distances between slices and motifs there can be single motif?*/ {
+    if t_0.size()[1] < 2 {
         return Err(ThoError::new(format!(
             "not enough slices in dimension 0 to calculate distances and mask: t_0.size={:?} t_1.size={:?}",
             t_0.size(),
@@ -179,25 +235,16 @@ pub fn clc_dist_d2_and_mask(
         )));
     }
 
-    //TODO options for z_norm_dims and pearson_corr
 
-    // let distances = Tensor::f_cdist(
-    //     &z_norm_dims(&t_0, &[2], 1e-8)?,
-    //     &z_norm_dims(&t_1, &[2], 1e-8)?,
-    //     2.0, 0
-    // )?;
+    let distances = clc_d2_similarity(t_0, t_1, similarity_metric)?;
 
-    // let distances = pearson_corr_distance_matrix_0_2(&t_0, &t_1, 1e-8)?;
-
-    let distances = Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?;
-
-    debug!("clc_dist_d2_and_mask: t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",t_0.size(), t_0.device(), t_1.size(), t_1.device());
-    debug!("clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",distances.size());
-    trace!("clc_dist_d2_and_mask: distances=\n{distances} device={:?}",distances.device());
+    debug!("clc_d2_similarity_and_mask: similarity_metric={similarity_metric:?} t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",t_0.size(),t_0.device(),t_1.size(),t_1.device());
+    debug!("clc_d2_similarity_and_mask: mask_makers={mask_makers:?} distances size={:?}",distances.size());
+    trace!("clc_d2_similarity_and_mask: distances=\n{distances} device={:?}",distances.device());
 
     let mut mask_opt: Option<Tensor> = None;
     for maker in mask_makers.iter_mut() {
-        debug!("clc_dist_d2_and_mask: mask={mask_opt:?}");
+        debug!("clc_d2_similarity_and_mask: mask={mask_opt:?}");
 
         let new_mask = maker.make_mask(mask_opt.take(), &distances)?;
         mask_opt = Some(new_mask);
@@ -210,7 +257,11 @@ pub fn clc_dist_d2_and_mask(
 
     Ok((
         mask,
-        if with_distances { Some(distances) } else { None },
+        if with_distances {
+            Some(distances)
+        } else {
+            None
+        },
     ))
 }
 
@@ -632,7 +683,6 @@ fn accumulating_mean_mask(
     let mut total_samples_guard = total_samples.lock();
     debug!("new_total_means: 1. total_samples_guard=\n{total_samples_guard} ");
 
-    // let means_device = total_samples_guard.device();
 
     let count_t_added =  counts_t.f_add(&total_samples_guard)?;
 
@@ -857,10 +907,10 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
 
 #[cfg(test)]
 mod distance_tests {
-    use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
+    use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeAccumulatedQuantile, LeQuantile, LocalMin, Tril};
     use crate::distance::{
-        MaskMaker, average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask,
-        local_min_mask_suppressed, accumulating_mean_mask, slice_t, z_normalized_euclidean,
+        accumulating_mean_mask, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask,
+        local_min_mask_suppressed, slice_t, z_normalized_euclidean, MaskMaker,
     };
     use chrono::Utc;
     use log::__private_api::enabled;
@@ -880,19 +930,18 @@ mod distance_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::{Device, IndexOp, Kind};
     use thoosa_common::builder::Node::Par;
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig};
-    use thoosa_common::loader::SyncWrapper;
+    use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
     use thoosa_shared::panic_to_err;
     use thoosa_common::utils::{
-        cuda_mem, from, hist_1_dim, lin_iter,
+        from, hist_1_dim, lin_iter,
         lin_t, plot_series, plot_series_with_points, reset_print_options,
-        skewness_kurtosis_1_dim, three_sigs_tensor, to_vec_f32,
+        skewness_kurtosis_1_dim, three_sigs_tensor, to_vec_f32, z_norm_dims,
     };
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::{
-        ThoError, comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp,
-        sin_v,
+        comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v,
+        ThoError,
     };
 
     #[ctor::ctor]
@@ -914,9 +963,8 @@ mod distance_tests {
             1,
         )?;
 
-        //TODO?
         assert!(
-            Tensor::from_slice(&[4., 4.,])
+            Tensor::from_slice(&[4.4721, 4.4721,]) //4.0 - with Bessel's correction, 4.4721 - without (unbiased=false)
                 .totype(Float)
                 .allclose(&d, 0.01, 0.01, false)
         );
@@ -1077,9 +1125,10 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (mask, Some(dist_t)) = super::clc_dist_d2_and_mask(
-            slice_0,
-            slice_1,
+        let (mask, Some(dist_t)) = super::clc_d2_similarity_and_mask(
+            &slice_0,
+            &slice_1,
+            SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }),
             true,
             &mut [LeQuantile {
                 q: 0.2,
@@ -1138,7 +1187,7 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         let (mask, Some(dist_t)) =
-            super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LocalMin { dim: 1, radius: 0 }]).unwrap()
+            super::clc_d2_similarity_and_mask(&slice_0, &slice_1, SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }), true, &mut [LocalMin { dim: 1, radius: 0 }]).unwrap()
         else {
             panic!("no dists");
         };
@@ -1205,9 +1254,10 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         //set_max_level(Trace);
-        let (mask, Some(dist_t)) = clc_dist_d2_and_mask(
-            slice_0,
-            slice_1,
+        let (mask, Some(dist_t)) = clc_d2_similarity_and_mask(
+            &slice_0,
+            &slice_1,
+            SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }),
             true,
             &mut [
                 LeQuantile {
@@ -1232,6 +1282,90 @@ mod distance_tests {
         // assert_eq!(5.0, dist_t.double_value(&[0,0,0]));
         // assert_eq!(5.0, dist_t.double_value(&[0,1,1]));
         // assert_eq!(5.0, dist_t.double_value(&[0,2,2]));
+    }
+
+    #[test]
+    fn test_clc_d2_similarity_and_mask_pearson_route() -> Result<(), ThoError> {
+        let t_0 = Tensor::from_slice(&[
+            1.0f32, 2.0, 3.0,
+            2.0, 3.0, 4.0,
+        ]).view((1, 2, 3));
+        let t_1 = Tensor::from_slice(&[
+            3.0f32, 2.0, 1.0,
+            2.0, 4.0, 6.0,
+        ]).view((1, 2, 3));
+
+        let (mask, Some(distances)) = clc_d2_similarity_and_mask(
+            &t_0,
+            &t_1,
+            SimilarityMetric::PearsonCorr(PearsonCorrConfig::default()),
+            true,
+            &mut [],
+        )? else {
+            panic!("no distances");
+        };
+
+        let expected = crate::pearson_corr::pearson_corr_distance_matrix_0_2(&t_0, &t_1, 1e-8)?;
+        assert!(distances.allclose(&expected, 1e-6, 1e-6, false));
+        assert_eq!(mask, Tensor::ones(expected.size(), (Bool, expected.device())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_clc_d2_similarity_and_mask_dot_product_route() -> Result<(), ThoError> {
+        let t_0 = Tensor::from_slice(&[
+            1.0f32, 2.0,
+            3.0, 4.0,
+        ]).view((1, 2, 2));
+        let t_1 = Tensor::from_slice(&[
+            5.0f32, 6.0,
+            7.0, 8.0,
+        ]).view((1, 2, 2));
+
+        let (_, Some(distances)) = clc_d2_similarity_and_mask(
+            &t_0,
+            &t_1,
+            SimilarityMetric::DotProduct(DotProductConfig::default()),
+            true,
+            &mut [],
+        )? else {
+            panic!("no distances");
+        };
+
+        let expected = Tensor::from_slice(&[-17.0f32, -23.0, -39.0, -53.0]).view((1, 2, 2));
+        assert!(distances.allclose(&expected, 1e-6, 1e-6, false));
+        Ok(())
+    }
+
+    #[test]
+    fn test_clc_d2_similarity_and_mask_z_normalized_euclidean_route() -> Result<(), ThoError> {
+        let t_0 = Tensor::from_slice(&[
+            1.0f32, 3.0, 5.0,
+            2.0, 4.0, 6.0,
+        ]).view((1, 2, 3));
+        let t_1 = Tensor::from_slice(&[
+            10.0f32, 30.0, 50.0,
+            3.0, 2.0, 1.0,
+        ]).view((1, 2, 3));
+
+        let (_, Some(distances)) = clc_d2_similarity_and_mask(
+            &t_0,
+            &t_1,
+            SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }),
+            true,
+            &mut [],
+        )? else {
+            panic!("no distances");
+        };
+
+        let expected = Tensor::f_cdist(
+            &z_norm_dims(&t_0, &[2], 1e-8)?,
+            &z_norm_dims(&t_1, &[2], 1e-8)?,
+            2.0,
+            0,
+        )?;
+        assert!(distances.allclose(&expected, 1e-6, 1e-6, false));
+        Ok(())
     }
 
     #[test]
@@ -1262,7 +1396,7 @@ mod distance_tests {
         debug!("thresholds_t_broadcasted=\n{thresholds_t_broadcasted}");
 
         let mask = Le {
-            v: thresholds_t_broadcasted,
+            v: &thresholds_t_broadcasted,
         }
         .make_mask(None, &dists_t).unwrap();
 
@@ -1983,6 +2117,7 @@ mod distance_tests {
         let q_t = samples.quantile_scalar(0.5, 2, true, "lower");
 
         debug!("full: q_t=\n{q_t}");
+        assert_eq!(q_t.double_value(&[0, 0, 0]), 0.0200);
 
         let samples = Tensor::from_slice(&[
             0.0000,
@@ -1998,6 +2133,7 @@ mod distance_tests {
         let q_t = samples.quantile_scalar(0.5, 2, true, "lower");
 
         debug!("masked: q_t=\n{q_t}");
+        assert_eq!(q_t.double_value(&[0, 0, 0]), 0.0300);
     }
 
     #[test]
@@ -2159,5 +2295,39 @@ mod distance_tests {
         println!("eq={}", eq);
 
         assert!(eq);
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct EucDistConfig {
+    #[in_map]
+    #[run_config]
+    pub z_normalize: bool,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct PearsonCorrConfig {
+
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct DotProductConfig {
+    #[in_map]
+    #[run_config]
+    pub with_rfft: bool,
+}
+
+//TODO change to not/normalized
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum SimilarityMetric {
+    #[run_config_default]
+    EucDist(EucDistConfig),
+    PearsonCorr(PearsonCorrConfig),
+    DotProduct(DotProductConfig),
+}
+
+impl Default for SimilarityMetric {
+    fn default() -> Self {
+        Self::EucDist(EucDistConfig::default())
     }
 }

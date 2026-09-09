@@ -1,19 +1,23 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
+use std::str::FromStr;
+use clap::{Args, Subcommand};
 use crate::utils::from;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::ThoError;
+use thoosa_digest_id::DigestHash;
 
 pub trait InputFilterLengthAdjuster {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync>;
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)] //PartialEq - for tests
+#[digest(tag = "thoosa.BandPassFilterParams:v1")]
 pub struct BandPassFilterParams {
     #[in_map]
     #[run_config]
@@ -33,6 +37,7 @@ pub struct BandPassFilterParams {
 
     #[in_map]
     #[run_config]
+    #[command(subcommand)]
     pub padding: Padding,
 }
 
@@ -58,7 +63,8 @@ impl InputFilterLengthAdjuster for BandPassFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)] //PartialEq - for tests
+#[digest(tag = "thoosa.NotchBandFilterParams:v1")]
 pub struct NotchBandFilterParams {
     #[in_map]
     #[run_config]
@@ -75,7 +81,9 @@ impl InputFilterLengthAdjuster for NotchBandFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+// Every InputFilter payload needs its own stable schema tag before the enum can hash nested content.
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.SavGolFilterParams:v1")]
 pub struct SavGolFilterParams {
     #[in_map]
     #[run_config]
@@ -91,6 +99,7 @@ pub struct SavGolFilterParams {
 
     #[in_map]
     #[run_config]
+    #[command(subcommand)]
     pub padding: Padding,
 }
 
@@ -117,7 +126,8 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.MedianFilterParams:v1")]
 pub struct MedianFilterParams {
     #[in_map]
     #[run_config]
@@ -126,11 +136,14 @@ pub struct MedianFilterParams {
 
 impl InputFilterLengthAdjuster for MedianFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
-        Box::new(|l: u32| l)
+        let window = self.window;
+
+        Box::new(move |l: u32| l.saturating_sub(window))
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.AverageFilterParams:v1")]
 pub struct AverageFilterParams {
     #[in_map]
     #[run_config]
@@ -143,7 +156,10 @@ pub struct AverageFilterParams {
 
 impl InputFilterLengthAdjuster for AverageFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
-        Box::new(|l: u32| l)
+        let window = self.window;
+        let step = self.step;
+
+        Box::new(move |l: u32| l.saturating_sub(window) / step)
     }
 }
 
@@ -256,42 +272,46 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, DigestHash)]
+#[digest(tag = "thoosa.Padding:v1")]
 pub enum Padding {
     /// Pad with zeros (uses conv1d's built-in padding).
-    Zero(SgZeroPadding),
+    Zero(ZeroPadding),
     /// Mirror the signal at the boundary, **excluding** the edge value (PyTorch "reflect").
-    Reflect(SgReflectPadding),
+    Reflect(ReflectPadding),
     /// Repeat the edge value (PyTorch "replicate").
-    Replicate(SgReplicatePadding),
+    Replicate(ReplicatePadding),
 }
 
 impl Padding {
     pub fn zero() -> Self {
-        Self::Zero(SgZeroPadding {})
+        Self::Zero(ZeroPadding {})
     }
 
     pub fn reflect() -> Self {
-        Self::Reflect(SgReflectPadding {})
+        Self::Reflect(ReflectPadding {})
     }
 
     pub fn replicate() -> Self {
-        Self::Replicate(SgReplicatePadding {})
+        Self::Replicate(ReplicatePadding {})
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SgZeroPadding {}
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default, DigestHash)]
+#[digest(tag = "thoosa.ZeroPadding:v1")]
+pub struct ZeroPadding {}
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SgReflectPadding {}
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default, DigestHash)]
+#[digest(tag = "thoosa.ReflectPadding:v1")]
+pub struct ReflectPadding {}
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SgReplicatePadding {}
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default, DigestHash)]
+#[digest(tag = "thoosa.ReplicatePadding:v1")]
+pub struct ReplicatePadding {}
 
 
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
-fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
+pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
     if pad == 0 {
         return Ok(x.shallow_clone());
     }
@@ -390,18 +410,28 @@ pub fn savgol_smooth_1d_channels(
     Ok(y3.squeeze_dim(0))
 }
 
+// The unit-like ZNorm payload still needs a tag so its type remains domain-separated in the digest.
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.ZNormFilterParams:v1")]
+pub struct ZNormFilterParams {
+
+}
+
+impl InputFilterLengthAdjuster for ZNormFilterParams {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        Box::new(move |l: u32| l)
+    }
+}
+
+
+
+
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::transforms::filters::{band_pass_filter, clc_frequencies, hann_window};
+    use crate::transforms::filters::{band_pass_filter, clc_frequencies};
     use crate::transforms::utils::sin_t;
-    use crate::utils::{from, plot_series, to_vec_f32};
-    use log::debug;
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
-    use std::f64;
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::*;
     use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_shared::ThoError;
     use thoosa_shared::test_utils::are_close;
@@ -506,4 +536,36 @@ mod tests {
         Ok(())
     }
 
+}
+
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, DigestHash)]
+#[digest(tag = "thoosa.InputFilter:v1")]
+pub enum InputFilter {
+    NotchBandFilter(NotchBandFilterParams),
+    BandPassFilter(BandPassFilterParams),
+    SavGolFilter(SavGolFilterParams),
+    MedianFilter(MedianFilterParams),
+    AverageFilter(AverageFilterParams),
+    ZNorm(ZNormFilterParams),
+}
+
+impl FromStr for InputFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json5::from_str(s).map_err(|e| format!("parse InputFilter from `{s}`: {e}"))
+    }
+}
+
+impl InputFilterLengthAdjuster for InputFilter {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        match self {
+            InputFilter::NotchBandFilter(filter) => filter.adjust_length(),
+            InputFilter::BandPassFilter(filter) => filter.adjust_length(),
+            InputFilter::SavGolFilter(filter) => filter.adjust_length(),
+            InputFilter::MedianFilter(filter) => filter.adjust_length(),
+            InputFilter::AverageFilter(filter) => filter.adjust_length(),
+            InputFilter::ZNorm(filter) => filter.adjust_length(),
+        }
+    }
 }

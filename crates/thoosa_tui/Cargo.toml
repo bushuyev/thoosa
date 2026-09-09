@@ -8,6 +8,7 @@ thoosa_store = { path = "../thoosa_store" }
 thoosa_shared = { path = "../thoosa_shared" }
 clap.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 serde_json.workspace = true
 interprocess.workspace = true
 ratatui = "0.29.0"

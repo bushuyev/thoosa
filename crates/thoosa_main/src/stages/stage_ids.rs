@@ -1,0 +1,19 @@
+pub const RAW_TENSOR_LOADER: u32 = 1;
+pub const FREQ_FILTER: u32 = 2;
+pub const WELCH_PSD_PER_RESOURCE: u32 = 3;
+pub const WELCH_PSD: u32 = 4;
+pub const MOTIF_STATS_SYNC_STAGE: u32 = 5;
+pub const MOTIF_STATS: u32 = 6;
+pub const MOTIF_LOADER: u32 = 7;
+pub const RANDOM_SLICES_LOADER: u32 = 8;
+pub const MOTIF_LOADER_SYNC_STAGE: u32 = 9;
+pub const APPLY_MOTIF_NET: u32 = 10;
+pub const MERGE_SELECTED_MOTIFS: u32 = 11;
+pub const SELECT_MOTIFS: u32 = 12;
+pub const TRAIN_MOTIF_NETS: u32 = 13;
+pub const APPLY_MOTIF_NETS: u32 = 14;
+
+pub const SELECT_BUCKETS: u32 = 15;
+pub const EXTEND_MOTIFS: u32 = 16;
+
+pub const STFT: u32 = 17;

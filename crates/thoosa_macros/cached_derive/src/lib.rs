@@ -7,7 +7,7 @@ pub fn derive_acachable(_input: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
-// Derive macro for thoosa_shared::runner::common::cachable::Cached
+// Derive macro for thoosa_common::runner::common::cachable::Cached
 #[proc_macro_derive(Cached, attributes(cache_name))]
 pub fn derive_cached(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -16,12 +16,10 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
 
     let map_type = quote! {
         dashmap::DashMap<
-            <<Self as thoosa_shared::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
+            <<Self as thoosa_shared::traits::Stage>::Out as thoosa_shared::traits::WithId>::ID,
             futures_util::future::Shared<
                 futures_util::future::BoxFuture<'static, Result<
-                    std::sync::Arc<thoosa_shared::runner::common::cachable::DevicesWrap<
-                        <Self as thoosa_shared::runner::common::runnable::Stage>::Out
-                    >>,
+                    <Self as thoosa_shared::traits::Stage>::Out,
                     thoosa_shared::ThoosaError
                 >>
             >,
@@ -40,35 +38,37 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
         static #register_static_ident: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
         #[async_trait::async_trait]
-        impl #impl_generics thoosa_shared::runner::common::cachable::Cached for #name #ty_generics #where_clause {
+        impl #impl_generics thoosa_common::runner::common::cachable::Cached for #name #ty_generics #where_clause {
             async fn cache() -> &'static #map_type
-            where
-                Self: Sized,
+                where
+                    Self: Sized,
+                    Self::Out:  Sync + Send
             {
-                let ptr_ref = #cache_static_ident.get_or_init(|| {
-                    let map: &'static #map_type = Box::leak(Box::new(Default::default()));
-                    map as *const #map_type as usize
+                use mockall_double::double;
+                #[double]
+                use thoosa_common::runner::global_ctx::GlobalCtx;
+
+                let arc_ptr = #cache_static_ident.get_or_init(|| {
+                    let map: std::sync::Arc<#map_type> = std::sync::Arc::new(Default::default());
+                    Box::into_raw(Box::new(map)) as usize
                 });
 
-                let map: &'static #map_type = unsafe {
-                    &*((*ptr_ref) as *const #map_type)
+                let map: &'static std::sync::Arc<#map_type> = unsafe {
+                    &*((*arc_ptr) as *const std::sync::Arc<#map_type>)
                 };
-
 
                 #register_static_ident
                     .get_or_init(|| async move {
                         use thoosa_shared::traits::Named;
 
-                        thoosa_shared::runner::global_ctx::GlobalCtx::global()
-                            .register_cache((
-                                Self::name(),
-                                map as &'static dyn thoosa_shared::runner::purge::FuturesRunnerMapPurger,
-                            ))
-                            .await;
+                        GlobalCtx::global().register_cache((
+                            Self::name(),
+                            std::sync::Arc::new(thoosa_common::runner::purge::StaticMapPurger::new(map.as_ref())) as std::sync::Arc<dyn thoosa_common::runner::purge::FuturesRunnerMapPurger>,
+                        ));
                     })
                     .await;
 
-                map
+                map.as_ref()
             }
         }
     };

@@ -5,11 +5,12 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::batches::BatchLengths;
-use crate::dims::{AnyDims, Dims, MotifSlices};
-use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
-use thoosa_shared::{panic_to_err, ThoError};
+use crate::dims::{AnyDims, Dims, MotifSlices, Spectorgram};
+use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, conv1d_from_path, conv2d_from_path, my_linear, MotifInitMode};
+use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
+use crate::nodes::cosine_2d::MyCosineConv2d;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -23,12 +24,12 @@ pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig,
         return Err(ThoError::new(format!("kernel={kernel} should be bigger than 0")))
     }
     if l_in + 2 * (c.padding as u32) < c.dilation as u32  * (kernel - 1) {
-        return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} should be bigger than 2", kernel, c.dilation)))
+        return Err(ThoError::new(format!("clc_conv1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} padding={}", kernel, c.dilation, c.padding)))
     }
 
     if l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1{
 
-        return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={} should be bigger than 1", kernel, c.dilation)))
+        return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={}", kernel, c.dilation)))
     }
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
@@ -45,7 +46,7 @@ pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, s
     }
 
     if l_in + 2 * padding < dilation * (kernel - 1) - 1 {
-        return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} should be bigger than 2")))
+        return Err(ThoError::new(format!("clc_max_pool1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} padding={padding}")))
     }
 
     debug!("clc_max_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} dilation={dilation} stride={stride}");
@@ -93,7 +94,17 @@ pub enum Node {
         kernel: u32,
         a: f64,
         b: f64,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init_mode:MotifInitMode
+    },
+    CosineConv2d {
+        path:String,
+        kw_time:i64,
+        kh_freq:i64,
+        a: f64,
+        b: f64,
+        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
+        init_mode:MotifInitMode
     },
     SharpeningHead1d {
         path: String,
@@ -122,7 +133,7 @@ pub enum Node {
         path:String,
         in_feats: u32,
         out_feats: u32,
-        config: Option<LinearConfig>,
+        config: Option<LinearConfig>
     },
     Func {
         func: Fp,
@@ -242,17 +253,22 @@ impl Node {
                 config,
                 init
             } => {
-                let mut conv = panic_to_err!(Ok::<_, ThoError>(nn::conv1d(
-                    vs / path,
+                let conv_path = vs / path;
+                let had_weight = conv_path.get("weight").is_some();
+                let mut conv = conv1d_from_path(
+                    &conv_path,
                     in_channels as i64,
                     out_channels as i64,
                     kernel as i64,
                     config,
-                )))?;
-                if let Some(init) = init {
-                    no_grad(|| {
-                        conv.ws.copy_(&init.t.view((1, 1, kernel as i64)));
-                    });
+                )?;
+                // Initialization belongs only to a newly created variable;
+                // copied tensors must retain their existing values.
+                if !had_weight && let Some(init) = init {
+                    no_grad(|| -> Result<(), ThoError> {
+                        conv.ws.f_copy_(&init.t_ref().f_view((1, 1, kernel as i64))?)?;
+                        Ok(())
+                    })?;
 
                 }
                 Box::new(MyConv::new(conv, kernel, config))
@@ -263,13 +279,13 @@ impl Node {
                 in_channels,
                 out_channels,
                 config,
-            } => Box::new(MyConv::new(nn::conv2d(
-                vs / "cnn_2d",
+            } => Box::new(MyConv::new(conv2d_from_path(
+                &(vs / "cnn_2d"),
                 in_channels as i64,
                 out_channels as i64,
                 kernel as i64,
                 config,
-            ),
+            )?,
           0,
             ConvConfig::default())),
 
@@ -278,11 +294,29 @@ impl Node {
                 kernel,
                 a, b,
                 init,
+                init_mode
             } => Box::new(MyCosineConv1d::new(
                 &(vs / path),
                 kernel as i64,
-                init, a, b
+                init,
+                init_mode,
+                a, b
             )?),
+            Node::CosineConv2d {
+                path,
+                kw_time, kh_freq,
+                a, b,
+                init,
+                init_mode
+            } => Box::new(MyCosineConv2d::new(
+                &(vs / path),
+                kh_freq,
+                kw_time,
+                init,
+                // init_mode,
+                a, b,
+            )?),
+
 
             Node::SharpeningHead1d {
                 path,
@@ -302,12 +336,12 @@ impl Node {
                 temperature as f64,
             )?),
 
-            Node::BinaryHead { path, pool } => Box::new(BinaryHead::new(&(vs / path), pool)),
+            Node::BinaryHead { path, pool } => Box::new(BinaryHead::new(&(vs / path), pool)?),
 
             Node::BatchNorm {
                 num_features,
                 config,
-            } => Box::new(MyBatchNorm1d::new(vs / "batch_norm", num_features, config)),
+            } => Box::new(MyBatchNorm1d::new(vs / "batch_norm", num_features, config)?),
 
             Node::Linear {
                 path,
@@ -322,7 +356,7 @@ impl Node {
                 assert!(in_feats > 0, "in_feats > 0: in_feats={in_feats} path={path}");
                 assert!(out_feats > 0, "out_feats > 0: in_feats={in_feats} path={path}");
 
-                #[cfg(debug_assertions)]
+                #[cfg(any(debug_assertions, tho_debug))]
                 let decr = path.clone();
 
                 Box::new(my_linear(
@@ -330,7 +364,7 @@ impl Node {
                     in_feats as i64,
                     out_feats as i64,
                     config.unwrap_or(LinearConfig::default()),
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(debug_assertions, tho_debug))]
                     decr,
                 )?)
             }
@@ -382,10 +416,15 @@ impl Node {
             },
 
             Node::AttnPool1d { path, channels, attn_hidden } => {
-                Box::new(MyAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64))
+                Box::new(MyAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64)?)
             }
         })
     }
+}
+
+pub trait AsNode {
+    type InitData=();
+    fn as_node(&self, init_data:Self::InitData) -> Result<Node, ThoError>;
 }
 
 #[derive(Debug)]
@@ -486,14 +525,16 @@ impl SeqBuilder {
         kernel: u32,
         init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
         a: f64,
-        b: f64
+        b: f64,
+        init_mode: MotifInitMode
     ) -> Result<&mut Self, ThoError> {
 
         self.elts.push(Node::CosineConv1d {
             path:path.to_string(),
             kernel,
             a, b,
-            init
+            init,
+            init_mode
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, ConvConfig::default(),  "")?;
@@ -501,6 +542,33 @@ impl SeqBuilder {
 
         Ok(self)
     }
+
+    pub fn cosine_conv_2d<P:ToString>(
+        &mut self,
+        path: P,
+        kw_time: u32,
+        kh_freq: u32,
+        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
+        a: f64,
+        b: f64,
+        init_mode: MotifInitMode
+    ) -> Result<&mut Self, ThoError> {
+
+        self.elts.push(Node::CosineConv2d {
+            path:path.to_string(),
+            kw_time: kw_time as i64,
+            kh_freq: kh_freq as i64,
+            a, b,
+            init,
+            init_mode
+        });
+
+        self.num_features = clc_conv1d_out(self.num_features, kw_time, ConvConfig::default(), "")?;
+        self.kernel = Some(kw_time);
+
+        Ok(self)
+    }
+
 
     pub fn sharpening_head_1d<P:ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> Result<&mut Self, ThoError> {
         self.elts.push(Node::SharpeningHead1d {
