@@ -164,60 +164,6 @@ pub struct TrainLabelNetRunConfigResultParams<'a> {
     pub motif_nets_ids: &'a Vec<u32>,
 }
 
-#[derive(Debug)]
-pub struct TrainFinalNetsRunConfigResult {
-    train_label_nets_run_config_ids: Vec<RunConfigId>,
-    pub loss: f32,
-    var_store_path: TmpFile,
-    final_node_params: FinalNetParams,
-    train_final_net_run_config: TrainFinalNetRunConfig,
-}
-
-impl TrainFinalNetsRunConfigResult {
-    pub fn new(
-        train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>,
-        loss: f32,
-        var_store_path: TmpFile,
-        final_node_params: FinalNetParams,
-        train_final_nodes_values: TrainFinalNetRunConfig,
-    ) -> Self {
-        Self {
-            train_label_nets_run_config_ids: train_label_nets_run_config_ids
-                .expect("train_label_nodes_run_config_ids")
-                .clone(),
-            loss,
-            var_store_path,
-            final_node_params,
-            train_final_net_run_config: train_final_nodes_values,
-        }
-    }
-}
-
-#[async_trait]
-impl SavableResult for TrainFinalNetsRunConfigResult {
-    type R = u32;
-
-    async fn save(
-        &mut self,
-        store: &Arc<Box<dyn Store>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
-        let run_config_id = track_await(store.save_run_config(
-            Some(&self.train_label_nets_run_config_ids),
-            &TrainFinalNetRunConfig::type_name(),
-            "Final",
-            self.train_final_net_run_config.to_properties_iter(None).collect(),
-        )).await?;
-
-        let path = ws.read()
-            .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
-
-        track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
-
-        Ok(run_config_id)
-    }
-}
 type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError>;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
@@ -2127,7 +2073,7 @@ impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
 }
 
 impl FinalNetArgs {
-    #[cfg(test)]
+
     pub fn new(num_layers: u32, mid_features: u32) -> Self {
         Self { num_layers, mid_features }
     }
@@ -3905,32 +3851,6 @@ mod train_tests {
     }
 
 
-    #[tokio::test]
-    async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
-        let store = Arc::new(SqlStore::in_mem().await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
-        let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
-        let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
-        // Exercise the same checkpoint handoff used by local and IPC training.
-        let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
-        VarStore::new(Cpu).save(&checkpoint_path)?;
-        let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
-            Some(&vec![label_run_config_id_0, label_run_config_id_1]),
-            0.125,
-            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
-            FinalNetParams::new(4, 100, 2, 3),
-            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3, 100)),
-        );
-
-        let run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
-        let run_config_values = store.list_run_config_values(run_config_id).await?;
-        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
-
-        assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
-        Ok(())
-    }
 
 
     #[test]
