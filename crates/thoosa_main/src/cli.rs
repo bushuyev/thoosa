@@ -5,12 +5,12 @@ use crate::cli::Commands::{
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::progress_socket::CollectEtaProgressSocketServer;
-use crate::tasks::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
-use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::export::{Export as ExportStage, ExportArgs, ExportInput};
-use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
-use crate::tasks::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
-use crate::tasks::tensor_loader::RawTensorLoader;
+use crate::stages::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
+use crate::stages::cross_loader::ResourcesConfigInput;
+use crate::stages::export::{Export as ExportStage, ExportArgs, ExportInput};
+use crate::stages::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
+use crate::stages::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
+use crate::stages::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand};
@@ -49,22 +49,22 @@ use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, S
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::traits::Stage;
 
-use crate::tasks::apply_motif_nets::ApplyMotifNets;
-use crate::tasks::apply_motif_nets::apply_motif_net_forward;
-use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
-use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
-use crate::tasks::load_motif_net::MotifNetMeta;
-use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
-use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-use crate::tasks::select_buckets::SelectBucketsRunConfigRangeOrValue;
-use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
-use crate::tasks::seq_scan::SeqScanStage;
-use crate::tasks::slices_stats::{Aggr, Metrics};
-use crate::tasks::train_final_net::new_train_final_net;
-use crate::tasks::train_label_nets::{TrainLabelNets, new_train_label_nets};
-use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult};
-use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
+use crate::stages::apply_motif_nets::ApplyMotifNets;
+use crate::stages::apply_motif_nets::apply_motif_net_forward;
+use crate::stages::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
+use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
+use crate::stages::load_motif_net::MotifNetMeta;
+use crate::stages::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
+use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+use crate::stages::select_buckets::SelectBucketsRunConfigRangeOrValue;
+use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use crate::stages::seq_scan::SeqScanStage;
+use crate::stages::slices_stats::{Aggr, Metrics};
+use crate::stages::train_final_net::new_train_final_net;
+use crate::stages::train_label_nets::{TrainLabelNets, new_train_label_nets};
+use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult};
+use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsMotifsDists;
@@ -645,7 +645,7 @@ where
                 &store,
                 async move |run_configs| {
                     Ok(Arc::new(
-                        track_await(crate::tasks::find_motifs::FindMotifsStage::new(
+                        track_await(crate::stages::find_motifs::FindMotifsStage::new(
                             &init_ws,
                             &init_store,
                             init_loader,
@@ -2122,16 +2122,16 @@ where
 #[cfg(test)]
 mod cli_tests {
     use crate::cli::{Cli, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
-    use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
-    use crate::tasks::find_motifs::FindMotifsStage;
-    use crate::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::tasks::motif_stats::MotifStats;
-    use crate::tasks::slices_stats::{Aggr, Metrics};
-    use crate::tasks::stft::SyncStftSelector;
-    use crate::tasks::tensor_loader::RawTensorLoader;
-    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
+    use crate::stages::cross_loader::ResourcesConfigInput;
+    use crate::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
+    use crate::stages::find_motifs::FindMotifsStage;
+    use crate::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+    use crate::stages::motif_stats::MotifStats;
+    use crate::stages::slices_stats::{Aggr, Metrics};
+    use crate::stages::stft::SyncStftSelector;
+    use crate::stages::tensor_loader::RawTensorLoader;
+    use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -2265,8 +2265,8 @@ mod cli_tests {
 
         match cli.command {
             Some(crate::cli::Commands::ConvertPrecision(args)) => {
-                assert_eq!(args.nets_by(), crate::tasks::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
-                assert_eq!(args.target_precision(), crate::tasks::convert_precision::ConvertPrecisionTarget::Bf16);
+                assert_eq!(args.nets_by(), crate::stages::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
+                assert_eq!(args.target_precision(), crate::stages::convert_precision::ConvertPrecisionTarget::Bf16);
             }
             other => panic!("unexpected command: {other:?}"),
         }

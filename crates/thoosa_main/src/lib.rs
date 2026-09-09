@@ -15,13 +15,13 @@
 pub mod cli;
 pub mod data;
 mod progress_socket;
-pub mod tasks;
+pub mod stages;
 pub mod version;
 
 //TODO use directly?
 pub use thoosa_common::dims::ChannelsData;
-pub use tasks::apply_motif_nets::ApplyMotifNets;
-pub use tasks::motif_stats::random_non_overlapping_slices;
-pub use tasks::tensor_loader::RawTensorLoader;
-pub use tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
-pub use tasks::transforms::freq_filter::FreqFilter;
+pub use stages::apply_motif_nets::ApplyMotifNets;
+pub use stages::motif_stats::random_non_overlapping_slices;
+pub use stages::tensor_loader::RawTensorLoader;
+pub use stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
+pub use stages::transforms::freq_filter::FreqFilter;

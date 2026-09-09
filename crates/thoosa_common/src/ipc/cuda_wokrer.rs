@@ -129,7 +129,7 @@ fn prepare_d2h_source(all_cuda_tensors: &AllTensors, tensor_key: u64, kind: IpcT
     if source_cuda_device != cuda_device {
         return Err(ThoError::new(format!("worker tensor key={tensor_key} device={source_cuda_device} does not match worker CUDA device={cuda_device}")));
     }
-    // A fallible alias keeps the CUDA storage alive after releasing the tensor map while CopyCtx awaits its chunk tasks.
+    // A fallible alias keeps the CUDA storage alive after releasing the tensor map while CopyCtx awaits its chunk stages.
     Ok(source.f_alias()?)
 }
 
@@ -306,7 +306,7 @@ impl CudaWorker {
             let task_context = request_context.clone();
             request_tasks.spawn(async move { Self::process_worker_request(request, task_context).await });
 
-            // Reap tasks only between complete frames so doing so can never cancel an in-progress socket read.
+            // Reap stages only between complete frames so doing so can never cancel an in-progress socket read.
             while let Some(joined) = request_tasks.try_join_next() {
                 joined.map_err(|error| ThoError::new(format!("worker request task failed: {error}")))??;
             }

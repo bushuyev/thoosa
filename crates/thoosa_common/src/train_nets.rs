@@ -1092,7 +1092,7 @@ impl MotifNetParams {
     }
 
     //TODO
-    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_main/src/tasks/apply_motif_nets.rs
+    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_main/src/stages/apply_motif_nets.rs
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,

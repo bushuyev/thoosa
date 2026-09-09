@@ -702,7 +702,7 @@ where
             }
         } else {
             // If it's locked, assume it's the current task's input. DumpToCpu only runs with
-            // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
+            // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other stages should be running; skipping avoids deadlock.
             warn!("DevicesWrap::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data);
             debug!("DevicesWrap::dump_to_cpu: id={:?} trace: {}", self.id, n_trace_line(&Backtrace::capture(), 50));
         }

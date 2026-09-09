@@ -294,8 +294,8 @@ impl Drop for ParentSuspendGuard {
     }
 }
 
-///Its goal is to run synchronous tasks limiting parallelism.
-/// Maximum allowed number of parallel tasks is specified in max_other_parallel parameter to submit method
+///Its goal is to run synchronous stages limiting parallelism.
+/// Maximum allowed number of parallel stages is specified in max_other_parallel parameter to submit method
 /// All per-device executor instances share BufferLimits execution permits. The aggregate number of
 /// active jobs is bounded by that adaptive limit.
 /// Currently, it's used from OOMHandler only.
@@ -690,7 +690,7 @@ impl DynamicTaskExecutor {
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
         pending_reset: PendingCudaReset,
     ) {
-        // The manager calls this only after all jobs and their Tokio tasks have completed,
+        // The manager calls this only after all jobs and their Tokio stages have completed,
         // making reset equivalent to an exclusive max_other_parallel=0 job. Keeping the
         // reopen operation in Drop also covers cancellation or reset_fn failure.
         struct ResetPauseGuard {
@@ -1380,7 +1380,7 @@ impl DynamicTaskExecutor {
         buffer_limits: &FuturesLimits,
     ) {
         // Resumes queued before the pause may not receive a fresh Resume command. Flush
-        // only fully-unsuspended jobs so parent tasks that are already eligible to run
+        // only fully-unsuspended jobs so parent stages that are already eligible to run
         // are not stranded behind a reset that may be waiting for them to drop state.
         for job in jobs.values_mut() {
             if job.suspend_depth == 0 && !job.waiting_resumes.is_empty() {
