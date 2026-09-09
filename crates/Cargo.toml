@@ -105,6 +105,7 @@ blake3 = "1.8.6"
 postcard = { version = "1", features = ["alloc"] }
 talc = "5.1"
 memmap2 = "0.9"
+rusqlite = { version = "0.37", features = ["bundled", "trace"] }
 [profile.test]
 opt-level = 0
 [profile.dev]

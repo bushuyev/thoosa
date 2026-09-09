@@ -29,7 +29,8 @@ ctor.workspace = true
 chrono.workspace = true
 rayon.workspace = true
 #rand_distr.workspace = true
-
+mockall.workspace = true
+rusqlite.workspace = true
 sci-rs = "0"
 plotters = { version = "0"}
 
