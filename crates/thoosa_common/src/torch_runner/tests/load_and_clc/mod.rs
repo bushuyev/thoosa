@@ -992,10 +992,10 @@ async fn test_with_data() -> Result<(), ThoError> {
     assert_eq!(i, 0);
     assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 3);
 
-    // train cycle at crates/thoosa_main/src/tasks/train_net.rs:273.
+    // train cycle at crates/thoosa_main/src/stages/train_net.rs:273.
     // Buffered batch futures 1 and 2 are no longer being polled, but still hold read guards.
     let got_all_gpu = tokio::time::timeout(Duration::from_millis(100), async move {
-        let _guard = full_access_to_gpu.write().await; // oom_handler.run at crates/thoosa_main/src/tasks/train_net.rs:278 when it's trying to get 100% GPU
+        let _guard = full_access_to_gpu.write().await; // oom_handler.run at crates/thoosa_main/src/stages/train_net.rs:278 when it's trying to get 100% GPU
         debug!("got all gpu");
     }).await;
     assert!(got_all_gpu.is_err(), "writer should starve while buffered batch futures keep read guards alive");

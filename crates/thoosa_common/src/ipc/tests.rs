@@ -404,7 +404,7 @@ mod tests {
         let size = [3, 10];
         const MUL_K: f64 = 2.;
         let clc_dim = if use_matmul { size[0] } else { size[1] };
-        // All resource tasks use the same CLC operation, so share one proxy and its typed worker endpoint identity.
+        // All resource stages use the same CLC operation, so share one proxy and its typed worker endpoint identity.
         let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
 
         // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;

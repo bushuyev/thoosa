@@ -557,7 +557,7 @@ pub async fn clone_var_store_to(
     /*
      * Snapshot all Rust-side VarStore metadata before the first await.
      *
-     * The returned specs own shallow tensor handles, so the spawned tasks do
+     * The returned specs own shallow tensor handles, so the spawned stages do
      * not borrow either the source VarStore or its mutex guard.
      */
     let (mut specs, src_kind) = {

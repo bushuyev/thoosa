@@ -2728,9 +2728,9 @@ pub mod tests {
         let max_len_0 = *[motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len].iter().max().unwrap();
         let resource_0_t_after_nets_applied = Tensor::f_vstack(
             &[
-                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
             ]
         )?;
 
@@ -2747,9 +2747,9 @@ pub mod tests {
         let max_len_1 = *[motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len].iter().max().unwrap();
         let resource_1_t_after_nets_applied = Tensor::f_vstack(
             &[
-                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
             ]
         )?;
 

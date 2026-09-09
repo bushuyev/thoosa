@@ -497,12 +497,12 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
                                            at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tch-0.20.0/src/wrappers/tensor_generated.rs:19386:40
               19:     0x650bc2986325 - thoosa_common::tho_tensor::ThoTensor<D,Id>::zeros::hec7444fdf1238b68
                                            at /home/bu/dvl/rust/thoosa/crates/thoosa_common/src/tho_tensor.rs:233:16
-              20:     0x650bc2986325 - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::{{closure}}::ha04a296d1395eb8b
-                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:346:46
+              20:     0x650bc2986325 - thoosa_main::stages::motif_loader::load_motif_slices::{{closure}}::{{closure}}::ha04a296d1395eb8b
+                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/stages/motif_loader.rs:346:46
               21:     0x650bc29851cc - <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll::h285e9afbf1ed55e9
                                            at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.43/src/instrument.rs:321:15
-              22:     0x650bc29851cc - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::hcda8bc73e874ad61
-                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:304:1
+              22:     0x650bc29851cc - thoosa_main::stages::motif_loader::load_motif_slices::{{closure}}::hcda8bc73e874ad61
+                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/stages/motif_loader.rs:304:1
             */
             inner: ThoTensorInner::Val { t: Tensor::f_zeros(size, options)? },
             tracking: Default::default(),

@@ -8,7 +8,9 @@ rustflags = [
 #    "-C", "debuginfo=2", //set in Cargo.toml profile.release
 #    "-C", "link-arg=-Wl,-rpath,$LIBTORCH",
 #    "--cfg", "tho_debug_plots",
-    "-Zhigher-ranked-assumptions"
+    "-Zhigher-ranked-assumptions",
+    # Rust 1.100 nightly enables the next trait solver globally, but this workspace still uses generic_const_exprs and async GAT bounds that it cannot prove yet.
+    "-Znext-solver=coherence"
 ]
 
 [env]

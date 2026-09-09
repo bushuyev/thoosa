@@ -209,7 +209,7 @@ mod tests {
     use thoosa_common::ws::{FsWorkspace, WsConfigs};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
-    use thoosa_main::tasks::stft::{Stft, SyncStftSelector};
+    use thoosa_main::stages::stft::{Stft, SyncStftSelector};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};

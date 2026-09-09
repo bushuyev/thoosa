@@ -824,7 +824,7 @@ mod tests {
     use thoosa_main::cli::{Cli, import_resources};
     use thoosa_main::data::parquet_to_tensor_by_path;
     use thoosa_main::random_non_overlapping_slices;
-    use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;

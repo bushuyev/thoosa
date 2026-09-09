@@ -19,19 +19,19 @@ use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;
 use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZNormFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{RunAllArgs, run_grid, run_opt, run_plot};
-use thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use thoosa_main::tasks::bucketing::PlainBandAggregationRangeOrValue::Mean;
-use thoosa_main::tasks::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, PlainBandAggregationMeanRangeOrValue, PlainConfigRangeOrValue};
-use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
-use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
-use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-use thoosa_main::tasks::motif_loader::MotifLoader;
-use thoosa_main::tasks::motif_stats::{MotifStats, MotifStatsInput};
-use thoosa_main::tasks::select_buckets::{BestSelectionModeRangeOrValue, FilterSelectionModeRangeOrValue, SelectBucketsRunConfigRangeOrValue, SelectBucketsStage, SelectionModeRangeOrValue};
-use thoosa_main::tasks::select_motifs::SelectMotifsInput;
-use thoosa_main::tasks::stft::Stft;
-use thoosa_main::tasks::train_label_nets::new_train_label_nets;
-use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, tasks};
+use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
+use thoosa_main::stages::bucketing::PlainBandAggregationRangeOrValue::Mean;
+use thoosa_main::stages::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, PlainBandAggregationMeanRangeOrValue, PlainConfigRangeOrValue};
+use thoosa_main::stages::cross_loader::ResourcesConfigInput;
+use thoosa_main::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
+use thoosa_main::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_main::stages::motif_loader::MotifLoader;
+use thoosa_main::stages::motif_stats::{MotifStats, MotifStatsInput};
+use thoosa_main::stages::select_buckets::{BestSelectionModeRangeOrValue, FilterSelectionModeRangeOrValue, SelectBucketsRunConfigRangeOrValue, SelectBucketsStage, SelectionModeRangeOrValue};
+use thoosa_main::stages::select_motifs::SelectMotifsInput;
+use thoosa_main::stages::stft::Stft;
+use thoosa_main::stages::train_label_nets::new_train_label_nets;
+use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, stages};
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
@@ -173,7 +173,7 @@ pub(crate) async fn run_all(
                                 debug!("run_all: run_configs={run_configs:?}");
 
                                 Ok(Arc::new(
-                                    tasks::find_motifs::FindMotifsStage::new(
+                                    stages::find_motifs::FindMotifsStage::new(
                                         &Arc::clone(&ws_spawn),
                                         &Arc::clone(&store_spawn),
                                         Arc::clone(&loader_spawn),
