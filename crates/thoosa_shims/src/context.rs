@@ -1,16 +1,20 @@
+use std::backtrace::Backtrace;
 use std::ffi::c_void;
-use std::sync::Arc;
-use log::debug;
+use log::{debug, error, trace};
+use log::Level::Trace;
+use thoosa_shared::ThoError;
 
-type CuResult = i32;
+use crate::cuda_result::{check_cuda_status, cuda_error_from_status, CuResult, CUDA_SUCCESS};
+
 type CuDevice = i32;
 type CuContext = *mut c_void;
 
-const CUDA_SUCCESS: CuResult = 0;
 const CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED: i32 = 115;
 
 unsafe extern "C" {
     pub fn tho_cu_init(flags: u32) -> CuResult;
+
+    pub fn tho_cu_reset(device: CuDevice) -> CuResult;
     pub fn tho_cu_device_get(device: *mut CuDevice, ordinal: i32) -> CuResult;
     pub fn tho_cu_device_primary_ctx_retain(ctx: *mut CuContext, device: CuDevice) -> CuResult;
     pub fn tho_cu_device_primary_ctx_release(device: CuDevice) -> CuResult;
@@ -20,38 +24,36 @@ unsafe extern "C" {
     pub fn tho_cu_ctx_synchronize() -> CuResult;
 }
 
-fn check(status: CuResult, label: &str) -> Result<(), String> {
-    if status == CUDA_SUCCESS {
-        Ok(())
-    } else {
-        Err(format!("{label} failed with code {status}"))
-    }
-}
-
 #[derive(Debug)]
 pub struct ThoCudaContext {
-    device: i32,
+    pub device: i32,
     cu_device: CuDevice,
     ctx: CuContext,
     has_memory_pools: bool,
 }
 
 impl ThoCudaContext {
-    pub fn new(device: i32) -> Result<Arc<Self>, String> {
+    pub fn new(device: i32) -> Result<Self, ThoError> {
+        debug!("ThoCudaContext::new: device={}", device);
+        if log::log_enabled!(Trace) {
+            let backtrace = Backtrace::capture();
+            trace!("ThoCudaContext::new:  backtrace={}", backtrace.to_string());
+        }
+
         unsafe {
-            check(tho_cu_init(0), "cuInit")?;
+            check_cuda_status(tho_cu_init(0), "cuInit")?;
 
             let mut cu_device: CuDevice = 0;
-            check(tho_cu_device_get(&mut cu_device, device), "cuDeviceGet")?;
+            check_cuda_status(tho_cu_device_get(&mut cu_device, device), "cuDeviceGet")?;
 
-            let mut ctx: CuContext = std::ptr::null_mut();
-            check(
-                tho_cu_device_primary_ctx_retain(&mut ctx, cu_device),
+            let mut primary_ctx: CuContext = std::ptr::null_mut();
+            check_cuda_status(
+                tho_cu_device_primary_ctx_retain(&mut primary_ctx, cu_device),
                 "cuDevicePrimaryCtxRetain",
             )?;
 
             let mut pools_supported = 0;
-            check(
+            check_cuda_status(
                 tho_cu_device_get_attribute(
                     &mut pools_supported,
                     CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED,
@@ -60,15 +62,15 @@ impl ThoCudaContext {
                 "cuDeviceGetAttribute",
             )?;
 
-            let ctx = Arc::new(Self {
+            let tho_ctx = Self {
                 device,
                 cu_device,
-                ctx,
+                ctx: primary_ctx,
                 has_memory_pools: pools_supported > 0,
-            });
+            };
 
-            ctx.bind_to_thread()?;
-            Ok(ctx)
+            tho_ctx.bind_to_thread()?;
+            Ok(tho_ctx)
         }
     }
 
@@ -80,22 +82,35 @@ impl ThoCudaContext {
         self.has_memory_pools
     }
 
-    pub fn bind_to_thread(&self) -> Result<(), String> {
+    pub fn bind_to_thread(&self) -> Result<(), ThoError> {
         unsafe {
             debug!("ThoCudaContext::bind_to_thread: thread={:?}", std::thread::current().id());
 
             let mut current: CuContext = std::ptr::null_mut();
-            check(tho_cu_ctx_get_current(&mut current), "cuCtxGetCurrent")?;
+            check_cuda_status(tho_cu_ctx_get_current(&mut current), "cuCtxGetCurrent")?;
             if current != self.ctx {
-                check(tho_cu_ctx_set_current(self.ctx), "cuCtxSetCurrent")?;
+                check_cuda_status(tho_cu_ctx_set_current(self.ctx), "cuCtxSetCurrent")?;
             }
         }
         Ok(())
     }
 
     #[allow(dead_code)]
-    pub fn synchronize(&self) -> Result<(), String> {
-        unsafe { check(tho_cu_ctx_synchronize(), "cuCtxSynchronize") }
+    ///synchronizes device   (cuCtxSynchronize), use stream.synchronize
+    pub fn synchronize(&self) -> Result<(), ThoError> {
+        unsafe { check_cuda_status(tho_cu_ctx_synchronize(), "cuCtxSynchronize") }
+    }
+
+    pub fn reset(&mut self) -> Result<(), ThoError> {
+        unsafe {
+            check_cuda_status(tho_cu_reset(self.cu_device), "tho_cu_reset")?;
+
+            let cu_device: CuDevice = 0;
+            check_cuda_status(
+                tho_cu_device_primary_ctx_retain(&mut self.ctx, cu_device),
+                "cuDevicePrimaryCtxRetain",
+            )
+        }
     }
 }
 
@@ -106,7 +121,10 @@ impl Drop for ThoCudaContext {
     fn drop(&mut self) {
         unsafe {
             if !self.ctx.is_null() {
-                let _ = tho_cu_device_primary_ctx_release(self.cu_device);
+                let status = tho_cu_device_primary_ctx_release(self.cu_device);
+                if status != CUDA_SUCCESS {
+                    error!("{:?}", cuda_error_from_status("cuDevicePrimaryCtxRelease", status));
+                }
                 self.ctx = std::ptr::null_mut();
             }
         }

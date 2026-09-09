@@ -5,9 +5,9 @@ experimental = ["wrapper-scripts"]
 heavy = { max-threads = 1 }
 
 [profile.default]
-test-threads = 3
+test-threads = 1
 default-filter = 'not test(/::heavy[^:]*$/)'
-retries = 3
+#retries = 3
 
 
 [profile.stress]
@@ -32,7 +32,7 @@ run-wrapper = 'passthrough'
 
 [profile.heavy]
 default-filter = 'test(/::heavy[^:]*$/)'
-retries = 3
+retries = 0
 
 [[profile.heavy.overrides]]
 filter = 'test(/::heavy[^:]*$/)'

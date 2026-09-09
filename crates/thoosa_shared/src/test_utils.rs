@@ -3,7 +3,7 @@ use crate::perf_logging::{
     init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level, PerfLayer,
     SimplelogLikeEvent,
 };
-use log::{debug, trace, LevelFilter};
+use log::{trace, LevelFilter};
 use num_traits::{Num, Signed, ToPrimitive};
 use std::env;
 use std::env::VarError;
@@ -19,6 +19,7 @@ use tracing_subscriber::{
 };
 use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 use rand::RngExt;
+use thoosa_shared::perf_logging::set_panic_hook;
 
 fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
     if filter == LevelFilter::Off {
@@ -44,6 +45,7 @@ fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
 
 //TODO per mod filtering like in EnvFilter::new("warn,my_crate::some_mod=trace")
 pub fn init_test_logging() {
+    set_panic_hook();
 
     if LOG_INIT.swap(true, Ordering::Relaxed) {
         return;
@@ -63,7 +65,7 @@ pub fn init_test_logging() {
         }
     }
 
-    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
+    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S%.3f".to_string());
     let include_log_fields = false;
 
     let stdout_layer = fmt::layer()
@@ -125,29 +127,6 @@ pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
 }
 
 
-pub fn set_panic_hook() {
-    let default_hook = std::panic::take_hook();
-
-    std::panic::set_hook(Box::new(move |info| {
-        debug!("Panic info: {:?}", info);
-
-        if let Some(s) = info.payload().downcast_ref::<&str>() {
-            log::error!("panic payload: {s}");
-        } else if let Some(s) = info.payload().downcast_ref::<String>() {
-            log::error!("panic payload: {s}");
-        }
-
-
-        let backtrace = std::backtrace::Backtrace::force_capture();
-        for frame in backtrace.frames() {
-            debug!("{:?}\n", frame);
-        }
-        log::logger().flush(); // make sure async loggers flush
-
-        default_hook(info);
-    }));
-}
-
 pub fn are_close<T>(a: &[T], b: &[T], p: T) -> bool
 where
     T: Num + Signed + PartialOrd + Copy + ToPrimitive + Debug,
@@ -202,17 +181,173 @@ mod tests {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum MotifKind {
     Triangle,
     Sin,
-    Pulse
+    Pulse,
+
+    /// Stable harmonic stack: f0 + 2f0 + 3f0 ...
+    HarmonicStack,
+
+    /// Harmonic stack with amplitude envelope, closer to a bird syllable.
+    HarmonicSyllable,
+
+    /// Frequency rises during the motif.
+    ChirpUp,
+
+    /// Frequency falls during the motif.
+    ChirpDown,
+
+    /// Several short repeated harmonic syllables.
+    Trill,
 }
 
 pub fn gen_motif(motif_len: usize, motif_kind: &MotifKind) -> Vec<f32> {
     match motif_kind {
-        MotifKind::Triangle => generate_triangle_wave(motif_len).into_iter().map(|v| v as f32).collect(),
+        MotifKind::Triangle => generate_triangle_wave(motif_len)
+            .into_iter()
+            .map(|v| v as f32)
+            .collect(),
+
         MotifKind::Sin => generate_sine_wave::<f32>(motif_len),
-        MotifKind::Pulse => crate::pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.)
+
+        MotifKind::Pulse => {
+            crate::pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.)
+        }
+
+        MotifKind::HarmonicStack => {
+            harmonic_stack(motif_len, 8.0, &[1.0, 0.55, 0.30, 0.18])
+        }
+
+        MotifKind::HarmonicSyllable => {
+            let mut x = harmonic_stack(motif_len, 9.0, &[1.0, 0.60, 0.35, 0.20]);
+            apply_syllable_envelope(&mut x);
+            normalize_peak(&mut x, 1.0);
+            x
+        }
+
+        MotifKind::ChirpUp => {
+            let mut x = chirp(motif_len, 5.0, 16.0);
+            apply_syllable_envelope(&mut x);
+            normalize_peak(&mut x, 1.0);
+            x
+        }
+
+        MotifKind::ChirpDown => {
+            let mut x = chirp(motif_len, 16.0, 5.0);
+            apply_syllable_envelope(&mut x);
+            normalize_peak(&mut x, 1.0);
+            x
+        }
+
+        MotifKind::Trill => {
+            let mut x = trill(motif_len, 5, 10.0);
+            normalize_peak(&mut x, 1.0);
+            x
+        }
+    }
+}
+
+fn harmonic_stack(length: usize, f0_cycles: f32, harmonic_amps: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0f32; length];
+
+    for i in 0..length {
+        let t = i as f32 / length as f32;
+
+        let mut v = 0.0;
+        for (h_idx, amp) in harmonic_amps.iter().enumerate() {
+            let h = (h_idx + 1) as f32;
+            let phase = std::f32::consts::TAU * f0_cycles * h * t;
+            v += amp * phase.sin();
+        }
+
+        out[i] = v;
+    }
+
+    normalize_peak(&mut out, 1.0);
+    out
+}
+
+fn chirp(length: usize, f_start_cycles: f32, f_end_cycles: f32) -> Vec<f32> {
+    let mut out = vec![0.0f32; length];
+
+    for i in 0..length {
+        let t = i as f32 / length as f32;
+
+        // Linear frequency sweep.
+        // Phase is integral of frequency:
+        // phase(t) = 2π * length-normalized-cycles * (f0*t + 0.5*(f1-f0)*t²)
+        let phase = std::f32::consts::TAU
+            * (f_start_cycles * t + 0.5 * (f_end_cycles - f_start_cycles) * t * t);
+
+        out[i] = phase.sin();
+    }
+
+    normalize_peak(&mut out, 1.0);
+    out
+}
+
+fn trill(length: usize, syllables: usize, f0_cycles_per_syllable: f32) -> Vec<f32> {
+    let mut out = vec![0.0f32; length];
+
+    if syllables == 0 || length == 0 {
+        return out;
+    }
+
+    let syll_len = length / syllables;
+    if syll_len == 0 {
+        return out;
+    }
+
+    for s in 0..syllables {
+        let from = s * syll_len;
+        let to = if s + 1 == syllables {
+            length
+        } else {
+            ((s + 1) * syll_len).min(length)
+        };
+
+        let mut syll = harmonic_stack(to - from, f0_cycles_per_syllable, &[1.0, 0.5, 0.25]);
+        apply_syllable_envelope(&mut syll);
+
+        for (j, v) in syll.into_iter().enumerate() {
+            out[from + j] = v;
+        }
+    }
+
+    normalize_peak(&mut out, 1.0);
+    out
+}
+
+fn apply_syllable_envelope(x: &mut [f32]) {
+    let n = x.len();
+    if n <= 1 {
+        return;
+    }
+
+    for (i, v) in x.iter_mut().enumerate() {
+        let t = i as f32 / (n - 1) as f32;
+
+        // Hann envelope: smooth attack and decay.
+        let env = 0.5 - 0.5 * (std::f32::consts::TAU * t).cos();
+
+        *v *= env;
+    }
+}
+
+fn normalize_peak(x: &mut [f32], peak: f32) {
+    let max_abs = x
+        .iter()
+        .copied()
+        .map(f32::abs)
+        .fold(0.0f32, f32::max);
+
+    if max_abs > 1e-12 {
+        let scale = peak / max_abs;
+        for v in x {
+            *v *= scale;
+        }
     }
 }
 

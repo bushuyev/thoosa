@@ -1,16 +1,18 @@
 use lewton::inside_ogg::OggStreamReader;
-use log::debug;
+use log::{debug, warn};
 use ogg::reading::PacketReader;
+use polars::prelude::{CsvParseOptions, CsvReadOptions, IntoLazy, SerReader, col, lit};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs::{File, read_dir};
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use tch::Tensor;
+use std::path::Path;
+use tch::Kind::{BFloat16, Half};
+use tch::{Kind, Tensor};
 use thoosa_shared::ThoError;
 
 pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
-    file: P,
+    file: P, kind: Kind,
 ) -> Result<Tensor, ThoError> {
     debug!("ogg_to_tensor: file={file:?}");
 
@@ -31,61 +33,48 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
         }
     }
 
+    //gpt Navigation note: import-resources persists this channel-major Half tensor to ws/tensors; later RawTensorLoader reads that file instead of decoding OGG again.
     let tensor = Tensor::stack(
         &channels
             .into_iter()
-            .map(|channel| Tensor::from_slice(channel.as_slice()))
-            .collect::<Vec<Tensor>>(),
+            .map(|channel| Ok(
+                Tensor::f_from_slice(channel.as_slice())?
+                       .f_totype(kind)?
+            ))
+            .collect::<Result<Vec<Tensor>, ThoError>>()?,
         0,
     );
 
-    debug!("ogg_to_tensor: tensor.size={:?}", tensor.size());
+    debug!("ogg_to_tensor: tensor={:?}", tensor);
 
     Ok(tensor)
 }
 
-#[allow(dead_code)]
-pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, ThoError> {
-    let file = File::open(file)?;
-    let reader = BufReader::new(file);
-    let mut pr = PacketReader::new(reader);
-
-    let mut serial_numbers = HashSet::new();
-
-    while let Some(packet) = pr.read_packet()? {
-        serial_numbers.insert(packet.stream_serial());
-    }
-
-    // println!("Found {} logical stream(s).", serial_numbers.len());
-    // for (i, serial) in serial_numbers.iter().enumerate() {
-    //     println!("  Stream #{}: serial={}", i + 1, serial);
-    // }
-
-    Ok(serial_numbers.len())
-}
-
-pub fn labeled_resourses<P: Into<PathBuf>>(
-    _path: P,
+pub fn labeled_resourses(
+    path: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
-    /*let df_csv = CsvReadOptions::default()
+    // Navigation note: keys are "{label}_{filename}" so resource_to_tensor can map them back to train_audio/{label}/{filename}. Keep this mapping in sync with Resource::file_stem consumers.
+    let df_csv = CsvReadOptions::default()
         .with_ignore_errors(true)
         .with_has_header(true)
         .with_parse_options(CsvParseOptions::default().with_try_parse_dates(true))
-        .try_into_reader_with_file_path(Some(<P>::into(path).join("train.csv")))?
-        .finish()?;
-    debug!("{}", df_csv);
+        .try_into_reader_with_file_path(Some(path.as_ref().join("train.csv")))?
+        .finish()?
+        .lazy();
 
-    // debug!("df={:#?}", df.collect());*/
+
+    debug!("df={:?}", df_csv.clone().limit(10).collect()?);
 
     let mut map = HashMap::new();
-    let train_audio_dir =
-        PathBuf::from("/home/bu/dvl/data/kaggle/BirdCLEF_2025").join("train_audio"); //<P>::into(/*path*/
-    debug!("train_audio_dir={train_audio_dir:?}");
 
+    let train_audio_dir = path.as_ref().join("train_audio");
+
+    debug!("clef/labeled_resourses: train_audio_dir={train_audio_dir:?}");
+    let mut counts = HashMap::new();
+    let df_csv_ref = &df_csv;
     for label_dir in read_dir(train_audio_dir)? {
-        debug!("label_dir={label_dir:?}");
+
         let label_dir = label_dir?;
-        let _meta = label_dir.metadata()?;
         let label = label_dir
             .path()
             .file_stem()
@@ -94,23 +83,65 @@ pub fn labeled_resourses<P: Into<PathBuf>>(
             .expect("label")
             .to_string();
 
+        debug!("label_dir={label_dir:?} label={:?}", label);
+
+
         for file in read_dir(label_dir.path())? {
-            let file = file?;
-            debug!("    file={file:?}");
+            let path_buf = file?.path();
+            let file = path_buf.file_stem().expect("file_name").to_str().expect("file");
+            let file_name = path_buf.file_name().expect("file_name").to_str().expect("file_name").to_string();
+            let csv_filename = format!("{label}/{file_name}");
+
+            let key = format!("{label}_{file_name}");
+
+            let secondary_labels = df_csv_ref
+                .clone()
+                .filter(col("filename").eq(lit(csv_filename.as_str())))
+                .select([col("secondary_labels")])
+                .collect()?;
+
+            let secondary_labels: Vec<String> = match secondary_labels
+                .column("secondary_labels")?
+                .str()?
+                .iter()
+                .next()
+                .flatten() {
+                Some(s) => parse_secondary_labels(s),
+                None => Vec::new(),
+            };
+            debug!("clef/labeled_resourses: file={file:?} csv_filename={csv_filename} key={key:?} secondary_labels={secondary_labels:?}");
+            let secondary_labels = secondary_labels.into_iter().filter(|secondary_label|{
+                let r = !secondary_label.eq(&label);
+                if !r {
+                    warn!("clef/labeled_resourses: secondary_label={secondary_label} eq {label}");
+                }
+                r
+            }).collect::<Vec<_>>();
+
+            let labels = if secondary_labels.is_empty() {
+                vec![(label.clone(), 1.0)]
+            } else {
+                let secondary_labels = secondary_labels.into_iter().filter(|secondary_label|!secondary_label.eq(&label)).collect::<Vec<_>>();
+                let secondary_p = 0.1/secondary_labels.len() as f32;
+                //train.cvs doesn't contain probabilities of the secondary labels
+                std::iter::once((label.clone(), 0.9)).chain(secondary_labels.into_iter().map(|secondary_label|{
+                    (secondary_label, secondary_p)
+                })).collect()
+            };
+
+            debug!("clef/labeled_resourses: file={file:?} key={key:?} labels={labels:?}");
+
+            *counts.entry(key.clone()).or_insert(0) +=1;
 
             map.insert(
-                format!(
-                    "{}_{}", //TODO train_audio?
-                    label.clone(),
-                    file.path()
-                        .file_name()
-                        .expect("zzz")
-                        .to_str()
-                        .expect("path")
-                        .to_string(),
-                ),
-                vec![(label.clone(), 1.0)],
+                key,
+                labels,
             );
+        }
+    }
+    for e in counts {
+        if e.1 > 1 {
+            warn!("key {} has {} entries", e.0, e.1);
         }
     }
 
@@ -119,19 +150,37 @@ pub fn labeled_resourses<P: Into<PathBuf>>(
     Ok(map)
 }
 
+fn parse_secondary_labels(s: &str) -> Vec<String> {
+    let inner = s
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+
+    if inner.is_empty() {
+        return Vec::new();
+    }
+
+    inner
+        .split(',')
+        .map(|x| x.trim().trim_matches('\'').trim_matches('"').to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
+}
+
 pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Tensor, ThoError> {
+    //gpt The key is intentionally reversible: labeled_resourses stores "class_file.ogg", and this restores "class/file.ogg".
     Ok(ogg_to_tensor(
         source_path
             .as_ref()
             .join("train_audio")
-            .join(key.replace("_", "/")),
+            .join(key.replace("_", "/")), BFloat16,
     )?)
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
-    use crate::data::{clc_tracks, labeled_resourses, ogg_to_tensor};
+    use crate::data::{labeled_resourses, ogg_to_tensor};
     use crate::labels::LABELS;
     use log::LevelFilter::Trace;
     use log::{debug, warn};
@@ -145,24 +194,31 @@ mod tests {
     use std::sync::Arc;
     use std::time::UNIX_EPOCH;
     use tch::Device::Cpu;
-    use tch::Kind::Float;
+    use tch::Kind::{BFloat16, Float};
     use tch::{Device, IndexOp, TchError, Tensor};
     use tempfile::NamedTempFile;
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
+    use thoosa_common::dims::Spectorgram;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::runs::Simple;
-    use thoosa_common::utils::{
-        from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32,
-    };
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::train_nets::StftRunConfig;
+    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, plot_spectrogram, skewness_kurtosis_1_dim, to_vec_f32, z_norm};
     use thoosa_common::ws::Workspace;
+    use thoosa_common::ws::{FsWorkspace, WsConfigs};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
+    use thoosa_main::stages::stft::{Stft, SyncStftSelector};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::distance::clc_dist_d2_and_mask;
+    use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
+    use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::resource::{Resource, ResourceStore};
-    use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
-    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files};
+    use thoosa_shared::test_utils::{are_close, init_test_logging};
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::RunCtx;
+    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files, sin_v_f};
     use thoosa_store::SqlStore;
 
     #[ctor::ctor]
@@ -170,14 +226,14 @@ mod tests {
         init_test_logging();
     }
 
-    // #[test]
+    #[test]
     pub fn test_read_oog() -> Result<(), ThoError> {
         use lewton::inside_ogg::OggStreamReader;
         use std::fs::File;
         use std::io::BufReader;
 
         let file =
-            File::open("/home/bu/dvl/data/kaggle/BirdCLEF_2025/train_audio/65349/iNat109039.ogg")?;
+            File::open("/home/bu/dvl/data/kaggle/birdclef-2026/train_audio/555123/iNat336366.ogg")?;
         let reader = BufReader::new(file);
 
         let mut ogg_reader = OggStreamReader::new(reader)?;
@@ -214,31 +270,6 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    pub fn test_all() -> Result<(), ThoError> {
-        let files = recurse_files(&"/home/bu/dvl/data/kaggle/BirdCLEF_2025/", &|path| {
-            path.extension().map(|v| v.eq("ogg")).unwrap_or(false)
-        })?;
-        let files_cnt = files.len();
-        debug!("files_cnt={files_cnt}");
-
-        for (i, file) in files.iter().enumerate() {
-            if i % 100 == 0 {
-                debug!("{i} files done");
-            }
-
-            let tracks = clc_tracks(&file)?;
-            // let tracks = ogg_to_tensor(&file)?;
-            if tracks != 1 {
-                debug!("file: {file:?} tracks={tracks}");
-            }
-        }
-
-        debug!("{files_cnt} done");
-
-        Ok(())
-    }
-
     #[test]
     fn test_ogg_to_tensor() -> Result<(), ThoError> {
         let base = Path::new("/tmp").join(cdt_for_dir());
@@ -267,7 +298,7 @@ mod tests {
         debug!("ogg_file={ogg_file:?}");
         debug!("sample={sample:?}");
 
-        let t = ogg_to_tensor(&ogg_file)?;
+        let t = ogg_to_tensor(&ogg_file, BFloat16)?;
 
         debug!("t={t}");
 
@@ -344,22 +375,40 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
+    #[test]
     fn test_labeled_resourses() -> Result<(), ThoError> {
+        unsafe {
+            std::env::set_var("POLARS_FMT_STR_LEN", "1000");
+            std::env::set_var("POLARS_FMT_TABLE_WIDTH", "-1");
+            std::env::set_var("POLARS_FMT_MAX_COLS", "-1");
+            std::env::set_var("POLARS_FMT_MAX_ROWS", "-1");
+        }
+
         let resourses = labeled_resourses("test_data/")?;
 
-        assert_eq!(28564, resourses.len());
+        debug!("resourses={resourses:?}");
+
+        assert_eq!(5, resourses.len());
+        assert_eq!(Some(&vec![("555123".to_string(), 1.0)]), resourses.get("555123_iNat336366.ogg"));
+        assert_eq!(
+            Some(&vec![
+                ("24279".to_string(), 0.9),
+                ("326272".to_string(), 0.05),
+                ("67107".to_string(), 0.05),
+            ]),
+            resourses.get("24279_XC1039628.ogg"),
+        );
 
         Ok(())
     }
 
-    // #[test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_plot_resource() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            "/tmp/ws_test_clef",
-            1,
-            999,
-            32000,
+            "/tmp/ws_clef",
+            WsConfigs::new(1,
+                           999,
+                           32000)
         )?));
 
         let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
@@ -383,6 +432,53 @@ mod tests {
         )
         .await?;
 
+        Ok(())
+    }
+
+    //#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plot_spec() -> Result<(), ThoError>{
+        GlobalCtx::init_devices(2)?;
+        let audio_path = PathBuf::from("test_data/train_audio/");
+
+        let file = "555123/iNat336366.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let file = "555123/iNat859875.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let file = "555123/iNat1370876.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let file = "116570/iNat1460166.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice());
+        resource_spec("test", sig_t.view((1,-1))).await?;
+
+        Ok(())
+    }
+
+    async fn resource_spec(file: &str, tensor: Tensor) -> Result<(), ThoError> {
+
+        let t = z_norm(&tensor, 1)?;
+
+        let stft = Arc::new(Stft::new(StftRunConfig::new(16000, 4000.into(), 4000.into(), true, true, true))?);
+        let mut ctx = RunCtxImpl::new(1, "plot_spec");
+        let spec = stft.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), t)?)), ctx.branch(false)).await?;
+
+        {
+            let spec = spec.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let spec = spec.as_ref().as_ref();
+            debug!("spec = {spec:?}");
+            plot_spectrogram(
+                &spec.squeeze_dim(0),
+                format!("/tmp/plots/spectrogram_znorm_{}.png", file.replace("/", "_")),
+                1200,
+                600,
+            )?;
+
+            Ok::<(), ThoError>(())
+        }?;
         Ok(())
     }
 }

@@ -1,16 +1,23 @@
 
 ## General info
-The app asynchronously executes a series of tensor-related tasks (Stages) on GPU devices and handles OutOfMemory errors (see OOMHandler in crates/thoosa_shared/src/runner/oom_handler.rs) by throttling GPU access, processing data in chunks, or otherwise reducing GPU memory usage (see the Adjuster trait in crates/thoosa_shared/src/runner/oom_handler.rs:33 and its implementations).
-The app’s entry point is run_cli (crates/thoosa_main/src/cli.rs), which is invoked from the sample project (crates/thoosa_projects/thoosa_hbac/src/main.rs).
+The goal of the application is to asynchronously execute (see AsyncStage) series of tensor-related tasks (SyncStages) on GPU devices and handle OutOfMemory errors (see OOMHandler in crates/thoosa_shared/src/runner/oom_handler.rs) by throttling GPU access, processing data in chunks, or otherwise reducing GPU memory usage (see the Adjuster trait in crates/thoosa_shared/src/runner/oom_handler.rs:33 and its implementations).
+Tensor operations can either be executed in same process as asynchronous code ("Local" mode) or in the separate processed ("IPC" mode, see crates/thoosa_common/src/ipc).
+The main goal of the application is to ensure reliable execution of GPU tasks by handling errors and restarting tasks as needed, including resetting the GPU device if necessary.
+It's important to keep big tensors (or big number of small tensors) between async awaits either in Arc<DevicesWrap<..>> obtained from SomeStage::run_cached (crates/thoosa_common/src/runner/common/cachable.rs) or in TmpCached (crates/thoosa_common/src/runner/tmp_cache.rs) so that GlobalCtx::dump_all_to_cpu (crates/thoosa_common/src/runner/global_ctx.rs) could dump them to CPU when handling OOM.
+The app’s entry point is run_cli (crates/thoosa_main/src/cli.rs), which is invoked from the sample projects (crates/thoosa_projects/thoosa_hbac/src/main.rs and thoosa_projects/thoosa_hbac/src/main.rs).
 Currently, the only implemented workflow is time series classification, located in crates/thoosa_main/src/tasks.
 async engine is Tokio, rayon is used to parallel sync functions. 
+Data (run  resources, labels, configuration parameters etc) is kept in sqlite database, schema can be found in SqlStore::create_tables (crates/thoosa_store/src/lib.rs).
+
 
 ## Important Agent Rules
 - **Never run `cargo fmt` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand.
 - **Do not touch unrelated files or code paths.** If a change is not strictly required to implement the current request, leave it untouched.
 - **Use fallible tensor APIs and propagate tensor errors.** In `thoosa_main` and code invoked from it, prefer `Tensor::f_*`/`tensor.f_*` forms and bubble errors up; do not `unwrap`/`expect` tensor operations.
-- if you've got any questions, ask before starting tasks.
+- **if you've got any questions, ask before starting tasks**
 - before finishing task always check if everything compiles (run `cargo build --release && cargo test --no-run`) and relevant tests pass (`cargo nextest run --profile codex  --no-fail-fast --retries=0 -p [crate]`)
+- Never use Tensor::shallow_clone to return tensor out of sync function or over .await wrapped in ThoTensor
+- Always add comments explaining why changes were made, especially for new code.
 
 ## Project Structure & Module Organization
 - Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).
@@ -41,16 +48,19 @@ Notes:
 - Linting: keep `clippy` clean; deny warnings in CI/local before PRs.
 - Naming: modules/files `snake_case`; types/traits `PascalCase`; functions/vars `snake_case`.
 - Concurrency: prefer `tokio` primitives; shared maps via `dashmap`; avoid `unsafe`.
-- asserts and logging should be on one line - no matter how long it gets.
+- asserts and logging should be on one line - no matter how long it is.
+- debug! and trace!  should be on one line - no matter how long it is
 
 ## Testing Guidelines
 - Frameworks: `cargo test` with `#[test]` and `#[tokio::test]` (multi-thread where needed).
 - Location: unit tests inline in `src/*` modules;
 - A struct being tested should receive its mocked dependencies which are configured through their Mock[StructName]Builder (placed next to StructName in a #[cfg(test)] mock_[struct_name] module. If a struct can't be hidden behind a trait (although it should not be a problem to hide a Stage struct behind Stage trait) it can be injected with mock_double.
-- Naming: `mod tests { ... }`, test fns `snake_case` describing behavior.
+- mockall mocks should never be replaced with custom 'dummy' objects
+- Naming: `mod tests { ... }`, test fns `snake_case` describing behavior, prefixed with test_.
 
 ## Misc info
 masks for tensors of all sorts expected to contain false for padded (zeros)) values and true for actual values.
+tho_device_idx and ThoDevice (crates/thoosa_common/src/tho_device.rs) represent the devices used by the application during the current run. The CPU is always at index 0, followed by GPUs or, in the future, other devices. Therefore, GPU(0) usually corresponds to tho_device_idx - 1.
 
 ## Motif Search Notes
 - For HBAC motif exploration, `plot-data --stdout` is the most useful inspection path because it emits machine-readable JSON. Redirect stderr separately because CUDA/libtorch setup can still print noise there even when stdout is clean JSON.

@@ -1,13 +1,17 @@
+use std::backtrace::Backtrace;
 use std::cmp::max;
 use std::fmt::Debug;
-use std::fs::File;
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::{io, panic};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
+use console_subscriber::ServerAddr;
 use dashmap::DashMap;
-use log::LevelFilter;
+use log::{debug, LevelFilter};
 use tracing::{error, Level};
 use tracing_log::LogTracer;
 use tracing_subscriber::{
@@ -22,6 +26,16 @@ use tracing_subscriber::{
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use crate::ThoError;
+use file_rotate::{
+    compression::Compression,
+    suffix::AppendCount,
+    ContentLimit,
+    FileRotate,
+};
+use parking_lot::{Mutex, MutexGuard};
+use tracing_appender::non_blocking;
+use tracing_subscriber::fmt::MakeWriter;
+use thoosa_shared::os_thread_id;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
@@ -79,10 +93,18 @@ where
         // level
         write_level(&mut w, meta.level(), self.use_color)?;
 
+
+        fn tokio_task_id_string() -> String {
+            match tokio::task::try_id() {
+                Some(id) => id.to_string(),
+                None => "-".to_string(),
+            }
+        }
+
         // thread name
         let thread = std::thread::current();
         let tname = thread.name().unwrap_or("unknown");
-        write!(w, "({}) ", tname)?;
+        write!(w, "({}/{}/{:?}) ", tname, os_thread_id(),  tokio_task_id_string())?;
 
         // target (module path)
         write!(w, "{}: ", meta.target())?;
@@ -203,11 +225,9 @@ pub(crate) fn init_log_tracer(max_level: LevelFilter) {
     log::set_max_level(max_level);
 }
 
-pub struct TracingGuards {
-    _log_guard: tracing_appender::non_blocking::WorkerGuard,
-    _perf_guard: tracing_appender::non_blocking::WorkerGuard,
-}
 
+
+#[allow(dead_code)]
 fn init_perf_writer(
     perf_file: Option<PathBuf>,
 ) -> Result<
@@ -226,46 +246,169 @@ fn init_perf_writer(
     }
 }
 
-/// Initialize tracing logging for stdout, log file, and perf output.
+#[allow(dead_code)]
+fn make_file_layer<P:AsRef<Path>>(
+    log_path: P,
+    file_level: LevelFilter,
+) -> (
+    impl tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    tracing_appender::non_blocking::WorkerGuard,
+) {
+    // let log_path = log_dir.into().join("app.log");
+
+    // Keep current app.log + 10 rotated files: app.log.1 .. app.log.10
+    let rotating = FileRotate::new(
+        log_path,
+        AppendCount::new(10),
+        ContentLimit::BytesSurpassed(100 * 1024 * 1024), // 100 MiB
+        Compression::None,
+        None,
+    );
+
+    let (writer, guard) = non_blocking(rotating);
+
+    let layer = fmt::layer()
+        .with_ansi(false)
+        .with_writer(writer)
+        .with_filter(EnvFilter::new(level_filter_string(file_level)));
+
+    (layer, guard)
+}
+
+/// A synchronous writer factory that serializes all writes through a Mutex.
+/// Each tracing event gets its own locked writer, so whole events are written
+/// without byte-level interleaving from other threads.
+#[derive(Clone)]
+pub struct SyncMakeWriter<W> {
+    inner: Arc<Mutex<W>>,
+}
+
+impl<W> SyncMakeWriter<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(writer)),
+        }
+    }
+
+
+}
+
+pub struct SyncWriterGuard<'a, W>
+where
+    W:Write
+{
+    guard: MutexGuard<'a, W>,
+}
+
+impl<'a, W> Write for SyncWriterGuard<'a, W>
+where
+    W:Write
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.guard.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.guard.flush()
+    }
+}
+
+impl<'a, W> Drop for SyncWriterGuard<'a, W>
+where
+    W:Write
+{
+    fn drop(&mut self) {
+        let _ = self.guard.flush();
+    }
+}
+
+impl<'a, W> MakeWriter<'a> for SyncMakeWriter<W>
+where
+    W: Write + Send + 'static,
+{
+    type Writer = SyncWriterGuard<'a, W>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SyncWriterGuard {
+            guard: self.inner.lock(),
+        }
+    }
+}
+static TRACING_INIT: OnceLock<()> = OnceLock::new();
+
+
+fn open_new_log_file(path: &Path) -> Result<File, ThoError> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            ThoError::from_error(
+                format!("refusing to open existing log file: {}", path.display()),
+                e,
+            )
+        })
+}
+
 pub fn init_tracing(
     term_level: LevelFilter,
     term_extra_fields: bool,
     file_level: LevelFilter,
     file_extra_fields: bool,
-    log_file: File,
+    log_file: PathBuf,
     perf_filter: &str,
     perf_file: Option<PathBuf>,
-) -> Result<TracingGuards, ThoError> {
+    console_addr: Option<ServerAddr>,
+) -> Result<(), ThoError> {
+    if TRACING_INIT.get().is_some() {
+        panic!("init_tracing() called more than once in the same process");
+    }
+
     let max_level = max(term_level, file_level);
 
-    let _ = set_perf_log_level(perf_filter)?;
+    set_perf_log_level(perf_filter)?;
 
-    // Local timestamp like: `2025-12-15 08:35:30`
-    // (requires tracing-subscriber chrono support for ChronoLocal)
-    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
+    let timer = tracing_subscriber::fmt::time::ChronoLocal::new( "%Y-%m-%d %H:%M:%S%.3f".to_string());
 
+    let stdout_writer = SyncMakeWriter::new(std::io::stdout());
     let stdout_layer = fmt::layer()
         .with_ansi(true)
-        .with_writer(std::io::stdout)
+        .with_writer(stdout_writer)
         .event_format(SimplelogLikeEvent::new(timer.clone(), true, term_extra_fields))
         .with_filter(EnvFilter::new(level_filter_string(term_level)));
 
-    let (log_writer, log_guard) = tracing_appender::non_blocking(log_file);
+    let log_file_handle = open_new_log_file(&log_file)?;
+    let log_writer = SyncMakeWriter::new(log_file_handle);
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(log_writer)
-        .event_format(SimplelogLikeEvent::new(timer.clone(), false, file_extra_fields))
+        .event_format(SimplelogLikeEvent::new(
+            timer.clone(),
+            false,
+            file_extra_fields,
+        ))
         .with_filter(EnvFilter::new(level_filter_string(file_level)));
 
-    let (perf_writer, perf_guard) = init_perf_writer(perf_file)?;
-    let perf_layer = fmt::layer()
-        .with_ansi(false)
-        .with_writer(perf_writer)
-        .with_span_events(fmt::format::FmtSpan::CLOSE)
-        .event_format(SimplelogLikeEvent::new(timer, false, false))
-        .with_filter(FilterFn::new(perf_output_filter));
+    let perf_layer = if let Some(perf_path) = perf_file {
+        let perf_file_handle = open_new_log_file(&perf_path)?;
+        let perf_writer = SyncMakeWriter::new(perf_file_handle);
 
-    let console_layer = console_subscriber::spawn(); // :contentReference[oaicite:2]{index=2}
+        Some(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(perf_writer)
+                .with_span_events(fmt::format::FmtSpan::CLOSE)
+                .event_format(SimplelogLikeEvent::new(timer, false, false))
+                .with_filter(FilterFn::new(perf_output_filter)),
+        )
+    } else {
+        None
+    };
+
+
+    let console_layer = console_subscriber::ConsoleLayer::builder()
+        .server_addr(console_addr.unwrap_or(([127, 0, 0, 1], 6677).into()))
+        .spawn();
 
     let subscriber = registry()
         .with(console_layer)
@@ -274,20 +417,18 @@ pub fn init_tracing(
         .with(perf_layer)
         .with(PerfLayer::new());
 
-    tracing::subscriber::set_global_default(subscriber)
-        .map_err(|e| {
-            error!("Init tracing logging failed: {e:?}");//TODO print in CLI
-            e
-        })?;
+    tracing::subscriber::set_global_default(subscriber).map_err(|e| {
+        error!("Init tracing logging failed: {e:?}");
+        ThoError::from_error("set global tracing subscriber", e)
+    })?;
+
 
     init_log_tracer(max_level);
 
-    Ok(TracingGuards {
-        _log_guard: log_guard,
-        _perf_guard: perf_guard,
-    })
-}
+    let _ = TRACING_INIT.set(());
 
+    Ok(())
+}
 
 #[derive(Debug)]
 pub struct SpanTiming {
@@ -577,13 +718,23 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::path::Path;
-    use crate::cdt_for_dir;
-    use crate::perf_logging::init_perf_writer;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::thread;
+    use std::time::Duration;
+    use log::{debug, info};
+    use tracing::Instrument;
+    use crate::{cdt_for_dir, ThoError};
+    use crate::perf_logging::{format_perf_map, init_perf_writer, PERF};
+
+    const NS_IN_MLS:u64 = 1_000_000;
 
     #[test]
     fn test_init_perf_writer_none_uses_sink() {
-        let _ = init_perf_writer(None).expect("init_perf_writer(None) should succeed");
+        let (mut writer, _guard) = init_perf_writer(None).expect("init_perf_writer(None) should succeed");
+        writer.write_all(b"perf line\n").expect("sink writer should accept bytes");
     }
 
     #[test]
@@ -594,4 +745,167 @@ mod tests {
         assert!(perf_file.exists());
         let _ = std::fs::remove_file(perf_file);
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_in_spawned() -> Result<(), ThoError>{
+
+        let h = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }).instrument(tracing::debug_span!(
+            "label",
+            agg_perf="label",
+        ));
+
+        h.await?;
+
+        info!("\n{}", format_perf_map(&PERF));
+
+        assert!(PERF.get("label").unwrap().elapsed_ns.load(Ordering::Relaxed) > 3000);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_nested() {
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_1"))]
+        async fn inner_1(){
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_2"))]
+
+        async fn inner_2(){
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_3"))]
+        async fn inner_3(){
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="outer"))]
+        async fn outer(){
+            inner_1().await;
+            inner_2().await;
+            inner_3().await;
+        }
+
+        outer().await;
+
+        info!("\n{}", format_perf_map(&PERF));
+
+
+        assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("outer").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 3000 < 6);
+    }
+
+    #[test]
+    fn test_impls() {
+
+        trait Runnable {
+            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Runnable::do_run"))]
+            fn do_run(self:Arc<Self>){
+                thread::sleep(Duration::from_secs(1))
+            }
+        }
+
+        struct A;
+        impl Runnable for A {
+            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="A::do_run"))]
+            fn do_run(self:Arc<Self>) {
+                thread::sleep(Duration::from_secs(1))
+            }
+        }
+
+        struct B;
+        impl Runnable for B {
+
+        }
+
+        let a = Arc::new(A);
+        a.do_run();
+
+        let b = Arc::new(B);
+        b.do_run();
+
+        info!("\n{}", format_perf_map(&PERF));
+
+        assert!(PERF.get("A::do_run").unwrap().elapsed_ns.load(Ordering::Relaxed) >= 1000);
+        assert!(PERF.get("Runnable::do_run").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
+    }
+}
+
+///for tests
+pub fn set_panic_hook() {
+    let default_hook = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        debug!("Panic info: {:?}", info);
+
+        if let Some(s) = info.payload().downcast_ref::<&str>() {
+            log::error!("panic payload: {s}");
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            log::error!("panic payload: {s}");
+        }
+
+
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        for frame in backtrace.frames() {
+            debug!("{:?}\n", frame);
+        }
+        log::logger().flush(); // make sure async loggers flush
+
+        default_hook(info);
+    }));
+}
+
+
+pub fn install_panic_hook<W>(make_writer: W)
+where
+    W:  for<'writer> MakeWriter<'writer> + Sync + Send + 'static,
+{
+    let prev = panic::take_hook();
+
+    panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<non-string panic payload>");
+
+        let backtrace = Backtrace::force_capture();
+
+        // Goes through tracing, so it can appear in your normal file/stdout layers.
+        tracing::error!(
+            target: "panic",
+            thread = %thread_name,
+            location = %location,
+            payload = %payload,
+            backtrace = %backtrace,
+            "panic"
+        );
+
+        let mut writer = make_writer.make_writer();
+        // Synchronous crash log, so it still has a chance to survive abort paths.
+        let _ = writeln!(
+            writer,
+            "\n=== PANIC ===\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\nbacktrace:\n{backtrace}\n"
+        );
+        let _ = writer.flush();
+
+        // Keep the normal stderr panic output too.
+        prev(info);
+    }));
 }

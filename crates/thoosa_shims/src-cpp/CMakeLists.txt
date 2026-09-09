@@ -20,9 +20,23 @@ set(Torch_DIR "${TORCH_DIR}" CACHE PATH "")
 find_package(Torch REQUIRED)          # brings torch, torch_cpu, torch_cuda…
 find_package(CUDAToolkit REQUIRED)
 
-add_library(thoosa_shims SHARED stream.cpp memcpy.cpp context.cpp)
+add_library(
+        thoosa_shims SHARED
+        stream.cpp
+        memcpy.cpp
+        context.cpp
+        device_stats.cpp
+        errors.cpp
+        inference_mode.cpp
+        quantized_linear.cpp
+        logging.h
+        logging.cpp
+        optimizers.h
+        optimizers.cpp
+        shared_arena_allocator.cpp
+) #add file to build.rs / cargo:rerun-if-changed
 target_include_directories(thoosa_shims PUBLIC ..)
-target_link_libraries(thoosa_shims PUBLIC ${TORCH_LIBRARIES} CUDA::cuda_driver)
+target_link_libraries(thoosa_shims PUBLIC ${TORCH_LIBRARIES} CUDA::cuda_driver CUDA::cudart)
 
 
 install(TARGETS thoosa_shims

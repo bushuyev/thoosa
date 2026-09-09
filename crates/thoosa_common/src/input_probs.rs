@@ -129,7 +129,7 @@ pub mod tests {
     use crate::input_probs::{InputProbs, compare_input_probs};
 
     #[test]
-    fn test_0() {
+    fn test_input_probs() {
         // Example: 3 labels
         let labels = vec!["cat".into(), "dog".into(), "mouse".into()];
 
@@ -148,7 +148,8 @@ pub mod tests {
         inf.add("img1".into(), vec![0.2, 0.7, 0.1]);
         inf.add("img2".into(), vec![0.6, 0.3, 0.1]);
 
-        // Compare
-        compare_input_probs(&exp, &inf);
+        let (mse, soft_ce) = compare_input_probs(&exp, &inf);
+        assert!((mse - 0.06666667).abs() < 1e-6);
+        assert!((soft_ce - 0.43375027).abs() < 1e-6);
     }
 }

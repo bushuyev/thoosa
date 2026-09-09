@@ -1,0 +1,135 @@
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStage, ABClcSyncStageInput, ABClcSyncStageInputWrapperSelector};
+// use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
+use crate::torch_runner::tests::composite_input::loader_a::{AStageInput, AStageOutput};
+use crate::torch_runner::tests::composite_input::loader_b::{BStageInput, BStageOutput};
+use log::debug;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tch::Tensor;
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::RunCtx;
+// use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
+// use crate::torch_runner::tests::load_and_clc::LoadAndClcStage;
+
+pub mod loader_a;
+pub mod loader_b;
+pub mod ab_clc;
+pub mod dims;
+//
+pub const AB_CLC_STAGE_ID:u32 = 0;
+pub const A_STAGE_ID:u32 = 1;
+pub const B_STAGE_ID:u32 = 2;
+pub const AB_SYNC_CLC_STAGE_ID:u32 = 3;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_ab_clc() -> Result<(), ThoError> {
+    run_ab_clc().await?
+}
+
+pub async fn run_ab_clc() -> Result<Result<(), ThoError>, ThoError> {
+    GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+
+    run_ab_clc_with_current_ctx().await?;
+
+    Ok(Ok(()))
+}
+
+pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
+    let ab_stage = Arc::new(ABClcStage::new());
+    let calls_stage = Arc::clone(&ab_stage);
+
+    run_ab_clc_with_stage(ab_stage, move || calls_stage.num_calls()).await
+}
+
+pub(crate) async fn run_ab_clc_with_stage<S, F>(ab_stage: Arc<ABClcStage<S>>, num_calls: F) -> Result<(), ThoError>
+where
+    for<'a> ABClcStage<S>:  thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = Arc<DevicesWrap<ABClcStageOutput>>>,
+    // ABClcStage<S>: crate::runner::common::runnable::AsyncStage<In<'static> = Arc<ABClcStageInput>>,
+    // ABClcStage<S>: Cached + crate::runner::common::OutId,
+    S:  thoosa_shared::traits::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
+    for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+    F: Fn() -> usize,
+{
+    let mut ctx = RunCtxImpl::new(1, "root");
+
+    let out = Arc::clone(&ab_stage).run_cached(
+        ABClcStageInput::new(
+            Arc::new(AStageInput::new(0, "a100")),
+            Arc::new(BStageInput::new(1, "b100")),
+        ),
+        ctx.branch(false)
+    ).await?;
+
+
+    let val = BorrowRef::borrow_to(&out, 0).await?;
+
+    let value = val.as_ref().value;
+
+    debug!("test_ab_clc: value={value:?}");
+
+    assert_eq!(value, 200.3);
+    assert_eq!(num_calls(), 1);
+
+    GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test_ab_clc").await?;
+    assert!(GlobalCtx::global().is_all_on_cpu(1, true));
+
+    let out = Arc::clone(&ab_stage).run_cached(
+        ABClcStageInput::new(
+            Arc::new(AStageInput::new(0, "a100")),
+            Arc::new(BStageInput::new(1, "b100")),
+        ),
+        ctx.branch(false)
+    ).await?;
+
+    let val = BorrowRef::borrow_to(&out, 0).await?;
+
+    let value = val.as_ref().value;
+
+
+    debug!("test_ab_clc: value={value:?}");
+
+    assert_eq!(value, 200.3);
+    assert_eq!(num_calls(), 1);
+
+    Ok(())
+}
+
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_ab_clc_sync_with_selector() -> Result<(), ThoError> {
+    GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+    let ab_stage = Arc::new(ABClcStage::new());
+
+    ab_clc_sync_with_selector(ab_stage).await?;
+
+    Ok(())
+}
+
+pub async fn ab_clc_sync_with_selector<S>(ab_stage: Arc<ABClcStage<S>>) -> Result<(), ThoError>
+where
+    S:  thoosa_shared::traits::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+{
+    let mut run_ctx = RunCtxImpl::new(1, "root");
+    let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+    let ab_clc_sync = Arc::clone(&ab_stage.ab_clc_sync); //Arc::new(ABClcSyncStage::new());
+    let a_out = AStageOutput::new("01".into(), Tensor::from_slice(&[0., 1., 2.]))?;
+    let b_out = BStageOutput::new("02".into(), Tensor::from_slice(&[3., 4., 5.]))?;
+    let input = Arc::new(ab_clc::ABClcSyncStageInputWrapper::new(a_out, b_out));
+
+    let r = cuda_actor.run_stage(Arc::clone(&ab_clc_sync), Arc::clone(&input), 1, &run_ctx).await?; // ((0+3) + (1+4) + (2+5))/3
+    assert_eq!(5.0, r.value);
+
+    let r = cuda_actor.run_stage_with_select(ab_clc_sync, input, Some(ABClcSyncStageInputWrapperSelector::new(2, 2)), 1, &run_ctx).await?; // ((0+3) + (1+4)) / 2
+    assert_eq!(4.0, r.value);
+    Ok(())
+}

@@ -9,7 +9,7 @@ path = "src/lib.rs"
 [dependencies]
 thoosa_common = {path = "../thoosa_common" }
 thoosa_store = {path = "../thoosa_store" }
-thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shared = {path = "../thoosa_shared", features = ["tch-error", "serde-json5-error"] }
 rand.workspace = true
 log.workspace = true
 crossbeam-utils.workspace = true
@@ -22,7 +22,6 @@ async-trait.workspace = true
 clap.workspace = true
 regex.workspace = true
 crossbeam-channel.workspace = true
-cudarc.workspace = true
 libloading.workspace = true
 serde.workspace = true
 serde_json5.workspace = true
@@ -30,7 +29,8 @@ ctor.workspace = true
 chrono.workspace = true
 rayon.workspace = true
 #rand_distr.workspace = true
-
+mockall.workspace = true
+rusqlite.workspace = true
 sci-rs = "0"
 plotters = { version = "0"}
 

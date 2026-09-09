@@ -1,10 +1,10 @@
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::{RangeOrValue, ThoError, round_to_digits};
+use log::warn;
 use num_traits::ToPrimitive;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-use log::warn;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
@@ -689,6 +689,19 @@ impl TryFrom<&Val> for String {
     }
 }
 
+impl TryFrom<&Val> for usize {
+    type Error = ThoError;
+
+    fn try_from(value: &Val) -> Result<usize, ThoError> {
+        match value {
+            Val::Int(v) => Ok(*v as usize),
+            Val::UInt(v) => Ok(*v as usize),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
+        }
+    }
+}
+
 impl TryFrom<Val> for usize {
     type Error = ThoError;
 
@@ -834,7 +847,6 @@ impl<T: FieldName> TryFrom<&NamedVal<T>> for u32 {
 
 #[cfg(test)]
 mod tests {
-
     use crate::hyperparameter::Hyperparameter;
     use crate::val::{GridValueSet, NamedRange, NamedVal, Val};
 
@@ -927,5 +939,15 @@ mod tests {
                 ),
             ],
         );
+    }
+}
+
+pub fn val_to_f32(val: &Val) -> Option<f32> {
+    match val {
+        Val::Real(v) => Some(*v as f32),
+        Val::Int(v) => Some(*v as f32),
+        Val::UInt(v) => Some(*v as f32),
+        Val::Str(v) => v.parse().ok(),
+        Val::Bool(_) => None,
     }
 }

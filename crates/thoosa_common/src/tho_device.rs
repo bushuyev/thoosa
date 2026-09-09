@@ -35,7 +35,7 @@ impl From<usize> for ThoDevice {
 
 
 impl ThoDevice {
-    pub fn ordinal(&self) -> usize {
+    pub fn tho_device_idx(&self) -> usize {
         match &self.0 {
             Device::Cpu => 0,
             Device::Cuda(v) => v + 1,

@@ -5,23 +5,34 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
+use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum ElvVal {
+    Path(PathBuf),//for LoadNet - so that it can be loaded by path in CudaWorker avoiding SqlStore there for getting path by net_id
     Str(String),
     Num(usize),
+    Bool(bool),
 }
 
 impl Display for ElvVal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            //TODO use same ?
             ElvVal::Str(v) => {
                 write!(f, "{}", v)
             }
             ElvVal::Num(v) => {
                 write!(f, "{}", v)
+            }
+            ElvVal::Bool(v) => {
+                write!(f, "{}", v)
+            }
+            ElvVal::Path(path) => {
+                write!(f, "{}", path.to_string_lossy())
             }
         }
     }
@@ -57,7 +68,19 @@ impl From<&str> for ElvVal {
     }
 }
 
-#[derive(Debug, Clone, Ord, Named)]
+impl From<bool> for ElvVal {
+    fn from(v: bool) -> Self {
+        ElvVal::Bool(v)
+    }
+}
+
+impl From<PathBuf> for ElvVal {
+    fn from(v: PathBuf) -> Self {
+        ElvVal::Path(v)
+    }
+}
+
+#[derive(Debug, Clone, Ord, Named, Serialize, Deserialize)]
 pub struct MonoKey {
     val: ElvVal,
 
@@ -110,13 +133,15 @@ impl MonoKey {
         self.name.as_ref()
     }
 
+    //TODO add a safer way to get to data_id
     pub fn to_data_id(&self) -> DataId{
         match &self.val {
-            ElvVal::Str(val) => {
-                panic!("can't convert {val} to data_id")
-            }
+
             ElvVal::Num(val) => {
                 DataId(*val as u32)//TODO as
+            }
+            val => {
+                panic!("can't convert {val} to data_id")
             }
         }
     }
@@ -168,14 +193,14 @@ impl Hash for MonoKey {
 
 
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
-#[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
+#[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named, Serialize, Deserialize)]
 pub struct SynKey {
     pub vals: Box<[MonoKey]>,
 }
 
 impl Display for SynKey{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        for val in &self.vals {
+        for val in self.vals.iter().take(5) {//TODO
             write!(f, "_{}_", val)?;
         }
 
@@ -186,7 +211,7 @@ impl Display for SynKey{
 impl fmt::Debug for SynKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SynKey[")?;
-        for (idx, mono) in self.vals.iter().enumerate() {
+        for (idx, mono) in self.vals.iter().enumerate().take(5) {
             if idx > 0 {
                 f.write_str("/")?;
             }
@@ -199,7 +224,9 @@ impl fmt::Debug for SynKey {
 fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match val {
         ElvVal::Num(value) => write!(f, "{value}"),
-        ElvVal::Str(value) => write!(f, "{value:?}"),
+        ElvVal::Str(value) => write!(f, "{value}"),
+        ElvVal::Bool(value) => write!(f, "{value}"),
+        ElvVal::Path(value) => write!(f, "{}", value.to_string_lossy())
     }
 }
 
@@ -348,6 +375,34 @@ impl Add<&MonoKey> for MonoKey {
     }
 }
 
+impl Add<MonoKey> for MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: MonoKey) -> Self::Output {
+        SynKey {
+            vals: Box::new([
+                self.clone(),
+                rhs
+            ]),
+        }
+    }
+}
+
+
+impl Add<MonoKey> for &MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: MonoKey) -> Self::Output {
+        SynKey {
+            vals: Box::new([
+                self.clone(),
+                rhs
+            ]),
+        }
+    }
+}
+
+
 impl Add<&SynKey> for &MonoKey {
     type Output = SynKey;
 
@@ -375,6 +430,36 @@ impl Add<&SynKey> for MonoKey {
 impl From<(u32, &str)> for SynKey {
     fn from(value: (u32, &str)) -> Self {
         SynKey::from([mono_key!(value.0, value.1)])
+    }
+}
+
+pub mod hashmap_as_vec {
+    use std::collections::HashMap;
+    use serde::{Deserializer, Serializer};
+    use super::*;
+
+    pub fn serialize<S, K, V>(
+        value: &HashMap<K, V>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        K: Serialize,
+        V: Serialize,
+    {
+        value.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D, K, V>(
+        deserializer: D,
+    ) -> Result<HashMap<K, V>, D::Error>
+    where
+        D: Deserializer<'de>,
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
+    {
+        let entries = Vec::<(K, V)>::deserialize(deserializer)?;
+        Ok(entries.into_iter().collect())
     }
 }
 
@@ -413,4 +498,5 @@ mod tests {
 
         assert!(key_1.gt(&key_0));
     }
+    
 }
