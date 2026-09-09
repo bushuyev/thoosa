@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use thoosa_motifs::motifs_store::MotifsStore;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
@@ -1149,7 +1150,7 @@ where
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pub motif_loader: Arc<ML>,
@@ -1174,7 +1175,7 @@ where
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     pub fn new(
-        store: Arc<Box<dyn Store>>,
+        store: Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn Workspace>>>,
         motif_loader: Arc<ML>,
@@ -1498,7 +1499,8 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::traits::AsyncStage;
-    use thoosa_store::{MockStoreBuilder, RunConfigRow};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::RunConfigRow;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_random_stats_basic() -> Result<(), ThoError> {
@@ -1516,7 +1518,7 @@ mod tests {
         let run_config_id = 42;
         let motif_width = 6;
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_random_resources([(None, Ok(resources.clone()))])
                 .with_run_config_descr([(
                     run_config_id,
@@ -1584,7 +1586,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().build());
+        let store = Arc::new(MockMotifsStoreBuilder::new().build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![100]));
         let motif_input_1 = MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![200]));

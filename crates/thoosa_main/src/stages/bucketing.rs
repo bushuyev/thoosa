@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
@@ -56,7 +57,7 @@ where
         Self { resources_config }
     }
 
-    pub async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
+    pub async fn check(self, store: &Arc<Box<dyn MotifsStore>>) -> Result<Self, ThoError> {
         track_await(self.resources_config.check(store)).await?;
         Ok(self)
     }
@@ -209,7 +210,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<L>,
     run_config: BucketRunConfig,
     sync_bucketing_stage: Arc<SyncBucketingStage<D, Id, C>>,
@@ -231,7 +232,7 @@ where
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         run_config: BucketRunConfig,
         window: u32,
@@ -1320,6 +1321,7 @@ impl Default for BucketRunConfig {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_motifs::motifs_store::MotifsStore;
     use super::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups};
     use crate::RawTensorLoader;
     use crate::cli::{import_resources, plot_motif};
@@ -1471,7 +1473,7 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         debug!("test_dir={test_dir:?}");
         // let store = Arc::new(SqlStore::in_mem().await?);
-        let store = Arc::new(SqlStore::from_path(test_dir.join(&"main_db.db3")).await?);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?));
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
@@ -1674,7 +1676,7 @@ mod tests {
         Ok(())
     }
 
-    async fn plot_test_resources(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
+    async fn plot_test_resources(store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
         for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
             // resource
 
@@ -1720,7 +1722,7 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         debug!("test_dir={test_dir:?}");
         // let store = Arc::new(SqlStore::in_mem().await?);
-        let store = Arc::new(SqlStore::from_path(test_dir.join(&"main_db.db3")).await?);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?));
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,

@@ -40,9 +40,11 @@ use sha2::{Digest, Sha256};
 use thoosa_properties_map::FromHashmap;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
-pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
+// Keep the helper generic so callers retain specialized store trait objects across this common boundary.
+pub async fn load_run_config<FH, S>(store: &Arc<Box<S>>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
 where
-    FH: FromHashmap + RunConfig + Debug
+    FH: FromHashmap + RunConfig + Debug,
+    S: Store + ?Sized,
 {
     let real_find_motifs_run_config_id = if track_await(store.run_config_descr(find_motifs_id)).await?.r#type == "FindMotifsRunConfig" {
         find_motifs_id

@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use thoosa_motifs::motifs_store::MotifsStore;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
@@ -235,7 +236,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<(RC, C)>,
@@ -247,7 +248,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(store: Arc<Box<dyn MotifsStore>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
             id: (WELCH_PSD, "WelchPSD").into(),
             store,

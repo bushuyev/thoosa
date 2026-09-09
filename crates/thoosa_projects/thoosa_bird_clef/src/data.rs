@@ -213,6 +213,7 @@ mod tests {
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
+    use thoosa_motifs::motifs_store::MotifsStore;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging};
@@ -411,7 +412,7 @@ mod tests {
                            32000)
         )?));
 
-        let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?));
 
         plot_resource(
             Simple::new(ResourceType::List(vec![

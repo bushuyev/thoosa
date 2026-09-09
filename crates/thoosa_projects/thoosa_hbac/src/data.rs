@@ -829,6 +829,7 @@ mod tests {
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;
+    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::comp_id::SynKey;
@@ -842,7 +843,7 @@ mod tests {
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{ThoError, cdt_for_dir};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_store::{MockStoreBuilder, SqlStore, TrainedNet};
+    use thoosa_store::{SqlStore, TrainedNet};
 
     #[ctor::ctor]
     fn init() {
@@ -1005,7 +1006,7 @@ mod tests {
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let store = Arc::new(SqlStore::in_mem().await?);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
 
         let _resources = import_resources(
             &ws,
@@ -1210,7 +1211,7 @@ mod tests {
         let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_run_config_values([(find_motifs_run_config_id, Ok(find_motifs_props))])
                 .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
                 .with_list_selected_motifs([(select_motifs_run_config_id, Ok(selected_motifs))])

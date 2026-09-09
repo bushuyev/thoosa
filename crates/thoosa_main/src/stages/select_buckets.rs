@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use crate::stages::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
@@ -159,7 +160,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
         run_configs: Vec<SelectBucketsRunConfig>,
@@ -267,7 +268,7 @@ where
 
     async fn load_resources_for_selection(
         input: &Arc<SelectMotifsInput>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         mut ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
@@ -568,7 +569,8 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{RunConfig, RunConfigId};
     use thoosa_shared::traits::AsyncStage;
-    use thoosa_store::{MockStoreBuilder, RunConfigRow};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::RunConfigRow;
 
     #[test]
     fn test_selection_mode_best_selects_highest_scores() {
@@ -596,7 +598,7 @@ mod tests {
         let high_motif_id = 102;
 
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,

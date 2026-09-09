@@ -31,7 +31,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
-use thoosa_store::Store;
+use thoosa_motifs::motifs_store::MotifsStore;
 use tracing::Instrument;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
@@ -70,7 +70,7 @@ pub(crate) struct AllConfigs {
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="thoosa_hbac::run_all"))]
 pub(crate) async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn Store>>,
+    store: &Arc<Box<dyn MotifsStore>>,
     loader: &Arc<RawTensorLoader<RunCtxImpl>>,
     mut root_ctx: RunCtxImpl,
     run_all_args: &RunAllArgs,
@@ -613,6 +613,7 @@ mod tests {
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
+    use thoosa_motifs::motifs_store::MotifsStore;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::copy_mode::CpuOnly;
@@ -879,7 +880,7 @@ mod tests {
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let mut store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
+        let mut store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?));
 
         debug!("heavy_test_run_all: import_hash={import_hash:?}");
 

@@ -172,7 +172,7 @@ fn main() -> Result<(), ThoError> {
             },
             async |
                 ws: &Arc<RwLock<Box<dyn Workspace>>>,
-                store: &Arc<Box<dyn Store>>,
+                store: &Arc<Box<dyn MotifsStore>>,
                 loader: &Arc<RawTensorLoader<RunCtxImpl>>,
                 root_ctx: RunCtxImpl,
                 run_all_args: &RunAllArgs,
@@ -184,7 +184,7 @@ fn main() -> Result<(), ThoError> {
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             app_configs,
-            Some(async |_params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn Store>>,|{
+            Some(async |_params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn MotifsStore>>,|{
                 debug!("bird_clef: infer");
                 todo!()
             }),

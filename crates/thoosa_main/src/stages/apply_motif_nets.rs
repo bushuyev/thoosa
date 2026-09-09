@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use crate::stages::instance_cache::InstanceCache;
@@ -86,7 +87,7 @@ where
 {
     id: SynKey,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
-    store:Arc<Box<dyn Store>>,
+    store:Arc<Box<dyn MotifsStore>>,
     apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>)>,
     pub slice_step: u32,//should be in the input
     // pub motif_width:u32,
@@ -319,7 +320,7 @@ where
 {
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         train_motif_net_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
@@ -345,7 +346,7 @@ where
 
     pub async fn from_trained_nets<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>, //for logging only
+        store: &Arc<Box<dyn MotifsStore>>, //for logging only
         mut stage_ctx: R,
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
@@ -1604,7 +1605,8 @@ pub(crate) mod tests {
     use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, Named, RunCtx, SimpleId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow, Store, TrainedNet};
+    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_store::{RunConfigRow, Store, TrainedNet};
 
     #[ctor::ctor]
     fn init() {
@@ -1651,7 +1653,7 @@ pub(crate) mod tests {
     pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig/*shouldn't be here, needed only for cosine 2d*/, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
     where
         for <'a> A:AsyncStage<In<'a>=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=MockRunCtx, Out=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, //+ thoosa_common::runner::common::runnable::WrappedRunInputStage,
-        F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn Store>>) -> Result<Arc<A>, ThoError>,
+        F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn MotifsStore>>) -> Result<Arc<A>, ThoError>,
         MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
     {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
@@ -1690,7 +1692,7 @@ pub(crate) mod tests {
         ));
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {
@@ -1791,7 +1793,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNets<MockRunCtx>>, ThoError> {
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn MotifsStore>>) -> Result<Arc<ApplyMotifNets<MockRunCtx>>, ThoError> {
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
@@ -1855,7 +1857,7 @@ pub(crate) mod tests {
         ));
 
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {
@@ -1955,7 +1957,7 @@ pub(crate) mod tests {
         ));
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
             .with_run_config_descr([(
                 find_motifs_run_config_id,
                 Ok(RunConfigRow {

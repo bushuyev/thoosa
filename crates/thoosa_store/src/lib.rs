@@ -3060,6 +3060,11 @@ impl SqlStore {
 
 
     pub async fn from_path_readonly<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
+        Ok(Box::new(Self::from_path_readonly_(path).await?))
+    }
+
+    /// Returns the concrete store so downstream crates can construct their specialized store trait objects.
+    pub async fn from_path_readonly_<P: AsRef<Path>>(path: P) -> Result<SqlStore, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
         let conn_target = path_buf.to_string_lossy().to_string();
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_ONLY;
@@ -3071,7 +3076,7 @@ impl SqlStore {
             readers.push(reader);
         }
 
-        Ok(Box::new(Self {
+        Ok(Self {
             #[cfg(test)]
             conn: Mutex::new(Connection::open(&path_buf)?),
             writer: tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_ONLY).await?,
@@ -3079,12 +3084,17 @@ impl SqlStore {
             conn_target,
             conn_flags,
             rr: AtomicUsize::new(0),
-        }))
+        })
     }
 
 
     // #[cfg(test)]
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
+        Ok(Box::new(Self::in_mem_().await?))
+    }
+
+    /// Returns the concrete in-memory store for specialized store trait objects in downstream tests.
+    pub async fn in_mem_() -> Result<SqlStore, ThoError> {
         let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
@@ -3108,7 +3118,7 @@ impl SqlStore {
             readers
         };
 
-        Ok(Box::new(Self {
+        Ok(Self {
             #[cfg(test)]
             conn: Mutex::new(conn),
             writer,
@@ -3116,7 +3126,7 @@ impl SqlStore {
             conn_target: uri,
             conn_flags,
             rr: AtomicUsize::new(0),
-        }))
+        })
     }
 
     fn export_apply_label_nets_records(conn: &mut Connection, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> Result<(), ThoError> {
@@ -4339,10 +4349,31 @@ impl SqlMotifTrackerStore {
 #[derive(Debug, PartialEq, Copy, Clone, Pod, Zeroable)]
 pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 
+/// Object-safe adapter used by motif trackers without erasing a downstream specialized store trait object.
+#[async_trait]
+pub trait MotifGroupsStore: Send + Sync {
+    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError>;
+    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
+}
+
+#[async_trait]
+impl<S> MotifGroupsStore for Arc<Box<S>>
+where
+    S: Store + ?Sized,
+{
+    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError> {
+        self.as_ref().save_groups_as_motifs(run_config_id, channel, groups).await
+    }
+
+    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError> {
+        self.as_ref().save_groups_as_motifs_with_slices_matches(run_config_id, channel, groups, path).await
+    }
+}
+
 #[async_trait]
 pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError>;
-    async fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifGroupsStore, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
 
     fn run_config_id(&self) -> RunConfigId;
     fn channel(&self) -> u32;
@@ -4400,7 +4431,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
 
     async fn load_slices_into_groups(
         &mut self,
-        store: &Arc<Box<dyn Store>>,
+        store: &dyn MotifGroupsStore,
         max_slices_counts: Option<u32>,
     ) -> Result<usize, ThoError> {
         let groups = {

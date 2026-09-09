@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use thoosa_motifs::motifs_store::MotifsStore;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -206,7 +207,7 @@ where
 {
 
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
     loader:Arc<L>,
 
@@ -241,7 +242,7 @@ where
 
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader:Arc<L>,
         motif_loader:Arc<ML>,
         run_configs:Vec<SelectMotifsRunConfig>,
@@ -515,7 +516,8 @@ pub mod tests {
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::{DataId, RunCtx};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir};
-    use thoosa_store::{IdSlice, MockStore, MockStoreBuilder, RunConfigRow, Store};
+    use thoosa_motifs::motifs_store::{MockMotifsStore, MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_store::{IdSlice, RunConfigRow, Store};
     use tokio::fs;
 
     #[ctor::ctor]
@@ -575,7 +577,7 @@ pub mod tests {
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals)];
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -652,7 +654,7 @@ pub mod tests {
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals), (&resource_b, &[channel_0_motifs_ids.as_slice()][..],  &resource_b_intervals)];
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -730,7 +732,7 @@ pub mod tests {
         let resources_channels_intervals = [(&resource_a, &[motifs_ids.as_slice()][..], &resource_a_intervals)];
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -870,7 +872,7 @@ pub mod tests {
         debug!("test_3_resources_2_labels_3_channels_3_motifs: expected_add_slices_to_motif_calls={expected_add_slices_to_motif_calls:?}");
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -941,7 +943,7 @@ pub mod tests {
         let select_motifs_run_config_id: RunConfigId = 22;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build());
+        let store = Arc::new(MockMotifsStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -999,7 +1001,7 @@ pub mod tests {
         let select_motifs_run_config_id: RunConfigId = 22;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build());
+        let store = Arc::new(MockMotifsStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -1048,7 +1050,7 @@ pub mod tests {
         let select_motifs_run_config_id: RunConfigId = 42;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2]))]).build());
+        let store = Arc::new(MockMotifsStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2]))]).build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -1104,7 +1106,7 @@ pub mod tests {
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_motifs([(find_motifs_run_config_id, Ok(vec![101, 102]))])
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![Resource::new(1, 1, "resource_a", 1000)])),
@@ -1238,7 +1240,7 @@ pub mod tests {
         let find_motifs_run_config_id = 1;
         let select_motifs_run_config_id = 2;
 
-        let mut store_mock = MockStore::new();
+        let mut store_mock = MockMotifsStore::new();
         let resource_for_resources_query = resource_a.clone();
         store_mock.expect_list_resources_not_in_group().times(1).returning(move |group, _limit| {
             if group == resources_group {
@@ -1256,7 +1258,7 @@ pub mod tests {
         store_mock.expect_list_run_config_values().times(0);
         store_mock.expect_add_slices_to_motif().times(0);
 
-        let store: Arc<Box<dyn Store>> = Arc::new(Box::new(store_mock) as Box<dyn Store>);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(store_mock) as Box<dyn MotifsStore>);
 
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
 
@@ -1313,7 +1315,7 @@ pub mod tests {
         let find_motifs_run_config_id = 1;
         let select_motifs_run_config_id = 2;
 
-        let mut store_mock = MockStore::new();
+        let mut store_mock = MockMotifsStore::new();
         let resource_for_resources_query = resource_a.clone();
         store_mock.expect_list_resources_not_in_group().times(1).returning(move |group, _limit| {
             if group == resources_group {
@@ -1331,7 +1333,7 @@ pub mod tests {
         store_mock.expect_list_run_config_values().times(0);
         store_mock.expect_add_slices_to_motif().times(0);
 
-        let store: Arc<Box<dyn Store>> = Arc::new(Box::new(store_mock) as Box<dyn Store>);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(store_mock) as Box<dyn MotifsStore>);
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
 
         let motif_21_t = Tensor::from_slice(&[
@@ -1598,7 +1600,7 @@ pub mod tests {
 
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(run_config_id)])
                 .with_list_run_config_values([(
                     run_config_id,

@@ -1,4 +1,5 @@
 use crate::stages::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionBy, ConvertPrecisionInput, ConvertPrecisionNetType, ConvertPrecisionStage, ConvertPrecisionTarget, ConvertedNet};
+use thoosa_motifs::motifs_store::MotifsStore;
 use clap::Args;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
@@ -100,7 +101,7 @@ where
     C: RunCtx + 'static,
 {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     args: ExportArgs,
     pd: PhantomData<C>,
 }
@@ -109,7 +110,7 @@ impl<C> Export<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Box<dyn Store>>, args: ExportArgs) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Box<dyn MotifsStore>>, args: ExportArgs) -> Self {
         Self { ws: Arc::clone(ws), store: Arc::clone(store), args, pd: PhantomData }
     }
 }

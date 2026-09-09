@@ -1,4 +1,5 @@
 use crate::ApplyMotifNets;
+use thoosa_motifs::motifs_store::MotifsStore;
 use crate::stages::apply_motif_nets::{StackAppliedMotifNets, StackAppliedMotifNetsInput};
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
@@ -78,7 +79,7 @@ where
 {
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         train_motif_net_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
@@ -106,7 +107,7 @@ where
 
     pub async fn from_trained_nets<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>, //for logging only
+        store: &Arc<Box<dyn MotifsStore>>, //for logging only
         mut stage_ctx: R,
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
@@ -998,6 +999,7 @@ fn cosine_conv2d_tensor_part_id(channel: u32, motif_width: u32, stft_hash_value:
 
 #[cfg(test)]
 mod tests {
+    use thoosa_motifs::motifs_store::MotifsStore;
     use crate::ApplyMotifNets;
     use crate::stages::apply_cosine2d_motif_nets::{ApplyCosine2DMotifNets, apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d};
     use crate::stages::apply_motif_nets::dummy_motif_net;
@@ -1103,7 +1105,7 @@ mod tests {
         ), 40000, 32000).await
     }
 
-    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyCosine2DMotifNets<MockRunCtx>>, ThoError> {
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn MotifsStore>>) -> Result<Arc<ApplyCosine2DMotifNets<MockRunCtx>>, ThoError> {
         let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
             &ws,
             &store,
