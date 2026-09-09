@@ -7,19 +7,22 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shared = {path = "../thoosa_shared", features = ["rusqlite-error"] }
 bytemuck.workspace = true
 rand.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 mockall.workspace = true
 ctor.workspace = true
-rusqlite = { version = "0.37.0", features = ["bundled"] }
-tokio-rusqlite  = "0.7"
+rusqlite.workspace = true
+#tokio-rusqlite  = {path = "../../../tokio-rusqlite"}
 zstd = "0.13"
 tokio.workspace = true
 futures-util.workspace = true
+futures.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
+crossbeam-channel.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
 [lints]
 workspace = true

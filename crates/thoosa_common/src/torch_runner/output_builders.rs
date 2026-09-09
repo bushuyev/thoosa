@@ -4,10 +4,11 @@ use std::hash::Hash;
 use log::debug;
 use tch::Device;
 use tch::Kind;
-use thoosa_shared::runner::adjusters::splits::OutputBuilder;
+use crate::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Named, WithId};
+use thoosa_shared::CopyToDevice;
+use thoosa_shared::traits::{Data, Named, WithId};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -26,7 +27,9 @@ where
     output: ThoTensor<D, Id>,
     added_partial_output_len: i64,
     add: BuildAs,
-    dim: i64
+    dim: i64,
+    partial_output_device_idx: Option<usize>,
+    error: Option<ThoError>,
 }
 
 impl<Id, D: Dims> SingleDimTensorOutputBuilder<Id, D>
@@ -47,8 +50,15 @@ where
             output: ThoTensor::zeros(id, size, options)?,
             added_partial_output_len: 0,
             add,
-            dim
+            dim,
+            partial_output_device_idx: None,
+            error: None,
         })
+    }
+
+    pub fn copy_partial_outputs_to_device(mut self, device_idx: usize) -> Self {
+        self.partial_output_device_idx = Some(device_idx);
+        self
     }
 }
 
@@ -60,6 +70,26 @@ where
     type O = ThoTensor<D, Id>;
 
     async fn add_partial_output(&mut self, partial: Self::O) {
+        if self.error.is_some() {
+            return;
+        }
+
+        let partial = if let Some(device_idx) = self.partial_output_device_idx {
+            if partial.device() == device_idx {
+                partial
+            } else {
+                match partial.copy_to_device(device_idx).await {
+                    Ok(partial) => partial,
+                    Err(error) => {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
+            }
+        } else {
+            partial
+        };
+
         let partial_size = partial.size();
 
 
@@ -73,10 +103,15 @@ where
             }
             BuildAs::Sum => {
                 debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: self.output.size={:?} partial_size={partial_size:?}", self.output.size());
+                if self.output.device() != partial.device() {
+                    let mut t = self.output.to_mut();
 
-                let mut t = self.output.to_mut();
-
-                t.add_(&partial).unwrap();
+                    t.add_(&partial.copy_to_device(0).await.unwrap()).unwrap();
+                } else {
+                    let mut t = self.output.to_mut();
+                    t.add_(&partial).unwrap();
+                }
+    
             }
         }
 
@@ -84,7 +119,11 @@ where
     }
 
     async fn build(self: Self) -> Result<Self::O, ThoError> {
-        Ok(self.output)
+        if let Some(error) = self.error {
+            Err(error)
+        } else {
+            Ok(self.output)
+        }
     }
 }
 
@@ -96,8 +135,8 @@ mod tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
-    use thoosa_shared::runner::adjusters::splits::OutputBuilder;
-    use crate::dims::{AnyMetrics, AnySub, Dims};
+    use crate::runner::adjusters::splits::OutputBuilder;
+    use crate::dims::{AnyMetrics, Dims};
     use thoosa_shared::simple_id;
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::SimpleId;

@@ -1,7 +1,9 @@
 [package]
 name = "macros_tests"
 version.workspace = true
-edition.workspace = true
+# macrotest copies this package edition into a standalone temporary manifest,
+# where inheriting it from the original workspace is not available.
+edition = "2024"
 
 
 [dependencies]
@@ -14,12 +16,14 @@ thoosa_run_config_args_derive = {path = "../thoosa_run_config_args_derive" }
 
 thoosa_properties_map = {path = "../thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
-serde.workspace = true
-log.workspace = true
-ctor.workspace = true
-
+# macrotest also copies these dependencies into its standalone manifest, so
+# keep their workspace versions explicit here for the expansion fixture.
+serde = { version = "1", features = ["derive"] }
+log = "0"
+ctor = "0"
+futures-util = "0.3"
 [dev-dependencies]
 macrotest = "1"
-serde_json5.workspace = true
+serde_json5 = "0.2"
 [lints]
 workspace = true

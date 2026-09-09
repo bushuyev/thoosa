@@ -15,14 +15,15 @@ members = [
     "thoosa_macros/thoosa_dummy_data_derive",
     "thoosa_macros/thoosa_properties_map",
     "thoosa_macros/thoosa_properties_map_derive",
-    "thoosa_macros/thoosa_with_data",
     "thoosa_macros/macros_tests",
     "thoosa_macros/cached_derive",
     "thoosa_macros/thoosa_named_derive",
     "thoosa_projects/thoosa_hbac",
-#    "thoosa_projects/thoosa_bird_clef",
+    "thoosa_projects/thoosa_bird_clef",
     "thoosa_macros/macros_tests",
-    "thoosa_shims", "thoosa_macros/thoosa_with_data",
+    "thoosa_macros/thoosa_digest_id",
+    "thoosa_macros/thoosa_digest_id_derive",
+    "thoosa_shims",
 ]
 
 [workspace.package]
@@ -52,59 +53,93 @@ tch = "0.20"
 torch-sys = "0.20"
 #tch = { path="../../tch-rs", features = ["cuda-tests"] }
 #torch-sys = { path="../../tch-rs/torch-sys" }
-parking_lot =  "0"
-crossbeam-utils = "0"
-crossbeam = "0.8.4"
-crossbeam-channel = "0"
-futures = "0"
-futures-util = "0"
-async-trait = "0"
+parking_lot =  "0.12"
+crossbeam-utils = "0.8"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+futures = "0.3"
+futures-util = "0.3"
+async-trait = "0.1"
 clap = { version = "4", features = ["derive", "cargo"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_json5 = "0"
+serde_json5 = "0.2"
 interprocess = { version = "2.4.0", features = ["futures-core", "tokio", "async"] }
 
 lazy_static = "1"
 num-traits = "0"
 regex = "1"
 bytemuck = { version = "1", features = ["derive"] }
-cudarc = { version = "0", features = ["cuda-12040"] }
+
 ctor = "0"
 
 syn = {version="2", features=["full"]}
 quote = "1"
 
-libloading = "0"
-plotters = { version = "0"}
-mockall = { version = "0", features = ["nightly"] }
-mockall_double = "0"
-ambassador = "0"
+libloading = "0.9"
+plotters = { version = "0.3"}
+mockall = { version = "0.14", features = ["nightly"] }
+mockall_double = "0.3"
+ambassador = "0.5"
 dashmap = "6"
 #TODO move to polars_utils
-polars = { version = "0", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
+polars = { version = "0.54", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "dtype-array", "strings"] }
 
-tokio = { version = "1", features = ["full", "test-util", "tracing"] }
-tokio-utils = "0.1"
+tokio = { version = "1.52", features = ["full", "test-util", "tracing"] }
+tokio-util = "0.7.18"
+tokio-utils = "0.1"#pool
 tracing = "0.1"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
+file-rotate = "0.8"
 console-subscriber = "0.5"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 statrs = "0"
 proc-macro2 = {version = "1.0.103"}
 time="0"
 libc = "0.2.175"
+sha2 = "0.11"
+typetag = "0.2.22"
+blake3 = "1.8.6"
+postcard = { version = "1", features = ["alloc"] }
+talc = "5.1"
+memmap2 = "0.9"
+rusqlite = { version = "0.37", features = ["bundled", "trace"] }
 [profile.test]
 opt-level = 0
 [profile.dev]
-opt-level = 0
-debug = 2
-overflow-checks = true
-[profile.release]
+#opt-level = 2
+#debug = "full"
+#overflow-checks = true
+[profile.release-opt1]
+inherits = "release"
 debug = "full"
-opt-level = 3
+opt-level = 1
 strip = "none"
 lto = false
 panic = "unwind"
+
+[profile.final-release]
+inherits = "release"
+debug = false
+opt-level = 3
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+incremental = false
+debug-assertions = false
+overflow-checks = false
+
+
+[patch.crates-io]
+tch = {
+    git = "https://github.com/bushuyev/tch-rs.git",
+    branch = "tch-0.20-local",
+}
+
+torch-sys = {
+    git = "https://github.com/bushuyev/tch-rs.git",
+    branch = "tch-0.20-local",
+}

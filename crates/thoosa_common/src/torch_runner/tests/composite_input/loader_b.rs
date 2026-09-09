@@ -1,0 +1,217 @@
+use std::collections::HashMap;
+use crate as thoosa_common;
+use crate::dims::LocalSelect;
+use crate::runner::common::cachable::DevicesWrap;
+use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::tho_tensor::ThoTensor;
+use crate::torch_runner::tests::composite_input::B_STAGE_ID;
+use crate::torch_runner::tests::composite_input::dims::BStageOutputDims;
+use async_trait::async_trait;
+use cached_derive::Cached;
+use std::sync::Arc;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use tch::kind::FLOAT_CPU;
+use tch::{IndexOp, Tensor};
+use thoosa_dummy_data_derive::DummyData;
+use thoosa_named_derive::Named;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
+use thoosa_shared::copy_mode::CpuOrGpu;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stage, WithId};
+use thoosa_shared::{ThoError, mono_key};
+use crate::ipc::codec::IpcCodec;
+use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
+use crate::ipc::worker_msg::WorkerInput;
+use crate::torch_runner::tests::composite_input::loader_a::AStageOutput;
+
+#[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
+#[dummy_data(clone)]
+pub(super) struct BStageInput {
+    id: MonoKey,
+    db_id: u32,
+    token:String,
+}
+
+impl BStageInput {
+    pub(super) fn new<S:Into<String>>(db_id: u32, token:S) -> Self {
+        let token = token.into();
+        Self {
+            id: mono_key!(db_id, &token),
+            db_id,
+            token
+        }
+    }
+
+}
+
+impl From<&BStageInput> for ElvVal {
+    fn from(value: &BStageInput) -> Self {
+        ElvVal::Str(value.token.clone())
+    }
+}
+
+impl WithId for BStageInput {
+    type ID = MonoKey;
+
+    fn id(&self) -> &MonoKey {
+        &self.id
+    }
+}
+
+
+impl Input for BStageInput{}
+
+
+#[derive(Debug, Named, Serialize, Deserialize)]
+pub(super) struct BStageOutput {
+    pub id: SynKey,
+    pub(super) value:ThoTensor<BStageOutputDims, ()>,
+}
+
+impl BStageOutput {
+    pub(super) fn from_value(id: SynKey, value: ThoTensor<BStageOutputDims, ()>) -> Self {
+        // Worker decoding already owns the tensor, so avoid rebuilding it through a shallow clone.
+        Self { id, value }
+    }
+
+    pub(super) fn new(id: SynKey, tensor: Tensor) -> Result<Arc<DevicesWrap<Self>>, ThoError> {
+        Ok(Arc::new(DevicesWrap::wrap(
+            BStageOutput{
+                id,
+                value: ThoTensor::new((), tensor)?,
+            }
+        )))
+    }
+}
+
+
+#[typetag::serde]
+impl WorkerInput for BStageOutput {}
+
+impl WorkerStageInput for BStageOutput {
+    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
+        Ok(Box::new(BStageOutput{
+            id: self.id.clone(),
+            value: self.value.clone_ref()?,
+        }))
+    }
+
+    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
+        Ok(BStageOutput{
+            id: self.id.clone(),
+            value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
+        })
+    }
+
+}
+
+impl Select<RangeSelector> for BStageOutput {
+    type Output = BStageOutput;
+
+    fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
+        Ok(BStageOutput {
+            id: self.id.clone(),
+            value: self.value.subview(selector)?,
+        })
+    }
+}
+
+impl LocalSelect<(), RangeSelector> for ThoTensor<BStageOutputDims, ()> {
+    type Output = ThoTensor<BStageOutputDims, ()>;
+
+    fn local_subview(id: &(), t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
+        ThoTensor::new(
+            (),
+            t.i(selector.start[0]..selector.end[0]).copy().into()
+        )
+    }
+}
+
+
+
+impl WithId for BStageOutput {
+    type ID = SynKey;
+
+    fn id(&self) -> &SynKey {
+        &self.id
+    }
+}
+
+impl Data for BStageOutput {
+    type Metrics = <ThoTensor<BStageOutputDims, ()> as Data>::Metrics;
+    type M = CpuOrGpu<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        <ThoTensor<BStageOutputDims, ()> as Data>::size(&self.value)
+    }
+
+    fn device(&self) -> usize {
+        self.value.device()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.value.mem_size()
+    }
+}
+
+#[async_trait]
+impl thoosa_shared::CopyToDevice for BStageOutput {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+        Ok(Self {
+            id: self.id.clone(),
+            value: track_await(self.value.copy_to_device(dst_device)).await?,
+        })
+    }
+}
+
+
+impl Output for BStageOutput{}
+
+
+#[derive(Debug, Named, Cached)]
+pub(super) struct BStage {
+    id: MonoKey,
+}
+
+impl Stage for BStage  {
+    type Ctx = RunCtxImpl;
+    type In<'a> = Arc<BStageInput>;
+    type Out = Arc<DevicesWrap<BStageOutput>>;
+}
+
+impl BStage {
+    pub(super) fn new() -> Self {
+        Self { id: mono_key!(B_STAGE_ID, "BStage") }
+    }
+}
+
+impl AsyncStage for BStage  {
+    // type RunInput = Arc<Self::In<'static>>;
+    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
+
+    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as WithId>::ID {
+    //     WithId::id(input)
+    // }
+    async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
+
+
+        let tensor = match input.token.as_str() {
+            "b100" => Tensor::from_slice(&[100.2]),
+            _ => Tensor::rand(&[1], FLOAT_CPU)
+        };
+
+        let id = self.out_id(input.id());
+
+
+        BStageOutput::new(id, tensor)
+
+    }
+}
+
+impl OutId for BStage {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.id.clone() + input_id
+    }
+}

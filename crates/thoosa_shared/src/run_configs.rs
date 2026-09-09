@@ -4,7 +4,8 @@ use crate::val::{GridValueSet, NamedRange, NamedVal};
 use crate::make_combos;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct ConstConfigs<CP> {
@@ -155,31 +156,23 @@ impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>,
     }
 }
 
+pub type RunConfigId = u32;
 pub type RunId = u32;
 
-impl Named for RunId {}
+impl Named for RunConfigId {}
+impl Named for PathBuf {}//TODO it's for LoadNet - add type for NetId
 
 pub trait RunConfig: Debug {
-    fn set_id(&mut self, id: RunId);
+    fn set_id(&mut self, id: RunConfigId);
+    fn get_id(&mut self) ->RunConfigId;
 
-    fn type_name() -> &'static str;
+    fn type_name() -> &'static str;//TODO rename
 }
 
-//TODO move from_properties_map__ into here + all run config meta data id, description, date, running time
-#[allow(dead_code)]
-pub struct RunConfigHolder<R: RunConfig> {
-    id: RunId,
-    run_config: R,
-    descr: String,
-}
 
-impl<R: RunConfig> RunConfigHolder<R> {
-    pub fn new(id: RunId, run_config: R, _descr: &str) -> Self {
-        Self {
-            id,
-            run_config,
-            descr: "".to_string(),
-            // ran_on,
-        }
-    }
+pub static RUN_ID: OnceLock<RunId> = OnceLock::new();
+
+
+pub fn run_id() -> RunId {
+    RUN_ID.get().map(|v|*v).unwrap_or(0)
 }

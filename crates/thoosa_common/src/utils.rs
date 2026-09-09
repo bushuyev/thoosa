@@ -27,6 +27,7 @@ use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_shared::{cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
+use thoosa_store::Store;
 
 use crate::batches::BatchLengths;
 use crate::builder::SeqBuilder;
@@ -35,6 +36,31 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
+use sha2::{Digest, Sha256};
+use thoosa_properties_map::FromHashmap;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
+
+pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
+where
+    FH: FromHashmap + RunConfig + Debug
+{
+    let real_find_motifs_run_config_id = if track_await(store.run_config_descr(find_motifs_id)).await?.r#type == "FindMotifsRunConfig" {
+        find_motifs_id
+    } else {
+        let find_motifs_run_config_ids = track_await(store.get_input_run_config_ids(find_motifs_id, Some("FindMotifsRunConfig"))).await?;
+        *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={find_motifs_id}")))?
+    };
+
+
+    let map = track_await(store.list_run_config_values(real_find_motifs_run_config_id)).await?;
+    let mut find_motifs_run_config = FH::from_properties_map(None, &map)?;
+
+    debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
+
+    find_motifs_run_config.set_id(real_find_motifs_run_config_id);
+
+    Ok(find_motifs_run_config)
+}
 
 #[macro_export]
 macro_rules! debug_plot {
@@ -385,8 +411,14 @@ fn shorten_path_for_fs_limits(path: &Path) -> PathBuf {
     }
 }
 
+
 #[doc(hidden)]
 pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(), ThoError> {
+    debug_plot_impl_wh(t_0, label, plot_repeats, (2000, 1000))
+}
+
+#[doc(hidden)]
+pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32),) -> Result<(), ThoError> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
         let mut counts = DEBUG_PLOT_LABEL_COUNTS
@@ -426,7 +458,7 @@ pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(
             })
             .collect(),
         label,
-        (2000, 1000),
+        w_h,
         &path,
     )?;
     Ok(())
@@ -778,44 +810,139 @@ pub fn draw_function_plot(
     Ok(())
 }
 
+pub fn plot_spectrogram<P: AsRef<Path>>(
+    spectrogram: &Tensor, // shape [F, T]
+    path: P,
+    width: u32,
+    height: u32,
+) -> Result<(), ThoError> {
+    let spectrogram = spectrogram.transpose(0,1);
+    let size = spectrogram.size();
 
-pub fn plot_3d() { //TODO
-    // let root = BitMapBackend::gif(crate::bfgs::opt_tests::OUT_FILE_NAME, (600, 400), 100)?.into_drawing_area();
-    //
-    // for pitch in 9..10 {
-    //     root.fill(&WHITE)?;
-    //
-    //     let mut chart = ChartBuilder::on(&root)
-    //         .caption("2D Gaussian PDF", ("sans-serif", 20))
-    //         .build_cartesian_3d(-100.0..100.0, -100.0..100.0, -100.0..100.0)?;
-    //     chart.with_projection(|mut p| {
-    //         p.pitch = 1.57 - (1.57 - pitch as f64 / 50.0).abs();
-    //         p.scale = 0.7;
-    //         p.into_matrix() // build the projection matrix
-    //     });
-    //
-    //     chart
-    //         .configure_axes()
-    //         .light_grid_style(BLACK.mix(0.15))
-    //         .max_light_lines(3)
-    //         .draw()?;
-    //
-    //     chart.draw_series(
-    //         SurfaceSeries::xoz(
-    //             (-100..=100).map(|x| x as f64 /5.),
-    //             (-100..=100).map(|x| x as f64 /5.),
-    //             crate::bfgs::opt_tests::pdf,
-    //         )
-    //             .style_func(&|&v| (VulcanoHSL::get_color(v / 5.0)).into()),
-    //     )?;
-    //
-    //     root.present()?;
-    // }
-    //
-    // // To avoid the IO failure being ignored silently, we manually call the present function
-    // root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    // debug!("Result has been saved to {}", crate::bfgs::opt_tests::OUT_FILE_NAME);
+    if size.len() != 2 {
+        return Err(ThoError::new(format!("expected tensor shape [T, F], got {:?}", size)));
+    }
+
+    let t_bins = size[0];
+    let f_bins = size[1];
+
+    if t_bins <= 0 || f_bins <= 0 {
+        return Err(ThoError::new(format!("empty spectrogram shape {:?}", size)));
+    }
+
+    // Move to CPU and convert to double for easy scalar reading.
+    // For large spectrograms this is not the fastest approach, but it is simple and robust.
+    let spec = spectrogram
+        .to_device(Device::Cpu)
+        .to_kind(Kind::Double);
+
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+
+    for t in 0..t_bins {
+        for f in 0..f_bins {
+            let v = spec.double_value(&[t, f]);
+            if v.is_finite() {
+                min_v = min_v.min(v);
+                max_v = max_v.max(v);
+            }
+        }
+    }
+
+    if !min_v.is_finite() || !max_v.is_finite() {
+        return Err(ThoError::new("spectrogram contains no finite values"));
+    }
+
+    let range = (max_v - min_v).max(1e-12);
+
+    if let Some(parent) = path.as_ref().parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let root = BitMapBackend::new(path.as_ref(), (width, height)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption("Spectrogram", ("sans-serif", 20))
+        .margin(10)
+        .x_label_area_size(35)
+        .y_label_area_size(45)
+        .build_cartesian_2d(0i64..t_bins, 0i64..f_bins)?;
+
+    chart
+        .configure_mesh()
+        .x_desc("time bin")
+        .y_desc("frequency bin")
+        .disable_mesh()
+        .draw()?;
+
+    chart.draw_series((0..t_bins).flat_map(|t| {
+        let spec = &spec;
+
+        (0..f_bins).map(move |f| {
+            let v = spec.double_value(&[t, f]);
+
+            let x = if v.is_finite() {
+                ((v - min_v) / range).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            let color = turbo_colormap(x);
+
+            // Flip frequency axis visually: low frequencies at the bottom,
+            // high frequencies at the top.
+            let y0 = f_bins - f - 1;
+            let y1 = f_bins - f;
+
+            Rectangle::new(
+                [(t, y0), (t + 1, y1)],
+                color.filled(),
+            )
+        })
+    }))?;
+
+    root.present()?;
+
+    Ok(())
 }
+
+/// Simple Turbo-like colormap.
+/// Input x should be in [0, 1].
+fn turbo_colormap(x: f64) -> RGBColor {
+    let x = x.clamp(0.0, 1.0);
+
+    // Polynomial approximation of Google's Turbo colormap.
+    let r = 34.61
+        + x * (1172.33
+        + x * (-10793.56
+        + x * (33300.12
+        + x * (-38394.49
+        + x * 14825.05))));
+
+    let g = 23.31
+        + x * (557.33
+        + x * (1225.33
+        + x * (-3574.96
+        + x * (1073.77
+        + x * 707.56))));
+
+    let b = 27.2
+        + x * (3211.10
+        + x * (-15327.97
+        + x * (27814.00
+        + x * (-22569.18
+        + x * 6838.66))));
+
+    RGBColor(
+        r.clamp(0.0, 255.0) as u8,
+        g.clamp(0.0, 255.0) as u8,
+        b.clamp(0.0, 255.0) as u8,
+    )
+}
+
 
 //from tch-0.14.0/tests/test_utils.rs
 pub fn from<'a, T>(t: &'a Tensor) -> T
@@ -973,21 +1100,6 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
     one_hot.sum_dim_intlist(1, false, Kind::Int)
 }
 
-//TODO replace with same from cuda_utils free_mem, total_mem
-pub fn cuda_mem() -> (usize, usize) {
-    use cudarc::driver::CudaContext;
-    use cust::sys::cuMemGetInfo_v2;
-
-    let _ctx = CudaContext::new(0).unwrap();
-    let mut free: usize = 0;
-    let mut total: usize = 0;
-    unsafe {
-        let _res = cuMemGetInfo_v2(&mut free, &mut total);
-        // assert_eq!(res, sys::CUresult::CUDA_SUCCESS);
-    }
-    (free, total)
-}
-
 
 pub fn kick_register_cuda_hooks() {
     unsafe {
@@ -1070,17 +1182,10 @@ pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> Resul
 }
 
 
-pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
-    let mean_t = t.mean_dim(dim, true, Float);
-    let std_t = t.std(false);
-    let z_t = (t - mean_t) / std_t;
-    z_t
-}
+pub fn z_norm(t_0: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+    let std = t_0.f_std_dim(dim, false, true)?.f_add_scalar_(f64::EPSILON)?;
 
-pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
-    let std = t_0.f_std_dim(1, true, true)?;
-    //TODO std - 0
-    Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
+    Ok(t_0.f_sub(&t_0.f_mean_dim(dim, true, t_0.kind())?)?.f_div(&std)?)
 }
 
 pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
@@ -1157,14 +1262,13 @@ pub fn lin_t(n: u32) -> Tensor {
     Tensor::arange(n as i64, FLOAT_CPU)
 }
 
-pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
+pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Result<Tensor, ThoError> {
     let end = size.iter().fold(1, |a, v| a * *v);
 
     debug!("lin_for_size: end={end}");
 
-    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))
-        .expect("f_arange failed")
-        .view(&size[..]);
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))?
+        .f_view(&size[..])?;
 
     t = t.set_requires_grad(false);
     match kind {
@@ -1177,9 +1281,9 @@ pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tens
     }
 
     trace!("lin_for_size:t=\n{t}");
-    debug!("lin_for_size: t.size()={:?}", t.size());
+    debug!("lin_for_size: t.size={:?}", t.size());
 
-    t
+    Ok(t)
 }
 
 pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
@@ -1187,6 +1291,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 }
 
 use crate::train_nets::ThoModuleWithStore;
+use thoosa_shared::tracked_await::track_await;
 
 
 pub trait TrainListener: Send + Sync {
@@ -1671,7 +1776,7 @@ pub fn stretch<T: AsRef<Tensor>>(
 
     // Same length: return a shallow clone.
     if in_len == stretch_to {
-        return Ok(t.shallow_clone());
+        return Ok(t.shallow_clone());//it's used only from StackAppliedMotifNets::consume
     }
 
 
@@ -1685,8 +1790,33 @@ pub fn stretch<T: AsRef<Tensor>>(
         idx.push(src);
     }
 
-    let index = Tensor::from_slice(&idx).to_device(t.device());
+    let index = Tensor::f_from_slice(&idx)?.f_to_device(t.device())?;
     Ok(t.f_index_select(dim as i64, &index)?)
+}
+
+pub fn parse_run_config_ids_vec(payload: &str) -> Result<Vec<RunConfigId>, String> {
+    payload
+        .trim()
+        .trim_matches(|ch| ch == '\'' || ch == '"')
+        .split(',')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part
+                .trim()
+                .trim_matches(|ch| ch == '\'' || ch == '"')
+                .replace(" ", "")
+                .parse::<RunConfigId>()
+                .map_err(|e| format!("can't parse {part:?}: {e}"))
+        })
+        .collect()
+}
+
+pub fn parse_run_config_ids(s: &str) -> Result<u32, String> {
+    s.trim()
+        .trim_matches(|ch| ch == '\'' || ch == '"')
+        .replace(" ", "")
+        .parse::<u32>()
+        .map_err(|e| format!("invalid integer '{s}': {e}"))
 }
 
 
@@ -1697,7 +1827,7 @@ pub mod tests {
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, stretch, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, tensor_digest, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::{debug, set_max_level};
@@ -1721,8 +1851,8 @@ pub mod tests {
 
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoError};
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::{cdt_for_dir, clc_step, sin_v_f, RangeOrValue, ThoError};
+    use thoosa_shared::run_configs::RunConfigId;
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
     use crate::train_nets::{self_attention_label_node, LabelNetParams, LabelNetTypeParams, SelfAttentionNetParams};
@@ -1981,7 +2111,7 @@ pub mod tests {
         #[run_config_opt]
         struct TrainLabelsRunConfig {
             #[in_map]
-            pub id: Option<RunId>,
+            pub id: Option<RunConfigId>,
 
             #[in_map]
             #[run_config]
@@ -2000,19 +2130,7 @@ pub mod tests {
             net_type_1: Option<NetType>,
         }
 
-        // impl RunConfig for TrainLabelsRunConfig {
-        //     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-        //         todo!()
-        //     }
-        //
-        //     fn set_id(&mut self, id: RunId) {
-        //         todo!()
-        //     }
-        //
-        //     fn type_name() -> &'static str {
-        //         todo!()
-        //     }
-        // }
+
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -2067,20 +2185,6 @@ pub mod tests {
                 "#,
         ]);
 
-        #[derive(Debug, Default)]
-        struct TestNodeParams {
-            layers: u32,
-        }
-
-        fn test_train_label(
-            vs: &VarStore,
-            run_config: &TrainLabelsRunConfig,
-            ls: &mut dyn TrainListener,
-        ) -> Result<(f32, TestNodeParams), ThoError> {
-            debug!("test_train_label: run_config={:?}", run_config);
-
-            Ok((0.1, TestNodeParams { layers: 0 }))
-        }
 
         let opt_sources = match &cli.command {
             Commands::TrainLabels(train_labels_args) => {
@@ -2192,7 +2296,6 @@ pub mod tests {
             opt_sources.opt_params()
         );
 
-        // opt_train_2(test_train_label, &opt_sources, Cpu, "test").unwrap();
     }
 
     #[test]
@@ -2337,7 +2440,7 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Debug)]
         #[run_config_opt]
         struct SomeStruct {
-            pub id: Option<RunId>,
+            pub id: Option<RunConfigId>,
 
             #[run_config]
             field_00: u32,
@@ -2601,7 +2704,7 @@ pub mod tests {
 
     #[test]
     fn test_mix_masks_align_with_rows_2() -> Result<(), ThoError> {
-        set_max_level(Trace);
+        // set_max_level(Trace);
         //resource lengths (resources are the net's inputs, i.e. what needs to be classified)
         let resource_0_len = 100;
         let resource_1_len = 150;
@@ -2625,9 +2728,9 @@ pub mod tests {
         let max_len_0 = *[motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len].iter().max().unwrap();
         let resource_0_t_after_nets_applied = Tensor::f_vstack(
             &[
-                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
             ]
         )?;
 
@@ -2644,9 +2747,9 @@ pub mod tests {
         let max_len_1 = *[motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len].iter().max().unwrap();
         let resource_1_t_after_nets_applied = Tensor::f_vstack(
             &[
-                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/tasks/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
             ]
         )?;
 
@@ -2901,14 +3004,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_to_zero() -> Result<(), ThoError> {
-        let t = Tensor::from_slice(&[1., 2., 3.]);
-        let stretched = stretch(&t, 0, 0)?;
-        assert_eq!(stretched.size(), vec![0]);
-        Ok(())
-    }
-
-    #[test]
     fn test_stretch_singleton() -> Result<(), ThoError> {
         let t = Tensor::from_slice(&[7.]);
         let stretched = stretch(&t, 5, 0)?;
@@ -2924,6 +3019,40 @@ pub mod tests {
         assert_eq!(stretched.kind(), Kind::Int64);
         Ok(())
     }
+
+    // #[test]
+    fn test_spectrogram() -> Result<(), ThoError> {
+
+
+        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1,-1));
+        debug!("sig_t = {sig_t:?}");
+
+        let spec = sig_t.stft(
+            16000,
+            4000,
+            16000,
+            None::<Tensor>,
+            false,
+            true,
+            true,
+            true
+        );
+
+        debug!("spec = {spec:?}");
+
+        let spec_abs =spec.squeeze_dim(0).abs();
+        debug!("spec_abs = {spec_abs:?}");
+
+        plot_spectrogram(
+            &spec_abs,
+            "/tmp/plots/spectrogram.png",
+            1200,
+            600,
+        )?;
+
+        Ok(())
+    }
+
 }
 
 /// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
@@ -2939,4 +3068,152 @@ pub fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
         + (&phi * 7.0).sin() * 0.15;
 
     x.view([1, width])
+}
+
+
+
+
+#[derive(Debug, Clone)]
+pub struct TensorDigest {
+    pub hex: String,
+    pub shape: Vec<i64>,
+    pub stride: Vec<i64>,
+    pub kind: Kind,
+    pub device: Device,
+    pub requires_grad: bool,
+}
+
+/// Compute a debugging digest for a tensor.
+///
+/// The digest includes:
+/// - shape
+/// - stride
+/// - kind
+/// - device
+/// - requires_grad
+/// - tensor contents
+///
+/// Notes:
+/// - This is intended for debugging, not performance-sensitive code.
+/// - For best reproducibility, values are copied to CPU and made contiguous first.
+/// - Half/BFloat16 are converted to Float before hashing because extracting raw
+///   f16/bf16 bytes ergonomically in `tch` is awkward. If you need bit-exact
+///   distinction between Float16/BFloat16 payloads, that can be added separately.
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="tensor_digest"))]
+pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
+    let shape = t.size();
+    let stride = t.stride();
+    let kind = t.kind();
+    let device = t.device();
+    let requires_grad = t.requires_grad();
+
+    let mut hasher = Sha256::new();
+
+    // Hash metadata first.
+    hasher.update(b"shape");
+    for x in &shape {
+        hasher.update(x.to_le_bytes());
+    }
+
+    hasher.update(b"stride");
+    for x in &stride {
+        hasher.update(x.to_le_bytes());
+    }
+
+    hasher.update(b"kind");
+    hasher.update(format!("{kind:?}").as_bytes());
+
+    hasher.update(b"device");
+    hasher.update(format!("{device:?}").as_bytes());
+
+    hasher.update(b"requires_grad");
+    hasher.update([requires_grad as u8]);
+
+    // Normalize layout for stable content hashing.
+    let cpu = t.f_to_device(Device::Cpu)?.f_contiguous()?;
+
+    match kind {
+        Kind::Uint8 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
+            hasher.update(&v);
+        }
+        Kind::Int8 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i8> = Vec::<i8>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int16 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i16> = Vec::<i16>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i32> = Vec::<i32>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int64 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i64> = Vec::<i64>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Bool => {
+            let flat = cpu.f_to_kind(Kind::Uint8)?.f_view([-1])?;
+            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
+            hasher.update(&v);
+        }
+        Kind::Float => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        Kind::Double => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<f64> = Vec::<f64>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        Kind::Half | Kind::BFloat16 => {
+            // Preserves values well enough for debugging, but not the exact 16-bit payload.
+            let flat = cpu.f_to_kind(Kind::Float)?.f_view([-1])?;
+            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
+            hasher.update(format!("{kind:?}").as_bytes()); // keep original dtype distinct
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        other => {
+            return Err(tch::TchError::Torch(format!(
+                "tensor_digest: unsupported kind: {other:?}"
+            )));
+        }
+    }
+
+    let bytes = hasher.finalize();
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{:02x}", b).unwrap();
+    }
+
+    Ok(TensorDigest {
+        hex,
+        shape,
+        stride,
+        kind,
+        device,
+        requires_grad,
+    })
 }

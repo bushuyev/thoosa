@@ -1,13 +1,17 @@
 use crate::dims::{Dims, ThoBatch};
-use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
+use log::debug;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use thoosa_shared::runner::common::RunCtx;
 use thoosa_shared::ThoError;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::RunCtx;
+use tracing::Instrument;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Carries the per-sample valid time lengths for a padded batch.
 pub struct BatchLengths {
     lengths: Vec<i64>,
@@ -56,6 +60,37 @@ impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch
 
 }
 
+pub fn preload_one<S>(source: S) -> BoxStream<'static, S::Item>
+where
+    S: futures::stream::Stream + Send + 'static,
+    S::Item: Send + 'static,
+{
+    debug!("preload_one");
+
+    let (tx, rx) = tokio::sync::mpsc::channel(1); // exactly one ready batch ahead
+
+    tokio::spawn(async move {
+        futures_util::pin_mut!(source);
+
+        while let Some(item) = track_await(source.next()).await {
+            if track_await(tx.send(item)).await.is_err() {
+                break;
+            }
+        }
+    }.instrument(tracing::info_span!(
+        "batches::preload_one",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "preload one batch ahead",
+    )));
+
+    futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    })
+        .boxed()
+}
+
 // Prefetch at most one batch ahead. Reserve channel capacity before starting the next batch
 // so we never build more than one unconsumed batch in the background.
 pub fn prefetch_next_batch_stream<T, F, I>(futures: I) -> BoxStream<'static, Result<T, ThoError>>
@@ -69,13 +104,19 @@ where
 
     tokio::spawn(async move {
         for fut in futures {
-            let permit = match tx.reserve().await {
+            let permit = match track_await(tx.reserve()).await {
                 Ok(permit) => permit,
                 Err(_) => break,
             };
-            permit.send(fut.await);
+            permit.send(track_await(fut).await);
         }
-    });
+    }.instrument(tracing::info_span!(
+        "batches::prefetch_next_batch_stream",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "prefetch next batch",
+    )));
 
     futures_util::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))
@@ -93,7 +134,7 @@ mod tests {
     use tokio::sync::Semaphore;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn prefetch_next_batch_stream_prefetches_only_one_batch_ahead() -> Result<(), ThoError> {
+    async fn test_prefetch_next_batch_stream_prefetches_only_one_batch_ahead() -> Result<(), ThoError> {
         let started = Arc::new(AtomicUsize::new(0));
         let release_batches = Arc::new(Semaphore::new(0));
         let started_for_futures = Arc::clone(&started);
@@ -141,10 +182,10 @@ pub mod mock_async_data_batch {
     use crate::dims::{Dims, ThoBatch};
     use futures::stream::BoxStream;
     use mockall::mock;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use thoosa_shared::runner::common::RunCtx;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::ThoError;
+    use thoosa_shared::traits::RunCtx;
 
     mock! {
         #[derive(Debug)]

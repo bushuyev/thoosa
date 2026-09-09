@@ -1,3 +1,6 @@
+use std::fs;
+use chrono::Utc;
+
 fn main() {
     let libtorch = std::env::var("LIBTORCH")
         .expect("LIBTORCH must be set (see .cargo/config.toml)");
@@ -9,8 +12,9 @@ fn main() {
     }
     ld.push_str(&format!("{libtorch}/lib"));
     println!("cargo:rustc-env=LD_LIBRARY_PATH={ld}");
-    println!("cargo:rerun-if-env-changed=LIBTORCH");
+    // println!("cargo:rerun-if-env-changed=LIBTORCH");
 
     println!("cargo:rustc-env=CARGO_TARGET_DIR=target"); //https://stackoverflow.com/a/73543282/656449 - avoid rebuild all deps
-    // fs::write("src/version.rs", format!("pub const VERSION:&'static str = \"{}\";", Utc::now())).expect("Unable to write file");
+    //TODO write to OUT_DIR + include!(concat!(env!("OUT_DIR"), "/version.rs"));
+    fs::write("src/version.rs", format!("pub const VERSION:&'static str = \"{}\";", Utc::now())).expect("Unable to write file");
 }

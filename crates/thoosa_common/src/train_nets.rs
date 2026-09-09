@@ -1,60 +1,68 @@
 #![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
-#[cfg(test)]
-pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue};
-#[cfg(test)]
-pub use thoosa_shared::RangeOrValue;
 
-use crate::builder::{Node, SeqBuilder};
 use crate::batches::BatchLengths;
-use crate::my_tch::{BinaryHeadPool, ThoModule};
-use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
+use crate::builder::{Node, SeqBuilder};
+use crate::my_tch::{BinaryHeadPool, MotifInitMode, ThoModule};
+use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
-use crate::utils::{pad_to, plot_series, ListenerResponse, TrainListener};
+use crate::utils::{ListenerResponse, TrainListener, plot_series};
+use crate::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
-use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
+use thoosa_shared::{CopyToDevice, mono_key, panic_to_err, panic_to_err_async};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::{fmt, fs};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
+use std::{fmt, fs};
 
-use tch::nn::{init, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore};
 use tch::Device::Cpu;
-use tch::{nn, Device, Kind, Tensor};
-use thoosa_shared::val::{NamedRange, NamedVal, Val};
+use tch::nn::{ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore, init};
+use tch::{Device, Kind, TchError, Tensor, nn};
 use thoosa_shared::ThoError;
+use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use tch::Kind::Float;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
+use torch_sys::at_grad_set_enabled;
 
-use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice};
+use crate::data_with_extra::DataWithExtra;
+use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice, Spectorgram};
+use crate::my_tch::MotifInitModeBuilder;
+use crate::my_tch::MotifInitModeFields;
+use crate::my_tch::MotifInitModeRangeOrValue;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use crate::tho_varstore::clone_var_store_to;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
-use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
+use thoosa_shared::tmp_file::TmpFile;
+use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, SimpleId, WithId};
+use thoosa_shims::inference_mode::InferenceModeGuard;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
-    #[arg(long, value_delimiter = ',')]
-    pub train_motif_nets_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_config_ids)]
+    pub train_motif_nets_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     pub train_resource_group: String,
@@ -66,7 +74,7 @@ pub struct TrainLabelNetsArgs {
     pub opt_config: OptConfig,
 
     #[arg(long)]
-    pub run_config_cnt: String, //TrainLabelNetsRunConfig
+    pub run_config_cnt: String, //TrainLabelNetRunConfig
 
     #[arg(long)]
     pub max_motif_net_loss: Option<f32>,
@@ -98,12 +106,16 @@ impl TrainLabelNetsArgs {
     }
 }
 
+pub trait WithCommonTrainingRunConfig {
+    fn config(&self)->&CommonTrainingRunConfig;
+}
+
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
-pub struct TrainLabelNetsRunConfig {
+pub struct TrainLabelNetRunConfig {//TODO rename to TrainLabelNetRunConfig
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -112,116 +124,108 @@ pub struct TrainLabelNetsRunConfig {
     #[in_map]
     #[run_config]
     pub net: LabelNetTypeArgs,
+
+    #[in_map]
+    #[run_config]
+    pub validation_step: u32,
 }
 
-impl AsRef<CommonTrainingRunConfig> for TrainLabelNetsRunConfig {
+impl WithCommonTrainingRunConfig for TrainLabelNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
+impl AsRef<CommonTrainingRunConfig> for TrainLabelNetRunConfig {
     fn as_ref(&self) -> &CommonTrainingRunConfig {
         &self.common_training_args
     }
 }
 
-impl TrainLabelNetsRunConfig {
+impl TrainLabelNetRunConfig {
     pub fn new(
-        id: Option<RunId>,
+        id: Option<RunConfigId>,
         common_training_args: CommonTrainingRunConfig,
         net: LabelNetTypeArgs,
+        validation_step: u32,
     ) -> Self {
         Self {
             id,
             common_training_args,
             net,
+            validation_step,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct TrainLabelNetsRunConfigResult {
-    train_motif_nets_run_ids: Vec<RunId>,
-    train_label_nets_run_id: Option<RunId>,
+pub struct TrainLabelNetRunConfigResult {
+    train_label_nets_run_config_id: Option<RunConfigId>,
     pub label: String,
     pub loss: f32,
     label_node_params: LabelNetParams,
-    train_label_nets_run_config: TrainLabelNetsRunConfig,
-    var_store: VarStore,
+    train_label_nets_run_config: TrainLabelNetRunConfig,
+    var_store_path: TmpFile,
+    motif_nets_ids:Vec<u32>
 }
 
-impl WithId for Box<TrainLabelNetsRunConfigResult> {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-
-impl TrainLabelNetsRunConfigResult {
+impl TrainLabelNetRunConfigResult {
     pub fn new(
-        train_motif_nets_run_ids: Vec<RunId>,
         label: String,
         loss: f32,
         label_node_params: LabelNetParams,
-        train_motifs_nodes_values: TrainLabelNetsRunConfig,
-        var_store: VarStore,
+        train_label_nets_run_config: TrainLabelNetRunConfig,
+        var_store_path: TmpFile,
     ) -> Self {
         Self {
-            train_motif_nets_run_ids,
-            train_label_nets_run_id: None,
+            train_label_nets_run_config_id: None,
             label,
             loss,
             label_node_params,
-            train_label_nets_run_config: train_motifs_nodes_values,
-            var_store,
+            train_label_nets_run_config,
+            var_store_path,
+            motif_nets_ids: vec![],
         }
-    }
-
-    pub fn set_train_label_nets_run_id(&mut self, run_id: RunId) {
-        self.train_label_nets_run_id = Some(run_id);
     }
 }
 
-fn run_config_values_with_loss(values: impl Iterator<Item = (String, Val)>, loss: f32) -> HashMap<String, Val> {
-    let mut values = values.collect::<HashMap<_, _>>();
-    values.insert("loss".to_string(), loss.into());
-    values
+#[derive(Debug)]
+pub struct TrainLabelNetRunConfigResultParams<'a> {
+    pub train_motif_nets_run_config_ids: &'a Vec<RunConfigId>,
+    pub motif_nets_ids: &'a Vec<u32>,
 }
 
 #[async_trait]
-impl SavableResult for TrainLabelNetsRunConfigResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
+impl SavableResult for TrainLabelNetRunConfigResult {
+    type P<'a> = TrainLabelNetRunConfigResultParams<'a>;
+
+    type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
-        let mut input_run_ids = Vec::new();
-        let input_run_ids = if let Some(run_id) = self.train_label_nets_run_id {
-            input_run_ids.push(run_id);
-            input_run_ids.as_slice()
-        } else {
-            self.train_motif_nets_run_ids.as_slice()
-        };
 
-        let run_config_id = store.save_run_config(
-            Some(input_run_ids),
-            &TrainLabelNetsRunConfig::type_name(),
+        let run_config_id = track_await(store.save_run_config(
+            Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput
+            &TrainLabelNetRunConfig::type_name(),
             "Label",
-            "todo",
-            run_config_values_with_loss(self.train_label_nets_run_config.to_properties_iter(None), self.loss),
-        ).await?;
+            self.train_label_nets_run_config.to_properties_iter(None).collect(),
+        )).await?;
 
-        let path = ws.read()
+        let path = panic_to_err!(ws.read()
             .save_label_net(
                 run_config_id,
                 &self.label,
-                &self.var_store,
+                (&self.var_store_path).into(),
                 &self.label_node_params,
-            )
-            .expect("save_label_net failed");
+            ))?;
 
-        store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss).await?;
+        debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
+
+        track_await(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).await?;
 
         Ok(run_config_id)
     }
@@ -229,27 +233,27 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
 
 #[derive(Debug)]
 pub struct TrainFinalNetsRunConfigResult {
-    train_label_nodes_run_ids: Vec<RunId>,
+    train_label_nets_run_config_ids: Vec<RunConfigId>,
     pub loss: f32,
-    var_store: VarStore,
+    var_store_path: TmpFile,
     final_node_params: FinalNetParams,
     train_final_net_run_config: TrainFinalNetRunConfig,
 }
 
 impl TrainFinalNetsRunConfigResult {
     pub fn new(
-        train_label_nodes_run_ids: Option<&Vec<RunId>>,
+        train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>,
         loss: f32,
-        var_store: VarStore,
+        var_store_path: TmpFile,
         final_node_params: FinalNetParams,
         train_final_nodes_values: TrainFinalNetRunConfig,
     ) -> Self {
         Self {
-            train_label_nodes_run_ids: train_label_nodes_run_ids
-                .expect("train_label_nodes_run_ids")
+            train_label_nets_run_config_ids: train_label_nets_run_config_ids
+                .expect("train_label_nodes_run_config_ids")
                 .clone(),
             loss,
-            var_store,
+            var_store_path,
             final_node_params,
             train_final_net_run_config: train_final_nodes_values,
         }
@@ -258,26 +262,25 @@ impl TrainFinalNetsRunConfigResult {
 
 #[async_trait]
 impl SavableResult for TrainFinalNetsRunConfigResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
+    type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
-        let run_config_id = store.save_run_config(
-            Some(&self.train_label_nodes_run_ids),
+        let run_config_id = track_await(store.save_run_config(
+            Some(&self.train_label_nets_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
-            "todo",
-            run_config_values_with_loss(self.train_final_net_run_config.to_properties_iter(None), self.loss),
-        ).await?;
+            self.train_final_net_run_config.to_properties_iter(None).collect(),
+        )).await?;
 
-        ws.read()
-            .save_final_net(run_config_id, &self.var_store, &self.final_node_params)
-            .expect("save_final_model failed");
+        let path = ws.read()
+            .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
+
+        track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
         Ok(run_config_id)
     }
@@ -328,10 +331,37 @@ where
 unsafe impl<DI: Dims + Send, DO: Dims + Send> Send for ThoModuleWithStore<DI, DO> {}
 unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO> {}
 
-impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
-    for ThoModuleWithStore<DI, DO>
+impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        let _guard = InferenceModeGuard::new(!train);
+
+        //TODO move to ThoVarStore?
+        let store_float_precision = var_store_float_precision(&self.var_store);
+        debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.as_ref().kind());
+
+        let float_precision = match store_float_precision {
+            VarStoreFloatPrecision::NoFloatVars => {
+                warn!("ThoModuleWithStore::tho_forward: store_float_precision={store_float_precision:?}"); //dummy nets may have no tensors
+                Float
+            }
+            VarStoreFloatPrecision::Uniform(kind) => {
+                kind
+            }
+            VarStoreFloatPrecision::Mixed(_) => {
+                return Err(ThoError::new(format!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id)))
+            }
+        };
+
+        let t = if !float_precision.eq(&t.as_ref().kind()) {
+            debug!("ThoModuleWithStore::tho_forward: t.id={:?}, converting to {:?}", t.id(), float_precision);
+
+            &t.to_kind(float_precision)?
+        } else {
+            t
+        };
+        debug!("ThoModuleWithStore::tho_forward: t.id={:?}, t.as_ref().kind={:?}", t.id(), t.as_ref().kind());
+
         self.module.tho_forward(t, lengths, train)
     }
 }
@@ -356,15 +386,34 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
     }
 
-    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoError>
+    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device, quantize: bool) -> Result<Self, ThoError>
     where
         F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> + Send + Sync + 'static,
     {
+        let _guard = InferenceModeGuard::enabled();
+
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);
-        let module = builder(&vs.root())?;
+
+
+
+        let mut module = builder(&vs.root())?;
         vs.load(&model)?;
         vs.freeze();
+
+        {
+            let variables = vs.variables();
+            debug!("ThoModuleWithStore::load: id={:?}, variables={:?}", id, variables);
+
+            for tensor in variables.values() {
+                debug!("ThoModule::load: model={model:?} tensor={:?}", tensor);
+            }
+        }
+
+        //TODO config/arg to enable
+        if quantize {
+            module.quantize();
+        }
 
         Ok(Self::with_factory(id, module, vs, Some(builder)))
     }
@@ -390,6 +439,50 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     pub fn var_store(&self) -> &VarStore {
         &self.var_store
     }
+
+    pub fn module(&self) -> &Box<dyn ThoModule<DI, DO>> {
+        &self.module
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VarStoreFloatPrecision {
+    NoFloatVars,
+    Uniform(Kind),
+    Mixed(Vec<(Kind, usize)>),
+}
+
+fn is_float_kind(kind: Kind) -> bool {
+    matches!(
+            kind,
+            Kind::Half | Kind::BFloat16 | Kind::Float | Kind::Double
+        )
+}
+
+pub fn var_store_float_precision(vs: &nn::VarStore) -> VarStoreFloatPrecision {
+    let mut counts: Vec<(Kind, usize)> = Vec::new();
+
+    for (_name, tensor) in vs.variables() {
+        let kind = tensor.kind();
+
+        if !is_float_kind(kind) {
+            continue;
+        }
+
+        if let Some((_k, count)) = counts.iter_mut().find(|(k, _)| *k == kind) {
+            *count += 1;
+        } else {
+            counts.push((kind, 1));
+        }
+    }
+
+    debug!("var_store_float_precision: counts={counts:?}");
+
+    match counts.len() {
+        0 => VarStoreFloatPrecision::NoFloatVars,
+        1 => VarStoreFloatPrecision::Uniform(counts[0].0),
+        _ => VarStoreFloatPrecision::Mixed(counts),
+    }
 }
 
 #[async_trait]
@@ -398,22 +491,18 @@ where
 DI: Dims + Send + 'static,
 DO: Dims + Send + 'static {
 
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> {
 
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
+        let var_store = clone_var_store_to(&self.var_store, tho_dst_device.into()).await?;
+        // let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
         let builder = self
             .module_factory
             .as_ref()
             .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
 
-        let mut var_store = VarStore::new(ThoDevice::from(dst_device).into());
-
-        let module = builder(&var_store.root()).expect("module builder failed while copying to device");
-
-        var_store.copy(&self.var_store).expect("failed to copy VarStore weights");
-
-        var_store.freeze();
+        let module = builder(&var_store.root())?;
 
         Ok(Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder))))
     }
@@ -432,7 +521,7 @@ where
     }
 
     fn device(&self) -> usize {
-        ThoDevice::from(self.var_store.device()).ordinal()
+        ThoDevice::from(self.var_store.device()).tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -449,7 +538,7 @@ where
 
 //TODO move to ws
 pub fn load_final_model(
-    run_id: RunId,
+    run_config_id: RunConfigId,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     device: &Device,
 ) -> Result<
@@ -459,18 +548,19 @@ pub fn load_final_model(
     ),
     ThoError,
 > {
-    let (model_path, params_path) = ws.read().final_model(run_id)?;
-    debug!("load_final_model: params_path={model_path:?} run_id={run_id}");
+    let (model_path, params_path) = ws.read().final_model(run_config_id)?;
+    debug!("load_final_model: params_path={model_path:?} run_config_id={run_config_id}");
 
     let final_node_params = FinalNetParams::from_file(&params_path)?;
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
     let final_params_for_builder = final_node_params.clone();
     let node = ThoModuleWithStore::load(
-        mono_key!(run_id, "final_model").into(),
+        mono_key!(run_config_id, "final_model").into(),
         move |path: &nn::Path| final_net(&final_params_for_builder)?.build_tch_module(path),
         model_path,
         *device,
+        false,
     )?;
 
     Ok((final_node_params, node))
@@ -478,8 +568,8 @@ pub fn load_final_model(
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
-    #[arg(long, value_delimiter = ',')]
-    pub select_motifs_run_ids: Option<Vec<RunId>>,
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_config_ids)]
+    pub select_motifs_run_config_ids: Option<Vec<RunConfigId>>,
 
     #[arg(long)]
     pub motif_id: Option<u32>,
@@ -488,7 +578,7 @@ pub struct TrainMotifsNetsArgs {
     pub opt_config: OptConfig,
 
     #[arg(long)]
-    pub run_config_cnt: String, //TrainMotifsNetsRunConfig
+    pub run_config_cnt: String, //TrainMotifNetRunConfig
 
     #[arg(long, default_value_t = 10)]
     pub epoch_size: u32,
@@ -496,8 +586,8 @@ pub struct TrainMotifsNetsArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
 pub enum MotifsBy {
-    SelectMotifsRunIds { select_motifs_run_ids: Vec<RunId> },
-    MotifId { motif_id: u32, select_motifs_run_ids: Option<Vec<RunId>> },
+    SelectMotifsRunIds { select_motifs_run_config_ids: Vec<RunConfigId> },
+    MotifId { motif_id: u32, select_motifs_run_config_ids: Option<Vec<RunConfigId>> },
 }
 
 impl TrainMotifsNetsArgs {
@@ -506,9 +596,9 @@ impl TrainMotifsNetsArgs {
     }
 
     pub fn motifs_by(&self) -> Result<MotifsBy, ThoError> {
-        match (self.motif_id, self.select_motifs_run_ids.clone()) {
-            (Some(motif_id), select_motifs_run_ids) => Ok(MotifsBy::MotifId { motif_id, select_motifs_run_ids }),
-            (None, Some(select_motifs_run_ids)) => Ok(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids }),
+        match (self.motif_id, self.select_motifs_run_config_ids.clone()) {
+            (Some(motif_id), select_motifs_run_config_ids) => Ok(MotifsBy::MotifId { motif_id, select_motifs_run_config_ids }),
+            (None, Some(select_motifs_run_config_ids)) => Ok(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids }),
             (None, None) => Err(ThoError::new("TrainMotifsNetsArgs: either --select-motifs-run-ids or --motif-id must be provided")),
         }
     }
@@ -519,9 +609,9 @@ mod train_motifs_nets_args_tests {
     use super::{MotifsBy, OptConfig, TrainMotifsNetsArgs};
 
     #[test]
-    fn motifs_by_from_select_run_ids() {
+    fn motifs_by_from_select_run_config_ids() {
         let args = TrainMotifsNetsArgs {
-            select_motifs_run_ids: Some(vec![1, 2]),
+            select_motifs_run_config_ids: Some(vec![1, 2]),
             motif_id: None,
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
@@ -531,15 +621,15 @@ mod train_motifs_nets_args_tests {
         assert_eq!(
             args.motifs_by().unwrap(),
             MotifsBy::SelectMotifsRunIds {
-                select_motifs_run_ids: vec![1, 2],
+                select_motifs_run_config_ids: vec![1, 2],
             }
         );
     }
 
     #[test]
-    fn motifs_by_from_motif_id_and_optional_select_run_ids() {
+    fn motifs_by_from_motif_id_and_optional_select_run_config_ids() {
         let args = TrainMotifsNetsArgs {
-            select_motifs_run_ids: Some(vec![10, 11]),
+            select_motifs_run_config_ids: Some(vec![10, 11]),
             motif_id: Some(7),
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
@@ -550,7 +640,7 @@ mod train_motifs_nets_args_tests {
             args.motifs_by().unwrap(),
             MotifsBy::MotifId {
                 motif_id: 7,
-                select_motifs_run_ids: Some(vec![10, 11]),
+                select_motifs_run_config_ids: Some(vec![10, 11]),
             }
         );
     }
@@ -558,7 +648,7 @@ mod train_motifs_nets_args_tests {
     #[test]
     fn motifs_by_requires_one_source() {
         let args = TrainMotifsNetsArgs {
-            select_motifs_run_ids: None,
+            select_motifs_run_config_ids: None,
             motif_id: None,
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
@@ -604,15 +694,8 @@ pub struct MotifLinNetArgs {
 
     #[in_map]
     #[run_config]
-    pub step: u32,//TODO renamed to Conv stride
+    pub step: u32,
 
-    #[in_map]
-    #[run_config]
-    pub channels:u32,
-
-    #[in_map]
-    #[run_config]
-    pub kernel: u32
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -625,7 +708,33 @@ pub struct MotifCosineNetArgs {
     #[in_map]
     #[run_config]
     pub b: f64,
+
+    #[in_map]
+    #[run_config]
+    pub init_mode:MotifInitMode
+
 }
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifCosine2DNetArgs {
+
+    #[in_map]
+    #[run_config]
+    pub a:f64,
+
+    #[in_map]
+    #[run_config]
+    pub b: f64,
+
+    #[in_map]
+    #[run_config]
+    pub init_mode:MotifInitMode,
+
+    #[in_map]
+    #[run_config]
+    pub stft_config:StftRunConfig
+}
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct BinaryHeadMax{}
@@ -677,6 +786,7 @@ pub enum MotifNetTypeArgs {
     ConvNet(MotifConvNetArgs),
     LinNet(MotifLinNetArgs),
     CosineNet(MotifCosineNetArgs),
+    Cosine2DNet(MotifCosine2DNetArgs),
 }
 
 impl Default for MotifNetTypeArgs {
@@ -686,11 +796,11 @@ impl Default for MotifNetTypeArgs {
 }
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[run_config_opt]
-pub struct TrainMotifsNetsRunConfig {
+pub struct TrainMotifNetRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -704,14 +814,27 @@ pub struct TrainMotifsNetsRunConfig {
 
 }
 
-impl AsRef<CommonTrainingRunConfig> for TrainMotifsNetsRunConfig {
+impl WithCommonTrainingRunConfig for TrainMotifNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
+
+impl TrainMotifNetRunConfig {
+    pub fn new(id: Option<RunConfigId>, common_training_args: CommonTrainingRunConfig, net: MotifNetTypeArgs) -> Self {
+        Self { id, common_training_args, net }
+    }
+}
+
+impl AsRef<CommonTrainingRunConfig> for TrainMotifNetRunConfig {
     fn as_ref(&self) -> &CommonTrainingRunConfig {
         &self.common_training_args
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
-struct AdamW {
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+pub struct AdamW {
     #[in_map]
     #[run_config]
     beta1:f32,
@@ -729,13 +852,13 @@ struct AdamW {
     amsgrad:bool
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Optimizers {
     AdamW(AdamW)
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct CommonTrainingRunConfig {
     #[in_map]
     #[run_config]
@@ -759,10 +882,16 @@ pub struct CommonTrainingRunConfig {
 
     #[in_map]
     #[run_config]
-    optimizer: Optimizers
+    optimizer: Option<Optimizers>
 }
 
 impl CommonTrainingRunConfig {
+    fn default_optimizer() -> Optimizers {
+        Optimizers::AdamW(AdamW {
+            beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
+        })
+    }
+
     pub fn new(
         cycles: u32,
         batch_size: u32,
@@ -774,29 +903,30 @@ impl CommonTrainingRunConfig {
             lr,
             patience: 0,
             min_delta: 0.0,
-            optimizer: Optimizers::AdamW(AdamW {
-                beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
-            }),
+            optimizer: Some(Self::default_optimizer()),
         }
     }
 
     pub fn build_optimizer(&self, vs: &VarStore)->Result<Optimizer, ThoError>{
+        self.tho_optimizer().build_for(vs, self.lr)
+    }
 
-        debug!("CommonTrainingRunConfig::build_optimizer: optimizer={:?}", self.optimizer);
+    pub fn tho_optimizer(&self) -> crate::tho_varstore::ThoOptimizers {
+        let optimizer = self.optimizer.clone().unwrap_or_else(Self::default_optimizer);
 
-        match &self.optimizer {
+        debug!("CommonTrainingRunConfig::tho_optimizer: optimizer={optimizer:?}");
+
+        match optimizer {
             Optimizers::AdamW(AdamW{ beta1, beta2, wd, amsgrad }) => {
                 tch::nn::AdamW{
-                    beta1: *beta1 as f64,
-                    beta2: *beta2 as f64,
-                    wd: *wd,
+                    beta1: beta1 as f64,
+                    beta2: beta2 as f64,
+                    wd,
                     eps: 1e-8,
-                    amsgrad: *amsgrad,
-                }.build(&vs, self.lr).map_err(|e|e.into())
+                    amsgrad,
+                }.into()
             }
         }
-
-
     }
 }
 
@@ -809,9 +939,7 @@ impl Default for CommonTrainingRunConfig {
             lr: 0.0001,
             patience: 5,
             min_delta: 1e-4_f32,
-            optimizer: Optimizers::AdamW(AdamW {
-                beta1: 0.9, beta2: 0.999, wd: 0.01, amsgrad: false
-            }),
+            optimizer: Some(CommonTrainingRunConfig::default_optimizer()),
         }
     }
 }
@@ -823,6 +951,12 @@ pub struct OptConfig {
 
     #[arg(long, default_value_t = 10)]
     pub opt_num_init: u32,
+
+    #[arg(long, default_value_t = 20)]
+    pub patience: u32,
+
+    #[arg(long, default_value_t = 1e-5_f32)]
+    pub min_delta: f32,
 }
 
 impl OptConfig {
@@ -830,6 +964,17 @@ impl OptConfig {
         Self {
             opt_max_evals: max_evals,
             opt_num_init: n_init,
+            patience: 0,
+            min_delta: 0.0,
+        }
+    }
+
+    pub fn new_with_early_stopping(max_evals: u32, n_init: u32, patience: u32, min_delta: f32) -> Self {
+        Self {
+            opt_max_evals: max_evals,
+            opt_num_init: n_init,
+            patience,
+            min_delta,
         }
     }
 }
@@ -868,20 +1013,38 @@ pub struct MotifCosineNetParams {
     pub num_features: u32,
     pub a:f64,
     pub b:f64,
-
+    pub init_mode:MotifInitMode
 }
 
 impl MotifCosineNetParams {
-    pub fn new(num_features: u32, a: f64, b: f64) -> Self {
-        Self { num_features, a, b }
+    pub fn new(num_features: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
+        Self { num_features, a, b, init_mode }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MotifCosine2dNetParams {
+    pub kw_time: u32,
+    pub kh_freq: u32,
+    pub a:f64,
+    pub b:f64,
+    pub init_mode:MotifInitMode,
+    pub motif_width:u32
+}
+
+impl MotifCosine2dNetParams {
+    pub fn new(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode, motif_width: u32) -> Self {
+        Self { kw_time: kw, kh_freq: kh, a, b, init_mode,motif_width }
+    }
+}
+
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum MotifNetTypeParams {
     LinNetParams(MotifLinNetParams),
     ConvNetParams(MotifConvNetParams),
     CosineNetParams(MotifCosineNetParams),
+    CosineNet2DParams(MotifCosine2dNetParams),
 }
 
 impl Default for MotifNetTypeParams {
@@ -913,25 +1076,14 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::LinNetParams(MotifLinNetParams::new(num_features, num_layers)))
     }
 
-    pub fn new_cosine(num_features: u32, a: f64, b: f64) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b)))
+    pub fn new_cosine(num_features: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b, init_mode)))
     }
 
-
-    pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
-        MotifNetParams::new(
-            properties
-                .get("num_features")
-                .expect(format!("no num_features in {:?}", properties).as_str())
-                .try_into()
-                .expect("num_features as_i64"),
-            1,
-            1,
-            100,
-            32,
-            10,
-        )
+    pub fn new_cosine_2d(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode, motif_width: u32) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNet2DParams(MotifCosine2dNetParams::new(kw, kh, a, b, init_mode, motif_width)))
     }
+
 
     pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).map_err(
@@ -940,20 +1092,26 @@ impl MotifNetParams {
     }
 
     //TODO
-    pub fn num_features(&self) -> u32 {
+    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_main/src/stages/apply_motif_nets.rs
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
             MotifNetTypeParams::CosineNetParams(v) => v.num_features,
+            MotifNetTypeParams::CosineNet2DParams(v) => {v.motif_width }
         }
     }
 
     //TODO
     pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
+        debug!("motif_net: motif {motif:?}");
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
+            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(
+                v,
+                motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t()).unwrap()))
+            )}//TODO
         }
     }
 }
@@ -985,11 +1143,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
 
 
     net = net
-        .conv_1d("motif_conv_1", params.kernel, 1, params.channels, ConvConfig {
-            stride: 1,
-            padding: 0,
-            ..ConvConfig::default()
-        }, None)?
+        .conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
         .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
     let mut net = builder
@@ -1054,16 +1208,16 @@ net.closure(
     //     "motif_first_head",
     //     2,1
     // )?
-  .closure(
-      Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-          let r = t.shallow_clone();
-
-          debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
-
-          Ok(r)
-      })),
-      None,
-  )?
+  // .closure(
+  //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+  //         let r = t.shallow_clone();
+  //
+  //         debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
+  //
+  //         Ok(r)
+  //     })),
+  //     None,
+  // )?
     // .linear("motif_first_head")?
     .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
@@ -1090,6 +1244,39 @@ net.closure(
 
 }
 
+pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<Spectorgram, SynKey>>>) -> Result<Node, ThoError> {
+    debug!("cosine_2d_motif_node: params={params:?} motif={motif:?}");
+
+    let mut builder = SeqBuilder::new(0, None)?;
+
+
+    let params =  MotifCosine2dNetParams{
+        kh_freq: motif.as_ref().map(|v|v.as_ref().as_ref().size()[1] as u32).unwrap_or(params.kh_freq),//freq
+        kw_time: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
+
+        ..params.clone()
+    };
+
+
+    builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("cosine_2d_motif_node: 1. t.size={:?}", t.size());
+                Ok(t.unsqueeze(1))
+            })),
+            None,
+        )?
+        .cosine_conv_2d("cosine_bank", params.kw_time, params.kh_freq, motif, params.a, params.b, params.init_mode)?
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )?
+        .end_seq()
+}
+
 pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
     debug!("cosine_motif_node: params={params:?}");
 
@@ -1101,23 +1288,27 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     };
 
 
-    builder
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("cosine_motif_node: 1. t.size={:?}", t.size());
-                Ok(t.unsqueeze(1))
-            })),
-            None,
-        )?
-        .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("cosine_motif_node: 2. t.size={:?}", t.size());
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )?
-        .end_seq()
+    let mut builder = builder
+    .closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            debug!("cosine_motif_node: 1. t.size={:?}", t.size());
+            Ok(t.unsqueeze(1))
+        })),
+        None,
+    )?
+    .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?;
+
+    #[cfg(test)]
+    let mut builder = builder.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+            Ok(t.shallow_clone())
+        })),
+        None,
+    )?;
+
+
+    builder.end_seq()
 
 }
 
@@ -1232,12 +1423,12 @@ impl SelfAttentionNetParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinLenNetParams {
     pub motif_layers: u32,
-    pub slices_len: u32,
+    pub features: u32,
 }
 
 impl LinLenNetParams {
-    pub fn new(slices_len: u32, motif_layers: u32) -> Self {
-        Self { motif_layers, slices_len }
+    pub fn new(features: u32, motif_layers: u32) -> Self {
+        Self { motif_layers, features }
     }
 }
 
@@ -1295,10 +1486,11 @@ fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Res
         return Err(ThoError::new(format!("self_attention_masked_mean expected [B,L,D], got {:?}", h_size)));
     }
     if let Some(lengths) = lengths {
+        let kind = h.kind();
         let mask = mask_from_lengths(lengths.as_slice(), h_size[1], h.device())?.f_squeeze_dim(1)?;
-        let mask_f = mask.f_to_kind(Kind::Float)?.f_unsqueeze(-1)?;
-        let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?;
-        let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?.f_clamp_min(1.0)?;
+        let mask_f = mask.f_to_kind(kind)?.f_unsqueeze(-1)?;
+        let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, kind)?;
+        let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, kind)?.f_clamp_min(1.0)?;
         sum.f_div(&denom).map_err(|e| e.into())
     } else {
         h.f_mean_dim(1, false, None).map_err(|e| e.into())
@@ -1458,10 +1650,11 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
     debug!("self_attention_label_node: params={params:?}");
 
 
-    SeqBuilder::new(0, None)?
+    let mut seq_builder = SeqBuilder::new(0, None)?;
+    let builder = seq_builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("self_attention_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
+                debug!("self_attention_label_node: transpose input={t:?} _lengths={_lengths:?}");
                 Ok(t.transpose(1, 2))
             })),
             Some(params.motif_nets),
@@ -1480,7 +1673,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
-                debug!("self_attention_label_node: pooling input={:?} lengths={lengths:?}", t.size());
+                debug!("self_attention_label_node: pooling input={t:?} lengths={lengths:?}");
                 self_attention_masked_mean(t, lengths)
             })),
             None,
@@ -1488,138 +1681,82 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         .linear_s(
             1,
             "self_attention_label_head_last",
-        )?
-        .closure(
+        )?;
+
+        #[cfg(any(debug_assertions, tho_debug))] {
+        let builder = builder.closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
                 Ok(t.shallow_clone())
             })),
             None,
-        )?
-        .end_seq()
+        )?;}
 
+
+    builder .end_seq()
 }
 
-
 pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+    debug!("lin_label_node: params={params:?}");
 
     let LabelNetTypeParams::LinNetParams(lin_params) = &params.net_type else {
         // return Err(ThoError::new(format!("Unexpected params type: {cnn_params:?}")));
         panic!("Unexpected params type: {:?}", params.net_type);
     };
 
-    let num_features = lin_params.slices_len;//params.motif_nets;
+    let num_features = lin_params.features;//params.motif_nets;
     debug!("lin_label_node: num_features={num_features}");
 
-
-    SeqBuilder::new(num_features/*30000*/, None)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("lin_label_node: input={t:?}");
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )?
-        .split1(
-
-        {
-            let mut seq_builder = SeqBuilder::new(num_features, None)?;
-            let mut builder = &mut seq_builder
-            /*.closure(
-                Arc::new(Box::new(move |t: &Tensor| {
-                    debug!("lin_label_node: motif input={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )*/;
-            for _ in 0..lin_params.motif_layers {
-                builder = builder.linear_s(
-                    num_features,
-                    "todo",
-                )?;
-
-            }
-            builder
-                .end_seq()?
-            },
-
-            Box::new(move |t: &Tensor| {
-                debug!("lin_label_node: t.size={:?}", t.size());
-                let batch_size = t.size()[0];
-                let motif_nets = t.size()[1];
-                let dim_size = t.size()[2] as u32;
-                let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
-                debug!("lin_label_node: ranges={ranges:?}");
-
-
-                Ok(ranges.into_iter().map(|start| {
-
-                    let t = if start as u32 + num_features > dim_size  {
-                        debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-                        pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
-                    } else {
-                        debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
-                        t.f_narrow(2, start, num_features as i64)?
-                    };
-
-                    Ok(t)
-                }).collect::<Result<Vec<Tensor>, ThoError>>()?)
-            }),
-            Box::new(move |res: Vec<Tensor>| {
-                debug!("lin_label_node: res={res:?}");
-
-                let all = Tensor::f_concat(res.as_slice(), 1)?;
-                debug!("lin_label_node: all.size={:?}", all.size());
-
-                let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
-                debug!("lin_label_node: r.size={:?}", r.size());
-
-                Ok(r)
-
-            })
-        )?
+    let mut seq_builder = SeqBuilder::new(0, None)?;
+    let mut builder = seq_builder
         // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor| {
-        //         debug!("lin_label_node: final input={t:?}");
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         debug!("lin_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
+        //         // Ok(t.transpose(1, 2))
         //         Ok(t.shallow_clone())
         //     })),
-        //     None,
-        // )
-        // .conv_1d("lin_label_node conv", 1000)
-        .linear_s(
-            num_features,
-            "todo",
+        //     Some(params.motif_nets),
+        // )?
+        .adaptive_avg_pool(lin_params.features,lin_params.features )?;
+
+        for layer in 0..lin_params.motif_layers {
+            builder = builder.linear_feats(
+                "lin_label_node",
+                lin_params.features,
+                lin_params.features,
+            )?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+        }
+
+
+    builder.linear_s(
+        1,
+        "lin_label_node last",
+    )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("lin_label_node: out={:?}", t.size());
+                Ok(t.f_mean_dim(1, false, None)?)
+            })),
+            Some(params.motif_nets),
         )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        .linear_s(
-            256,
-            "todo",
-        )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        .linear_s(
-            128,
-            "todo",
-        )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        .linear_s(
-            1,
-            "todo",
-        )?
-        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
+
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct FinalNetParams {
     in_features: u32,
+    mid_features: u32,
     out_features: u32,
     num_layers: u32,
 }
 
 impl FinalNetParams {
-    pub fn new(in_features: u32, out_features: u32, num_layers: u32) -> Self {
+    pub fn new(in_features: u32, mid_features: u32, out_features: u32, num_layers: u32) -> Self {
         Self {
             in_features,
+            mid_features,
             out_features,
             num_layers,
         }
@@ -1638,8 +1775,15 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
 
     let mut builder = SeqBuilder::new(params.in_features, None)?;
     let mut net = builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                trace!("final_net: input=\n{t}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
         .linear_s(
-            2 * params.in_features,
+            params.mid_features * params.in_features,
             "final_net_first_layer".to_string(),
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -1647,7 +1791,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     for i in 0..params.num_layers {
         net = net
             .linear_s(
-                params.in_features,
+                params.mid_features * params.in_features,
                 format!("final_net_{i}th_layer"),
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
@@ -1724,12 +1868,12 @@ pub struct TrainMotifNetResult {
     pub loss: f32, //TODO pub
     channel: u32,
     motif_id: u32,
-    pub vs: VarStore,
+    pub vs: TmpFile,
     pub params: MotifNetParams,
-    run_config_values: TrainMotifsNetsRunConfig,
+    run_config_values: TrainMotifNetRunConfig,
     #[allow(dead_code)]
-    select_motifs_run_id: RunId,
-    train_motifs_nets_run_id: Option<RunId>,
+    select_motifs_run_config_id: RunConfigId,
+    descr: Option<String>
 }
 
 impl TrainMotifNetResult {
@@ -1737,10 +1881,11 @@ impl TrainMotifNetResult {
         loss: f32,
         channel: u32,
         motif_id: u32,
-        vs: VarStore,
-        select_motifs_run_id: RunId,
+        vs: TmpFile,
+        select_motifs_run_config_id: RunConfigId,
         params: MotifNetParams,
-        run_config_values: TrainMotifsNetsRunConfig,
+        run_config_values: TrainMotifNetRunConfig,
+        descr: Option<String>,
     ) -> Self {
         Self {
             loss,
@@ -1749,142 +1894,147 @@ impl TrainMotifNetResult {
             vs,
             params,
             run_config_values,
-            select_motifs_run_id,
-            train_motifs_nets_run_id: None
+            select_motifs_run_config_id,
+            descr
         }
     }
 
 
-}
-
-#[derive(Debug, DummyData)]
-#[dummy_data(no_clone)]
-pub struct TrainMotifsNetsResult {
-    id:RunId,
-    select_motifs_run_ids: Vec<RunId>,
-    pub train_motif_nets_results:Vec<TrainMotifNetResult>
-}
-
-impl TrainMotifsNetsResult {
-    pub fn new(select_motifs_run_ids: Vec<RunId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
-        Self { id: 0, select_motifs_run_ids, train_motif_nets_results }
-    }
-}
-
-#[async_trait]
-impl SavableResult for TrainMotifsNetsResult {
-    fn value(&self) -> f32 {
-        0.0
-    }
-
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-
-        self.id = store.save_run_config(
-            Some(&self.select_motifs_run_ids),
-            &TrainMotifsNetsRunConfig::type_name(),
-            "TrainMotifsNetResult",
-            "todo",
-            HashMap::new(),
-        ).await?;
-
-        for r in self.train_motif_nets_results.iter_mut() {
-            r.train_motifs_nets_run_id = Some(self.id);
-            r.save(store, ws).await?;
-        }
-
-        Ok(self.id)
-    }
-}
-
-//TODO remove
-impl WithId for Box<TrainMotifsNetsResult> {
-    type ID = RunId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-
-impl WithId for TrainMotifsNetsResult {
-    type ID = RunId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-#[async_trait]
-impl Output for TrainMotifsNetsResult {
 }
 
 
 #[async_trait]
 impl SavableResult for TrainMotifNetResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
+    type P<'a> =  &'a [RunConfigId];
+    type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
-        //TODO save loss to choose model
-        debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
+        debug!("TrainMotifNetResult::save: self={:?}", self);
 
-        let train_motifs_nets_run_id = self.train_motifs_nets_run_id.expect("no train_motifs_nets_run_id");
-        let run_config_id = store.save_run_config(
-            Some(&[train_motifs_nets_run_id]),
-            &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
-            "TrainMotifNetResult",
-            "todo",
-            run_config_values_with_loss(self.run_config_values.to_properties_iter(None), self.loss),
-        ).await?;
+        let train_motif_net_run_config_id = track_await(store.save_run_config(
+            Some(p),
+            &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
+            self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
+            self.run_config_values.to_properties_iter(None).collect(),
+        )).await?;
 
-        let path = ws.read().save_motif_net(
+        let path = panic_to_err!(ws.read().save_motif_net(
             &self.channel,
-            &train_motifs_nets_run_id,
+            &train_motif_net_run_config_id,
             &self.motif_id,
-            &self.vs,
+           (&self.vs).into(),
             &self.params,
-        )?;
+        ))?;
 
-        store.save_selected_net(train_motifs_nets_run_id, path, self.loss).await?;
+        track_await(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).await?;
 
-        Ok(run_config_id)
+        Ok(train_motif_net_run_config_id)
 
     }
 }
 
-pub async fn opt_train<P, R, F, N: Debug + Default>(
+fn opt_param_property_keys<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], cs: &ConfigurationSpace<P>) -> Vec<String>
+where
+    P: FieldName + 'static,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+{
+    let base_opt_vals = cs
+        .into_iter()
+        .map(|hp| NamedVal::new(hp.name().clone(), opt_param_base_value(hp)))
+        .collect::<Vec<_>>();
+    let base_map = run_config_property_map::<P, R>(const_vals, grid_vals, &base_opt_vals);
+
+    cs.into_iter()
+        .enumerate()
+        .map(|(idx, hp)| {
+            let fallback = hp.name().to_string();
+            let Some(alt_value) = opt_param_alt_value(hp) else {
+                return fallback;
+            };
+
+            let mut alt_opt_vals = base_opt_vals.clone();
+            alt_opt_vals[idx] = NamedVal::new(hp.name().clone(), alt_value);
+            let alt_map = run_config_property_map::<P, R>(const_vals, grid_vals, &alt_opt_vals);
+            changed_property_key(&base_map, &alt_map).unwrap_or_else(|| {
+                debug!("opt_param_property_keys: could not resolve property key for hp={hp:?}; falling back to display key {fallback}");
+                fallback
+            })
+        })
+        .collect()
+}
+
+fn run_config_property_map<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], opt_vals: &[NamedVal<P>]) -> HashMap<String, Val>
+where
+    P: FieldName + 'static,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+{
+    let run_config: R = [const_vals, grid_vals, opt_vals].concat().into_iter().into();
+    run_config.to_properties_iter(None).collect()
+}
+
+fn changed_property_key(base_map: &HashMap<String, Val>, alt_map: &HashMap<String, Val>) -> Option<String> {
+    let mut changed = alt_map
+        .iter()
+        .filter(|(key, val)| base_map.get(*key) != Some(*val))
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    changed.extend(base_map.keys().filter(|key| !alt_map.contains_key(*key)).cloned());
+    changed.sort();
+    changed.dedup();
+    (changed.len() == 1).then(|| changed.remove(0))
+}
+
+fn opt_param_base_value<P: FieldName>(hp: &Hyperparameter<P>) -> Val {
+    match hp {
+        Hyperparameter::UniformFloat { lower, .. } => Val::Real(*lower),
+        Hyperparameter::UniformInt { lower, .. } => Val::Int(*lower),
+        Hyperparameter::Categorical { .. } => Val::Int(0),
+    }
+}
+
+fn opt_param_alt_value<P: FieldName>(hp: &Hyperparameter<P>) -> Option<Val> {
+    match hp {
+        Hyperparameter::UniformFloat { lower, upper, .. } if upper > lower => Some(Val::Real(lower + ((upper - lower) / 2.0))),
+        Hyperparameter::UniformInt { lower, upper, .. } if upper > lower => Some(Val::Int(lower + 1)),
+        Hyperparameter::Categorical { values, .. } if values.len() > 1 => Some(Val::Int(1)),
+        _ => None,
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="opt_train"))]
+pub async fn opt_train<P, R, F, N: Debug + Default, A: Debug + Send + Sync + 'static>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
-    device: Device,
     descr: &str,
-) -> Result<(VarStore, N, R, f32), ThoError>
+    reusable_completed_trials: Vec<CompletedTrial>,
+) -> Result<(A, N, R, f32), ThoError>
 where
     P: FieldName + 'static,
-    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
     F: for<'a, 'b> AsyncFnMut(
-            Arc<Mutex<VarStore>>,
             R,
             &'a mut (dyn TrainListener + 'b),
-        ) -> Result<(f32, N), ThoError>,
+        ) -> Result<(A, f32, N), ThoError>,
 {
     let const_vals = run_config_source
         .grid_run_config_source()
         .const_params()
         .clone();
-    let min_loss = Arc::new(RwLock::new(f32::MAX));
+    const MAX_LOSS:f32 = 1f32;
+    let min_loss = Arc::new(RwLock::new(MAX_LOSS));
 
-    let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
+    let min_var_store: Arc<RwLock<Option<(A, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
     let grid_runs = run_config_source.grid_to_vals_and_opt_params();
 
-    info!("opt_train: running opt train {descr} grid_runs={grid_runs:?}");
+    debug!("opt_train: running opt train {descr} grid_runs={grid_runs:?}");
 
     let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("grid_sets_{descr}"), grid_runs.len(), 1);
     for (grid_vals, opt_params) in grid_runs.into_iter() {
@@ -1893,32 +2043,45 @@ where
 
         let min_var_store_clone = Arc::clone(&min_var_store);
         let min_loss_moved = Arc::clone(&min_loss);
+        let config_space = ConfigurationSpace::new(opt_params);
+        let reusable_configs = if reusable_completed_trials.is_empty() {
+            vec![]
+        } else {
+            let reusable_param_keys = opt_param_property_keys::<P, R>(const_vals.as_slice(), grid_vals.as_slice(), &config_space);
+            config_space.reusable_configs_from_completed_trials_with_param_keys(
+                reusable_completed_trials.iter().cloned(),
+                StudyDirection::Minimize,
+                opt_config.opt_max_evals as usize,
+                &reusable_param_keys,
+            )
+        };
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
-                debug!("opt_train: opt_vals={opt_vals:?}  "); //descr={descr}
+                debug!("opt_train: opt_vals={opt_vals:?}  ");
 
                 let run_config: R = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals]
                     .concat()
                     .into_iter()
                     .into();
 
-                let vs = Arc::new(Mutex::new(VarStore::new(device)));
-
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
                 ); //motif_id ?train_net
 
-                let (loss, node_params) = panic_to_err_async!(
-                    train_clone(
-                        Arc::clone(&vs),
+                let train_result = panic_to_err_async!(
+                    train_clone(//TODO spawn
                         run_config.clone(),
                         &mut listener
                     )
-                ).unwrap_or_else(|e| {
-                    warn!("opt_train failed with {e:?} on {run_config:?} ");
-                    (1.0, Default::default())
-                });
+                );
+                let (var_store, loss, node_params) = match train_result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        warn!("opt_train failed with {e:?} on {run_config:?} ");
+                        return MAX_LOSS;
+                    }
+                };
                 // listener.plot();
 
                 let min_loss_val = *min_loss_moved.read();
@@ -1926,34 +2089,31 @@ where
 
                 if loss < min_loss_val {
                     *min_loss_moved.write() = loss;
-                    let vs = Arc::try_unwrap(vs)
-                        .expect("opt_train: VarStore still shared after train")
-                        .into_inner();
-
                     min_var_store_clone
                         .write()
-                        .replace((vs, node_params, run_config, loss));
+                        .replace((var_store, node_params, run_config, loss));
                 }
 
                 loss
             },
-            ConfigurationSpace::new(opt_params),
-            opt_config.opt_max_evals,
-            opt_config.opt_num_init,
+            config_space,
+            opt_config.as_ref().clone(),
             descr,
         );
-        info!("opt_train: wait on optimize ");
-        let best_config = opt.optimize().await;
+        opt.enqueue_configs(reusable_configs);
+        debug!("opt_train: wait on optimize ");
+        let best_config = track_await(opt.optimize()).await;
 
         debug!("opt_train: best_config={:?}", best_config);
 
-        debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={} min_var_store={min_var_store:?}", min_loss.read());
+        debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={}", min_loss.read());
+        trace!("opt_train: done opt, descr={descr} min_var_store={min_var_store:?}");//can cause Internal torch error: CUDA error: device-side assert triggered
         collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)
-        .unwrap()
+        .expect("min_var_store is used somewhere else")
         .into_inner()
-        .ok_or_else(|| ThoError::new("opt was not run"))
+        .ok_or_else(|| ThoError::new("no min_var_store"))
 }
 
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
@@ -1963,40 +2123,10 @@ pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)
         .collect::<Vec<Tensor>>()
 }
 
-
-#[derive(Debug)]
-pub struct LoadMotifNetOutput {
-    #[allow(dead_code)]
-    channel: u32,
-    #[allow(dead_code)]
-    nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, //single motif's nets (of different types)
-}
-
-impl LoadMotifNetOutput {
-    pub fn new(
-        channel: u32,
-        nets: Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>,
-    ) -> Self {
-        Self { channel, nets }
-    }
-}
-
-impl WithId for LoadMotifNetOutput {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-
-
-
-
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
-    #[arg(long)]
-    pub train_label_nets_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_config_ids)]
+    pub train_label_nets_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -2008,7 +2138,7 @@ pub struct TrainFinalNetArgs {
     pub opt_config: OptConfig,
 
     #[arg(long)]
-    pub run_config_cnt: String, //TrainLabelNetsRunConfig
+    pub run_config_cnt: String, //TrainLabelNetRunConfig
 
     #[arg(long)]
     pub selected_motif_nets_limit: Option<usize>,
@@ -2028,7 +2158,7 @@ impl TrainFinalNetArgs {
 #[run_config_opt]
 pub struct TrainFinalNetRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -2039,11 +2169,22 @@ pub struct TrainFinalNetRunConfig {
     pub net: FinalNetArgs,
 }
 
+impl WithCommonTrainingRunConfig for TrainFinalNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct FinalNetArgs {
     #[in_map]
     #[run_config]
     pub num_layers: u32,
+
+    #[in_map]
+    #[run_config]
+    pub mid_features: u32,
 }
 
 impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
@@ -2054,14 +2195,14 @@ impl AsRef<CommonTrainingRunConfig> for TrainFinalNetRunConfig {
 
 impl FinalNetArgs {
     #[cfg(test)]
-    pub fn new(num_layers: u32) -> Self {
-        Self { num_layers }
+    pub fn new(num_layers: u32, mid_features: u32) -> Self {
+        Self { num_layers, mid_features }
     }
 }
 
 impl TrainFinalNetRunConfig {
     pub fn new(
-        id: Option<RunId>,
+        id: Option<RunConfigId>,
         common_training_args: CommonTrainingRunConfig,
         net: FinalNetArgs,
     ) -> Self {
@@ -2075,17 +2216,23 @@ impl TrainFinalNetRunConfig {
 
 #[derive(Debug, Args, Clone)]
 pub struct InferArgs {
-    #[arg(long)]
-    pub final_run_id: RunId,
+    #[arg(long, default_value_t = 0)]
+    pub final_run_config_id: RunConfigId,
 
     #[arg(long, default_value_t = 1000)]
-    pub input_slice_step: usize,
+    pub motif_slices_step: usize,
 
-    #[arg(long, default_value = "../../data_local/test_eegs")]
+    #[arg(long)]
     pub input_dir: String,
 
     #[arg(long, default_value = "submission.csv")]
     pub output_dir: String,
+
+    #[arg(long)]
+    pub limit:Option<usize>,
+
+    #[arg(long)]
+    pub models_dir: Option<String>,
 }
 
 impl InferArgs {
@@ -2097,16 +2244,18 @@ impl InferArgs {
     }
 
     pub fn new(
-        final_run_id: RunId,
+        final_run_config_id: RunConfigId,
         input_data: String,
         output: String,
         input_slice_step: usize,
     ) -> Self {
         Self {
-            final_run_id,
-            input_slice_step,
+            final_run_config_id,
+            motif_slices_step: input_slice_step,
             input_dir: input_data,
             output_dir: output,
+            limit: None,
+            models_dir: None,
         }
     }
 }
@@ -2159,8 +2308,7 @@ pub struct ConvNetArgs {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AttnPool1dArgs{
-    #[in_map]
-    pub _dummy: u32,
+
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -2192,7 +2340,7 @@ pub struct LinNetArgs {
 
     #[in_map]
     #[run_config]
-    pub slices_len: u32,
+    pub features: u32,
 }
 
 
@@ -2219,7 +2367,7 @@ impl LinNetArgs {
     pub fn new(num_layers: u32, slices_len: u32) -> Self {
         Self {
             num_layers,
-            slices_len,
+            features: slices_len,
         }
     }
 }
@@ -2270,6 +2418,44 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         .build_tch_module(&vs.root())
 }
 
+///returns [batch x frequencies x time]
+pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf: &PathBuf*/) -> Tensor {
+    let motifs = x_train.unbind(0, );
+    let mut specs = vec![];
+    // let path = path_buf.join(desc);
+    // fs::create_dir_all(&path).unwrap();
+    for (i, motif) in motifs.iter().enumerate() {
+        let motif = motif.unsqueeze(0);
+        let spec_i = motif.stft(
+            16000,
+            hop_length,
+            16000,
+            None::<Tensor>,
+            false,
+            true,
+            true,
+            true
+        ).squeeze_dim(0).abs(); //.transpose(0, 1);
+
+        debug!("motifs_to_specs: motif={motif:?} spec_i={spec_i:?}");
+        // fs::create_dir_all(format!("/tmp/plots/spectrogram_{}")
+
+
+        //
+        // plot_spectrogram(
+        //     &spec_i,
+        //     path.join(format!("{i}_.png")),
+        //     1200,
+        //     600,
+        // ).unwrap();
+
+        specs.push(spec_i);
+    }
+
+    let specs_x = Tensor::stack(&specs, 0);
+    specs_x
+}
+
 
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
@@ -2277,24 +2463,23 @@ mod train_tests {
     use crate::batches::BatchLengths;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{
-        AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
+        AnyDims, Batch, ChannelsMotifsData, Dims, LabelProbability, MotifProbability, Slice,
         ThoBatch,
     };
-    use crate::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::loader::{LoadRunner, OfMemSize, SyncWrapper};
-    use crate::my_tch::ThoModule;
+    use crate::my_tch::{InitDummy, MotifInitMode, ThoModule};
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint};
+    use crate::train_nets::ConvNetArgsFields::Joint;
+    use crate::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetJoint, ConvNetParams, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinLenNetParams, LinNetArgs, MotifCosine2dNetParams, MotifCosineNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
-    use crate::utils::{cuda_mem, from, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
+    use crate::utils::{TrainListener, debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, vs_mem_size};
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };
-    use crate::ws::mock_ws_simp;
-    use crate::ws::{FsWorkspace, Workspace, WsMockBuilder, NET_WEIGHTS_FILE};
+    use crate::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace, WsMockBuilder};
+    use crate::ws::{WsConfigs, mock_ws_simp};
     use crate::{train_nets, utils};
     use async_trait::async_trait;
     use futures::executor::block_on;
@@ -2304,7 +2489,8 @@ mod train_tests {
     use mockall::automock;
     use mockall_double::double;
     use parking_lot::{Mutex, RwLock};
-    use rand::{random_range, Rng, RngExt, SeedableRng};
+    use rand::prelude::SliceRandom;
+    use rand::{Rng, RngExt, SeedableRng, random_range};
     use rayon::iter::IntoParallelRefMutIterator;
     use std::collections::HashMap;
     use std::ops::{Deref, RangeInclusive};
@@ -2313,29 +2499,32 @@ mod train_tests {
     use std::rc::Rc;
     use std::sync::Arc;
     use std::{fs, mem};
-    use rand::prelude::SliceRandom;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::nn::{init, AdamW, LinearConfig, Module, OptimizerConfig, VarStore};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Float, Half};
-    use tch::{nn, Device, Tensor};
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::nn::{AdamW, LinearConfig, Module, OptimizerConfig, VarStore, init};
+    use tch::{Device, Tensor, nn};
     use tch::{IndexOp, Kind, Reduction};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
+    use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
-    use thoosa_shared::test_utils::set_panic_hook;
-    use thoosa_shared::val::Val;
-    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoError};
-    use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
-    use torch_sys::at_autocast_clear_cache;
+    use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId};
     use thoosa_shared::traits::SimpleId;
-    use crate::train_nets::ConvNetArgsFields::Joint;
+    use thoosa_shared::val::Val;
+    use thoosa_shared::{CopyToDevice, ThoError, batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len};
+    use thoosa_store::{MockStore, SqlStore, TrainedNet, TrainedNetsBy, mock_store_with_find_motifs_run_config};
+    use torch_sys::at_autocast_clear_cache;
 
 
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::tch_test_utils::motifs_tensor;
+    use crate::train_nets::LabelNetTypeParams::LinNetParams;
     use rand::rngs::StdRng;
     use rand_distr::{Distribution, Normal};
+    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shims::inference_mode::InferenceModeGuard;
 
     #[ctor::ctor]
     fn test_init() {
@@ -2393,17 +2582,19 @@ mod train_tests {
         debug!("test_dir={test_dir:?}");
         let channels = 3;
         let max_motif_nodes = 19;
-        let slices_len = 23;
+        let features = 23;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            channels,
+            WsConfigs::new(
+                channels,
             1000,
-            32000,
+            32000
+            )
         )?));
         let params = LabelNetParams::new(
             max_motif_nodes,
-            LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 3)),
+            LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, 3)),
         );
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2412,13 +2603,13 @@ mod train_tests {
         vs_0.freeze();
 
         let batch = 11i64;
-        for slices in [slices_len, 123, 17] {
+        for features in [features, 123, 17] {
             let _ = net.tho_forward(
                 &Tensor::rand(
                     [
                         batch,
                         channels as i64,
-                        slices as i64,
+                        features as i64,
                     ],
                     FLOAT_CPU,
                 )
@@ -2429,19 +2620,19 @@ mod train_tests {
         }
 
 
-
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", (&vs_0).into(), &params)?;
 
         debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
 
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-           model_base_path.join(NET_WEIGHTS_FILE),
-           Cpu,
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           Cpu,
+                                                                                           false,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -2452,6 +2643,9 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_conv_label_node() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         _test_save_load_conv_label_node(
             3, 19, &[2000, 12030, 17000], 11i64,
             ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::MinMax)
@@ -2467,6 +2661,9 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_conv_label_node_1() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         _test_save_load_conv_label_node(
             360, 1541, &[1541], 101i64,
             ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::MinMax)
@@ -2482,12 +2679,26 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_self_attention_label_node() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         _test_save_load_self_attention_label_node(
             19,
             &[128, 256, 384],
             11i64,
             SelfAttentionNetParams::new(64, 4, 4, 0.1),
-        ).await
+            false,
+        ).await?;
+
+        _test_save_load_self_attention_label_node(
+            19,
+            &[128, 256, 384],
+            11i64,
+            SelfAttentionNetParams::new(64, 4, 4, 0.1),
+            true,
+        ).await?;
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2547,39 +2758,48 @@ mod train_tests {
         let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
-        debug!(
-            "heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
-            first_loss,
-        );
+        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
 
         assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
         assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        info!("worker perf:\n{}", format_perf_map(&PERF));
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_test_train_self_attention_label_node() -> Result<(), ThoError> {
-        tch::manual_seed(42);
-        let motif_nets = 30;
-        let self_attention_net_params = SelfAttentionNetParams::new(64, 4, 4, 0.1);
+    async fn heavy_test_train_lin_label_node_on_kernels() -> Result<(), ThoError> {
+        let motif_nets= 100;
+        let conv_net_params = LinLenNetParams::new(256, 4);
         let params = LabelNetParams::new(
             motif_nets,
-            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
+            LabelNetTypeParams::LinNetParams(conv_net_params),
         );
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
 
-        let batch = 32usize;
+        let batch = 64usize;
+        let (x_train, y_train, lengths_train) = gen_motifs_output(
+            batch,
+            motif_nets as usize,
+            1200..=1400,
+            LabelSignal::ByMotifs,
+            0.01,
+            Some(11),
+        )?;
+        let target_train = y_train.unsqueeze(1);
+        let lengths_train = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
         let (x_eval, y_eval, lengths_eval) = gen_motifs_output(
             batch,
             motif_nets as usize,
-            220..=320,
-            LabelSignal::ByOrder,
-            0.35,
-            Some(22),
+            1200..=1400,
+            LabelSignal::ByMotifs,
+            0.15,
+            Some(12),
         )?;
         let target_eval = y_eval.unsqueeze(1);
         let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
@@ -2590,15 +2810,259 @@ mod train_tests {
 
         let mut first_loss = None;
         let mut last_loss = 0.0;
-        for step in 0..120 {
-            let (x_train, y_train, lengths_train) = gen_motifs_output(
-                batch,
+        for _ in 0..50 {
+            let mut batch_lengths = BatchLengths::new(lengths_train.clone());
+            let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
+            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            if first_loss.is_none() {
+                first_loss = Some(loss.double_value(&[]));
+            }
+            last_loss = loss.double_value(&[]);
+            opt.backward_step(&loss);
+        }
+
+        let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
+        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
+        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
+
+        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
+        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
+
+    fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError>{
+        assert_eq!(batch%2, 0);
+
+        // debug_plot_impl(motifs, "motifs", 0)?;
+        let random = motifs_tensor(motif_len, batch/2, MotifKind::Triangle, 1.0, 2.0);
+        // debug_plot_impl(&random, "random", 0)?;
+
+        mix_x_binary_with_labels(motifs, None, &random, None)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_cosine_motif_node() -> Result<(), ThoError> {
+        let motif_width= 100usize;
+        let batch = 64usize;
+
+        let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
+
+
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let motifs = motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.0, 2.0);
+
+        let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
+        // debug_plot_impl(&x_train, "x_train", 0)?;
+
+        let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
+        // debug_plot_impl(&x_eval, "x_eval", 0)?;
+
+        for init_mode in &crate::my_tch::MotifInitMode::list(0.4) {
+            let net = cosine_motif_node(&MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), motifs.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+
+            let result = run_cosine_motif_node(
+                &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
+                &net
+            );
+            debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
+        }
+
+        Ok(())
+    }
+
+    fn run_cosine_motif_node(vs_0: &mut VarStore, x_train: &Tensor, y_train: &Tensor, x_eval: &Tensor, y_eval: &Tensor, net: &Box<dyn ThoModule<AnyDims, AnyDims>>) -> Result<u32, ThoError> {
+        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
+
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), None, false)?;
+        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
+        assert!(eval_loss_before > 0.5);
+        let mut first_loss = None;
+        let mut last_loss = 0.0;
+        for i in 0..50u32 {
+            let logits = net.tho_forward(&x_train.as_ref().into(), None, true)?;
+
+            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&y_train, None, None, Reduction::Mean);
+            if first_loss.is_none() {
+                first_loss = Some(loss.double_value(&[]));
+            }
+            last_loss = loss.double_value(&[]);
+
+            let logits_eval = net.tho_forward(&x_eval.as_ref().into(), None, false)?;
+            let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
+            if eval_loss < 0.1 {
+                debug!("heavy_test_train_cosine_motif_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
+                return Ok(i);
+            }
+
+            debug!("heavy_test_train_cosine_motif_node: x_train={x_train:?} y_train={y_train:?} logits={logits:?} logits.isnan={} last_loss={last_loss}", logits.as_ref().isnan().any());
+            trace!("heavy_test_train_cosine_motif_node: x_train={x_train} y_train={y_train}");
+
+            opt.backward_step(&loss);
+        }
+        Err(ThoError::new("failed"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_cosine_motif_node_2d() -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp/plots/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+
+        let motif_width= 160_000usize;
+        let batch = 64usize;
+
+
+        let mut vs_0 = VarStore::new(Cpu);
+        // let motifs = motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.0, 2.0);
+        let motifs = Tensor::stack((0..batch/2).map(|i| {
+            Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice())
+        }).collect::<Vec<_>>().as_slice(), 0);
+
+        let kernel = motifs_to_specs(&motifs, "kernel"/*, &test_dir*/,   4000);
+
+        let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
+        // debug_plot_impl(&x_train, "x_train", 0)?;
+
+        let specs_x = motifs_to_specs(&x_train, "specs_x"/*, &test_dir*/,   4000);
+
+        debug!("heavy_test_train_cosine_motif_node_2d: all_spects_t={specs_x:?} kernel={kernel:?}");
+
+
+        // let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
+        // debug_plot_impl(&x_eval, "x_eval", 0)?;
+
+        for init_mode in [MotifInitMode::Mean(InitDummy{})] {// &crate::my_tch::MotifInitMode::list(0.4) {
+            let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 10.0, 1.0, init_mode.clone(), motif_width as u32), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+
+            let result = run_cosine_motif_node(
+                // &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
+                &mut vs_0, &specs_x, &y_train, &specs_x, &y_train,
+                &net
+            );
+            debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
+        }
+        Ok(())
+    }
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_self_attention_label_node() -> Result<(), ThoError> {
+        tch::manual_seed(42);
+        let motif_nets = 2;
+
+
+
+        let batch = 10usize;
+        let eval_x_y = gen_motifs_output(
+            batch,
+            motif_nets as usize,
+            100..=100,
+            LabelSignal::ByOrder,
+            0.1,
+            None,
+        )?;
+        // crate::utils::debug_plot_impl(&eval_x_y.0.i((.., 0, ..)), &format!("eval_random_motif_net_0_output_label_{:?}",  eval_x_y.1), 0)?;
+        // crate::utils::debug_plot_impl(&eval_x_y.0.i((.., 1, ..)), &format!("eval_random_motif_net_1_output_label_{:?}",  eval_x_y.1), 0)?;
+
+        let (eval_loss_before, first_loss, last_loss, eval_loss) = train_self_attention(
+            motif_nets,
+            SelfAttentionNetParams::new(20, 1, 1, 0.1),
+            batch,
+            eval_x_y,
+            |step| {
+                let v = gen_motifs_output(
+                    batch,
+                    motif_nets as usize,
+                    100..=100,
+                    LabelSignal::ByOrder,
+                    0.1,
+                    None,
+                )?;
+                // debug!("y {}", v.1);
+                // crate::utils::debug_plot_impl(&v.0.i((.., 0, ..)), &format!("{step}_random_motif_net_0_output_label_{:?}",  v.1), 0)?;
+                // crate::utils::debug_plot_impl(&v.0.i((.., 1, ..)), &format!("{step}_random_motif_net_1_output_label_{:?}",  v.1), 0)?;
+                Ok(v)
+            },
+            100,
+        )?;
+
+        debug!("test_train_self_attention_label_node: first_loss={first_loss:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}");
+
+        assert!(last_loss < first_loss.expect("no first_loss"));
+
+
+        Ok(())
+    }
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_self_attention_label_node() -> Result<(), ThoError> {
+        tch::manual_seed(42);
+        let motif_nets = 30;
+
+        let (eval_loss_before, first_loss, last_loss, eval_loss) = train_self_attention(
+            motif_nets,
+            SelfAttentionNetParams::new(64, 4, 2, 0.1),
+            32usize,
+            gen_motifs_output(
+                32,
+                motif_nets as usize,
+                220..=320,
+                LabelSignal::ByOrder,
+                0.35,
+                Some(22),
+            )?, |step| gen_motifs_output(
+                32,
                 motif_nets as usize,
                 220..=320,
                 LabelSignal::ByOrder,
                 0.35,
                 Some(1_000 + step as u64),
-            )?;
+            ), 120,
+        )?;
+
+        debug!(
+            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
+            first_loss,
+        );
+
+        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
+        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
+    fn train_self_attention<XYF>(motif_nets: u32, attention_net_params: SelfAttentionNetParams, batch: usize, x_y_lengths_eval: (Tensor, Tensor, Vec<usize>), x_y_lengths_train: XYF, steps: i32) -> Result<(f64, Option<f64>, f64, f64), ThoError>
+    where
+        XYF: Fn(i32)->Result<(Tensor, Tensor, Vec<usize>), ThoError>
+    {
+
+        let params = LabelNetParams::new(
+            motif_nets,
+            LabelNetTypeParams::SelfAttentionNetParams(attention_net_params),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-2)?;
+
+
+        let (x_eval, y_eval, lengths_eval) = x_y_lengths_eval;
+        let target_eval = y_eval.unsqueeze(1);
+        let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
+        let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(&mut eval_lengths_before), false)?;
+        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        let mut first_loss = None;
+        let mut last_loss = 0.0;
+        for step in 0..steps {
+            let (x_train, y_train, lengths_train) = x_y_lengths_train(step)?;
             let target_train = y_train.unsqueeze(1);
             let mut batch_lengths = BatchLengths::new(lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>());
             let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
@@ -2613,16 +3077,7 @@ mod train_tests {
         let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
         let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
-
-        debug!(
-            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
-            first_loss,
-        );
-
-        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
-        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
-
-        Ok(())
+        Ok((eval_loss_before, first_loss, last_loss, eval_loss))
     }
 
     async fn _test_save_load_conv_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<(), ThoError> {
@@ -2631,9 +3086,11 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            motif_nets,
+            WsConfigs::new(
+                motif_nets,
             1000,//not used
-            32000,
+            32000
+            )
         )?));
         let params = LabelNetParams::new(
           motif_nets,
@@ -2663,16 +3120,17 @@ mod train_tests {
 
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", (&vs_0).into(), &params)?;
 
         debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
 
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-           model_base_path.join(NET_WEIGHTS_FILE),
-           Cpu,
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           Cpu,
+                                                                                           false,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -2701,15 +3159,17 @@ mod train_tests {
         Ok(())
     }
 
-    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams) -> Result<(), ThoError> {
+    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams, half: bool) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_dir={test_dir:?}");
+        debug!("_test_save_load_self_attention_label_node: test_dir={test_dir:?}");
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            motif_nets,
+            WsConfigs::new(
+                motif_nets,
             1000,
-            32000,
+            32000
+            )
         )?));
         let params = LabelNetParams::new(
             motif_nets,
@@ -2718,11 +3178,16 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        if half {
+            vs_0.half();
+        }
         vs_0.freeze();
+
+        let module_with_store = ThoModuleWithStore::with_factory(mono_key!(0, "test"), net, vs_0, None);
 
         for slices in all_slices {
             let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
-            let _ = net.tho_forward(
+            let _ = module_with_store.tho_forward(
                 &Tensor::rand(
                     [
                         batch,
@@ -2738,23 +3203,30 @@ mod train_tests {
 
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", module_with_store.var_store().into(), &params)?;
 
-        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("_test_save_load_self_attention_label_node: net_id={net_id:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
 
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-             model_base_path.join(NET_WEIGHTS_FILE),
-             Cpu,
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
+            "".into(),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+           model_base_path.join(NET_WEIGHTS_FILE),
+           Cpu,
+           false,
         )?;
 
-        assert!(vs_0.variables().len() > 0);
-        assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
+        assert!(module_with_store.var_store().variables().len() > 0);
+        assert_eq!(module_with_store.var_store().variables(), loaded_module.var_store().variables());
+
+        debug!("_test_save_load_self_attention_label_node: module_with_store.var_store().variables()={:?}", module_with_store.var_store().variables());
 
         if matches!(Device::cuda_if_available(), Cuda(_)) {
             let cuda_net = loaded_module.copy_to_device(1).await?;
+
+            debug!("_test_save_load_self_attention_label_node: cuda_net.var_store().variables()={:?}", cuda_net.var_store().variables());
+
             for slices in all_slices {
                 let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
                 let _ = cuda_net.tho_forward(
@@ -2764,7 +3236,7 @@ mod train_tests {
                             motif_nets as i64,
                             *slices as i64,
                         ],
-                        FLOAT_CUDA,
+                        FLOAT_CUDA
                     ).into(),
                     Some(&mut lengths),
                     false,
@@ -3028,11 +3500,11 @@ mod train_tests {
     //TODO remove?
     fn save_test_models(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        base_run_id: RunId,
+        base_run_config_id: RunConfigId,
         channels: u32,
         max_motif_batches: u32,
         max_batch_size: u32,
-        motif_node_params_run_id: RunId,
+        motif_node_params_run_config_id: RunConfigId,
         window: u32,
     ) -> Result<(), ThoError> {
         // fs::create_dir_all(models_path)?;
@@ -3041,7 +3513,7 @@ mod train_tests {
 
         save_test_label_model(
             &ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "seizure",
             3,
             4,
@@ -3050,17 +3522,17 @@ mod train_tests {
         )?;
         // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "0", 1, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "0", 2, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "0", 3, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 11, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "0", 1, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "0", 2, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "0", 3, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 11, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "lpd",
             1,
             1,
@@ -3068,13 +3540,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "gpd",
             1,
             1,
@@ -3082,13 +3554,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "lrda",
             1,
             1,
@@ -3096,13 +3568,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "grda",
             1,
             1,
@@ -3110,13 +3582,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "other",
             1,
             1,
@@ -3124,9 +3596,9 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
         Ok(())
     }
 
@@ -3140,7 +3612,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::final_net(&FinalNetParams::new(features, 0, 1))?
+            train_nets::final_net(&FinalNetParams::new(features, 100, 0, 1))?
                 .build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
@@ -3155,7 +3627,7 @@ mod train_tests {
 
     fn save_test_label_model(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         label: &str,
         channels: u32,
         max_motif_nets: u32,
@@ -3181,7 +3653,7 @@ mod train_tests {
         );
 
         ws.write()
-            .save_label_net(run_id, &label, &vs_0, &label_node_params)?;
+            .save_label_net(run_config_id, &label, (&vs_0).into(), &label_node_params)?;
         Ok(())
     }
 
@@ -3190,7 +3662,7 @@ mod train_tests {
         channel: &str,
         motif_id: u32,
         window: u32,
-        motif_node_params_run_id: RunId,
+        motif_node_params_run_config_id: RunConfigId,
     ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
@@ -3217,10 +3689,10 @@ mod train_tests {
         );
         ws.write().save_motif_net(
             &channel,
-            &motif_node_params_run_id,
+            &motif_node_params_run_config_id,
             &motif_id,
-            &vs_0,
-            &MotifNetParams::new(100, 1, 1, 100, 32, 10),
+            (&vs_0).into(),
+            &MotifNetParams::new_conv(100, 1, 1, 100, 32, 10),
         )?;
         Ok(())
     }
@@ -3476,10 +3948,11 @@ mod train_tests {
 
     #[test]
     fn shapes_ok() {
+        let batch_len = 3;
         let (x, y, lengths) = gen_motifs_output(
-            3,
+            batch_len,
             5,
-            5..=8,
+            70..=80,
             LabelSignal::ByMotifs,
             0.2,
             Some(123),
@@ -3490,329 +3963,46 @@ mod train_tests {
 
         let xs = x.size();
         assert_eq!(xs.len(), 3);
-        assert_eq!(xs[0], 16);
-        assert_eq!(xs[1], 7);
+        assert_eq!(xs[0], batch_len as i64);
+        assert_eq!(xs[1], 5);
         assert!(xs[2] >= 50 && xs[2] <= 80);
 
         let ys = y.size();
-        assert_eq!(ys, vec![16]);
-    }
-
-    mod test_conv_net {
-        use log::debug;
-        use tch::{nn, nn::ModuleT, Device, Kind, Reduction, Tensor};
-        use tch::nn::{Module, OptimizerConfig};
-        use thoosa_shared::ThoError;
-        use crate::train_nets::train_tests::{gen_motifs_output, LabelSignal};
-
-        // -----------------------------
-        // Mask helper
-        // -----------------------------
-        #[inline]
-        fn valid_time_mask(lengths: &Tensor, max_l: i64) -> Tensor {
-            // lengths: [B] int64
-            // returns: [B, max_l] bool, true for t < lengths[b]
-            let device = lengths.device();
-            let pos = Tensor::arange(max_l, (Kind::Int64, device)).unsqueeze(0); // [1, L]
-            let len = lengths.unsqueeze(1); // [B, 1]
-            pos.lt_tensor(&len) // [B, L] bool
-        }
-
-        // -----------------------------
-        // Self-attention (manual MHA)
-        // -----------------------------
-        pub struct SelfAttention {
-            w_q: nn::Linear,
-            w_k: nn::Linear,
-            w_v: nn::Linear,
-            w_o: nn::Linear,
-            n_heads: i64,
-            head_dim: i64,
-            dropout: f64,
-        }
-
-        impl SelfAttention {
-            pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, dropout: f64) -> Self {
-                assert!(d_model % n_heads == 0, "d_model must be divisible by n_heads");
-                let head_dim = d_model / n_heads;
-                let lin = |name: &str| nn::linear(vs / name, d_model, d_model, Default::default());
-                Self {
-                    w_q: lin("q"),
-                    w_k: lin("k"),
-                    w_v: lin("v"),
-                    w_o: lin("o"),
-                    n_heads,
-                    head_dim,
-                    dropout,
-                }
-            }
-
-            pub fn forward_t(&self, x: &Tensor, key_valid: &Tensor, train: bool) -> Tensor {
-                // x: [B, L, D]
-                // key_valid: [B, L] bool (valid keys)
-                let (b, l, _d) = {
-                    let s = x.size();
-                    (s[0], s[1], s[2])
-                };
-
-                let q = x.apply(&self.w_q);
-                let k = x.apply(&self.w_k);
-                let v = x.apply(&self.w_v);
-
-                // [B, L, D] -> [B, H, L, Dh]
-                let q = q
-                    .view([b, l, self.n_heads, self.head_dim])
-                    .transpose(1, 2);
-                let k = k
-                    .view([b, l, self.n_heads, self.head_dim])
-                    .transpose(1, 2);
-                let v = v
-                    .view([b, l, self.n_heads, self.head_dim])
-                    .transpose(1, 2);
-
-                // scores: [B, H, L, L]
-                let scale = (self.head_dim as f64).sqrt();
-                let mut scores = q.matmul(&k.transpose(-2, -1)) / scale;
-
-                // mask invalid keys with large negative
-                // key_valid: [B, L] -> [B, 1, 1, L] float
-                let key_mask_f = key_valid
-                    .unsqueeze(1)
-                    .unsqueeze(2)
-                    .to_kind(scores.kind());
-
-                let ones = Tensor::ones(&key_mask_f.size(), (scores.kind(), scores.device()));
-                let inv = &ones - &key_mask_f; // 1 for invalid positions
-                scores = scores + inv * (-1e9);
-
-                let attn = scores.softmax(-1, scores.kind()).dropout(self.dropout, train);
-                let y = attn.matmul(&v); // [B, H, L, Dh]
-
-                // [B, H, L, Dh] -> [B, L, D]
-                let y = y
-                    .transpose(1, 2)
-                    .contiguous()
-                    .view([b, l, self.n_heads * self.head_dim]);
-
-                y.apply(&self.w_o).dropout(self.dropout, train)
-            }
-        }
-
-        // -----------------------------
-        // Transformer-like block
-        // -----------------------------
-        pub struct AttnBlock {
-            ln1: nn::LayerNorm,
-            ln2: nn::LayerNorm,
-            attn: SelfAttention,
-            ff1: nn::Linear,
-            ff2: nn::Linear,
-            dropout: f64,
-        }
-
-        impl AttnBlock {
-            pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, dropout: f64) -> Self {
-                let ln_cfg = nn::LayerNormConfig { eps: 1e-5, ..Default::default() };
-                let ln1 = nn::layer_norm(vs / "ln1", vec![d_model], ln_cfg);
-                let ln2 = nn::layer_norm(vs / "ln2", vec![d_model], ln_cfg);
-
-                let attn = SelfAttention::new(&(vs / "attn"), d_model, n_heads, dropout);
-
-                let ff1 = nn::linear(vs / "ff1", d_model, d_model * ff_mult, Default::default());
-                let ff2 = nn::linear(vs / "ff2", d_model * ff_mult, d_model, Default::default());
-
-                Self { ln1, ln2, attn, ff1, ff2, dropout }
-            }
-
-            pub fn forward_t(&self, x: &Tensor, key_valid: &Tensor, train: bool) -> Tensor {
-                // pre-norm attention
-                let h = x.apply(&self.ln1);
-                let a = self.attn.forward_t(&h, key_valid, train);
-                let x = x + a;
-
-                // pre-norm FFN
-                let h2 = x.apply(&self.ln2);
-                let f = h2
-                    .apply(&self.ff1)
-                    .gelu("none")
-                    .dropout(self.dropout, train)
-                    .apply(&self.ff2)
-                    .dropout(self.dropout, train);
-
-                x + f
-            }
-        }
-
-        // -----------------------------
-        // Classifier for [B, M, L] (padded) + lengths
-        // -----------------------------
-        pub struct MotifOrderClassifier {
-            in_proj: nn::Linear,      // M -> D
-            pos_emb: nn::Embedding,   // [max_len, D]
-            block: AttnBlock,
-            out: nn::Linear,          // D -> 1
-            max_len: i64,
-            d_model: i64,
-            motif_nets: i64,
-        }
-
-        impl MotifOrderClassifier {
-            pub fn new(
-                vs: &nn::Path,
-                motif_nets: i64,   // M
-                max_len: i64,      // should be >= l_range.end()
-                d_model: i64,
-                n_heads: i64,
-                dropout: f64,
-            ) -> Self {
-                let in_proj = nn::linear(vs / "in_proj", motif_nets, d_model, Default::default());
-                let pos_emb = nn::embedding(vs / "pos_emb", max_len, d_model, Default::default());
-                let block = AttnBlock::new(&(vs / "block"), d_model, n_heads, 4, dropout);
-                let out = nn::linear(vs / "out", d_model, 1, Default::default());
-
-                Self { in_proj, pos_emb, block, out, max_len, d_model, motif_nets }
-            }
-
-            /// x: [B, M, Lpadded], lengths: [B] int64
-            /// returns logits: [B]
-            pub fn forward_t(&self, x: &Tensor, lengths: &Tensor, train: bool) -> Tensor {
-                let s = x.size();
-                let b = s[0];
-                let m = s[1];
-                let l = s[2];
-                assert_eq!(m, self.motif_nets, "motif_nets mismatch");
-                assert!(l <= self.max_len, "batch max_L={l} exceeds model max_len={}", self.max_len);
-
-                // [B, M, L] -> [B, L, M]
-                let x = x.transpose(1, 2);
-
-                // project to model dim: [B, L, D]
-                let mut h = x.apply(&self.in_proj);
-
-                // add learned positional embedding
-                let device = x.device();
-                let pos_ids = Tensor::arange(l, (Kind::Int64, device)); // [L]
-                let pos = self.pos_emb.forward(&pos_ids).unsqueeze(0);  // [1, L, D]
-                h = h + pos;
-
-                // mask for valid positions
-                let valid = valid_time_mask(lengths, l); // [B, L] bool
-
-                // (optional but helpful) zero out padding tokens early
-                let mask_f = valid.to_kind(Kind::Float).unsqueeze(-1); // [B, L, 1]
-                h = h * &mask_f;
-
-                // one attention block
-                h = self.block.forward_t(&h, &valid, train);
-
-                // masked mean pooling: sum(h * mask) / lengths
-                let sum = (h * &mask_f).sum_dim_intlist([1].as_slice(), false, Kind::Float); // [B, D]
-                let denom = lengths
-                    .to_kind(Kind::Float)
-                    .clamp_min(1.0)
-                    .unsqueeze(1); // [B, 1]
-                let pooled = sum / denom; // [B, D]
-
-                pooled.apply(&self.out).squeeze_dim(-1) // [B]
-            }
-        }
-
-        // -----------------------------
-        // Tiny training demo (uses your gen_motifs_output)
-        // -----------------------------
-        pub fn train_demo_by_order(
-            device: Device,
-            motif_nets: usize,
-            l_range: std::ops::RangeInclusive<usize>,
-        ) -> Result<(), ThoError> {
-            let (l_lo, l_hi) = (*l_range.start(), *l_range.end());
-            let max_len = l_hi as i64;
-
-            let mut vs = nn::VarStore::new(device);
-            let model = MotifOrderClassifier::new(
-                &vs.root(),
-                motif_nets as i64,
-                max_len,
-                64,     // d_model
-                4,      // n_heads
-                0.10,   // dropout
-            );
-
-            let mut opt = nn::Adam::default()
-                .build(&vs, 1e-3)
-                .map_err(|e| ThoError::new(format!("Adam build: {e:?}")))?;
-
-            for step in 0..2000 {
-                let (x, y, lengths) = gen_motifs_output(
-                    64,
-                    motif_nets,
-                    l_lo..=l_hi,
-                    LabelSignal::ByOrder,
-                    0.35,       // similarity
-                    None,
-                )?;
-
-                let x = x.to_device(device);
-                let y = y.to_device(device);
-
-                let lengths_i64: Vec<i64> = lengths.into_iter().map(|u| u as i64).collect();
-                let lengths_t = Tensor::from_slice(&lengths_i64).to_device(device);
-
-                let logits = model.forward_t(&x, &lengths_t, true);
-                let loss = logits.binary_cross_entropy_with_logits::<&Tensor>( &y, None, None, Reduction::Mean);
-
-                opt.backward_step(&loss);
-
-                if step % 200 == 0 {
-                    let probs = logits.sigmoid();
-                    let preds = probs.ge(0.5).to_kind(Kind::Float);
-                    let acc = preds
-                        .eq_tensor(&y)
-                        .to_kind(Kind::Float)
-                        .mean(Kind::Float)
-                        .double_value(&[]);
-                    debug!("step={step} loss={:.4} acc={:.3}", loss.double_value(&[]), acc);
-                }
-            }
-
-            Ok(())
-        }
-
-
-        #[test]
-        fn heavy_test_train_demo_by_order(){
-            train_demo_by_order(
-                Device::Cuda(0),
-                30,
-                700usize..=1000usize
-            ).unwrap();
-        }
+        assert_eq!(ys, vec![batch_len as i64]);
     }
 
     #[tokio::test]
-    async fn test_save_train_label_net_result_persists_selected_net_and_loss() -> Result<(), ThoError> {
+    async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
         let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", "todo", HashMap::new()).await?;
-        let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", "todo", HashMap::new()).await?;
-        let mut result = crate::train_nets::TrainLabelNetsRunConfigResult::new(
-            vec![source_run_id],
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
+        let train_motif_nets_run_config_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
+        // Trained results now own a worker-written checkpoint rather than an in-memory VarStore.
+        let checkpoint_path = test_dir.join("train_label_checkpoint.safetensors");
+        VarStore::new(Cpu).save(&checkpoint_path)?;
+
+        let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
+            // vec![source_run_config_id],
             "alpha".to_string(),
             0.125,
             LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
-            TrainLabelNetsRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16))),
-            VarStore::new(Cpu),
+            TrainLabelNetRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16)), 1),
+            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
         );
-        result.set_train_label_nets_run_id(parent_run_id);
 
-        let child_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws).await?;
-        let run_config_values = store.list_run_config_values(child_run_id).await?;
-        let selected_nets = store.list_selected_nets(parent_run_id, None, None).await?;
+        let train_motif_nets_run_config_id_vec = vec![train_motif_nets_run_config_id];
+        let motif_nets_ids= vec![];
+        let train_label_nets_run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
+            train_motif_nets_run_config_ids: &train_motif_nets_run_config_id_vec,
+            motif_nets_ids: &motif_nets_ids,
+        }).await?;
+        let run_config_values = store.list_run_config_values(train_label_nets_run_config_id).await?;
+        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_nets_run_config_id]), None, None).await?;
 
-        assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
-        assert_eq!(vec![child_run_id], store.list_output_run_ids(parent_run_id).await?);
-        assert_eq!(vec![(PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
+        assert_eq!(vec![train_label_nets_run_config_id], store.list_output_run_config_ids(train_motif_nets_run_config_id).await?);
+        assert_eq!(vec![TrainedNet { id: 1, run_config_id: train_label_nets_run_config_id, net_path: PathBuf::from(format!("alpha/{train_label_nets_run_config_id}")), loss: 0.125 }], trained_nets);
 
         Ok(())
     }
@@ -3820,24 +4010,99 @@ mod train_tests {
     #[tokio::test]
     async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
         let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let label_run_id_0 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_0", "todo", HashMap::new()).await?;
-        let label_run_id_1 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_1", "todo", HashMap::new()).await?;
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
+        let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
+        let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
+        // Exercise the same checkpoint handoff used by local and IPC training.
+        let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
+        VarStore::new(Cpu).save(&checkpoint_path)?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
-            Some(&vec![label_run_id_0, label_run_id_1]),
-            0.25,
-            VarStore::new(Cpu),
-            FinalNetParams::new(4, 2, 3),
-            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
+            Some(&vec![label_run_config_id_0, label_run_config_id_1]),
+            0.125,
+            thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
+            FinalNetParams::new(4, 100, 2, 3),
+            TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3, 100)),
         );
 
-        let run_id = crate::runs::SavableResult::save(&mut result, &store, &ws).await?;
-        let run_config_values = store.list_run_config_values(run_id).await?;
+        let run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
+        let run_config_values = store.list_run_config_values(run_config_id).await?;
+        let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
 
-        assert_eq!(Some(&Val::Real(0.25)), run_config_values.get("loss"));
+        assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
+        Ok(())
+    }
+
+
+    #[test]
+    fn test_inference_mode() -> Result<(), ThoError>{
+
+        assert!(!Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
+
+        let _guard = InferenceModeGuard::enabled();
+
+        assert!(Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
 
         Ok(())
     }
 
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Clone, PartialEq, Debug, Hash)]
+pub struct StftRunConfig {
+    #[in_map]
+    #[run_config]
+    pub n_fft: i64,
+
+    #[in_map]
+    #[run_config]
+    pub hop_length: Option<i64>,
+
+    #[in_map]
+    #[run_config]
+    pub win_length: Option<i64>,
+
+    #[in_map]
+    #[run_config]
+    pub normalized: bool,
+
+    #[in_map]
+    #[run_config]
+    pub onesided: bool,
+
+    #[in_map]
+    #[run_config]
+    pub align_to_window: bool,
+}
+
+impl StftRunConfig {
+    pub fn new(n_fft: i64, hop_length: Option<i64>, win_length: Option<i64>, normalized: bool, onesided: bool, align_to_window: bool) -> Self {
+        Self { n_fft, hop_length, win_length, normalized, onesided, align_to_window }
+    }
+
+    pub fn validate(&self) -> Result<(), ThoError> {
+        if self.n_fft <= 0 {
+            return Err(ThoError::new(format!("StftRunConfig::validate: n_fft must be positive, got {}", self.n_fft)));
+        }
+        if matches!(self.hop_length, Some(v) if v <= 0) {
+            return Err(ThoError::new(format!("StftRunConfig::validate: hop_length must be positive, got {:?}", self.hop_length)));
+        }
+        if matches!(self.win_length, Some(v) if v <= 0) {
+            return Err(ThoError::new(format!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length)));
+        }
+        Ok(())
+    }
+
+    pub fn hash_value(&self) ->u64{
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+impl Default for StftRunConfig {
+    fn default() -> Self {
+        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(4000), normalized: false, onesided: true, align_to_window: true }
+    }
 }

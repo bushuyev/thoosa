@@ -72,7 +72,7 @@ impl CategoricalParzenEstimator {
 
         for c in 0..self.n_choices {
             let mask = masks.i(c as i64);
-            let weight = weights.masked_select(&mask).sum(None).totype(Float);
+            let weight = weights.masked_select(&mask).sum(None).totype(Float);//TODO f_
 
             let c_t = Tensor::from_slice(&[c as i64]);
             let mask_not_c = slicer.ne_tensor(&c_t);
@@ -123,7 +123,7 @@ impl ParzenEstimator for CategoricalParzenEstimator {
                         .collect::<Vec<i64>>()
                         .as_slice(),
                 )
-                .totype(tch::Kind::Int64),
+                .totype(tch::Kind::Int64),//TODO f_
                 weights,
             ),
         )

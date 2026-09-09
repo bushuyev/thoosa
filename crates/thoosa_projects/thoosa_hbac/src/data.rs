@@ -1,9 +1,9 @@
 use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
-use polars::prelude::{
-    BooleanChunked, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader,
-    LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions, col, concat_list, lit,
+use polars::prelude::{BooleanChunked, Expr, IntoLazy, JoinArgs,
+                      JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, PlRefPath, ScanArgsParquet, Series, SortMultipleOptions,
+                      col, concat_list, lit,
 };
 use rand::{Rng, RngExt};
 use std::collections::HashMap;
@@ -12,7 +12,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tch::{Device, Kind, Tensor};
 
-use thoosa_common::dims::{Batch, ChannelsData};
+use thoosa_common::dims::Batch;
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_main::data::{AllTrainSplitter, Set, Splitter, parquet_to_tensor_by_path};
 use thoosa_shared::ThoError;
@@ -84,7 +85,7 @@ impl Splitter for ByPatientIdSplitter {
                     }
                 })
                 .collect::<Vec<_>>(),
-        ))?;
+        ).into())?;
 
         Ok(df.clone().join(
             df_set.clone().lazy(),
@@ -112,14 +113,14 @@ pub fn labeled_resourses(
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
-    let df = LazyCsvReader::new(path).finish()?.with_streaming(true);
+    let df = LazyCsvReader::new(PlRefPath::new(path.display().to_string())).finish()?.with_streaming(true);
 
     let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
 
     let mask: BooleanChunked = gr_by_eeg_id_df
         .column("eeg_id")?
         .i64()?
-        .into_iter()
+        .iter()
         .map(|opt| {
             opt.map(|id| {
                 let p = PathBuf::from(format!("{}/train_eegs/{id}.parquet", eeg_path.display()));
@@ -135,15 +136,15 @@ pub fn labeled_resourses(
         .filter(&mask)?
         .column("eeg_id")?
         .i64()?
-        .into_iter()
+        .iter()
         // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
         // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-        .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
         .map(
             |(
                 (
@@ -243,7 +244,7 @@ pub fn eegs_to_tensors() -> Result<(), ThoError> {
 
     // debug!("saved to {}", name);
 
-    let df = LazyCsvReader::new("../../data/train.csv")
+    let df = LazyCsvReader::new("../../data/train.csv".into())
         .finish()?
         .with_streaming(true);
 
@@ -264,15 +265,15 @@ pub fn eegs_to_tensors() -> Result<(), ThoError> {
         gr_by_eeg_id_df
             .column("eeg_id")?
             .i64()?
-            .into_iter()
+            .iter()
             // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
             // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
             .map(
                 |(
                     (
@@ -488,7 +489,7 @@ impl EEGs {
     }
 
     fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, ThoError> {
-        Ok(LazyCsvReader::new(format!("{}/train.csv", base_path))
+        Ok(LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path)))
             .finish()?
             .with_streaming(true)
             .group_by([col("eeg_id")])
@@ -532,7 +533,7 @@ impl EEGs {
     where
         S: Splitter<Type = EEG>,
     {
-        let df = LazyCsvReader::new(format!("{}/train.csv", base_path))
+        let df = LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path)))
             .finish()?
             .with_streaming(true);
 
@@ -564,15 +565,15 @@ impl EEGs {
         ) in gr_by_eeg_id_df
             .column("eeg_id")?
             .i64()?
-            .into_iter()
-            .zip(gr_by_eeg_id_df.column("set")?.i32()?)
-            .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+            .iter()
+            .zip(gr_by_eeg_id_df.column("set")?.i32()?.iter())
+            .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?.amortized_iter())
+            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
             .map(
                 |(
                     (
@@ -593,7 +594,7 @@ impl EEGs {
                     (
                         eeg_id.unwrap_or_default(),
                         set.unwrap_or_default(),
-                        eeg_label_offset_seconds.unwrap_or_default(),
+                        eeg_label_offset_seconds.expect("no eeg_label_offset_seconds"),
                         seizure_vote.unwrap_or_default(),
                         lpd_vote.unwrap_or_default(),
                         gpd_vote.unwrap_or_default(),
@@ -605,8 +606,9 @@ impl EEGs {
             )
         {
             let fragments_rows = eeg_label_offset_seconds
+                .as_ref()
                 .f64()?
-                .into_iter()
+                .iter()
                 .map(|v| v.expect("no id :(") as u32 * 200)
                 .collect::<Vec<u32>>();
 
@@ -617,7 +619,7 @@ impl EEGs {
             // scan_conf.cache = false;
 
             let eeg_df = LazyFrame::scan_parquet(
-                format!("{}/train_eegs/{}.parquet", base_path, eeg_id),
+                PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_path, eeg_id)),
                 scan_conf,
             )?;
 
@@ -626,7 +628,7 @@ impl EEGs {
             let mut eegs_vec = vec![];
             let mut names_vec = vec![];
 
-            for s in df.get_columns() {
+            for s in df.columns() {
                 names_vec.push(s.name().to_owned());
 
                 match s.dtype() {
@@ -788,15 +790,15 @@ mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
     use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
     use crate::data::EEGs;
-    use std::collections::HashMap;
     use log::LevelFilter::Trace;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
     use plotters::count;
     use plotters::prelude::{BLACK, RED};
-    use polars::prelude::{
-        LazyCsvReader, LazyFileListReader, NamedFrom, Series, col, concat_list, lit, when,
+    use polars::prelude::{LazyCsvReader, LazyFileListReader, NamedFrom, Series,
+                          col, concat_list, lit, when,
     };
+    use std::collections::HashMap;
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -805,38 +807,42 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
+    use thoosa_common::dims::ChannelsData;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::MockRunCtx;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, Padding};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifNetRunConfigFields};
+    use thoosa_common::transforms::filters::{InputFilter, NotchBandFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
-    use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
+    use thoosa_common::ws::{Workspace, WsConfigs};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
-    use thoosa_main::{random_non_overlapping_slices, ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+    use thoosa_main::data::parquet_to_tensor_by_path;
+    use thoosa_main::random_non_overlapping_slices;
+    use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::distance::clc_dist_d2_and_mask;
-    use thoosa_motifs::find::{SelectMotifsParams};
+    use thoosa_motifs::distance::clc_d2_similarity_and_mask;
+    use thoosa_motifs::find::SelectMotifsParams;
     use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
-    use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunId};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::cachable::DevicesWrap;
-    use thoosa_shared::runner::common::mock_run_ctx;
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::common::{MockRunCtx, RunCtx};
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::val::{NamedRange, NamedVal, Val};
-    use thoosa_shared::TensorIdSliceIdx;
-    use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::{MockStoreBuilder, SqlStore};
     use thoosa_shared::mono_key;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfigId};
+    use thoosa_shared::test_utils::init_test_logging;
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::RunCtx;
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
+    use thoosa_shared::{ThoError, cdt_for_dir};
+    use thoosa_store::rusqlite::Transaction;
+    use thoosa_store::{MockStoreBuilder, SqlStore, TrainedNet};
 
     #[ctor::ctor]
     fn init() {
@@ -847,7 +853,7 @@ mod tests {
     // #[test]
     pub fn test_fetch_similarities() -> Result<(), ThoError> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
-        let df = LazyCsvReader::new("../../../data/train.csv")
+        let df = LazyCsvReader::new("../../../data/train.csv".into())
             .finish()?
             .with_streaming(true)
             .group_by([col("eeg_id")])
@@ -909,8 +915,8 @@ mod tests {
         //TODO hash + assert
         df.column("win_vote")?
             .str()?
-            .into_iter()
-            .zip(df.column("votes_count")?.u32()?.into_iter())
+            .iter()
+            .zip(df.column("votes_count")?.u32()?.iter())
             .for_each(|v| {
                 debug!("v={:?}", v);
             });
@@ -1008,14 +1014,18 @@ mod tests {
             || super::labeled_resourses(Path::new("test_data/eeg"), "train_10.csv"),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
-                Tensor::load(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str())
+
+                parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)
                     .map_err(|e| e.into())
             },
+            None,
             true,
-            false,
+            |t: &Transaction|{
+                Ok(())
+            },
         ).await?;
 
-        let labels = store.list_labels().await?;
+        let labels = store.list_labels(false).await?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
@@ -1025,70 +1035,68 @@ mod tests {
         Ok(())
     }
 
-    fn _test_cosine_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+    fn _test_cosine_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
                 ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), cycles),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(20)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), cycles),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(20)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
                 ]),
                 vec![],
             ),
             vec![
-                // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                // Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), lower: 10, upper: 100 },
-                Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), lower: 1.0, upper: 10.0 },
-                Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)), lower: 0.0, upper: 0.1 },
+                // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                // Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::Kernel)), lower: 10, upper: 100 },
+                Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), lower: 1.0, upper: 10.0 },
+                Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)), lower: 0.0, upper: 0.1 },
             ],
         )
     }
 
-    fn _test_lin_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+    fn _test_lin_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
                 ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), cycles),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::NumLayers)), Val::Int(8)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)), Val::Int(1)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Kernel)), kernel),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), cycles),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::NumLayers)), Val::Int(8)),
                 ]),
                 vec![],
             ),
             vec![
-                // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Channels)), lower: 8, upper: 10 },
+                // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)), lower: 8, upper: 10 },
             ],
         )
     }
 
-    fn _test_conv_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields> {
+    fn _test_conv_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
                 ConstConfigs::new(vec![
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), cycles),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
-                    // NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), Val::Int(4)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), Val::Int(4)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
-                    NamedVal::new(TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), kernel),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), cycles),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), batch_size),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Patience), Val::Int(10)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
+                    // NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), Val::Int(4)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), Val::Int(4)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Step)), Val::Int(1)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Kernel)), kernel),
                 ]),
                 vec![],
             ),
             vec![
-                // Hyperparameter::UniformFloat { name: TrainMotifsNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), lower: 2, upper: 24 },
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), lower: 2, upper: 24 },
-                Hyperparameter::UniformInt { name: TrainMotifsNetsRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 8, upper: 256 },
+                // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
+                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::ConvLayers)), lower: 2, upper: 24 },
+                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::HeadLayers)), lower: 2, upper: 24 },
+                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::ConvNet(MotifConvNetArgsFields::Channels)), lower: 8, upper: 256 },
             ],
         )
     }
@@ -1098,11 +1106,11 @@ mod tests {
         if !tch::Cuda::is_available() {
             return Ok(());
         }
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2)?;
 
-        let find_motifs_run_id: RunId = 1;
-        let select_motifs_run_id: RunId = 2;
-        let train_motif_nets_run_id: RunId = 3;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
+        let train_motif_nets_run_config_id: RunConfigId = 3;
         let motif_id = 10u32;
         let motif_width = 200u32;
         let max_slices = 500u32;
@@ -1146,16 +1154,16 @@ mod tests {
         let raw_loaded_for_apply = raw_loaded.shallow_clone();
 
         let channels = raw_loaded.size()[0] as u32;
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(Path::new("/tmp").join(cdt_for_dir()), channels, raw_loaded.size()[1] as u32, 200)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(Path::new("/tmp").join(cdt_for_dir()), WsConfigs::new(channels, raw_loaded.size()[1] as u32, 200))?));
 
-        let raw_tensor = ThoTensor::<ChannelsData2, SynKey>::new(
+        let raw_tensor = ThoTensor::<ChannelsData, SynKey>::new(
             SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
             raw_loaded,
         )?;
 
         /*
         it's applied  when being loaded
-        let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
+        let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_config_id)?)
             .run(Arc::new(DevicesWrap::wrap(raw_tensor, CacheArea::default())), mock_run_ctx::default(1))
             .await?;
 
@@ -1169,7 +1177,7 @@ mod tests {
             return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
         }
         let find_motifs_config = FindMotifsRunConfig::new_with_running_mean(
-            Some(find_motifs_run_id),
+            Some(find_motifs_run_config_id),
             1,
             motif_width,
             Some(freq_filters.clone()),
@@ -1197,39 +1205,37 @@ mod tests {
 
         let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
         selected_motifs[0].push((motif_id, 1.0));
-        let selected_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
+        let trained_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_config_id));
 
         let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_list_run_config_values(find_motifs_run_id, Ok(find_motifs_props))
-                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_id)))])
-                .with_list_selected_motifs([(select_motifs_run_id, Ok(selected_motifs))])
+                .with_list_run_config_values([(find_motifs_run_config_id, Ok(find_motifs_props))])
+                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
+                .with_list_selected_motifs([(select_motifs_run_config_id, Ok(selected_motifs))])
                 .with_list_motif_slices(
                     motif_id,
-                    Some(vec![select_motifs_run_id]),
+                    Some(vec![select_motifs_run_config_id]),
                     None,
                     None,
-                    Ok((0i64, find_motifs_run_id, motif_slices, motif_resources_by_id.clone())),
+                    Ok((0i64, find_motifs_run_config_id, motif_slices, motif_resources_by_id.clone())),
                 )
                 .with_list_random_slices_out_of_motif(
                     motif_id,
                     motif_width,
                     None,
-                    Ok((0i64, find_motifs_run_id, random_slices, random_resources_by_id)),
+                    Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)),
                 )
-                .with_list_selected_nets([
-                    (train_motif_nets_run_id, None, None, Ok(vec![(selected_net_path.clone(), 0.01)])),
+                .with_list_trained_nets([
+                    (vec![train_motif_nets_run_config_id], None, None, Ok(vec![TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: trained_net_path.clone(), loss: 0.01 }])),
                 ])
                 .build(),
         );
 
         let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
             move |input_resource: &Resource, _device| {
-                let t = loader_tensors
-                    .try_lock_for(thoosa_shared::LOCK_TIMEOUT)
-                    .expect("lock timeout")
+                let t = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(loader_tensors))
                     .get(input_resource)
                     .map(|v| v.as_ref().shallow_clone())
                     .ok_or_else(|| ThoError::new(format!("missing resource tensor for resource_id={}", input_resource.id())))?;
@@ -1247,19 +1253,15 @@ mod tests {
         //conv_layers: 11, head_layers: 3, stride: 1, channels: 218,
         //conv_layers: 21, head_layers: 2, stride: 1, channels: 215
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_cosine_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(10))));
-        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100)), 10));
+        let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100)), 10, None).await?);
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
-        let input = Arc::new(DevicesWrap::wrap(
-            TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10))),
-            CacheArea::default(),
-        ));
+        let input = TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(100, 10)));
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
-            .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false, false))
+        let result = train_motif_nets
+            .run(input, run_ctx.branch(false))
             .await?;
-        let result = result.load_from_any_device_(1).await?;
 
 
         debug!("train_motif_nets: result={result:?}");
@@ -1268,38 +1270,34 @@ mod tests {
         assert!(!result.train_motif_nets_results.is_empty());
 
         let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
-        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_id, &motif_id, &train_result.vs, &train_result.params)?;
-        assert_eq!(saved_path, selected_net_path);
+        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_config_id, &motif_id, (&train_result.vs).into(), &train_result.params)?;
+        assert_eq!(saved_path, trained_net_path);
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
-            vec![train_motif_nets_run_id],
+            vec![train_motif_nets_run_config_id],
             mock_run_ctx::default(1),
             None,
             None,
             1,
+            None,
+            false
         ).await?);
 
         let out = Arc::clone(&apply_motif_nets).run(
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::new(
-                    SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]),
-                    raw_loaded_for_apply.shallow_clone(),
-                )?,
-                CacheArea::default(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(
+                SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]),
+                raw_loaded_for_apply.shallow_clone(),
+            )?)),
             mock_run_ctx::default(1),
         ).await?;
 
         let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::new(
-                    SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]),
-                    raw_loaded_for_apply,
-                )?,
-                CacheArea::default(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(
+                SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]),
+                raw_loaded_for_apply,
+            )?)),
             mock_run_ctx::default(1),
         ).await?;
         let out = out.load_from_any_device_(1).await?;
@@ -1326,7 +1324,7 @@ mod tests {
         Ok(())
     }
 
-    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> Result<Tensor, ThoError>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData2, SynKey>>) -> Result<Vec<Resource>, ThoError> {
+    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> Result<Tensor, ThoError>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData, SynKey>>) -> Result<Vec<Resource>, ThoError> {
         let eeg_dir = Path::new("test_data/eeg");
         let mut random_resources = Vec::new();
         let mut eeg_files = std::fs::read_dir(eeg_dir)
@@ -1365,7 +1363,7 @@ mod tests {
             random_resources.push(resource.clone());
             loader_tensors_map.insert(
                 resource.clone(),
-                ThoTensor::<ChannelsData2, SynKey>::new(
+                ThoTensor::<ChannelsData, SynKey>::new(
                     SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]),
                     tensor,
                 )?,

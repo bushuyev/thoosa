@@ -5,7 +5,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures::executor::block_on;
 use futures::future::join_all;
 use futures::{FutureExt, StreamExt};
-use futures_util::future::{BoxFuture, try_join_all};
+use futures_util::future::{try_join_all, BoxFuture};
 use log::*;
 use log::{debug, error, info, trace, warn};
 use parking_lot::Mutex;
@@ -35,14 +35,14 @@ use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::utils::*;
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
-use thoosa_shared::{RangeOrValue, ResourceType, ThoError, make_combos};
+use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoError};
 use thoosa_shared::{avg_hist, parse_key_val};
 use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
-use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LocalMin, Tril};
-use crate::distance::{MaskMaker, average_euclidean_distance, clc_dist_d2, slice_t};
-use crate::distance::{clc_dist_d2_and_mask, dist_d2};
+use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeQuantile, LocalMin, Tril};
+use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t, MaskMaker};
+use crate::distance::dist_d2;
 use plotters::prelude::BLACK;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -51,22 +51,18 @@ use serde::Deserialize;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
-use thoosa_common::tho_device::{ThoDevice};
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::bool_iter::BoolTensorIterator;
-use thoosa_common::dims::{Dims, TCD, TCSD};
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};
-use thoosa_common::loader::Loader;
-use thoosa_common::loader::{LoadRunner, SyncWrapper};
+use thoosa_common::dims::{Dims};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{Labeled, SavableResult, Simple};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::*;
 use thoosa_common::transforms::filters::clc_frequencies;
 use thoosa_common::ws::{FsWorkspace, Workspace};
-use thoosa_common::{loader};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::run_configs::{RunConfig};
+use thoosa_shared::run_configs::RunConfig;
 
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -76,8 +72,8 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::RunId;
-use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::traits::Data;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::panic_to_err;
 use thoosa_store::fs_store::FileMotifTrackerStore;
@@ -139,30 +135,20 @@ impl FindMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for FindMotifsSavableResult {
-    fn value(&self) -> f32 {
-        0.0
-    }
+    type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
-        //gpt TODO!! placeholder save: no persistence and always returns 0; callers rely on presaved run ids.
+        //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
         Ok(0)
     }
 }
 
 impl Output for FindMotifsSavableResult {}
-impl WithId for FindMotifsSavableResult {
-    type ID = ();
-
-    fn id(&self) -> &Self::ID {
-        &()
-    }
-}
-
-
 
 //TODO trait for MotifTracker
 #[derive(Debug)]
@@ -236,13 +222,11 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 }
 
-/**
-TODO  selects motifs based on correlation to a label only
-*/
+
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
     #[arg(long)]
-    find_motifs_run_ids: Vec<RunId>,
+    find_motifs_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     pub resources_group: String,
@@ -250,8 +234,8 @@ pub struct SelectMotifsParams {
 
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsArgs {
-    #[arg(long, value_delimiter = ',')]
-    pub find_motifs_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_config_ids)]
+    pub find_motifs_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     pub resources_group: String,
@@ -262,96 +246,11 @@ pub struct SelectMotifsArgs {
 
 impl SelectMotifsArgs {
     pub fn resource_config(&self) -> Simple {
-        Simple::new(ResourceType::NotInGroup(self.resources_group.clone()))
+        Simple::new(ResourceType::Group(self.resources_group.clone()))
     }
 }
 
 
-#[derive(Debug, Clone, DummyData)]
-#[dummy_data(clone)]
-pub struct SelectMotifsRunResult {
-    pub run_config: SelectMotifsRunConfig,
-    pub selected_motif_ids_scores: Vec<(u32, f64)>,
-    pub constraint_metrics: Option<HashMap<String, f32>>,
-}
-
-impl SelectMotifsRunResult {
-    pub fn new(
-        run_config: SelectMotifsRunConfig,
-        selected_motif_ids_scores: Vec<(u32, f64)>,
-        constraint_metrics: Option<HashMap<String, f32>>,
-    ) -> Self {
-        Self {
-            run_config,
-            selected_motif_ids_scores,
-            constraint_metrics,
-        }
-    }
-}
-
-#[derive(Debug, Clone, DummyData)]
-#[dummy_data(clone)]
-pub struct SelectMotifsSavableResult {
-    dummy_id:RunId,
-    run_results: Vec<SelectMotifsRunResult>,
-}
-
-impl Output for SelectMotifsSavableResult {}
-impl WithId for SelectMotifsSavableResult {
-    type ID = RunId;
-
-    fn id(&self) -> &Self::ID {
-        &self.dummy_id
-    }
-}
-
-impl SelectMotifsSavableResult {
-    pub fn new(
-        run_results: Vec<SelectMotifsRunResult>,
-    ) -> Self {
-        Self {
-            dummy_id: 0,
-            run_results,
-        }
-    }
-
-    //to be used from opt FindAndSelectMotifsStage
-    pub fn score_sum(&self) -> f64 {
-        //always one - from run_find_and_select
-        assert_eq!(self.run_results.len(), 1, "expected one run config");
-        self.run_results[0].selected_motif_ids_scores.iter().map(|v| v.1).sum::<f64>()
-    }
-
-    pub fn selected_motif_ids_scores(&self) -> &[(u32, f64)] {
-        assert_eq!(self.run_results.len(), 1, "expected one run config");
-        self.run_results[0].selected_motif_ids_scores.as_slice()
-    }
-
-    pub fn constraint_metrics(&self) -> Option<&HashMap<String, f32>> {
-        assert_eq!(self.run_results.len(), 1, "expected one run config");
-        self.run_results[0].constraint_metrics.as_ref()
-    }
-}
-
-#[async_trait]
-impl SavableResult for SelectMotifsSavableResult {
-    fn value(&self) -> f32 {
-        0.1
-    }
-
-    async fn save(
-        &mut self,
-        store: &Arc<Box<dyn Store>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoError> {
-        for run_result in &self.run_results {
-            store.save_selected_motifs(run_result.run_config.id.expect("should be pre set in run_grid"), run_result.selected_motif_ids_scores.clone()).await?; //TODO mem::replace?
-
-        }
-        //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
-        Ok(0)//TODO not used
-    }
-}
 #[cfg(test)]
 mod motif_find_tests {
     use std::{fs, mem, thread};
@@ -381,7 +280,6 @@ mod motif_find_tests {
     use tch::Kind::{Bool, Float, Int};
     use tch::kind::DOUBLE_CPU;
     use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::transforms::filters::BandPassFilterParams;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::*;
@@ -391,15 +289,14 @@ mod motif_find_tests {
     use crate::find::{
         FixedFindMotifsConfig, MotifTrackerStore,
     };
-    use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
     use thoosa_common::runs::Simple;
-    use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::RunConfig;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val;
     use thoosa_shared::val::Val::UInt;
     use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
@@ -410,11 +307,13 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_z_norm() {
+    fn test_z_norm()  -> Result<(), ThoError>{
         assert_eq!(
             vec![-1.2247449, 0.0, 1.2247449],
-            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64))
+            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)
         );
+
+        Ok(())
     }
 
     #[test]
@@ -545,7 +444,7 @@ mod motif_find_tests {
             todo!()
         }
 
-        fn run_id(&self) -> RunId {
+        fn run_config_id(&self) -> RunConfigId {
             todo!()
         }
 
@@ -735,30 +634,6 @@ mod motif_find_tests {
         //2 2 2 0 0 0 * 2 2 2 = 4  8  12 8  4 0 0 0
     }
 
-    #[test]
-    fn test_find_motifs_run_config_to_from_map() {
-        let params = FindMotifsRunConfig::new_with_running_mean(
-            Some(0),
-            10,
-            10,
-            Some(vec![InputFilter::BandPassFilter(BandPassFilterParams {
-                low_hz: 0.0,
-                band_hz: 100.0,
-                kernel_size: 10,
-                stride: 1,
-                padding: thoosa_common::transforms::filters::Padding::zero(),
-            })]),
-            Some(0.01),
-        );
-
-        let properties: HashMap<String, Val> = params.to_properties_iter(None).collect();
-
-        let loaded_params = FindMotifsRunConfig::from_properties_map_with_id(0, &properties).unwrap();
-
-        debug!("loaded_params={:?}", loaded_params);
-
-        assert_eq!(params, loaded_params);
-    }
 
 }
 

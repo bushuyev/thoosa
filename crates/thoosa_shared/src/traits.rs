@@ -1,22 +1,28 @@
+use crate::ThoError;
+use crate::applicables_runner::{Input, Output};
+use crate::copy_mode::CpuOnly;
 use ambassador::delegatable_trait;
+use async_trait::async_trait;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
+use log::debug;
 use mockall::automock;
-use std::any::Any;
+use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
+use std::any::{Any, TypeId};
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
-use std::sync::Arc;
-use log::debug;
-use thoosa_named_derive::Named;
-use crate::applicables_runner::Input;
-use crate::{CopyToDevice, ThoError};
-use uuid::Uuid;
-use async_trait::async_trait;
-use parking_lot::RwLock;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
 use thoosa_dummy_data_derive::DummyData;
-use crate::copy_mode::{CopyMode, CpuOnly};
+use thoosa_named_derive::Named;
+use tokio::sync::MutexGuard;
+use uuid::Uuid;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -132,7 +138,7 @@ pub trait Named {// like Type name
 }
 ///////////////////////////////////
 ///this should be used when id is only needed for debug. In release build is empty struct. TODO - make it static counter in release?
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Named)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Named, Serialize, Deserialize)]
 pub struct SimpleId(
     #[cfg(any(debug_assertions, tho_debug))]
     pub Cow<'static, str>,
@@ -222,7 +228,6 @@ pub struct DataId(pub u32);//for sql-store based stuff
 unsafe impl Send for DataId {}
 unsafe impl Sync for DataId {}
 
-
 impl WithId for DataId {
     type ID = Self;
 
@@ -296,6 +301,7 @@ pub trait Metrics:Default {//TODO remove Default
     }
 }
 
+
 impl Metrics for () {} //for stages without output
 
 impl Metrics for [usize; 1] {
@@ -337,6 +343,26 @@ pub struct MonoMetrics<const IDX:usize, const SIZE:usize> {
      dims: [i64; SIZE]
 }
 
+impl<const IDX: usize, const SIZE: usize> Serialize for MonoMetrics<IDX, SIZE> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.dims.as_slice().serialize(serializer)
+    }
+}
+
+impl<'de, const IDX: usize, const SIZE: usize> Deserialize<'de> for MonoMetrics<IDX, SIZE> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let dims = Vec::<i64>::deserialize(deserializer)?;
+        let dims = dims.try_into().map_err(|dims: Vec<i64>| serde::de::Error::invalid_length(dims.len(), &"an array matching the metric size"))?;
+        Ok(Self { dims })
+    }
+}
+
 impl <const IDX:usize, const SIZE:usize> Metrics for MonoMetrics<IDX, SIZE> {
     fn default_end(&self) -> Self {
         MonoMetrics {
@@ -374,7 +400,7 @@ impl <const IDX:usize, const SIZE:usize> Default for MonoMetrics<IDX, SIZE> {
 
 impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
 
-    //TODO remove - replace with 'effective dim Idx and 'others'
+    //TODO remove
     pub fn dim_0(&self) -> i64 {
         self.dims[0]
     }
@@ -382,6 +408,10 @@ impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
     //TODO remove
     pub fn dim_1(&self) -> i64 {
         self.dims[1]
+    }
+    //FIXME
+    pub fn dim_2(&self) -> i64 {
+        self.dims[2]
     }
 
     pub fn dim<const DIM: usize>(&self) -> i64
@@ -473,9 +503,12 @@ impl <const IDX:usize, const SIZE:usize> TryFrom<Vec<i64>> for MonoMetrics<IDX, 
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
         assert!(SIZE > 0);
-        assert_eq!(value.len(), SIZE);
+        // assert_eq!(value.len(), SIZE);
 
-        Ok(Self { dims: value.clone().try_into().expect(&format!("can't convert {value:?} to dims")) })//TODO avoid value.clone
+        Ok(Self { dims: value.clone().try_into().unwrap_or( {
+
+            (0..SIZE).map(|i|value.get(i).map(|v|*v).unwrap_or(0)).collect::<Vec<_>>().try_into().unwrap()
+        }) })//TODO avoid value.clone
     }
 }
 
@@ -487,7 +520,7 @@ impl <const IDX:usize, const SIZE:usize> From<&MonoMetrics<IDX, SIZE>> for [i64;
 
 impl <const IDX:usize, const SIZE:usize> From<[i64; 2]> for MonoMetrics<IDX, SIZE> {
     fn from(value: [i64; 2]) -> Self {
-        assert_eq!(2, SIZE);
+        // assert_eq!(2, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -498,7 +531,7 @@ impl <const IDX:usize, const SIZE:usize> From<[i64; 2]> for MonoMetrics<IDX, SIZ
 
 impl <const IDX:usize, const SIZE:usize> From<&[i64; 2]> for MonoMetrics<IDX, SIZE> {
     fn from(value: &[i64; 2]) -> Self {
-        assert_eq!(2, SIZE);
+        // assert_eq!(2, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -509,7 +542,7 @@ impl <const IDX:usize, const SIZE:usize> From<&[i64; 2]> for MonoMetrics<IDX, SI
 
 impl <const IDX:usize, const SIZE:usize> From<[i64; 3]> for MonoMetrics<IDX, SIZE> {
     fn from(value: [i64; 3]) -> Self {
-        assert_eq!(3, SIZE);
+        // assert_eq!(3, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -534,22 +567,20 @@ impl From<usize> for MonoMetrics<0, 1> {
 pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
-    type M:CopyMode;
+    type M;//TODO remove
 
     fn size(&self) -> Self::Metrics;
 
     fn track_used_in(&self, _token: &'static str) {}
 
-    fn device(&self) -> usize;
+    fn device(&self) -> usize;//TODO rename tho_device_idx
 
     fn mem_size(&self) -> u64;
-}
 
-impl WithId for MockData {
-    type ID = ();
+    async fn adrop(self)
+    where
+    Self:Sized{
 
-    fn id(&self) -> &Self::ID {
-        todo!()
     }
 }
 
@@ -613,17 +644,62 @@ impl Data for (){
     }
 }
 
+#[typetag::serde(tag = "type")]
+pub trait ThoSelector:Debug + Send + Sync {
+    fn clone_box(&self)->Box<dyn ThoSelector>;
 
-#[async_trait]
-impl CopyToDevice for MockData {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(MockData::new())
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Err(ThoError::new(format!("selector {self:?} cannot be applied directly to a tensor")))
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RangeSelector(pub Range<[i64; 1]>);
+
+impl Adjustable for RangeSelector {}
+
+impl Deref for RangeSelector {
+    type Target = Range<[i64; 1]>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[typetag::serde]
+impl ThoSelector for RangeSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(RangeSelector(self.0.clone()))
+    }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(vec![self.0.start[0]..self.0.end[0]])
+    }
+}
+
+#[typetag::serde(name = "UnitSelector")]
+impl ThoSelector for () {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(())
+    }
+}
+
+#[typetag::serde(name = "I64RangeSelector")]
+impl ThoSelector for Range<i64> {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(vec![self.clone()])
+    }
+}
+
+
 #[delegatable_trait]
-pub trait Select<S> {
-    type Output; //: CopyToDevice;
+pub trait Select<S>
+where S:ThoSelector
+{
+    type Output;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoError>;
 }
@@ -638,3 +714,306 @@ impl<T: Send + Sync> Adjustable for std::ops::Range<T> {}
 
 
 impl <A:Adjustable> Adjustable for Arc<A> {}
+
+/// steepness: larger values mean a steeper slope.
+/// flatness: larger values mean a flatter slope.
+///https://www.wolframalpha.com/input?i=plot+1%2F%281%2Babs%280.2*%28x-10%29%29%5E5%29
+pub fn hump(x: f64, center: f64, steepness: f64, flatness: f64) -> f64 {
+    assert!(steepness > 0.0);
+    assert!(flatness > 0.0);
+    1.0 / (1.0 + (steepness * (x - center)).abs().powf(flatness))
+}
+
+pub trait FromJsonFile {
+    fn from_file(path: &PathBuf) -> Result<Self, ThoError>
+        where Self:Sized;
+}
+
+pub trait ToJsonFile:Debug {
+    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError>;
+}
+
+#[delegatable_trait]
+pub trait MaxParallelCtx: Named + Debug + Send + Sync {
+    fn set_max_other_parallel(&mut self, permit: u8);//u8 - MaxParallel
+
+    fn max_other_parallel(&self) -> u8;
+}
+
+pub trait RunCtx: WithId + Debug + Send + Sync {
+    fn tho_device_idx(&self) -> usize;
+
+    fn branch(&mut self, with_new_cache_area: bool) -> Self
+    where
+        Self: Sized;
+
+    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
+
+}
+
+pub trait OutId: Stage
+where
+        for<'a> <Self as Stage>::In<'a>: WithId,
+        <Self as Stage>::Out: WithId,
+{
+    fn out_id<'a>(
+        &self,
+        input_id: &<<Self as Stage>::In<'a> as WithId>::ID,
+    ) -> <Self::Out as WithId>::ID;
+
+}
+
+pub type StageHash = [u8; 32];
+/// a Stage is just a function with explicitly defined state, execution context and input so that all three can be adjusted to handle OOM
+/// see ['thoosa_common::runner::oom_handler::Adjusters'] enum
+pub trait Stage: Debug {
+    type Ctx: RunCtx;
+
+    type In<'a>: Input;
+
+    type Out: Output;
+
+}
+
+impl <S> Stage for Arc<S>
+where
+S:Stage{
+    type Ctx = S::Ctx;
+    type In<'a> = S::In<'a>;
+    type Out = S::Out;
+}
+
+pub trait AsyncStage:Stage + Debug + Send + Sync + 'static
+where
+        for <'a> Self::In<'a>:  Send + Sync,
+        Self::Out: Send + Sync,
+{
+
+
+    //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
+    //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
+    // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
+    fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send
+
+    {
+        async {
+            unimplemented!()
+        }
+    }
+}
+
+
+pub trait SyncStage: Stage + Debug {
+
+
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
+    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
+        unimplemented!()
+    }
+
+    fn consume<'f>(
+        self: Arc<Self>,
+        _input: Self::In<'f>,
+        _ctx: Self::Ctx,
+    ) -> ConsumeResult<Self::In<'f>, Self::Out> {
+        unimplemented!()
+    }
+}
+
+pub trait StageWithState: SyncStage + Sync {
+    type S: Debug + Send + Sync;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
+
+    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        unimplemented!()
+    }
+}
+
+pub trait ErasedStageState<S>: Send
+where
+    S: SyncStage,
+{
+    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
+}
+
+//for switching between ipc proxy and local
+pub trait DynSyncStage<I, O, C>: Debug + Send + Sync + 'static
+where
+    I: Input /* + WithId*/ + 'static,
+    O: Output/* + WithId*/ + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError>;
+
+
+}
+
+pub trait DynOutId<I, O>: Debug + Send + Sync + 'static
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static
+{
+    fn out_id_dyn(&self, input_id: &I::ID) -> O::ID;
+}
+
+pub trait DynSyncStageOutId<I, O, C>:DynSyncStage<I, O, C> + DynOutId<I, O>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static
+{
+
+}
+
+impl <I, O, C, T> DynSyncStageOutId<I,O,C> for T
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+    T: DynSyncStage<I,O,C> + DynOutId<I, O>
+{
+
+}
+
+impl<T, I, O, C> DynSyncStage<I, O, C> for T
+where
+    T: SyncStage + Send + Sync + 'static,
+    for<'a> T: Stage<In<'a> = I, Out = O, Ctx = C>,
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError> {
+        self.do_run(input, ctx)
+    }
+
+
+}
+
+impl<T, I, O> DynOutId<I, O> for T
+where
+    for<'a> T: Stage<In<'a> = I, Out = O>,
+    T: OutId + Send + Sync + 'static,
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+{
+
+    fn out_id_dyn(&self, input_id: &I::ID) -> O::ID {
+        self.out_id(input_id)
+    }
+}
+
+
+#[derive(Debug)]
+pub struct DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    inner: Arc<dyn DynSyncStageOutId<I, O, C>>,
+}
+
+impl<I, O, C> DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    pub fn new(inner: Arc<dyn DynSyncStageOutId<I, O, C>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<I, O, C> Stage for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
+    type In<'a> = I;
+    type Out = O;
+}
+
+impl<I, O, C> SyncStage for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        Arc::clone(&self.inner).do_run_dyn(input, ctx)
+    }
+}
+
+impl<I, O, C> OutId for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.inner.out_id_dyn(input_id)
+    }
+}
+
+impl<I, O, C> Adjustable for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+}
+
+#[derive(Debug)]
+pub enum ConsumeResult<I, O> {
+    Failed{input:I, error:ThoError},
+    Ok(O)
+}
+
+///for keeping stages with different state types in the CudaWorker's installed stages map
+pub trait ErasedStageWithState<S>
+where
+    S: SyncStage,
+{
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
+}
+
+impl<S> ErasedStageWithState<S> for S
+where
+    S: StageWithState,
+{
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>> {
+        async move {
+            let state = StageWithState::pre_run(self, to_device_idx).await?;
+            // Keep the concrete guard type inside the erased value while it spans later async preparation.
+            Ok(Box::new(StageStateGuard::<S> { state }) as Box<dyn ErasedStageState<S>>)
+        }.boxed()
+    }
+}
+
+
+struct StageStateGuard<'a, S>
+where
+    S: StageWithState,
+{
+    state: MutexGuard<'a, S::S>,
+}
+
+impl<S> ErasedStageState<S> for StageStateGuard<'_, S>
+where
+    S: StageWithState,
+{
+    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
+        let Self { state } = *self;
+        StageWithState::do_run_with_state(stage, input, state, ctx)
+    }
+}

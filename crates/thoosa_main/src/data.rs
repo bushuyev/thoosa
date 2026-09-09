@@ -15,6 +15,8 @@ use thoosa_common::utils::{from};
 use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_store::Store;
+use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Default)]
 pub enum Set {
@@ -122,7 +124,7 @@ where
 
     assert!(ids.len() > 1);
 
-    df.with_column(Series::from_vec("frag_id".into(), ids))?;
+    df.with_column(Series::from_vec("frag_id".into(), ids).into())?;
 
     df.partition_by::<_, &str>(["frag_id"], false)
 }
@@ -131,9 +133,8 @@ pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<Box<dyn Store>>,
 ) -> Vec<(Resource, Vec<f32>)> {
-    store
-        .list_resource_random_in_group(group)
-        .await
+    track_await(store
+        .list_resource_random_in_group(group)).await
         .expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resource_id, labels_p)| {
@@ -156,7 +157,7 @@ pub fn parquet_to_tensor_by_path(
     let df = read_parquet_to_df(path)?;
 
     let tensor = Tensor::f_vstack(
-        &df.get_columns()
+        &df.columns()
             .into_iter()
             .map(|s| series_to_tensor(s.as_series().unwrap()))
             .collect::<Result<Vec<Tensor>, ThoError>>()?,
@@ -169,7 +170,7 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoError>
 
     let df = LazyFrame::scan_parquet(
         //TODO read_parallel?
-        path, scan_conf,
+        PlRefPath::try_from_path(path.as_ref()).unwrap(), scan_conf,
     )?;
 
     Ok(df.collect()?)
@@ -184,7 +185,7 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
         .map(|resource_id| {
             //TODO config path
             let df = LazyFrame::scan_parquet(
-                format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
+                PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_dir, resource_id)),
                 scan_conf.clone(),
             )
             .unwrap()
@@ -200,9 +201,11 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
 
 pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     assert_eq!(t.size().len(), 2);
+    assert_eq!(t.size()[0] as usize, ids.len());
     assert_eq!(t.size()[1] as usize, columns.len() - 1);
 
     let mut df = DataFrame::new(
+        ids.len(),
         [
             vec![Series::new(columns[0].into(), ids).into()],
             columns
@@ -241,14 +244,14 @@ pub async fn labeled_tensors_by_descr<'a>(
             1,
             store_lock
                 .list_resource_set_resources_by_descr(resource_set_descr)
-                .await
+                .instrument(tracing::debug_span!("labeled_tensors_by_descr/1", file = file!(), line = line!())).await
                 .expect("list_resource_set_resources_by_descr"),
         ),
         (
             0,
             store_lock
                 .list_resource_random_not_labeled(label.as_str(), 100)
-                .await
+                .instrument(tracing::debug_span!("labeled_tensors_by_descr/2", file = file!(), line = line!())).await
                 .expect("list_resource_random_not_label"),
         ),
     ]
@@ -259,8 +262,6 @@ mod data_tests {
     use crate::data::{split_frame_by_offsets};
     use log::debug;
     use polars::prelude::*;
-    use polars_arrow::array::Float32Array;
-    use polars_arrow::buffer::Buffer;
     use std::mem::forget;
     use tch::Device::Cpu;
     use tch::Kind::Float;
@@ -333,16 +334,16 @@ mod data_tests {
             path,
         );
 
-        let lf = LazyCsvReader::new(path).finish().unwrap().collect()?;
+        let lf = LazyCsvReader::new(path.into()).finish().unwrap().collect()?;
         let mut checked = 0;
-        for (column_i, column) in lf.get_columns().iter().enumerate() {
+        for (column_i, column) in lf.columns().iter().enumerate() {
             if column_i == 0 {
-                for (row_i, v) in column.str()?.into_iter().enumerate() {
+                for (row_i, v) in column.str()?.iter().enumerate() {
                     assert_eq!(ids[row_i], v.unwrap());
                     checked += 1;
                 }
             } else {
-                for (row_i, v) in column.f64()?.into_iter().enumerate() {
+                for (row_i, v) in column.f64()?.iter().enumerate() {
                     assert_eq!(
                         format!(
                             "{:.3}",

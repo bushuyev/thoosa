@@ -123,13 +123,15 @@ mod tests {
 
 
         let x_vec = to_vec_f32(&x_t);
-        let _ei_for_all_x = x_vec
+        let ei_for_all_x = x_vec
             .iter()
             .map(|x_i| {
                 expected_improvement(&Tensor::from(*x_i).totype(Float), &y_train_min, &gpf, 0.01)
                     .double_value(&[]) as f32
             })
             .collect::<Vec<f32>>();
+        assert_eq!(ei_for_all_x.len(), n as usize);
+        assert!(ei_for_all_x.iter().all(|v| v.is_finite() && *v >= 0.0));
 
         /*
         let pred_y = gpf.predict(&x_t).unwrap();

@@ -5,10 +5,15 @@ use interprocess::local_socket::{
 use log::{debug, warn};
 use std::io;
 use std::time::Duration;
-use thoosa_shared::collect_futures_eta::{collect_eta_subscribe_progress, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
+use thoosa_shared::collect_futures_eta::{collect_eta_set_device_stats, collect_eta_subscribe_progress, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
+use thoosa_shared::device_stats::ThoDeviceStats;
+use thoosa_shims::device_stats::get_device_stats;
+use torch_sys::cuda::atc_cuda_device_count;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -16,11 +21,14 @@ pub(crate) struct CollectEtaProgressSocketServer {
     name: Name<'static>,
     shutdown_tx: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
+    stats_task: Option<JoinHandle<()>>,
 }
 
 impl CollectEtaProgressSocketServer {
     pub(crate) fn start_default() -> io::Result<Self> {
-        Self::start_with_socket_id(COLLECT_ETA_PROGRESS_SOCKET_ID, collect_eta_subscribe_progress())
+        let mut server = Self::start_with_socket_id(COLLECT_ETA_PROGRESS_SOCKET_ID, collect_eta_subscribe_progress())?;
+        server.stats_task = Some(server.spawn_device_stats_task());
+        Ok(server)
     }
 
     fn start_with_socket_id(
@@ -65,10 +73,16 @@ impl CollectEtaProgressSocketServer {
                             Ok(stream) => {
                                 let rx = snapshot_rx.clone();
                                 tokio::spawn(async move {
-                                    if let Err(err) = serve_one_client(stream, rx).await {
+                                    if let Err(err) = serve_one_client(stream, rx).instrument(tracing::debug_span!("start_with_name/1", file = file!(), line = line!())).await {
                                         debug!("collect ETA socket client disconnected: {err}");
                                     }
-                                });
+                                }.instrument(tracing::info_span!(
+                                    "progress_socket::client",
+                                    kind = "spawn",
+                                    file = file!(),
+                                    line = line!(),
+                                    task = "serve collect ETA progress socket client",
+                                )));
                             }
                             Err(err) => {
                                 warn!("collect ETA socket accept failed: {err}");
@@ -78,13 +92,43 @@ impl CollectEtaProgressSocketServer {
                     }
                 }
             }
-        });
+        }.instrument(tracing::info_span!(
+            "progress_socket::server",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = "accept collect ETA progress socket clients",
+        )));
 
         Ok(Self {
             name,
             shutdown_tx,
             task: Some(task),
+            stats_task: None,
         })
+    }
+
+    fn spawn_device_stats_task(&self) -> JoinHandle<()> {
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                collect_eta_set_device_stats(read_device_stats_snapshot());
+                tokio::select! {
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_err() || *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+            }
+        }.instrument(tracing::info_span!(
+            "progress_socket::device_stats",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = "publish device stats snapshots",
+        )))
     }
 
     #[cfg(test)]
@@ -95,7 +139,10 @@ impl CollectEtaProgressSocketServer {
     pub(crate) async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.take() {
-            let _ = task.await;
+            let _ = track_await(task).await;
+        }
+        if let Some(stats_task) = self.stats_task.take() {
+            let _ = track_await(stats_task).await;
         }
     }
 }
@@ -106,7 +153,32 @@ impl Drop for CollectEtaProgressSocketServer {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+        if let Some(stats_task) = self.stats_task.take() {
+            stats_task.abort();
+        }
     }
+}
+
+fn read_device_stats_snapshot() -> Option<ThoDeviceStats> {
+    let device_count = unsafe { atc_cuda_device_count() };
+    if device_count < 1 {
+        return None;
+    }
+
+    let mut total = ThoDeviceStats::default();
+    for device in 0..device_count {
+        match get_device_stats(device) {
+            Ok(device_stats) => {
+                total = total.saturating_add(device_stats);
+            }
+            Err(err) => {
+                debug!("failed to read device stats for device={device}: {}", err.msg);
+                return None;
+            }
+        }
+    }
+
+    Some(total)
 }
 
 fn socket_names(socket_id: &str) -> io::Result<Vec<Name<'static>>> {
@@ -132,15 +204,15 @@ async fn serve_one_client(
 ) -> SocketResult<()> {
     let mut writer = &stream;
     let first = rx.borrow_and_update().clone();
-    send_snapshot(&mut writer, &first).await?;
+    track_await(send_snapshot(&mut writer, &first)).await?;
 
     loop {
-        if rx.changed().await.is_err() {
+        if track_await(rx.changed()).await.is_err() {
             break;
         }
 
         let snapshot = rx.borrow_and_update().clone();
-        send_snapshot(&mut writer, &snapshot).await?;
+        track_await(send_snapshot(&mut writer, &snapshot)).await?;
     }
 
     Ok(())
@@ -152,8 +224,8 @@ where
 {
     let mut bytes = serde_json::to_vec(snapshot)?;
     bytes.push(b'\n');
-    writer.write_all(&bytes).await?;
-    writer.flush().await?;
+    track_await(writer.write_all(&bytes)).await?;
+    track_await(writer.flush()).await?;
     Ok(())
 }
 
@@ -164,6 +236,7 @@ mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
+    use thoosa_shared::futures_limits::{ENTRY, FutureLimitProgressEntry};
     use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState};
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::sync::watch;
@@ -195,6 +268,14 @@ mod tests {
             }],
             started_at_unix_ms: 111,
             oom_all_failed: 1,
+            oom_success: 0,
+            device_stats: None,
+            futures_limits: vec![FutureLimitProgressEntry {
+                descr: ENTRY.to_string(),
+                limit: 4,
+                registrations: 1,
+                weight: 1,
+            }],
         })?;
 
         let second = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("second line");
@@ -209,6 +290,12 @@ mod tests {
         );
         assert_eq!(second.started_at_unix_ms, 111);
         assert_eq!(second.oom_all_failed, 1);
+        assert_eq!(second.futures_limits, vec![FutureLimitProgressEntry {
+            descr: ENTRY.to_string(),
+            limit: 4,
+            registrations: 1,
+            weight: 1,
+        }]);
 
         snapshot_tx.send(CollectEtaProgressState {
             invocations: vec![
@@ -225,6 +312,9 @@ mod tests {
             ],
             started_at_unix_ms: 222,
             oom_all_failed: 2,
+            oom_success: 0,
+            device_stats: None,
+            futures_limits: vec![],
         })?;
 
         let third = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("third line");
