@@ -22,7 +22,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
-use thoosa_common::ws::{Workspace, WsConfigs};
+use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::cli::{Cli, RunAllArgs, run_cli};
 use thoosa_main::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
@@ -33,6 +33,7 @@ use thoosa_main::stages::train_final_net::{train_final_step_endpoint_inits, SYNC
 use thoosa_main::stages::train_label_nets::{train_label_step_endpoint_inits, SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
 use thoosa_main::stages::train_motif_nets::train_motif_step_endpoint_inits;
 use thoosa_main::stages::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, sync_freq_filter_endpoint_init};
+use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{ThoError, cdt_for_dir};
 use thoosa_shims::context::ThoCudaContext;
@@ -135,9 +136,19 @@ fn main() -> Result<(), ThoError> {
     let run_result = rt.block_on(async move {
         // let cdt = cdt_for_dir();
 
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            cli.common_args.ws_path.clone(),
+            app_configs.clone(),
+        )?));
+
+        let store = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
+
+
+
         track_await(run_cli(
             cli.common_args,
             cli.old_command,
+            Arc::clone(&store) as Arc<dyn MotifsStore>,
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
                 thoosa_main::data::parquet_to_tensor_by_path(

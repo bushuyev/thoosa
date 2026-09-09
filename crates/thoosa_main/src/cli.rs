@@ -133,14 +133,14 @@ pub struct Cli {
 
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum CommonCommands {
-
+    CommonTest
 }
 
 impl StageCommand for CommonCommands {
     type Service = Arc<dyn Store>;
 
-    fn run(self, service: &Self::Service) -> anyhow::Result<()> {
-        todo!()
+    fn run(self, service: &Self::Service) -> Result<(), ThoError> {
+        Ok(())
     }
 }
 
@@ -333,6 +333,7 @@ fn set_oom_score_adj(score: i32) {
 pub async fn run_cli<C, CS, F, R, A, S, FI>(
     cli: CommonArgs<C>,
     old_commands: Option<Commands>,
+    store2:Arc<CS>,
     labeled_resources: F,
     resource_to_tensor: R,
     init_data:S,
@@ -581,6 +582,11 @@ where
     ));
 
     let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
+
+
+    if let Some(command ) = cli.command{
+        command.run(&store2)?;
+    }
 
     // ImportResources is the only command that calls the project OGG decoder directly;
     // later commands load the persisted tensor files through RawTensorLoader.
@@ -945,9 +951,9 @@ where
         Some(SayHello(args)) => {
             debug!("args={:?} cudnn_is_available={}", args, tch::Cuda::cudnn_is_available());
 
-            unsafe {
-                tho_cu_reset(0);
-            }
+            // unsafe {
+            //     tho_cu_reset(0);
+            // }
 
             // let dir = read_dir(ws.read().tensors_path())?;
             //
