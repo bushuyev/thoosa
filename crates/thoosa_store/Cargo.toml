@@ -14,7 +14,7 @@ log.workspace = true
 parking_lot.workspace = true
 mockall.workspace = true
 ctor.workspace = true
-rusqlite = { version = "0.37", features = ["bundled", "trace"] }
+rusqlite.workspace = true
 #tokio-rusqlite  = {path = "../../../tokio-rusqlite"}
 zstd = "0.13"
 tokio.workspace = true

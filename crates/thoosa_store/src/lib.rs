@@ -16,7 +16,6 @@ mod tokio_rusqlite;
 
 pub use rusqlite;
 
-use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock};
 use std::array::IntoIter;
 use std::backtrace::Backtrace;
@@ -33,6 +32,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 use async_trait::async_trait;
+use bytemuck::{Pod, Zeroable};
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
 
