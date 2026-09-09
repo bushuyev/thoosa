@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -129,7 +130,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
@@ -141,7 +142,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
-        store: Arc<Box<dyn Store>>,
+        store: Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<Arc<Self>, ThoError> {
@@ -770,7 +771,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
@@ -781,7 +782,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(store: Arc<Box<dyn MotifsStore>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
             id: (RAW_TENSOR_LOADER, "RandomSlicesLoader").into(),
             store,
@@ -1579,7 +1580,7 @@ pub(crate) async fn load_random_slices<L, C>(
     find_motifs_run_config_id: u32,
     resources_map: HashMap<ResourceId, Resource>,
     slices: Vec<TensorIdSliceIdx>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<L>,
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1776,7 +1777,7 @@ mod tests {
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::{DataId, RunCtx};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
     use thoosa_store::RunConfigRow;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1791,7 +1792,7 @@ mod tests {
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
-        let mut store = MockStoreBuilder::new()
+        let mut store = MockMotifsStoreBuilder::new()
             .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, motif_source_run_config_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
@@ -1871,7 +1872,7 @@ mod tests {
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
-        let mut store = MockStoreBuilder::new()
+        let mut store = MockMotifsStoreBuilder::new()
             .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0i64, run_config_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),

@@ -1,4 +1,5 @@
 use parking_lot::{Mutex, RwLock};
+use thoosa_motifs::motifs_store::MotifsStore;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -131,7 +132,7 @@ where
 
 pub async fn load_to_logits_tensors(
     group: &str,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
 ) -> Vec<(Resource, Vec<f32>)> {
     track_await(store
         .list_resource_random_in_group(group)).await
@@ -230,7 +231,7 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
 pub async fn labeled_tensors_by_descr<'a>(
     label: &String,
     resource_set_descr: &String,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
 ) -> Vec<(i64, Vec<Resource>)> {
     debug!(
         "labeled_tensors_by_descr: label={:?} resource_set_descr={:?}",

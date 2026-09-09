@@ -1,4 +1,4 @@
-use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
+use crate::{IdSlice, MotifGroupsStore, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
 use async_trait::async_trait;
 use bytemuck::{AnyBitPattern, Pod};
 use log::{debug, error, info, trace, warn};
@@ -150,7 +150,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    async fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError> {
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifGroupsStore, max_slices_counts: Option<u32>) -> Result<usize, ThoError> {
         debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;

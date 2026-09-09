@@ -1,4 +1,5 @@
 use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
+use thoosa_motifs::motifs_store::MotifsStore;
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use futures::{FutureExt, future::BoxFuture};
 use log::{debug, info, trace};
@@ -1513,7 +1514,7 @@ where
 {
     find_motifs_run_config_id: RunConfigId,
     channel_trackers: Vec<Arc<RwLock<SimpleMotifTracker<'static>>>>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     _ctx: PhantomData<C>,
 }
 
@@ -1534,7 +1535,7 @@ where
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,

@@ -1,4 +1,5 @@
 use crate::stages::bucketing::{BucketingInput, BucketingStage};
+use thoosa_motifs::motifs_store::MotifsStore;
 use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcDynSyncStage, CrossUnfoldClcOutput, UnfoldParams};
 use crate::stages::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
@@ -354,7 +355,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
@@ -665,7 +666,8 @@ mod tests {
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::traits::{AsyncStage, DataId, RunCtx, Stage};
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp};
-    use thoosa_store::{CheckGroups, MockStoreBuilder, RunConfigRow, SqlStore};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::{CheckGroups, RunConfigRow, SqlStore};
 
     #[ctor::ctor]
     pub fn init() {
@@ -716,7 +718,7 @@ mod tests {
         let resources_group = "group";
 
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {

@@ -1,4 +1,5 @@
 #![allow(unused_assignments)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use crate::cli::run_plot;
 use crate::stages::cross_loader::ResourcesConfigInput;
@@ -100,11 +101,12 @@ impl FindAndSelectEvalMetrics {
 
 #[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
+    type Store = dyn MotifsStore;
     type R = Vec<u32>;
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<Vec<u32>, ThoError> {
@@ -132,7 +134,7 @@ impl SavableResult for FindAndSelectMotifsResult {
 #[derive(Debug)]
 pub struct FindAndSelectMotifsStage {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader: Arc<RawTensorLoader<RunCtxImpl>>,
     run_configs: Arc<
         OptRunConfigs<
@@ -151,7 +153,7 @@ impl FindAndSelectMotifsStage {
     pub fn new(
         loader: Arc<RawTensorLoader<RunCtxImpl>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         run_configs: OptRunConfigs<
             Vec<NamedVal<FindAndSelectMotifsRunConfigFields>>,
             Vec<NamedRange<FindAndSelectMotifsRunConfigFields>>,
@@ -174,7 +176,7 @@ impl FindAndSelectMotifsStage {
     }
 
     async fn save_run_config_with_input<R>(
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         input_run_config_ids: Option<&[RunConfigId]>,
         run_config: &mut R,
         descr: &str,
@@ -190,7 +192,7 @@ impl FindAndSelectMotifsStage {
 
     async fn run_find_and_select<C: RunCtx + MaxParallelCtx + Adjustable>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<RawTensorLoader<C>>,
         run_config: &mut FindAndSelectMotifsRunConfig,
         find_resources: &ResourceType,
@@ -276,7 +278,7 @@ impl FindAndSelectMotifsStage {
         opt_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         min_loss_ref: &Arc<RwLock<(f32, Option<FindAndSelectMotifsRunConfig>)>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: &Arc<RawTensorLoader<C>>,
         find_resources: &ResourceType,
         select_resources: &ResourceType,
