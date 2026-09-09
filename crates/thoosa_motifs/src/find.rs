@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use crate::motifs_store::MotifsStore;
 use clap::clap_derive::{Args, Subcommand};
 use crossbeam_channel::SendError;
 use crossbeam_utils::sync::WaitGroup;
@@ -37,7 +38,7 @@ use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
 use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoError};
 use thoosa_shared::{avg_hist, parse_key_val};
-use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
+use thoosa_store::{IdSlice, MotifGroupsStore, MotifTrackerStore, SqlStore, Store};
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeQuantile, LocalMin, Tril};
@@ -135,11 +136,12 @@ impl FindMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for FindMotifsSavableResult {
+    type Store = dyn MotifsStore;
     type R = u32;
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
@@ -299,7 +301,7 @@ mod motif_find_tests {
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val;
     use thoosa_shared::val::Val::UInt;
-    use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
+    use thoosa_store::{IdSlice, MotifGroupsStore, SlicesMatch, SqlStore, Store};
 
     #[ctor::ctor]
     fn init() {
@@ -438,7 +440,7 @@ mod motif_find_tests {
 
         async fn load_slices_into_groups(
             &mut self,
-            store: &Arc<Box<dyn Store>>,
+            _store: &dyn MotifGroupsStore,
             max_slices_counts: Option<u32>,
         ) -> Result<usize, ThoError> {
             todo!()
@@ -640,7 +642,7 @@ mod motif_find_tests {
 pub async fn plot_resource(
     resource_config: Simple,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn Store>>,
+    store: &Arc<Box<dyn MotifsStore>>,
 ) -> Result<(), ThoError> {
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO

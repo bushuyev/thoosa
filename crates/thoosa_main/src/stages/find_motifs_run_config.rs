@@ -1,4 +1,5 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use thoosa_common::transforms::filters::*;
 use log::debug;
@@ -1501,11 +1502,12 @@ impl SelectMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for SelectMotifsSavableResult {
+    type Store = dyn MotifsStore;
     type R = u32;
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {

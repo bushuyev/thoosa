@@ -1,4 +1,5 @@
 use cached_derive::Cached;
+use thoosa_motifs::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -93,7 +94,7 @@ where
 {
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
@@ -138,7 +139,7 @@ where
 {
     pub async fn new_with_apply_motif_nets<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
@@ -184,7 +185,7 @@ where
 {
     pub async fn new_with_motif_nets_builder<R, F, Fut>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx: R,
         batch_in_chunks: usize,
@@ -989,7 +990,8 @@ mod tests {
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{ThoError, mono_key};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::{RunConfigRow, TrainedNet};
 
     fn const_motif_net(
         motif_width: u32,
@@ -1310,7 +1312,7 @@ mod tests {
         }
 
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {

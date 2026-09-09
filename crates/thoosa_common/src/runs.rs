@@ -252,12 +252,14 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 
 #[async_trait]
 pub trait SavableResult: Sync + Send + Debug {
+    /// Allows feature crates to retain a stronger store trait object without making `thoosa_common` depend on them.
+    type Store: Store + ?Sized;
     type P<'a>:Debug = ();
     type R:Debug = ();
 
     async fn save(
         &mut self, //TODO consume
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<Self::Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<Self::R, ThoError>;
@@ -269,10 +271,11 @@ where
     S: SavableResult,
     for<'a> S::P<'a>: Send,
 {
+    type Store = S::Store;
     type P<'a> = S::P<'a>;
     type R = S::R;
 
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
+    async fn save(&mut self, store: &Arc<Box<Self::Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
         Arc::get_mut(self).ok_or_else(|| ThoError::new("SavableResult::save: result should not be shared"))?.save(store, ws, p).await
     }
 }

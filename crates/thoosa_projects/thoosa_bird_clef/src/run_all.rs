@@ -43,7 +43,8 @@ use thoosa_shared::run_configs::{RunConfig, RunConfigId, run_id};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::{FuturesOrdering, RangeOrValue, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async};
-use thoosa_store::{Store, TrainedNetsBy};
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_store::TrainedNetsBy;
 use tracing::Instrument;
 
 pub enum RunMode {
@@ -89,7 +90,7 @@ impl RunConfig for ClefRunConfig {
 
 pub(crate) async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn Store>>,
+    store: &Arc<Box<dyn MotifsStore>>,
     loader: &Arc<RawTensorLoader<RunCtxImpl>>,
     mut root_ctx: RunCtxImpl,
     run_all_args: &RunAllArgs,
@@ -773,6 +774,7 @@ mod tests {
     use thoosa_main::RawTensorLoader;
     use thoosa_main::cli::RunAllArgs;
     use thoosa_motifs::fragments::Resolution;
+    use thoosa_motifs::motifs_store::MotifsStore;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::resource::ResourceStats;
     use thoosa_shared::{ThoError, mono_key};
@@ -808,7 +810,7 @@ mod tests {
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
 
-        let mut store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
+        let mut store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?));
         let mut conn = store.open_external_writer_conn()?;
 
 

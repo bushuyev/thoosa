@@ -1,3 +1,4 @@
+use thoosa_motifs::motifs_store::MotifsStore;
 #[cfg(test)]
 use crate::stages::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
 use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
@@ -171,7 +172,7 @@ where
 {
     pub(crate) find_motifs_run_config_id: RunConfigId,
     configured_loader: Arc<L>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     cross_unfold_clc: Arc<CLC>,
     receiver_factory: Box<dyn Fn(&[Arc<Resource>]) -> Arc<RSV> + Send + Sync>,
     chunk_size: usize,
@@ -208,7 +209,7 @@ where
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         find_motifs_run_config_id: RunConfigId, //fod logging
         configured_loader: Arc<L>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         cross_unfold_clc: Arc<CLC>,
         receiver_factory: ReceiverFactory,
         chunk_size: usize,
@@ -395,7 +396,7 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clon
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
-    pub async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
+    pub async fn check(self, store: &Arc<Box<dyn MotifsStore>>) -> Result<Self, ThoError> {
         track_await(self.resources_config.check(store)).await?;
 
         Ok(self)
@@ -1275,7 +1276,8 @@ mod tests {
     use thoosa_shared::traits::ConsumeResult;
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir};
     use thoosa_store::fs_store::ChunkedSlicesReader;
-    use thoosa_store::{MockStoreBuilder, SlicesMatch, SqlStore};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::{SlicesMatch, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use tracing::subscriber::NoSubscriber;
@@ -1601,7 +1603,7 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(1, 1000, 32000))?));
         let store_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).store_path().to_path_buf());
-        let store = Arc::new(SqlStore::from_path(&store_path).await?);
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(&store_path).await?));
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
@@ -1839,12 +1841,12 @@ mod tests {
         let mut ctx = mock_run_ctx::default(0);
 
         let mut mocked_store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     vec!["resource_a".to_string(), "resource_b".to_string()],
                     Ok(resources.clone()),
                 )
-                .build() as Box<dyn Store>,
+                .build() as Box<dyn MotifsStore>,
         );
 
         let cross_loader = Arc::new(CrossLoader::new(
@@ -2002,12 +2004,12 @@ mod tests {
         let mut ctx = mock_run_ctx::default(1);
 
         let mut mocked_store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     vec!["resource_small".to_string(), "resource_large".to_string()],
                     Ok(resources.clone()),
                 )
-                .build() as Box<dyn Store>,
+                .build() as Box<dyn MotifsStore>,
         );
 
         let cross_loader = Arc::new(CrossLoader::new(
@@ -2141,12 +2143,12 @@ mod tests {
         let mut ctx = mock_run_ctx::default(1);
 
         let mut mocked_store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     vec!["resource_a".to_string()],
                     Ok(resources.clone()),
                 )
-                .build() as Box<dyn Store>,
+                .build() as Box<dyn MotifsStore>,
         );
 
         let cross_loader = Arc::new(CrossLoader::new(

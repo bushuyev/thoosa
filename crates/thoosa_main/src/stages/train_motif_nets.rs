@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_motifs::motifs_store::MotifsStore;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -354,7 +355,7 @@ where
     motif_loader:Arc<MotifLoader<L,C>>,
     random_slices_loader:Arc<RandomSlicesLoader<L,C>>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     epoch_size: u32,
     descr: Option<String>,
     pd:PhantomData<C>,
@@ -422,7 +423,7 @@ where
     pub async fn new(
         loader:Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         run_configs:  OptRunConfigs<
             Vec<NamedVal<TrainMotifNetRunConfigFields>>,
             Vec<NamedRange<TrainMotifNetRunConfigFields>>,
@@ -459,7 +460,7 @@ where
 }
 
 
-async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs_run_config_ids: &[RunConfigId]) -> Result<Vec<CompletedTrial>, ThoError> {
+async fn completed_train_motif_trials(store: &Arc<Box<dyn MotifsStore>>, select_motifs_run_config_ids: &[RunConfigId]) -> Result<Vec<CompletedTrial>, ThoError> {
     let mut train_parent_ids = Vec::new();
     let mut seen_parent_candidates = HashSet::new();
     for select_motifs_run_config_id in select_motifs_run_config_ids {
@@ -1440,7 +1441,8 @@ mod tests {
     use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key, simple_id};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::RunConfigRow;
     use tokio::fs;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1496,7 +1498,7 @@ mod tests {
 
         let motif_id = 10u32;
         let mut store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 50, 100, None, None).to_properties_iter(None).collect()),
@@ -1791,9 +1793,10 @@ impl TrainMotifNetsResult {
 
 #[async_trait]
 impl SavableResult for TrainMotifNetsResult {
+    type Store = dyn MotifsStore;
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
 
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
@@ -1852,12 +1855,13 @@ impl TrainMotifNetResult {
 
 #[async_trait]
 impl SavableResult for TrainMotifNetResult {
+    type Store = dyn MotifsStore;
     type P<'a> =  &'a [RunConfigId];
     type R = u32;
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {

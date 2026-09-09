@@ -1,4 +1,5 @@
 use crate::stages::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
+use thoosa_motifs::motifs_store::MotifsStore;
 use clap::Args;
 use log::debug;
 use parking_lot::RwLock;
@@ -146,7 +147,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     motif_stats: Arc<MS>,
     _ctx: PhantomData<C>,
@@ -167,7 +168,7 @@ where
     MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
+    pub fn new(store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
         Self {
             id: (MERGE_SELECTED_MOTIFS, "MergeSelectedMotifs").into(),
             store: Arc::clone(store),
@@ -383,7 +384,8 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::traits::AsyncStage;
-    use thoosa_store::{CheckGroups, MockStoreBuilder, RunConfigRow};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_store::{CheckGroups, RunConfigRow};
 
     use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};
     use crate::stages::motif_stats::MotifStats;
@@ -400,7 +402,7 @@ mod tests {
         let select_run_config_id_1 = 200;
         let merge_run_config_id = 300;
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_save_run_config(
                     Some(vec![select_run_config_id_0, select_run_config_id_1]),
                     "MergeMotifs",

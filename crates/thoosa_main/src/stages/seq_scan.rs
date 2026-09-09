@@ -1,4 +1,5 @@
 use crate::stages::cross_loader::ResourcesConfigInput;
+use thoosa_motifs::motifs_store::MotifsStore;
 use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
 use crate::stages::stft::SyncStftSelector;
 use crate::stages::transforms::freq_filter::FreqFilter;
@@ -46,11 +47,12 @@ impl Output for SeqScanOutput {}
 
 #[async_trait]
 impl SavableResult for SeqScanOutput {
+    type Store = dyn MotifsStore;
     type R = u32;
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
@@ -121,7 +123,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     run_config_stages: Vec<SeqScanConfiguredStage<L, C>>,
     chunk_size: usize,
     pd: PhantomData<(RC, C)>,
@@ -135,7 +137,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
     ) -> Result<Self, ThoError> {
@@ -144,7 +146,7 @@ where
 
     pub async fn new_with_chunk_size(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
         chunk_size: usize,
@@ -582,7 +584,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::WithId;
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
 
     #[ctor::ctor]
     fn init() {
@@ -723,7 +725,7 @@ mod tests {
         let resources = vec![Resource::new(1, 1, "r0", 6), Resource::new(2, 1, "r1", 6)];
         let resources_group = ResourceType::List(resources.iter().map(|resource| resource.file_stem().to_string()).collect());
         let store = Arc::new(
-            MockStoreBuilder::new()
+            MockMotifsStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     resources.iter().map(|resource| resource.file_stem().to_string()).collect(),
                     Ok(resources.clone()),

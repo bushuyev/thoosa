@@ -1,4 +1,5 @@
 use crate::stages::cross_dims::ChannelsDataSelector;
+use thoosa_motifs::motifs_store::MotifsStore;
 use crate::stages::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
 use crate::stages::find_motifs::config_to_stage;
@@ -88,11 +89,12 @@ impl Output for ExtendMotifsSavableResult {}
 
 #[async_trait]
 impl SavableResult for ExtendMotifsSavableResult {
+    type Store = dyn MotifsStore;
     type R = u32;
 
     async fn save(
         &mut self,
-        _store: &Arc<Box<dyn Store>>,
+        _store: &Arc<Box<dyn MotifsStore>>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
         _p: Self::P<'_>,
     ) -> Result<u32, ThoError> {
@@ -111,7 +113,7 @@ where
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
     find_motifs_run_config_ids:Vec<RunConfigId>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn Store>>,
+    store: Arc<Box<dyn MotifsStore>>,
     loader:Arc<L>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
     motif_stats:Arc<MotifStats<ML, L, C>>,
@@ -136,7 +138,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<Box<dyn MotifsStore>>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
         run_configs: Vec<ExtendMotifsRunConfig>,
@@ -183,7 +185,7 @@ where
 
     #[inline]
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
-    async fn load_stacked_motifs(store:&Arc<Box<dyn Store>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+    async fn load_stacked_motifs(store:&Arc<Box<dyn MotifsStore>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_config_ids.len());
 
 
@@ -1230,7 +1232,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{ThoError, mono_key};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
@@ -1276,7 +1278,7 @@ mod tests {
                 ),
             ),
         ]).finish());
-        let store = Arc::new(MockStoreBuilder::new().build());
+        let store = Arc::new(MockMotifsStoreBuilder::new().build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 
