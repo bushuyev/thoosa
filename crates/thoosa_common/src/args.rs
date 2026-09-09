@@ -1,9 +1,10 @@
 use clap::{Args, Subcommand};
 use log::LevelFilter;
+use thoosa_shared::ThoError;
 
 pub trait StageCommand {
     type Service;
-    fn run(self, service:&Self::Service) -> anyhow::Result<()>;
+    fn run(self, service:&Self::Service) -> Result<(), ThoError>;
 }
 
 
@@ -44,5 +45,5 @@ where
 
 
     #[command(subcommand)]
-    pub command: C,
+    pub command: Option<C>,
 }

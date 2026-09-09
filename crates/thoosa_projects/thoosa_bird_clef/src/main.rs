@@ -33,7 +33,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
-use thoosa_common::ws::{Workspace, WsConfigs};
+use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
 use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
@@ -48,6 +48,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
 use tokio::task::JoinHandle;
+use thoosa_motifs::motifs_store::MotifsStore;
 
 mod data;
 mod labels;
@@ -167,12 +168,18 @@ fn main() -> Result<(), ThoError>{
         })?;
 
     let run_result = rt.block_on(async move {
-        //gpt Navigation note: run_cli is the shared thoosa entry point. The arguments below are the
-        //gpt BirdCLEF adapters: label import, OGG->tensor loading, dataset-set seeding, run-all orchestration, and optional inference.
+
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            cli.common_args.ws_path.clone(),
+            app_configs.clone(),
+        )?));
+
+        let store = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
 
         track_await(run_cli(
             cli.common_args,
             cli.old_command,
+            Arc::clone(&store) as Arc<dyn MotifsStore>,
             |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
             |t: &Transaction|{

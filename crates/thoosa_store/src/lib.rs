@@ -3020,6 +3020,10 @@ impl SqlStore {
     }
 
     pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
+       Ok(Box::new(Self::from_path_(path).await?))
+    }
+
+    pub async fn from_path_<P: AsRef<Path>>(path: P) -> Result<SqlStore, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
         let conn_target = path_buf.to_string_lossy().to_string();
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
@@ -3043,7 +3047,7 @@ impl SqlStore {
             readers
         };
 
-        Ok(Box::new(Self {
+        Ok(Self {
             #[cfg(test)]
             conn: Mutex::new(conn),
             writer,
@@ -3051,8 +3055,9 @@ impl SqlStore {
             conn_target,
             conn_flags,
             rr: AtomicUsize::new(0),
-        }))
+        })
     }
+
 
     pub async fn from_path_readonly<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
