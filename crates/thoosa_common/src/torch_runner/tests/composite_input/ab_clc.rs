@@ -2,7 +2,7 @@ use crate as thoosa_common;
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::ipc::codec::{IpcCodec, JsonIpcCodec};
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
@@ -261,7 +261,7 @@ where
 
 
         let input = Arc::new(ABClcSyncStageInputWrapper::new(a_out, b_out));
-        let result = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ABClcSyncStageInputWrapperSelector>::new(
+        let result = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ABClcSyncStageInputWrapperSelector>::new(
             vec![],
             None,
         )

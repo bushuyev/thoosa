@@ -278,19 +278,19 @@ mod tests {
 
     mock! {
         #[derive(Clone, Debug)]
-        pub TestTask {}
+        pub TestStage {}
 
-        impl Stage for TestTask {
+        impl Stage for TestStage {
             type In<'a> = MockTestInput;
             type Out = MockTestOutput;
             type Ctx = MockRunCtx;
         }
 
-        impl SyncStage for TestTask {
+        impl SyncStage for TestStage {
             fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: &<Self as Stage>::Ctx) -> Result<<Self as Stage>::Out, ThoError>;
         }
 
-        impl Adjustable for TestTask {
+        impl Adjustable for TestStage {
 
         }
 
@@ -387,7 +387,7 @@ mod tests {
 
         let splits_adjuster: SplitsAdjuster<MockTestSelector, i64> = SplitsAdjuster::new(1);
         let output_builder = MockTestOutputBuilderBuilder::default();
-        let mut context_impl:SplitsAdjusterContextImpl<MockTestTask, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
+        let mut context_impl:SplitsAdjusterContextImpl<MockTestStage, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
 
 
         let mut selector = MockTestSelector::new();

@@ -596,7 +596,7 @@ mod tests {
     use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
     use thoosa_common::runner::common::cachable::BorrowRef;
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+    use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_common::tho_device::ThoDevice;
@@ -872,7 +872,7 @@ mod tests {
 
         let prepare_stage = Arc::new(PrepareRunAllData);
         let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), settings.resources_per_label));
-        let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
+        let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
         let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
 
 

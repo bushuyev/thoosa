@@ -17,7 +17,7 @@ use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap, SelectRef};
-use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
+use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use crate::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 
@@ -126,11 +126,11 @@ where
         match self.config {
             OOMRunnerConfig::MaxParallel { max, step } => {
                 let run_ctx = ctx.branch(false);
-                let adjusters: Vec<Adjusters<NoInputAdjuster, NoTaskAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
+                let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                     max,
                     step,
                 )))];
-                OOMHandler::<NoInputAdjuster, NoTaskAdjuster, _, S>::new(
+                OOMHandler::<NoInputAdjuster, NoStageAdjuster, _, S>::new(
                     adjusters,
                     None,
                 )
@@ -144,7 +144,7 @@ where
             },
             OOMRunnerConfig::Splits => {
                 let run_ctx = ctx.branch(false);
-                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, NoRunCtxAdjuster>> = vec![
+                let adjusters: Vec<Adjusters<_, NoStageAdjuster, NoRunCtxAdjuster>> = vec![
                     Adjusters::Input(input_adjuster(
                        SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(min_split_len),
                     ))
@@ -166,7 +166,7 @@ where
                 step: _step,
             } => {
                 let run_ctx = ctx.branch(false);
-                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+                let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
                         *MaxParallelStep::MID,
@@ -192,7 +192,7 @@ where
             }
             OOMRunnerConfig::DumpedToCpu => {
                 let run_ctx = ctx.branch(false);
-                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+                let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
                         *MaxParallelStep::FAST,
@@ -222,7 +222,7 @@ where
             }
             OOMRunnerConfig::DumpedToCpuAndSplits  => {
                 let run_ctx = ctx.branch(false);
-                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+                let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                         min_split_len,
@@ -371,7 +371,7 @@ pub mod fixtures {
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     #[name = "MulTaskOutputId"]
-    pub struct DMulTaskOutputId(pub &'static str);
+    pub struct DMulStageOutputId(pub &'static str);
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     #[name = "LoadedTensorId"]
@@ -596,7 +596,7 @@ pub mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId, MetricsRangeSelector};
+    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulStageOutputId, MetricsRangeSelector};
     use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
@@ -742,29 +742,29 @@ mod tests {
 
     ////////////
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-    struct DMulTaskId(&'static str);
+    struct DMulStageId(&'static str);
 
     #[derive(Debug)]
     #[allow(dead_code)]
-    struct DMulTask {
-        id: DMulTaskId,
+    struct DMulStage {
+        id: DMulStageId,
         k: f32,
         fail_until: FailUntil,
     }
 
-    impl DMulTask {
-        pub fn new(id: DMulTaskId, k: f32, fail_until: FailUntil) -> Self {
+    impl DMulStage {
+        pub fn new(id: DMulStageId, k: f32, fail_until: FailUntil) -> Self {
             Self { id, k, fail_until }
         }
     }
 
-    impl Stage for DMulTask {
+    impl Stage for DMulStage {
         type In<'a> = DLoadedTensor;
-        type Out = DMulTaskOutput;
+        type Out = DMulStageOutput;
         type Ctx = RunCtxImpl;
     }
 
-    impl SyncStage for DMulTask {
+    impl SyncStage for DMulStage {
 
         fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
@@ -803,7 +803,7 @@ mod tests {
 
             debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ","ctx.name()",ctx.tho_device_idx());
 
-            Ok(DMulTaskOutput {
+            Ok(DMulStageOutput {
                 id: self.out_id(WithId::id(input)),
                 data: input
                     .data
@@ -816,26 +816,26 @@ mod tests {
         }
     }
 
-    impl Adjustable for DMulTask {}
+    impl Adjustable for DMulStage {}
 
-    impl OutId for DMulTask {
+    impl OutId for DMulStage {
         fn out_id(
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            DMulTaskOutputId(format!("multiplied_{}", input_id.0).leak())
+            DMulStageOutputId(format!("multiplied_{}", input_id.0).leak())
         }
 
     }
 
     #[derive(Debug)]
-    struct DMulTaskOutput {
-        id: DMulTaskOutputId,
+    struct DMulStageOutput {
+        id: DMulStageOutputId,
         data: DummyTensor,
     }
 
     #[async_trait]
-    impl Data for DMulTaskOutput {
+    impl Data for DMulStageOutput {
         type Metrics = [usize; 1];
         type M = CpuOrGpu<Self>;
 
@@ -854,9 +854,9 @@ mod tests {
     }
 
     #[async_trait]
-    impl CopyToDevice for DMulTaskOutput {
+    impl CopyToDevice for DMulStageOutput {
         async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-            Ok(DMulTaskOutput {
+            Ok(DMulStageOutput {
                 id: self.id.clone(),
                 data: self.data.clone(),
             })
@@ -864,13 +864,13 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct DMulTaskOutputBuilder {
-        id: DMulTaskOutputId,
-        partial_output: Vec<DMulTaskOutput>,
+    struct DMulStageOutputBuilder {
+        id: DMulStageOutputId,
+        partial_output: Vec<DMulStageOutput>,
     }
 
-    impl DMulTaskOutputBuilder {
-        pub fn new(id: DMulTaskOutputId) -> Self {
+    impl DMulStageOutputBuilder {
+        pub fn new(id: DMulStageOutputId) -> Self {
             Self {
                 id,
                 partial_output: vec![],
@@ -878,15 +878,15 @@ mod tests {
         }
     }
 
-    impl OutputBuilder for DMulTaskOutputBuilder {
-        type O = DMulTaskOutput;
+    impl OutputBuilder for DMulStageOutputBuilder {
+        type O = DMulStageOutput;
 
         async fn add_partial_output(&mut self, o: Self::O) {
             self.partial_output.push(o);
         }
 
         async fn build(self) -> Result<Self::O, ThoError> {
-            Ok(DMulTaskOutput {
+            Ok(DMulStageOutput {
                 id: self.id.clone(),
 
                 data: DummyTensor(self.partial_output.into_iter().fold(vec![], |mut a, v| {
@@ -897,29 +897,29 @@ mod tests {
         }
     }
 
-    impl WithId for DMulTaskOutput {
-        type ID = DMulTaskOutputId;
+    impl WithId for DMulStageOutput {
+        type ID = DMulStageOutputId;
 
         fn id(&self) -> &Self::ID {
             &self.id
         }
     }
 
-    impl Output for DMulTaskOutput {}
+    impl Output for DMulStageOutput {}
 
     ////////////
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-    struct DLoadAndClcTaskId(&'static str);
+    struct DLoadAndClcStageId(&'static str);
 
     #[derive(Debug, Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
     #[allow(dead_code)]
     struct DLoadAndClcStage {
-        id: DLoadAndClcTaskId,
+        id: DLoadAndClcStageId,
 
         loader: Arc<DummyLoader>,
-        mul: Arc<DMulTask>,
-        mul_oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>, DMulTaskOutputBuilder>,
+        mul: Arc<DMulStage>,
+        mul_oom_runner: ClcOOMRunner<DMulStage, MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>, DMulStageOutputBuilder>,
     }
 
     impl OutId for DLoadAndClcStage {
@@ -933,16 +933,16 @@ mod tests {
 
     impl DLoadAndClcStage {
         pub fn new(
-            id: DLoadAndClcTaskId,
+            id: DLoadAndClcStageId,
             k: f32,
             fail_until: FailUntil,
             len: usize,
-            oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>, DMulTaskOutputBuilder>,
+            oom_runner: ClcOOMRunner<DMulStage, MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>, DMulStageOutputBuilder>,
         ) -> Self {
             Self {
                 id,
                 loader: Arc::new(DummyLoader::new(len)),
-                mul: Arc::new(DMulTask::new(DMulTaskId("mul_task_0"), k, fail_until)),
+                mul: Arc::new(DMulStage::new(DMulStageId("mul_task_0"), k, fail_until)),
                 mul_oom_runner: oom_runner,
             }
         }
@@ -951,7 +951,7 @@ mod tests {
 
     impl Stage for DLoadAndClcStage {
         type In<'a> = DLoaderInput;
-        type Out = Arc<DevicesWrap<DMulTaskOutput>>;
+        type Out = Arc<DevicesWrap<DMulStageOutput>>;
         type Ctx = RunCtxImpl;
     }
 
@@ -1122,7 +1122,7 @@ mod tests {
         let _device_idx = 0;
 
         let load_and_mut = Arc::new(DLoadAndClcStage::new(
-            DLoadAndClcTaskId("load_and_clc_id"),
+            DLoadAndClcStageId("load_and_clc_id"),
             2.,
             FailUntil::Never,
             100,
@@ -1131,7 +1131,7 @@ mod tests {
                     max: MAX_PARALLEL,
                     step: 10,
                 },
-                Box::new(|id| DMulTaskOutputBuilder::new(id)),
+                Box::new(|id| DMulStageOutputBuilder::new(id)),
             ),
         ));
         let mut ctx_device_0 = RunCtxImpl::new(1, "noname");
@@ -1159,7 +1159,7 @@ mod tests {
         Ok(())
     }
 
-    fn mul_check(mul_k: f32, res: &str, out: &DMulTaskOutput) {
+    fn mul_check(mul_k: f32, res: &str, out: &DMulStageOutput) {
         let self_k = parse_numeric_part(res).unwrap_or(1.0) as f32;
 
         assert_eq!(
@@ -1181,13 +1181,13 @@ mod tests {
         const MUL_K: f32 = 2.;
 
         let load_and_mut = Arc::new(DLoadAndClcStage::new(
-            DLoadAndClcTaskId("load_and_clc_id"),
+            DLoadAndClcStageId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(20),
             100,
             ClcOOMRunner::new(
                 OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
-                Box::new(|id| DMulTaskOutputBuilder::new(id)),
+                Box::new(|id| DMulStageOutputBuilder::new(id)),
             ),
         ));
 
@@ -1216,7 +1216,7 @@ mod tests {
 
         const MUL_K: f32 = 2.;
         let load_and_mut = Arc::new(DLoadAndClcStage::new(
-            DLoadAndClcTaskId("load_and_clc_id"),
+            DLoadAndClcStageId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(MAX_PARALLEL),
             100,
@@ -1225,7 +1225,7 @@ mod tests {
                     max: MAX_PARALLEL,
                     step: *MaxParallelStep::SLOW,
                 },
-                Box::new(|id| DMulTaskOutputBuilder::new(id)),
+                Box::new(|id| DMulStageOutputBuilder::new(id)),
             ),
         ));
 
@@ -1254,13 +1254,13 @@ mod tests {
 
         const MUL_K: f32 = 2.;
         let load_and_mut = Arc::new(DLoadAndClcStage::new(
-            DLoadAndClcTaskId("load_and_clc_id"),
+            DLoadAndClcStageId("load_and_clc_id"),
             MUL_K,
             FailUntil::MemLimit(12),
             100,
             ClcOOMRunner::new(
                 OOMRunnerConfig::Splits {},
-                Box::new(|id| DMulTaskOutputBuilder::new(id)),
+                Box::new(|id| DMulStageOutputBuilder::new(id)),
             ),
         ));
 
@@ -1297,13 +1297,13 @@ mod tests {
     let device_idx = 1;
         const MUL_K: f32 = 2.;
         let load_and_mut = Arc::new(DLoadAndClcStage::new(
-            DLoadAndClcTaskId("load_and_clc_id"),
+            DLoadAndClcStageId("load_and_clc_id"),
             MUL_K,
             FailUntil::DumpedToCpu,
             100,
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu,
-                Box::new(|id| DMulTaskOutputBuilder::new(id)),
+                Box::new(|id| DMulStageOutputBuilder::new(id)),
             ),
         ));
 

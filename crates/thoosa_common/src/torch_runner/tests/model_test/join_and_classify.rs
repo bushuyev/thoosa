@@ -11,7 +11,7 @@ use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustCont
 use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::oom_handler::{Adjusters, NoTaskAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
+use crate::runner::oom_handler::{Adjusters, NoStageAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -24,12 +24,12 @@ use super::loader::ABLoader;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "ClsOutId"]
-pub(crate) struct JoinAndClassifyTask {
+pub(crate) struct JoinAndClassifyStage {
     batch_builder: Arc<BatchBuilder>,
     clf: Arc<Classifier>,
 }
 
-impl JoinAndClassifyTask {
+impl JoinAndClassifyStage {
     pub(crate) fn new(loader: Arc<ABLoader>, clf: Arc<Classifier>, batch_size: usize) -> Self {
         Self {
             batch_builder: Arc::new(BatchBuilder::new(loader, batch_size)),
@@ -38,7 +38,7 @@ impl JoinAndClassifyTask {
     }
 }
 
-impl OutId for JoinAndClassifyTask {
+impl OutId for JoinAndClassifyStage {
     fn out_id(
         &self,
         input_id: &<Self::In<'static> as WithId>::ID,
@@ -47,13 +47,13 @@ impl OutId for JoinAndClassifyTask {
     }
 }
 
-impl Stage for JoinAndClassifyTask {
+impl Stage for JoinAndClassifyStage {
     type In<'a> = FileListInput;
     type Out = Arc<DevicesWrap<ThoTensor<ClsOut, ModelTestId>>>;
     type Ctx = RunCtxImpl;
 }
 
-impl AsyncStage for JoinAndClassifyTask {
+impl AsyncStage for JoinAndClassifyStage {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
@@ -95,7 +95,7 @@ impl AsyncStage for JoinAndClassifyTask {
             output_builder
         };
 
-        let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+        let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
             Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                 MAX_PARALLEL,
                 *MaxParallelStep::SLOW,

@@ -25,7 +25,7 @@ pub(crate) mod loader;
 use crate::ipc::cuda_wokrer::InitFn;
 use classifier::{Classifier, SYNC_CLASSIFIER_ENDPOINT, sync_classifier_endpoint_init};
 use common::{ClsOut, FileListInput, ModelTestId};
-use join_and_classify::JoinAndClassifyTask;
+use join_and_classify::JoinAndClassifyStage;
 use loader::ABLoader;
 
 #[ctor::ctor]
@@ -70,7 +70,7 @@ pub(crate) async fn run_model_test_pipeline(
         fail_until,
         ThoDevice::from(ctx_device_idx),
     ).await?);
-    let join_and_cls = Arc::new(JoinAndClassifyTask::new(
+    let join_and_cls = Arc::new(JoinAndClassifyStage::new(
         Arc::clone(&loader),
         Arc::clone(&clf),
         batch_size,

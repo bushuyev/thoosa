@@ -56,7 +56,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAd
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::load_run_config;
@@ -744,7 +744,7 @@ where
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("motif_loader"))),
@@ -905,7 +905,7 @@ where
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("random_slices_loader"))),
@@ -1499,7 +1499,7 @@ where
 {
     let loaded_resources = track_await(TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}"))).await;
     let sync_load_motif_resources = SyncLoadMotifResources::new(ctx.tho_device_idx()).await?;
-    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
     let mut loaded_resources_count = 0usize;
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} slices={slices:?} descr={descr}");
@@ -1614,7 +1614,7 @@ where
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws, ctx.tho_device_idx()).await?;
     let sync_load_random_slices = SyncLoadRandomSlices::new(ctx.tho_device_idx()).await?;
-    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);//TODO adjusters
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);//TODO adjusters
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");
 
