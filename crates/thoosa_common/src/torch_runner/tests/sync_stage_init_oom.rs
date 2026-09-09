@@ -13,7 +13,7 @@ use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::DynSyncStageEnum;
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoTaskAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
+use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::ws::{Workspace, mock_ws_simp};
@@ -73,7 +73,7 @@ async fn test_sync_stage_constructor_retries_after_run_context_adjustment() -> R
     let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1234)));
     let calls = Arc::new(AtomicUsize::new(0));
     let sync_init = ConstructorInit { calls: Arc::clone(&calls) };
-    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
         vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST)))],
         None,
     );

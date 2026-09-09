@@ -2,7 +2,7 @@ use crate as thoosa_common;
 use crate::dims::Dims;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
@@ -372,7 +372,7 @@ impl AsyncStage for ClcStage {
 
         debug!("AsyncStage for ClcTask::run: device_idx={device_idx} input={input:?}");
 
-        let output = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, LoadedRange>::new(vec![], None).run(
+        let output = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, LoadedRange>::new(vec![], None).run(
             &self.sync_clc,
             input,
             ctx,

@@ -31,7 +31,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::parzen::optimizer::CompletedTrial;
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -301,7 +301,7 @@ where
 
             debug!("TrainNet::run_inner: descr={descr} device={device:?} epochs={epochs}");
 
-            let oom_handler: OOMHandler<'_, '_, _, NoTaskAdjuster, _, TrainStepInputSelector> = OOMHandler::new(
+            let oom_handler: OOMHandler<'_, '_, _, NoStageAdjuster, _, TrainStepInputSelector> = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
