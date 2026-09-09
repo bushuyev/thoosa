@@ -100,6 +100,7 @@ use tokio::time::MissedTickBehavior;
 use tokio::{select, sync::watch, time::{self, Duration}};
 use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
+use thoosa_common::args::{CommonArgs, StageCommand};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOMHandler};
@@ -120,39 +121,27 @@ use thoosa_store::rusqlite::Transaction;
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    #[arg(long, default_value = ".")]
-    pub ws_path: String,
-
-    #[arg(long, default_value = "INFO")]
-    pub term_logger_level: LevelFilter,
-
-    #[arg(long, default_value = "INFO")]
-    pub write_logger_level: LevelFilter,
-
-    #[arg(long, default_value_t = false)]
-    pub term_logger_extra_fields: bool,
-
-    #[arg(long, default_value_t = false)]
-    pub write_logger_extra_fields: bool,
-
-    #[arg(long, default_value_t = false)]
-    pub write_perf_log_file: bool,
-
-    #[arg(long)]
-    pub loader_threads: Option<usize>,
-
-    #[arg(long, default_value_t = 100)]
-    pub futures_channel_bound: usize,
-
-    #[arg(long)]
-    pub run_id:Option<u32>,
-
-    #[arg(long)]
-    pub ipc:bool,
 
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub old_command: Option<Commands>,
 
+    #[command(flatten)]
+    pub common_args: CommonArgs<CommonCommands>,
+
+}
+
+
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum CommonCommands {
+
+}
+
+impl StageCommand for CommonCommands {
+    type Service = Arc<dyn Store>;
+
+    fn run(self, service: &Self::Service) -> anyhow::Result<()> {
+        todo!()
+    }
 }
 
 #[derive(Args, Debug, Clone)]
@@ -341,7 +330,9 @@ fn set_oom_score_adj(score: i32) {
 }
 
 
-pub async fn run_cli<F, R, A, S, FI>(
+pub async fn run_cli<C, CS, F, R, A, S, FI>(
+    cli: CommonArgs<C>,
+    old_commands: Option<Commands>,
     labeled_resources: F,
     resource_to_tensor: R,
     init_data:S,
@@ -352,6 +343,8 @@ pub async fn run_cli<F, R, A, S, FI>(
     cdt_for_dir: String,
 ) -> Result<(), ThoError>
 where
+    C: Subcommand + StageCommand<Service=Arc<CS>>+ Clone + std::fmt::Debug,
+    CS:?Sized + Store,
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
     A: AsyncFn(
@@ -380,10 +373,10 @@ where
         at_grad_set_enabled(0);
     };
 
-    let cli = Cli::parse();
+    // let cli = Cli::parse();
 
 
-    let ws = match &cli.command {
+    let ws = match &old_commands {
         Some(Infer(InferArgs{ models_dir: Some(models_dir), .. })) => {
             info!("FsWorkspace: models_dir={models_dir:?}");
             Arc::new(RwLock::new(FsWorkspace::new_with_models_dir(
@@ -446,7 +439,7 @@ where
     };
 
 
-    let store = match &cli.command {
+    let store = match &old_commands {
         Some(Infer(..)) => {
             info!("reqd-only SqlStore");
             Arc::new(SqlStore::from_path_readonly(ws.read().store_path()).await?)
@@ -460,7 +453,7 @@ where
     RUN_ID.set(match cli.run_id{
         None => {
 
-            if let Some(Infer(_) | Export(_)) = &cli.command {
+            if let Some(Infer(_) | Export(_)) = &old_commands {
                 panic!("No run_id")
             }
             track_await(store.save_run(format!("{cli:?}"))).await?
@@ -591,7 +584,7 @@ where
 
     // ImportResources is the only command that calls the project OGG decoder directly;
     // later commands load the persisted tensor files through RawTensorLoader.
-    match &cli.command {
+    match &old_commands {
         Some(ImportResources(import_resources_args)) => {
             debug!("ImportResources: import_resources_params={:?}",import_resources_args);
 
@@ -2210,20 +2203,20 @@ mod cli_tests {
     #[test]
     fn test_write_perf_log_file_default_is_false() {
         let cli = Cli::parse_from(["thoosa_main"]);
-        assert!(!cli.write_perf_log_file);
+        assert!(!cli.common_args.write_perf_log_file);
     }
 
     #[test]
     fn test_write_perf_log_file_flag_enables_perf_file_logging() {
         let cli = Cli::parse_from(["thoosa_main", "--write-perf-log-file"]);
-        assert!(cli.write_perf_log_file);
+        assert!(cli.common_args.write_perf_log_file);
     }
 
     #[test]
     fn test_plot_data_resolution_flag_parses_high() {
         let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.resolution(), Resolution::High),
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2233,7 +2226,7 @@ mod cli_tests {
     fn test_plot_data_stdout_flag_parses_true() {
         let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--stdout"]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert!(args.print_to_stdout()),
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2243,7 +2236,7 @@ mod cli_tests {
     fn test_plot_data_motif_id_parses_multiple_ids() {
         let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:1,2,3"]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2253,7 +2246,7 @@ mod cli_tests {
     fn test_plot_data_motif_id_parses_spaced_quoted_ids() {
         let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:'1, 2'"]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2263,7 +2256,7 @@ mod cli_tests {
     fn test_convert_precision_command_parses() {
         let cli = Cli::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::ConvertPrecision(args)) => {
                 assert_eq!(args.nets_by(), crate::stages::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
                 assert_eq!(args.target_precision(), crate::stages::convert_precision::ConvertPrecisionTarget::Bf16);
@@ -2275,19 +2268,19 @@ mod cli_tests {
     #[test]
     fn test_merge_selected_motifs_ids_parse_single_spaced_and_csv_values() {
         let single = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1"]);
-        match single.command {
+        match single.old_command {
             Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
             other => panic!("unexpected command: {other:?}"),
         }
 
         let spaced = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids='1, 2'"]);
-        match spaced.command {
+        match spaced.old_command {
             Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
             other => panic!("unexpected command: {other:?}"),
         }
 
         let csv = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1,2,3"]);
-        match csv.command {
+        match csv.old_command {
             Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2303,7 +2296,7 @@ mod cli_tests {
             "--resolution", "high",
         ]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::RunAll(args)) => assert_eq!(args.resolution, Resolution::High),
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2322,7 +2315,7 @@ mod cli_tests {
             "{AverageFilter:{window:7,step:1}}",
         ]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::ImportResources(args)) => {
                 assert_eq!(
                     args.freq_filters,
@@ -2345,7 +2338,7 @@ mod cli_tests {
             "--run-config-cnt", "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}",
         ]);
 
-        match cli.command {
+        match cli.old_command {
             Some(crate::cli::Commands::SeqScan(args)) => {
                 assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
                 assert_eq!(args.run_config_cnt, "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}");
