@@ -32,10 +32,15 @@ use thoosa_shared::traits::DataId;
 use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
-use thoosa_store::{LimitBy, Store, SetCond, IdSlice, RunConfigEntry, TrainedNetsBy, RunConfigRow,RunConfigFilter, RunMotifEntry, TrainedNetEntry, TrainedNet};
+use thoosa_store::{LimitBy, Store, SetCond, IdSlice, RunConfigEntry, TrainedNetsBy, RunConfigRow, RunConfigFilter, RunMotifEntry, TrainedNetEntry, TrainedNet, SqlStore};
 
 #[async_trait]
 pub trait MotifsStore: Store {}
+
+impl MotifsStore for SqlStore {
+
+}
+
 
 mock! {
     pub MotifsStore {}
