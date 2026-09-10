@@ -431,7 +431,7 @@ fn remove_disk_path(path: &Path) -> Result<bool, ThoError> {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_motifs::motifs_store::MotifsStore;
+    use thoosa_motifs::motifs_store::{create_motif_tables, MotifsStore};
     use super::{PurgeDate, PurgeLabelModelsBy, PurgeMode, PurgeModelType, PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
     use crate::cli::{Cli, Commands};
     use clap::Parser;
@@ -594,7 +594,10 @@ mod tests {
     async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn MotifsStore>>), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("{name}_{}", cdt_for_dir()));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?));
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+            thoosa_store::create_tables,
+            create_motif_tables
+        ]).await?));
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         Ok((ws, store))
     }

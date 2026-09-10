@@ -769,7 +769,7 @@ mod tests {
     use thoosa_shared::val::NamedVal;
     use thoosa_shared::val::Val;
     use thoosa_shared::{cdt_for_dir, mono_key, ThoError};
-    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_motifs::motifs_store::{create_motif_tables, MockMotifsStoreBuilder, MotifsStore};
     use thoosa_store::{RunConfigRow, SqlStore, TrainedNet, TrainedNetsBy};
 
     fn const_label_net(motif_nets: u32, slices_len: u32, k: f64, device: Device) -> (Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>) {
@@ -958,7 +958,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+            thoosa_store::create_tables,
+            create_motif_tables
+        ]).await?));
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));

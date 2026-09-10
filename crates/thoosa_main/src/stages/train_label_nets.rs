@@ -1137,7 +1137,7 @@ mod tests {
     use thoosa_shared::traits::{Named, RunCtx};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_motifs::motifs_store::{create_motif_tables, MockMotifsStoreBuilder, MotifsStore};
     use thoosa_store::{SqlStore, TrainedNet, TrainedNetsBy};
     use tokio::fs;
     use tokio::io::Join;
@@ -1546,7 +1546,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+            thoosa_store::create_tables,
+            create_motif_tables
+        ]).await?));
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
