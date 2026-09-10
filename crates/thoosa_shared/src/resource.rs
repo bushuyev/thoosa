@@ -245,10 +245,10 @@ pub trait ResourcesConfig {
     type R;
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
-        store: &Arc<Box<S>>,
+        store: &Arc<S>,
     ) -> Result<Self::R, ThoError>;
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> Result<(), ThoError> {
         Err(ThoError::new("resource config check is not implemented"))
     }
 }

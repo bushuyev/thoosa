@@ -1507,7 +1507,7 @@ impl SavableResult for SelectMotifsSavableResult {
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {

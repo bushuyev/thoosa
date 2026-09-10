@@ -84,7 +84,7 @@ where
     num_label_nets: u32,
     // label_net_run_config_ids: Vec<RunConfigId>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     opt_config: Arc<OptConfig>,
 }
 
@@ -93,7 +93,7 @@ pub async fn new_train_final_net<L, C, R>(
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     stage_ctx: R,
     opt_config: Arc<OptConfig>,
     slices_step: u32,
@@ -129,7 +129,7 @@ where
         num_label_nets: u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
         debug!("TrainFinalNet::new: train_label_nets_run_config_ids={train_label_nets_run_config_ids:?}");
@@ -170,7 +170,7 @@ impl SavableResult for TrainFinalNetOutput {
 
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
         let _ = track_await(self.result.save(store, ws, ())).await;
 
         Ok(vec![0])//TODO
@@ -859,7 +859,7 @@ mod tests {
         let train_logits = resources_train.iter().enumerate().map(|(i, r)| (r.clone(), if i % 2 == 0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })).collect::<Vec<_>>();
         let valid_logits = resources_valid.iter().enumerate().map(|(i, r)| (r.clone(), if i % 2 == 0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })).collect::<Vec<_>>();
 
-        let store = Arc::new(
+        let store =
             MockMotifsStoreBuilder::new()
                 .with_get_input_run_config_ids([(train_label_nets_run_config_id, Ok(vec![train_motif_nets_run_config_id]))])
                 .with_list_trained_nets([
@@ -921,8 +921,7 @@ mod tests {
                     (label_a_run_config_id*10, Ok(vec![train_motif_nets_run_config_id])),
                     (label_b_run_config_id*10, Ok(vec![train_motif_nets_run_config_id]))
                 ])
-                .build(),
-        );
+                .build();
 
         let run_configs = OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
@@ -958,10 +957,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             create_motif_tables
-        ]).await?));
+        ]).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
@@ -1024,7 +1023,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {

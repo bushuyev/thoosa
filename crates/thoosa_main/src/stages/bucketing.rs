@@ -57,7 +57,7 @@ where
         Self { resources_config }
     }
 
-    pub async fn check(self, store: &Arc<Box<dyn MotifsStore>>) -> Result<Self, ThoError> {
+    pub async fn check(self, store: &Arc<dyn MotifsStore>) -> Result<Self, ThoError> {
         track_await(self.resources_config.check(store)).await?;
         Ok(self)
     }
@@ -210,7 +210,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
     run_config: BucketRunConfig,
     sync_bucketing_stage: Arc<SyncBucketingStage<D, Id, C>>,
@@ -232,7 +232,7 @@ where
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_config: BucketRunConfig,
         window: u32,
@@ -1473,7 +1473,7 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         debug!("test_dir={test_dir:?}");
         // let store = Arc::new(SqlStore::in_mem().await?);
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?));
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
@@ -1676,7 +1676,7 @@ mod tests {
         Ok(())
     }
 
-    async fn plot_test_resources(store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
+    async fn plot_test_resources(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
         for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
             // resource
 
@@ -1722,7 +1722,7 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         debug!("test_dir={test_dir:?}");
         // let store = Arc::new(SqlStore::in_mem().await?);
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?));
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,

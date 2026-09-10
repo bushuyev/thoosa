@@ -1514,7 +1514,7 @@ where
 {
     find_motifs_run_config_id: RunConfigId,
     channel_trackers: Vec<Arc<RwLock<SimpleMotifTracker<'static>>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     _ctx: PhantomData<C>,
 }
 
@@ -1535,7 +1535,7 @@ where
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,

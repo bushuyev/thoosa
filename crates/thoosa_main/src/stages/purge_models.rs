@@ -199,7 +199,7 @@ where
     C: RunCtx + 'static,
 {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     args: PurgeModelsArgs,
     pd: PhantomData<C>,
 }
@@ -208,7 +208,7 @@ impl<C> PurgeModelsStage<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Box<dyn MotifsStore>>, args: PurgeModelsArgs) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<dyn MotifsStore>, args: PurgeModelsArgs) -> Self {
         Self {
             ws: Arc::clone(ws),
             store: Arc::clone(store),
@@ -320,7 +320,7 @@ struct PurgeEntry {
     remove_from_store: bool,
 }
 
-async fn selected_purge_entries(roots: &ModelRoots, store: &Arc<Box<dyn MotifsStore>>, purge_mode: PurgeMode) -> Result<Vec<PurgeEntry>, ThoError> {
+async fn selected_purge_entries(roots: &ModelRoots, store: &Arc<dyn MotifsStore>, purge_mode: PurgeMode) -> Result<Vec<PurgeEntry>, ThoError> {
     match purge_mode {
         PurgeMode::PurgeLost => purge_lost_entries(roots, track_await(store.list_trained_net_entries()).await?),
         PurgeMode::PurgeLabelModels(by) => {
@@ -591,20 +591,20 @@ mod tests {
         Ok(())
     }
 
-    async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn MotifsStore>>), ThoError> {
+    async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<dyn MotifsStore>), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("{name}_{}", cdt_for_dir()));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?));
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             create_motif_tables
-        ]).await?));
+        ]).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         Ok((ws, store))
     }
 
     async fn run_stage(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         purge_mode: PurgeMode,
     ) -> Result<super::PurgeModelsOutput, ThoError> {
         let stage = Arc::new(PurgeModelsStage::<RunCtxImpl>::new(ws, store, PurgeModelsArgs::new(purge_mode)));
@@ -625,7 +625,7 @@ mod tests {
         Ok(())
     }
 
-    async fn set_run_on(store: &Arc<Box<dyn MotifsStore>>, run_config_id: u32, run_on: &str) -> Result<(), ThoError> {
+    async fn set_run_on(store: &Arc<dyn MotifsStore>, run_config_id: u32, run_on: &str) -> Result<(), ThoError> {
         store.update_run_config_run_on(run_config_id, run_on.to_string()).await
     }
 }

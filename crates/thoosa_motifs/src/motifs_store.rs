@@ -617,7 +617,7 @@ impl MockMotifsStoreBuilder {
         self
     }
 
-    pub fn build(self) -> Box<dyn MotifsStore> {
-        Box::new(self.store)
+    pub fn build(self) -> Arc<dyn MotifsStore> {
+        Arc::new(self.store)
     }
 }

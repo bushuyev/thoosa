@@ -141,7 +141,7 @@ impl SavableResult for FindMotifsSavableResult {
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
@@ -642,7 +642,7 @@ mod motif_find_tests {
 pub async fn plot_resource(
     resource_config: Simple,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
 ) -> Result<(), ThoError> {
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO

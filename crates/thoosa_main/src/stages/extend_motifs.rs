@@ -94,7 +94,7 @@ impl SavableResult for ExtendMotifsSavableResult {
 
     async fn save(
         &mut self,
-        _store: &Arc<Box<dyn MotifsStore>>,
+        _store: &Arc<dyn MotifsStore>,
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
         _p: Self::P<'_>,
     ) -> Result<u32, ThoError> {
@@ -113,7 +113,7 @@ where
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
     find_motifs_run_config_ids:Vec<RunConfigId>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     loader:Arc<L>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
     motif_stats:Arc<MotifStats<ML, L, C>>,
@@ -138,7 +138,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
         run_configs: Vec<ExtendMotifsRunConfig>,
@@ -185,7 +185,7 @@ where
 
     #[inline]
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
-    async fn load_stacked_motifs(store:&Arc<Box<dyn MotifsStore>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+    async fn load_stacked_motifs(store:&Arc<dyn MotifsStore>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_config_ids.len());
 
 
@@ -1278,7 +1278,7 @@ mod tests {
                 ),
             ),
         ]).finish());
-        let store = Arc::new(MockMotifsStoreBuilder::new().build());
+        let store = MockMotifsStoreBuilder::new().build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 

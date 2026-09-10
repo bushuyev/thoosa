@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -297,7 +298,7 @@ impl NormalizedRunConfigSearch {
 }
 
 struct App {
-    store: Box<dyn Store>,
+    store: Arc<dyn Store>,
     ws_path: PathBuf,
     db_path: PathBuf,
     all_run_configs: Vec<RunConfigEntry>,
@@ -399,7 +400,7 @@ impl SearchField {
 }
 
 impl App {
-    fn new(store: Box<dyn Store>, ws_path: PathBuf, db_path: PathBuf) -> Self {
+    fn new(store: Arc<dyn Store>, ws_path: PathBuf, db_path: PathBuf) -> Self {
         Self {
             store,
             ws_path,
@@ -2183,9 +2184,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let db_path = args.ws_path.join("main_db.db3");
     info!("starting thoosa_tui: ws_path={} db_path={}", args.ws_path.display(), db_path.display());
-    let store = track_await(SqlStore::from_path(&db_path)).await.map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let store = track_await(SqlStore::from_path_(&db_path)).await.map_err(|e| io::Error::other(format!("{e:?}")))?;
 
-    let mut app = App::new(store, args.ws_path.clone(), db_path);
+    let mut app = App::new(Arc::new(store), args.ws_path.clone(), db_path);
     track_await(app.refresh_run_configs()).await;
     track_await(app.refresh_selected_details()).await;
 
@@ -3746,7 +3747,7 @@ mod tests {
 
     #[test]
     fn test_render_run_value_lines_excludes_db_path() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         assert!(!render_run_value_lines(&app).iter().any(|line| line.starts_with("db: ")));
@@ -3754,7 +3755,7 @@ mod tests {
 
     #[test]
     fn test_apply_view_mode_from_popup_switches_focus() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.open_view_popup();
@@ -3845,7 +3846,7 @@ mod tests {
 
     #[test]
     fn test_rebuild_visible_run_configs_groups_runs_under_run_on_date() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
@@ -3883,7 +3884,7 @@ mod tests {
 
     #[test]
     fn test_collapse_selected_run_collapses_run_on_date_group() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
@@ -3905,7 +3906,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filtered_view_deduplicates_shared_descendants() {
         let store = MockStore::new();
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
             RunConfigEntry {
@@ -3969,7 +3970,7 @@ mod tests {
             assert_eq!(vec![2, 1], ids.to_vec());
             Ok(vec![(2, 1)])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.refresh_run_configs().await;
 
@@ -4002,7 +4003,7 @@ mod tests {
             assert_eq!(vec![7], ids.to_vec());
             Ok(vec![])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.refresh_run_configs().await;
 
@@ -4034,7 +4035,7 @@ mod tests {
             assert_eq!(vec![2], ids.to_vec());
             Ok(vec![(2, 1)])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = true;
         app.all_run_configs = vec![RunConfigEntry {
             id: 1,
@@ -4060,7 +4061,7 @@ mod tests {
             assert_eq!(7, run_config_id);
             Ok(HashMap::new())
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 7,
@@ -4090,7 +4091,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 7,
@@ -4120,7 +4121,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86439,
@@ -4151,7 +4152,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86439,
@@ -4187,7 +4188,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
             RunConfigEntry {
@@ -4230,7 +4231,7 @@ mod tests {
                 resources_cnt: 7,
             }])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86434,
@@ -4262,7 +4263,7 @@ mod tests {
                 resources_cnt: 7,
             }])
         });
-        let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86434,
@@ -4282,7 +4283,7 @@ mod tests {
 
     #[test]
     fn test_move_main_to_bottom_updates_offset() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.run_configs = (0..30)
             .map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true))
@@ -4295,7 +4296,7 @@ mod tests {
 
     #[test]
     fn test_move_main_up_keeps_offset_until_top_visible_row() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.run_configs = (0..30)
             .map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true))
@@ -4317,7 +4318,7 @@ mod tests {
 
     #[test]
     fn test_progress_lines_include_device_stats() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.progress_state = CollectEtaProgressState {
             invocations: vec![],
@@ -4344,7 +4345,7 @@ mod tests {
 
     #[test]
     fn test_buffer_limit_lines_use_known_labels() {
-        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.progress_state.futures_limits = vec![
             FutureLimitProgressEntry {

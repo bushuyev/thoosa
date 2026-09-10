@@ -130,7 +130,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
@@ -142,7 +142,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
-        store: Arc<Box<dyn MotifsStore>>,
+        store: Arc<dyn MotifsStore>,
         loader: Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<Arc<Self>, ThoError> {
@@ -771,7 +771,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pd: PhantomData<C>,
@@ -782,7 +782,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<Box<dyn MotifsStore>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(store: Arc<dyn MotifsStore>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
         Self {
             id: (RAW_TENSOR_LOADER, "RandomSlicesLoader").into(),
             store,
@@ -1580,7 +1580,7 @@ pub(crate) async fn load_random_slices<L, C>(
     find_motifs_run_config_id: u32,
     resources_map: HashMap<ResourceId, Resource>,
     slices: Vec<TensorIdSliceIdx>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1818,7 +1818,7 @@ mod tests {
             .build();
 
         let motif_loader = MotifLoader::new(
-            Arc::new(store),
+            store,
             Arc::new(
                 mock_tensor_loader::build()
                     .with_out_id()
@@ -1898,7 +1898,7 @@ mod tests {
             .build();
 
         let random_slices_loader = Arc::new(RandomSlicesLoader::new(
-            Arc::new(store),
+            store,
             Arc::new(
                 mock_tensor_loader::build()
                     .with_out_id()

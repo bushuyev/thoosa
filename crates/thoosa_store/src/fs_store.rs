@@ -290,7 +290,7 @@ impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
 #[cfg(test)]
 mod tests {
     use crate::fs_store::{ChunkedSlicesReader, FileMotifTrackerStore, SlicesMatch};
-    use crate::{IdSlice, SqlStore, filter_groups_by_slices_count};
+    use crate::{filter_groups_by_slices_count, IdSlice, SqlStore, Store};
     use log::LevelFilter::Trace;
     use log::{debug, error};
     use parking_lot::{Mutex, RwLock};
@@ -308,7 +308,7 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        let mut store = SqlStore::from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
@@ -344,7 +344,7 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        let mut store = SqlStore::from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
@@ -390,7 +390,7 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        let mut store = SqlStore::from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
@@ -433,7 +433,7 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        let mut store = SqlStore::from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
@@ -473,7 +473,7 @@ mod tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        let mut store = SqlStore::from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;

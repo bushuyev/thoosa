@@ -31,7 +31,7 @@ impl ResourcesConfig for Simple {
 
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
-        store: &Arc<Box<S>>,
+        store: &Arc<S>,
     ) -> Result<Vec<Resource>, ThoError> {
         Ok(match self.resources() {
             ResourceType::List(list) => track_await(store
@@ -57,7 +57,7 @@ impl ResourcesConfig for Simple {
         })
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
         if let ResourceType::List(list) = self.resources() {
             if list.is_empty() {
                 return Err(ThoError::new("resource list should not be empty"));
@@ -84,12 +84,12 @@ impl ResourcesConfig for Empty {
 
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
-        _store: &Arc<Box<S>>,
+        _store: &Arc<S>,
     ) -> Result<Self::R, ThoError> {
         Ok(())
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> Result<(), ThoError> {
         Ok(())
     }
 }
@@ -118,7 +118,7 @@ impl ResourcesConfig for Labeled {
 
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
-        store: &Arc<Box<S>>,
+        store: &Arc<S>,
     ) -> Result<Vec<(String, Vec<Resource>)>, ThoError> {
         let store_guard = store;
         let mut out = Vec::new();
@@ -128,7 +128,7 @@ impl ResourcesConfig for Labeled {
         Ok(out)
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
         let labeled_resources = track_await(self.to_resources(store)).await?;
         if labeled_resources.is_empty() {
             return Err(ThoError::new(format!(
@@ -172,7 +172,7 @@ impl ResourcesConfig for Logits {
 
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
-        store: &Arc<Box<S>>,
+        store: &Arc<S>,
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
         track_await(store
             .list_resource_random_in_group(&self.group)).await?
@@ -190,7 +190,7 @@ impl ResourcesConfig for Logits {
             .collect()
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
         if track_await(store.list_resource_random_in_group(&self.group)).await?.is_empty() {
             Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no logits resources"
@@ -232,12 +232,12 @@ where
 
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
-        store: &Arc<Box<S>>,
+        store: &Arc<S>,
     ) -> Result<(RC::R, RC::R), ThoError> {
         Ok((track_await(self.train_resources.to_resources(store)).await?, track_await(self.valid_resources.to_resources(store)).await?))
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
         track_await(self.train_resources.check(store)).await?;
         track_await(self.valid_resources.check(store)).await?;
         Ok(())
@@ -259,7 +259,7 @@ pub trait SavableResult: Sync + Send + Debug {
 
     async fn save(
         &mut self, //TODO consume
-        store: &Arc<Box<Self::Store>>,
+        store: &Arc<Self::Store>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<Self::R, ThoError>;
@@ -275,7 +275,7 @@ where
     type P<'a> = S::P<'a>;
     type R = S::R;
 
-    async fn save(&mut self, store: &Arc<Box<Self::Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
+    async fn save(&mut self, store: &Arc<Self::Store>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
         Arc::get_mut(self).ok_or_else(|| ThoError::new("SavableResult::save: result should not be shared"))?.save(store, ws, p).await
     }
 }

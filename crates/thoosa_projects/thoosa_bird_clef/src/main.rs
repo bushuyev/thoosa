@@ -226,7 +226,7 @@ fn main() -> Result<(), ThoError>{
             },
             async |
                 ws: &Arc<RwLock<Box<dyn Workspace>>>,
-                store: &Arc<Box<dyn MotifsStore>>,
+                store: &Arc<dyn MotifsStore>,
                 loader: &Arc<RawTensorLoader<RunCtxImpl>>,
                 root_ctx: RunCtxImpl,
                 run_all_args: &RunAllArgs
@@ -249,7 +249,7 @@ fn main() -> Result<(), ThoError>{
             },
             &LABELS,
             app_configs,
-            Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn MotifsStore>>,|{
+            Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<dyn MotifsStore>,|{
                 debug!("bird_clef: infer");
                 track_await(infer_labels(params, ws, store)).await
 
@@ -272,7 +272,7 @@ fn main() -> Result<(), ThoError>{
 }
 
 
-async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn MotifsStore>>) -> Result<(), ThoError>{
+async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<dyn MotifsStore>) -> Result<(), ThoError>{
     let mut ctx = RunCtxImpl::new(0, "root");
 
 
@@ -391,7 +391,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     Ok(())
 }
 
-async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn MotifsStore>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>>, ThoError> {
+async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<dyn MotifsStore>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_config_ids = track_await(store.list_label_nets_run_config_ids(label)).await?;
     debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_config_ids={run_config_ids:?}");
@@ -567,7 +567,7 @@ mod tests {
                            0, //not used
                            32000)
         )?));
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?));
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
 
         let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 1000);
 
