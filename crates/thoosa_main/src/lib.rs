@@ -14,7 +14,6 @@
 )]
 pub mod cli;
 pub mod data;
-mod progress_socket;
 pub mod stages;
 pub mod version;
 

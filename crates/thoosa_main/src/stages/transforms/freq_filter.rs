@@ -63,7 +63,7 @@ impl Dims for BandPassDims {
 
 #[derive(Debug, Clone, Serialize, Deserialize, DigestHash)]
 #[digest(tag = "thoosa.SyncFreqFilterIpcInit:v1")]
-pub(crate) struct SyncFreqFilterIpcInit {
+pub struct SyncFreqFilterIpcInit {
     pub filter_configs: Vec<InputFilter>,
     pub num_channels: i64,
     pub sample_rate: f64,

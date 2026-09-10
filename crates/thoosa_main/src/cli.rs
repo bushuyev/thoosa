@@ -2,10 +2,8 @@ use crate::cli::Commands::{
     ConvertPrecision, Export, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, PurgeModels, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
-use thoosa_motifs::motifs_store::MotifsStore;
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
-use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::stages::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::export::{Export as ExportStage, ExportArgs, ExportInput};
@@ -45,9 +43,11 @@ use tch::nn::VarStore;
 use tch::{Device, IndexOp, Tensor};
 use thoosa_common::dims::{Batch, ChannelsData, MotifSlices, ThoBatch};
 use thoosa_common::input_probs::InputProbs;
+use thoosa_common::progress_socket::CollectEtaProgressSocketServer;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
+use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_shared::traits::Stage;
 
 use crate::stages::apply_motif_nets::ApplyMotifNets;
@@ -119,28 +119,122 @@ use thoosa_shims::context::tho_cu_reset;
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 
-#[derive(Parser, Clone, Debug)]
+
+
+#[derive(Debug, Subcommand, Clone)]
+pub enum MotifCommands {
+    // ImportResources2(ImportResourcesArgs),
+    FindMotifs2(FindMotifsArgs),
+}
+
+#[async_trait]
+impl StageCommand for MotifCommands {
+    type Store = Arc<dyn MotifsStore>;
+    type Ctx = RunCtxImpl;
+
+    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            // MotifCommands::ImportResources2(import_resources_args) => {
+            //     debug!("MotifCommands::ImportResources2: args={import_resources_args:?}");
+            //     let freq_filter = if import_resources_args.freq_filters.is_empty() {
+            //         None
+            //     } else {
+            //         Some(Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
+            //             import_resources_args.freq_filters.clone(),
+            //             ws.read().channels() as i64,
+            //             ws.read().sample_rate() as f64,
+            //             0,
+            //             root_ctx.tho_device_idx(),
+            //         ))?))
+            //     };
+            //     track_await(import_resources(
+            //         &ws,
+            //         store,
+            //         labels,
+            //         || labeled_resources(&import_resources_args.source_path),
+            //         |key: String| {
+            //             resource_to_tensor(&import_resources_args.source_path, key.as_str())
+            //         },
+            //         freq_filter,
+            //         true,
+            //         init_data
+            //     )).await?;
+            //
+            //     info!("ImportResources done");
+            //
+            //     Ok(())
+            // },
+            MotifCommands::FindMotifs2(args) => {
+                debug!("MotifCommands::FindMotifs: args={args:?}");
+                // let stage = FeatureA1Stage::new(args, service);
+                // stage.run();
+                Ok(())
+            }
+
+        }
+    }
+}
+/////////////////replaced by Hbac/Bird Args use for tests only
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum MotifAppCommands {
+    #[command(flatten)]
+    CommonCommands(CommonCommands),
+
+    #[command(flatten)]
+    Motifs(MotifCommands),
+}
+
+#[async_trait]
+impl StageCommand for MotifAppCommands {
+    type Store = Arc<dyn MotifsStore>;
+    type Ctx = RunCtxImpl;
+
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            MotifAppCommands::CommonCommands(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
+            }
+            MotifAppCommands::Motifs(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
+            }
+        }
+    }
+}
+
+
+#[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-pub struct Cli {
+pub struct MotifAppArgs {//should be HbacArgs, BirdClefArgs
+
+    #[command(flatten)]
+    pub common_args: CommonArgs<MotifAppCommands>,
 
     #[command(subcommand)]
     pub old_command: Option<Commands>,
 
-    #[command(flatten)]
-    pub common_args: CommonArgs<CommonCommands>,
-
 }
-
+/////////////////
 
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum CommonCommands {
-    CommonTest
+    ConvertPrecision2(ConvertPrecisionArgs),
+    SayHello2(SayHelloArgs),
 }
 
+#[async_trait]
 impl StageCommand for CommonCommands {
-    type Service = Arc<dyn MotifsStore>;
+    type Store = Arc<dyn Store>;
+    type Ctx = RunCtxImpl;
 
-    fn run(self, service: &Self::Service) -> Result<(), ThoError> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            CommonCommands::ConvertPrecision2(args) => {
+                debug!("CommonCommands::ImportResources:run: args={args:?}");
+            }
+            CommonCommands::SayHello2(args) => {
+                debug!("CommonCommands::SayHello:run: args={args:?}");
+            }
+        }
         Ok(())
     }
 }
@@ -332,7 +426,7 @@ fn set_oom_score_adj(score: i32) {
 
 
 pub async fn run_cli<C, CS, F, R, A, S, FI>(
-    cli: CommonArgs<C>,
+    args: CommonArgs<C>,
     old_commands: Option<Commands>,
     store2:Arc<CS>,
     labeled_resources: F,
@@ -345,7 +439,7 @@ pub async fn run_cli<C, CS, F, R, A, S, FI>(
     cdt_for_dir: String,
 ) -> Result<(), ThoError>
 where
-    C: Subcommand + StageCommand<Service=Arc<CS>>+ Clone + std::fmt::Debug,
+    C: Subcommand + StageCommand<Store=Arc<CS>>+ Clone + std::fmt::Debug,
     CS:?Sized + MotifsStore,
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
@@ -371,9 +465,9 @@ where
 
     //gpt Navigation note: project binaries such as thoosa_bird_clef provide the closures above.
     //gpt This shared function handles CLI parsing, workspace/store setup, tensor cache loading, and command dispatch.
-    unsafe {
-        at_grad_set_enabled(0);
-    };
+    // unsafe {
+    //     at_grad_set_enabled(0);
+    // };
 
     // let cli = Cli::parse();
 
@@ -382,63 +476,63 @@ where
         Some(Infer(InferArgs{ models_dir: Some(models_dir), .. })) => {
             info!("FsWorkspace: models_dir={models_dir:?}");
             Arc::new(RwLock::new(FsWorkspace::new_with_models_dir(
-                cli.ws_path.clone(),
+                args.ws_path.clone(),
                 &app_configs,
-                models_dir//to run inference on kaggle with model dir mounted under different dataset
+                models_dir //to run inference on kaggle with model dir mounted under different dataset
             )?))
         }
         _=> {
             Arc::new(RwLock::new(FsWorkspace::new(
-                cli.ws_path.clone(),
+                args.ws_path.clone(),
                 app_configs,
             )?))
         }
     };
 
 
-    let log_filename = ws.read()
-        .log_path()
-        .join(format!("thoosa_{}.log", cdt_for_dir).to_owned());
-
-
-    let perf_path = if cli.write_perf_log_file {
-        Some(
-            ws.read()
-                .log_path()
-                .join(format!("thoosa_perf_{}.log", cdt_for_dir).to_owned()),
-        )
-    } else {
-        None
-    };
-
-    install_panic_hook(SyncMakeWriter::new(OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open( ws.read()
-            .log_path()
-            .join(format!("thoosa_panic_{}.log", cdt_for_dir)))?));
-
-
-    let _logging_guards = init_tracing(
-        cli.term_logger_level,
-        cli.term_logger_extra_fields,
-        cli.write_logger_level,
-        cli.write_logger_extra_fields,
-        log_filename,
-        "info",
-        perf_path,
-        None,
-    )?;
-
-    init_cpp_logging();
-
-    let _collect_eta_progress_server = match CollectEtaProgressSocketServer::start_default() {
-        Ok(server) => Some(server),
-        Err(err) => {
-            warn!("run_cli: failed to start collect ETA progress socket server: {err}");
-            None
-        }
-    };
+    // let log_filename = ws.read()
+    //     .log_path()
+    //     .join(format!("thoosa_{}.log", cdt_for_dir).to_owned());
+    //
+    //
+    // let perf_path = if args.write_perf_log_file {
+    //     Some(
+    //         ws.read()
+    //             .log_path()
+    //             .join(format!("thoosa_perf_{}.log", cdt_for_dir).to_owned()),
+    //     )
+    // } else {
+    //     None
+    // };
+    //
+    // install_panic_hook(SyncMakeWriter::new(OpenOptions::new()
+    //     .create(true)
+    //     .append(true)
+    //     .open( ws.read()
+    //         .log_path()
+    //         .join(format!("thoosa_panic_{}.log", cdt_for_dir)))?));
+    //
+    //
+    // let _logging_guards = init_tracing(
+    //     args.term_logger_level,
+    //     args.term_logger_extra_fields,
+    //     args.write_logger_level,
+    //     args.write_logger_extra_fields,
+    //     log_filename,
+    //     "info",
+    //     perf_path,
+    //     None,
+    // )?;
+    //
+    // init_cpp_logging();
+    //
+    // let _collect_eta_progress_server = match CollectEtaProgressSocketServer::start_default() {
+    //     Ok(server) => Some(server),
+    //     Err(err) => {
+    //         warn!("run_cli: failed to start collect ETA progress socket server: {err}");
+    //         None
+    //     }
+    // };
 
 
     // Build the concrete SQL store first so the CLI retains the motif-specific trait-object boundary.
@@ -453,34 +547,34 @@ where
     };
 
 
-    RUN_ID.set(match cli.run_id{
-        None => {
-
-            if let Some(Infer(_) | Export(_)) = &old_commands {
-                panic!("No run_id")
-            }
-            track_await(store.save_run(format!("{cli:?}"))).await?
-        }
-        Some(run_id) => run_id
-    }).expect("can't set run_id");
+    // RUN_ID.set(match args.run_id{
+    //     None => {
+    //
+    //         if let Some(Infer(_) | Export(_)) = &old_commands {
+    //             panic!("No run_id")
+    //         }
+    //         track_await(store.save_run(format!("{args:?}"))).await?
+    //     }
+    //     Some(run_id) => run_id
+    // }).expect("can't set run_id");
 
     let devices = list_devices();
-
-    let cpu_num = std::thread::available_parallelism()?;
-
-    //TODO torch.backends.cuda.matmul.allow_tf32 = True
-    info!(
-        "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={} run_id={}",
-        cli.ws_path,
-        tch::get_num_interop_threads(),
-        tch::get_num_threads(),
-        run_id()
-    );
-    std::io::stdout().flush()?;
+    //
+    // let cpu_num = std::thread::available_parallelism()?;
+    //
+    // //TODO torch.backends.cuda.matmul.allow_tf32 = True
+    // info!(
+    //     "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={} run_id={}",
+    //     args.ws_path,
+    //     tch::get_num_interop_threads(),
+    //     tch::get_num_threads(),
+    //     run_id()
+    // );
+    // std::io::stdout().flush()?;
 
     let tensors_path = ws.read().tensors_path().clone();
 
-    if cli.ipc {
+    if args.ipc {
         info!("Running in IPC mode");
 
         if !std::env::var(CUDA_VISIBLE_DEVICES).map(|v|v.eq("-1")).unwrap_or(false) {
@@ -489,9 +583,9 @@ where
         }
 
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![
-            format!("--ws-path={}", cli.ws_path),
-            format!("--term-logger-level={}", cli.term_logger_level),
-            format!("--write-logger-level={}", cli.write_logger_level)
+            format!("--ws-path={}", args.ws_path),
+            format!("--term-logger-level={}", args.term_logger_level),
+            format!("--write-logger-level={}", args.write_logger_level)
         ]).await?;
     } else {
         // kick_register_cuda_hooks();
@@ -585,10 +679,6 @@ where
 
     let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
 
-
-    if let Some(command ) = cli.command{
-        command.run(&store2)?;
-    }
 
     // ImportResources is the only command that calls the project OGG decoder directly;
     // later commands load the persisted tensor files through RawTensorLoader.
@@ -1223,6 +1313,106 @@ where
 
     Ok(resource_ids)
 }
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="hbac/import_resources"))]
+pub async fn import_resources2<F, R, S>(
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<dyn MotifsStore>,
+    labels: &[&str],
+    labeled_resources: F,
+    resource_to_tensor: R, //None for tests - do not import parquet files
+    freq_filter: Option<Arc<SyncFreqFilter<RunCtxImpl>>>,
+    insert_label: bool,
+    init_data:S,
+) -> Result<Vec<ResourceId>, ThoError>
+where
+    F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
+    R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
+    S: FnOnce(&Transaction) -> Result<(), ThoError>
+{
+    // import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, freq_filter, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
+    let mut conn = store.open_external_writer_conn()?;
+    let t = conn.transaction()?;
+
+    if insert_label {
+        for label in labels {
+            SqlStore::save_label(label, &t)?; //TODO not all labels may have resources, still save all labels?
+        }
+    }
+
+    let labeled_resources_map = labeled_resources()?;
+    let total_count = labeled_resources_map.iter().map(|e|e.1.len()).sum::<usize>();
+    debug!("import_resources_with_pure_sets: labeled_resources_map={labeled_resources_map:?}");
+
+    let ws_guard = ws.write();
+    let import_descr = format!("Import on {}", cdt());
+    let import_id = SqlStore::save_import(import_descr.as_str(), &t)?;
+
+    let import_eta_guard = CollectEtaInvocationGuard::new("import", total_count, 1);
+    let import_eta_guard_id = import_eta_guard.id();
+    let (imported_tensors_stats, failed_tensors): (
+        HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
+        Vec<String>,
+    ) = labeled_resources_map
+        .into_iter()
+        .par_bridge()
+        .fold(
+            || (HashMap::new(), vec![]),
+            |mut a, (resource_key, probs)| {
+                trace!("import_resources: resource_key={resource_key} ok={} err={}",a.0.len(),a.1.len());
+
+                match resource_to_tensor(resource_key.clone())
+                    .and_then(|t| apply_import_freq_filter(freq_filter.as_deref(), resource_key.as_str(), t))
+                    .and_then(|t| {
+                        ws_guard.import_tensor(t, import_id, resource_key.as_str())
+                    })
+                {
+                    Ok(stats) => {
+                        //resource keys should not repeat
+                        assert!(a.0.insert(resource_key.clone(), (stats, probs)).is_none());
+                    }
+                    Err(err) => {
+                        error!("Can't load {resource_key}: {err:?}");
+                        a.1.push(resource_key.clone());
+                    }
+                }
+                collect_eta_record_completion(import_eta_guard_id);
+
+                a
+            },
+        )
+        .reduce_with(|mut v1, v2| {
+            v1.0.extend(v2.0); //TODO assert no keys overlaps
+            v1.1.extend(v2.1);
+            v1
+        })
+        .expect("imported_tensors");
+
+    let resource_ids = SqlStore::save_resources_labels(
+        imported_tensors_stats
+            .iter()
+            .map(|(resource_key, (stats, labels))| (resource_key.clone(), stats.length(), labels.clone()))
+            .collect(),
+        import_id,
+        &t,
+    )?;
+
+    init_data(&t)?;
+
+
+    t.commit()?;
+
+    info!(
+        "Import id: {}, imported {} tensors to {:?}, failed {}",
+        import_id,
+        resource_ids.len(),
+        ws_guard.tensors_path(),
+        failed_tensors.len()
+    );
+
+    Ok(resource_ids)
+}
+
 
 
 fn apply_import_freq_filter(
@@ -2122,8 +2312,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use thoosa_motifs::motifs_store::MotifsStore;
-    use crate::cli::{Cli, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
+    use crate::cli::{MotifAppArgs, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::stages::find_motifs::FindMotifsStage;
@@ -2188,6 +2377,7 @@ mod cli_tests {
         FixedFindMotifsConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
+    use thoosa_motifs::motifs_store::MotifsStore;
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
@@ -2211,19 +2401,19 @@ mod cli_tests {
 
     #[test]
     fn test_write_perf_log_file_default_is_false() {
-        let cli = Cli::parse_from(["thoosa_main"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main"]);
         assert!(!cli.common_args.write_perf_log_file);
     }
 
     #[test]
     fn test_write_perf_log_file_flag_enables_perf_file_logging() {
-        let cli = Cli::parse_from(["thoosa_main", "--write-perf-log-file"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "--write-perf-log-file"]);
         assert!(cli.common_args.write_perf_log_file);
     }
 
     #[test]
     fn test_plot_data_resolution_flag_parses_high() {
-        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
 
         match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.resolution(), Resolution::High),
@@ -2233,7 +2423,7 @@ mod cli_tests {
 
     #[test]
     fn test_plot_data_stdout_flag_parses_true() {
-        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--stdout"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--stdout"]);
 
         match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert!(args.print_to_stdout()),
@@ -2243,7 +2433,7 @@ mod cli_tests {
 
     #[test]
     fn test_plot_data_motif_id_parses_multiple_ids() {
-        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:1,2,3"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:1,2,3"]);
 
         match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
@@ -2253,7 +2443,7 @@ mod cli_tests {
 
     #[test]
     fn test_plot_data_motif_id_parses_spaced_quoted_ids() {
-        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:'1, 2'"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:'1, 2'"]);
 
         match cli.old_command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
@@ -2263,7 +2453,7 @@ mod cli_tests {
 
     #[test]
     fn test_convert_precision_command_parses() {
-        let cli = Cli::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
 
         match cli.old_command {
             Some(crate::cli::Commands::ConvertPrecision(args)) => {
@@ -2276,19 +2466,19 @@ mod cli_tests {
 
     #[test]
     fn test_merge_selected_motifs_ids_parse_single_spaced_and_csv_values() {
-        let single = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1"]);
+        let single = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1"]);
         match single.old_command {
             Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let spaced = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids='1, 2'"]);
+        let spaced = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids='1, 2'"]);
         match spaced.old_command {
             Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let csv = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1,2,3"]);
+        let csv = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1,2,3"]);
         match csv.old_command {
             Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
             other => panic!("unexpected command: {other:?}"),
@@ -2297,7 +2487,7 @@ mod cli_tests {
 
     #[test]
     fn test_run_all_resolution_flag_parses_high() {
-        let cli = Cli::parse_from([
+        let cli = MotifAppArgs::parse_from([
             "thoosa_main",
             "run-all",
             "--find-resources", "group:find",
@@ -2313,7 +2503,7 @@ mod cli_tests {
 
     #[test]
     fn test_import_resources_freq_filters_parse() {
-        let cli = Cli::parse_from([
+        let cli = MotifAppArgs::parse_from([
             "thoosa_main",
             "import-resources",
             "--source-path",
@@ -2340,7 +2530,7 @@ mod cli_tests {
 
     #[test]
     fn test_seq_scan_command_parses() {
-        let cli = Cli::parse_from([
+        let cli = MotifAppArgs::parse_from([
             "thoosa_main",
             "seq-scan",
             "--resources", "group:find",

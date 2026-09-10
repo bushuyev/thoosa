@@ -1,10 +1,17 @@
+use std::sync::Arc;
+use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use log::LevelFilter;
+use parking_lot::RwLock;
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::RunCtx;
+use crate::ws::Workspace;
 
+#[async_trait]
 pub trait StageCommand {
-    type Service;
-    fn run(self, service:&Self::Service) -> Result<(), ThoError>;
+    type Store;
+    type Ctx;
+    async fn run(self, store:&Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:Self::Ctx) -> Result<(), ThoError>;
 }
 
 
