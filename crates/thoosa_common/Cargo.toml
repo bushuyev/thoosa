@@ -86,6 +86,7 @@ libc.workspace = true
 typetag.workspace = true
 postcard.workspace = true
 memmap2.workspace = true
+interprocess.workspace = true
 [build-dependencies]
 chrono.workspace = true
 

@@ -6,14 +6,20 @@ mod data;
 mod run_all;
 
 use crate::run_all::{run_all, run_all_config_0};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use log::{debug, error, info};
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+use async_trait::async_trait;
+use polars::polars_utils::itertools::Itertools;
 use tch::Device;
 use tch::Device::{Cpu, Cuda};
+use tch::nn::Path;
+use thoosa_common::args::{CommonArgs, StageCommand};
+use thoosa_common::commands::common_cli::run_common_cli;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
@@ -24,7 +30,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{Cli, RunAllArgs, run_cli};
+use thoosa_main::cli::{run_cli, CommonCommands, MotifAppArgs, RunAllArgs, MotifCommands, Commands, ImportResourcesArgs, import_resources, import_resources2};
 use thoosa_main::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
 use thoosa_main::stages::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
 use thoosa_main::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
@@ -32,10 +38,12 @@ use thoosa_main::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS
 use thoosa_main::stages::train_final_net::{train_final_step_endpoint_inits, SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init};
 use thoosa_main::stages::train_label_nets::{train_label_step_endpoint_inits, SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
 use thoosa_main::stages::train_motif_nets::train_motif_step_endpoint_inits;
-use thoosa_main::stages::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, sync_freq_filter_endpoint_init};
+use thoosa_main::stages::transforms::freq_filter::{sync_freq_filter_endpoint_init, SyncFreqFilter, SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilterIpcInit};
+use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{ThoError, cdt_for_dir};
+use thoosa_shared::traits::RunCtx;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
@@ -90,6 +98,116 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
     endpoints
 }
 
+
+
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum HbacAppCommands {
+    #[command(flatten)]
+    CommonCommands(CommonCommands),
+
+    #[command(flatten)]
+    Motifs(MotifCommands),
+
+    #[command(flatten)]
+    Hbac(HbacCommands),
+}
+
+#[async_trait]
+impl StageCommand for HbacAppCommands {
+    type Store = Arc<dyn MotifsStore>;
+    type Ctx = RunCtxImpl;
+
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            HbacAppCommands::CommonCommands(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
+            }
+            HbacAppCommands::Motifs(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
+            }
+            HbacAppCommands::Hbac(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
+            }
+        }
+    }
+}
+
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+pub struct HbacArgs {
+
+    #[command(flatten)]
+    pub common_args: CommonArgs<HbacAppCommands>,
+
+    #[command(subcommand)]
+    pub old_command: Option<Commands>,
+
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub enum HbacCommands {
+    ImportResources2(ImportResourcesArgs),
+}
+
+const LABELS: [&str; 6] = ["seizure", "lpd", "gpd", "lrda", "grda", "other"];
+
+#[async_trait]
+impl StageCommand for HbacCommands {
+    type Store = Arc<dyn MotifsStore>;
+    type Ctx = RunCtxImpl;
+
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            HbacCommands::ImportResources2(import_resources_args) => {
+                debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
+                let freq_filter = if import_resources_args.freq_filters.is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
+                        import_resources_args.freq_filters.clone(),
+                        ws.read().channels() as i64,
+                        ws.read().sample_rate() as f64,
+                        0,
+                        ctx.tho_device_idx(),
+                    ))?))
+                };
+                track_await(import_resources2(
+                    &ws,
+                    store,
+                    &LABELS,
+                    || data::labeled_resourses(&import_resources_args.source_path, "train.csv"),
+
+                    | key| {
+                        thoosa_main::data::parquet_to_tensor_by_path(
+                            PathBuf::from(&import_resources_args.source_path)
+                                .join("train_eegs")
+                                .join(format!("{}.parquet", key)),
+                            Cpu,
+                        )
+                    },
+                    freq_filter,
+                    true,
+                    |t: &Transaction|{
+
+                        for pure_sets_len in [(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)] {
+                            SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
+                        }
+
+                        SqlStore::save_groups_by_label_cnt(100, &t)?;
+
+                        Ok(())
+                    }
+                )).await?;
+
+                Ok(())
+            }
+        }
+    }
+}
+
+
+
 fn main() -> Result<(), ThoError> {
     let cdt = cdt_for_dir();
     let app_configs = WsConfigs::new(20, 684400, 200);
@@ -113,7 +231,7 @@ fn main() -> Result<(), ThoError> {
     */
     let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
 
-    let cli = Cli::parse();
+    let args = HbacArgs::parse();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
@@ -137,7 +255,7 @@ fn main() -> Result<(), ThoError> {
         // let cdt = cdt_for_dir();
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            cli.common_args.ws_path.clone(),
+            args.common_args.ws_path.clone(),
             app_configs.clone(),
         )?));
 
@@ -149,9 +267,27 @@ fn main() -> Result<(), ThoError> {
             ]
         ).await?);
 
+        if run_common_cli(
+            args.common_args.clone(),
+            Arc::clone(&store) as Arc<dyn MotifsStore>,
+            Arc::clone(&ws),
+            |source_path, key| {
+                thoosa_main::data::parquet_to_tensor_by_path(
+                    source_path
+                        .as_ref()
+                        .join("train_eegs")
+                        .join(format!("{}.parquet", key)),
+                    Cpu,
+                )
+            },
+            cdt.clone()
+        ).await?.is_break() {
+            return Ok(())
+        }
+        // panic!("zzz");
         track_await(run_cli(
-            cli.common_args,
-            cli.old_command,
+            args.common_args,
+            args.old_command,
             Arc::clone(&store) as Arc<dyn MotifsStore>,
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
@@ -186,7 +322,7 @@ fn main() -> Result<(), ThoError> {
 
                 track_await(run_all(ws, store, loader, root_ctx, run_all_args, all_configs)).await
             },
-            &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
+            &LABELS,
             app_configs,
             Some(async |_params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn MotifsStore>>,|{
                 debug!("bird_clef: infer");

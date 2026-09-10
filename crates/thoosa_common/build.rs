@@ -1,3 +1,6 @@
+use std::fs;
+use chrono::Utc;
+
 fn main() {
     let libtorch = std::env::var("LIBTORCH")
         .expect("LIBTORCH must be set (see .cargo/config.toml)");
@@ -17,9 +20,13 @@ fn main() {
     let (debug_plots_mode, debug_plots_prefixes) = parse_debug_plots_rustflags(std::env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref());
     println!("cargo:rustc-env=THO_DEBUG_PLOTS_MODE={debug_plots_mode}");
     println!("cargo:rustc-env=THO_DEBUG_PLOTS_PREFIXES={debug_plots_prefixes}");
+
+    println!("cargo:rustc-env=CARGO_TARGET_DIR=target"); //https://stackoverflow.com/a/73543282/656449 - avoid rebuild all deps
+    //TODO write to OUT_DIR + include!(concat!(env!("OUT_DIR"), "/version.rs"));
+    fs::write("src/version.rs", format!("pub const VERSION:&'static str = \"{}\";", Utc::now())).expect("Unable to write file");
 }
 
-fn parse_debug_plots_rustflags(encoded_rustflags: Option<&str>) -> (&'static str, String) {
+pub fn parse_debug_plots_rustflags(encoded_rustflags: Option<&str>) -> (&'static str, String) {
     let Some(encoded_rustflags) = encoded_rustflags else {
         return ("off", String::new());
     };
