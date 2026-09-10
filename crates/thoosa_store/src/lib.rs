@@ -2986,8 +2986,8 @@ impl SqlStore {
         }
     }
 
-    pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
-       Ok(Box::new(Self::from_path_(path).await?))
+    pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Arc<dyn Store>, ThoError> {
+       Ok(Arc::new(Self::from_path_(path).await?))
     }
 
     pub async fn from_path_<P: AsRef<Path>>(path: P) -> Result<SqlStore, ThoError> {
@@ -3063,8 +3063,8 @@ impl SqlStore {
 
 
     // #[cfg(test)]
-    pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
-        Ok(Box::new(Self::in_mem_(vec![
+    pub async fn in_mem() -> Result<Arc<dyn Store>, ThoError> {
+        Ok(Arc::new(Self::in_mem_(vec![
             create_tables,
         ]).await?))
     }
@@ -4338,7 +4338,7 @@ pub trait MotifGroupsStore: Send + Sync {
 }
 
 #[async_trait]
-impl<S> MotifGroupsStore for Arc<Box<S>>
+impl<S> MotifGroupsStore for Arc<S>
 where
     S: Store + ?Sized,
 {
@@ -4879,9 +4879,9 @@ mod store_tests {
     async fn test_save_slices() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(SqlStore::from_path(
+        let mut store = SqlStore::from_path(
             test_dir.join("test_db.db3"),
-        ).await?);
+        ).await?;
 
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -5397,7 +5397,7 @@ mod store_tests {
 
     //TODO merge with init_test_store in cli::main_tests
     pub async fn init_test_store(
-        store: &Arc<Box<dyn Store>>,
+        store: &Arc<dyn Store>,
     ) -> Result<Vec<ResourceId>, ThoError> {
         let store_guard = store;
         let import_id = store_guard.save_import("test".to_string()).await?;
@@ -5441,9 +5441,9 @@ mod store_tests {
     async fn test_save_run_config() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(SqlStore::from_path(
+        let mut store = SqlStore::from_path(
             test_dir.join("test_db.db3"),
-        ).await?);
+        ).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let run_config_id = store.save_run_config(
@@ -6007,7 +6007,7 @@ mod store_tests {
         Ok(())
     }
 
-    async fn create_resources(store: &Box<dyn Store>, specs: &[(&str, u32)]) -> Result<(), ThoError> {
+    async fn create_resources(store: &Arc<dyn Store>, specs: &[(&str, u32)]) -> Result<(), ThoError> {
         let import_id = store.save_import("test resources".into()).await?;
 
         let resources = specs.iter().fold(
@@ -6026,7 +6026,7 @@ mod store_tests {
         Ok(())
     }
 
-    fn fetch_resource_id(store: &Box<dyn Store>, key: &str) -> Result<ResourceId, ThoError> {
+    fn fetch_resource_id(store: &Arc<dyn Store>, key: &str) -> Result<ResourceId, ThoError> {
         let guard = store.conn().lock();
         let id = guard.query_row("SELECT id FROM resources WHERE key=?", [key], |row| {
             row.get::<usize, ResourceId>(0)
@@ -6035,7 +6035,7 @@ mod store_tests {
     }
 
     fn insert_motif_with_slices(
-        store: &Box<dyn Store>,
+        store: &Arc<dyn Store>,
         run_config_id: RunConfigId,
         channel_id: i64,
         group_ord: i64,

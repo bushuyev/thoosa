@@ -101,7 +101,7 @@ where
     C: RunCtx + 'static,
 {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     args: ExportArgs,
     pd: PhantomData<C>,
 }
@@ -110,7 +110,7 @@ impl<C> Export<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Box<dyn MotifsStore>>, args: ExportArgs) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<dyn MotifsStore>, args: ExportArgs) -> Self {
         Self { ws: Arc::clone(ws), store: Arc::clone(store), args, pd: PhantomData }
     }
 }

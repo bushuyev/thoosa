@@ -94,7 +94,7 @@ where
 {
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
@@ -139,7 +139,7 @@ where
 {
     pub async fn new_with_apply_motif_nets<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
@@ -185,7 +185,7 @@ where
 {
     pub async fn new_with_motif_nets_builder<R, F, Fut>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx: R,
         batch_in_chunks: usize,
@@ -1311,8 +1311,7 @@ mod tests {
             );
         }
 
-        let store = Arc::new(
-            MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {
@@ -1336,8 +1335,7 @@ mod tests {
                         .map(|label| (label.trained_net_id, Ok(label.motif_run_config_ids.clone())))
                         .collect::<HashMap<_, _>>(),
                 )
-                .build(),
-        );
+                .build();
 
         debug!("run_apply_label_case: labels={labels:?}");
         let apply_label_nets = Arc::new(ApplyLabelNets::<mock_run_ctx::MockRunCtx, ApplyMotifNets<mock_run_ctx::MockRunCtx>>::new_with_apply_motif_nets(

@@ -1006,10 +1006,10 @@ mod tests {
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             create_motif_tables
-        ]).await?));
+        ]).await?);
 
         let _resources = import_resources(
             &ws,
@@ -1213,29 +1213,27 @@ mod tests {
 
         let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
-        let store = Arc::new(
-            MockMotifsStoreBuilder::new()
-                .with_list_run_config_values([(find_motifs_run_config_id, Ok(find_motifs_props))])
-                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
-                .with_list_selected_motifs([(select_motifs_run_config_id, Ok(selected_motifs))])
-                .with_list_motif_slices(
-                    motif_id,
-                    Some(vec![select_motifs_run_config_id]),
-                    None,
-                    None,
-                    Ok((0i64, find_motifs_run_config_id, motif_slices, motif_resources_by_id.clone())),
-                )
-                .with_list_random_slices_out_of_motif(
-                    motif_id,
-                    motif_width,
-                    None,
-                    Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)),
-                )
-                .with_list_trained_nets([
-                    (vec![train_motif_nets_run_config_id], None, None, Ok(vec![TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: trained_net_path.clone(), loss: 0.01 }])),
-                ])
-                .build(),
-        );
+        let store =             MockMotifsStoreBuilder::new()
+            .with_list_run_config_values([(find_motifs_run_config_id, Ok(find_motifs_props))])
+            .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
+            .with_list_selected_motifs([(select_motifs_run_config_id, Ok(selected_motifs))])
+            .with_list_motif_slices(
+                motif_id,
+                Some(vec![select_motifs_run_config_id]),
+                None,
+                None,
+                Ok((0i64, find_motifs_run_config_id, motif_slices, motif_resources_by_id.clone())),
+            )
+            .with_list_random_slices_out_of_motif(
+                motif_id,
+                motif_width,
+                None,
+                Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)),
+            )
+            .with_list_trained_nets([
+                (vec![train_motif_nets_run_config_id], None, None, Ok(vec![TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: trained_net_path.clone(), loss: 0.01 }])),
+            ])
+            .build();
 
         let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
             move |input_resource: &Resource, _device| {

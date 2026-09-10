@@ -160,7 +160,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
         run_configs: Vec<SelectBucketsRunConfig>,
@@ -268,7 +268,7 @@ where
 
     async fn load_resources_for_selection(
         input: &Arc<SelectMotifsInput>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         mut ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
@@ -597,7 +597,7 @@ mod tests {
         let low_motif_id = 101;
         let high_motif_id = 102;
 
-        let store = Arc::new(
+        let store =
             MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
@@ -606,8 +606,7 @@ mod tests {
                 )])
                 .with_list_motifs([(find_motifs_run_config_id, Ok(vec![low_motif_id, high_motif_id]))])
                 .with_list_resources_not_in_group([(resources_group, Ok(vec![resource_a.clone(), resource_b.clone()]))])
-                .build(),
-        );
+                .build();
 
         let loader = Arc::new(
             mock_tensor_loader::build()

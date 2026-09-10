@@ -496,7 +496,7 @@ where
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
     A: AsyncFn(
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Box<dyn MotifsStore>>,
+        &Arc<dyn MotifsStore>,
         &Arc<RawTensorLoader<RunCtxImpl>>,
         RunCtxImpl,
         &RunAllArgs,
@@ -505,7 +505,7 @@ where
     FI: AsyncFnOnce(
         &InferArgs,
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Box<dyn MotifsStore>>,
+        &Arc<dyn MotifsStore>,
     ) -> Result<(), ThoError>
 {
     // console_subscriber::init();
@@ -587,13 +587,13 @@ where
 
 
     // Build the concrete SQL store first so the CLI retains the motif-specific trait-object boundary.
-    let store: Arc<Box<dyn MotifsStore>> = match &old_commands {
+    let store: Arc<dyn MotifsStore> = match &old_commands {
         Some(Infer(..)) => {
             info!("reqd-only SqlStore");
-            Arc::new(Box::new(SqlStore::from_path_readonly_(ws.read().store_path()).await?))
+            Arc::new(SqlStore::from_path_readonly_(ws.read().store_path()).await?)
         }
         _=> {
-            Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?))
+            Arc::new(SqlStore::from_path_(ws.read().store_path()).await?)
         }
     };
 
@@ -1248,7 +1248,7 @@ pub fn dyn_step_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifsRunCon
 
 async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     input_run_config_ids: Option<&[RunConfigId]>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     run_configs: &mut Vec<R>,
     descr: &str,
 ) -> Result<Vec<RunConfigId>, ThoError> {
@@ -1269,7 +1269,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="hbac/import_resources"))]
 pub async fn import_resources<F, R, S>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
@@ -1488,7 +1488,7 @@ fn apply_import_freq_filter(
 
 pub async fn run_plot<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     plot_params: &PlotDataArgs,
     resolution: Resolution,
@@ -1701,7 +1701,7 @@ where
 
 async fn plot_found_motifs<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     find_motifs_run_config_id: RunConfigId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
@@ -1756,7 +1756,7 @@ where
 
 async fn plot_selected_motifs<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     select_motifs_run_config_id: RunConfigId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
@@ -1824,7 +1824,7 @@ where
 }
 
 async fn load_resource_tensor_for_plot<C>(
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     mut ctx: C,
@@ -1933,7 +1933,7 @@ fn plot_single_line_tensor(
 
 pub async fn plot_resource<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     channels: Option<Vec<u32>>,
@@ -1977,7 +1977,7 @@ where
 
 async fn plot_motif_net_applied<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     net_path: PathBuf,
@@ -2185,14 +2185,14 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
     input: ST::In<'static>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     f: F,
     ctx_f: CtxF,
     descr: &str,
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn MotifsStore>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<dyn MotifsStore>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
@@ -2236,7 +2236,7 @@ pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
     input: ST::In<'static>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     init_stage: F,
     ctx_f: CtxF,
 ) -> Result<Vec<RunConfigId>, ThoError>
@@ -2708,9 +2708,9 @@ mod cli_tests {
                            32000)
         )?));
 
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables
-        ]).await?));
+        ]).await?);
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
 
@@ -2757,9 +2757,9 @@ mod cli_tests {
                            100,
                            32000)
         )?));
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
            thoosa_store::create_tables
-       ]).await?));
+       ]).await?);
 
         let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
             vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })],

@@ -355,7 +355,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
@@ -717,8 +717,7 @@ mod tests {
 
         let resources_group = "group";
 
-        let mut store = Arc::new(
-            MockMotifsStoreBuilder::new()
+        let mut store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {
@@ -751,7 +750,7 @@ mod tests {
                 }).collect()))])
                 .with_list_random_resources([(None, Ok(resources.iter().map(|r|r.0.clone()).collect::<Vec<_>>()))])
                 .with_save_groups_as_motifs(vec![CheckGroups::MinGroups(1), CheckGroups::MinGroups(1), CheckGroups::MinGroups(1)]) //<-assert TODO check if too many groups
-                .build());
+                .build();
 
         let loader = Arc::new(
             mock_tensor_loader::build()

@@ -1150,7 +1150,7 @@ where
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pub motif_loader: Arc<ML>,
@@ -1175,7 +1175,7 @@ where
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     pub fn new(
-        store: Arc<Box<dyn MotifsStore>>,
+        store: Arc<dyn MotifsStore>,
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn Workspace>>>,
         motif_loader: Arc<ML>,
@@ -1517,26 +1517,24 @@ mod tests {
 
         let run_config_id = 42;
         let motif_width = 6;
-        let store = Arc::new(
-            MockMotifsStoreBuilder::new()
-                .with_list_random_resources([(None, Ok(resources.clone()))])
-                .with_run_config_descr([(
-                    run_config_id,
-                    Ok(RunConfigRow {
-                        id: run_config_id,
-                        r#type: "FindMotifsRunConfig".to_string(),
-                        descr: "test find motifs".to_string(),
-                        run_on: "2026-01-01 00:00:00".to_string(),
-                    }),
-                )])
-                .with_list_run_config_values([(
-                    run_config_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 1, motif_width, None, None)
-                        .to_properties_iter(None)
-                        .collect()),
-                )])
-                .build(),
-        );
+        let store =             MockMotifsStoreBuilder::new()
+            .with_list_random_resources([(None, Ok(resources.clone()))])
+            .with_run_config_descr([(
+                run_config_id,
+                Ok(RunConfigRow {
+                    id: run_config_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_list_run_config_values([(
+                run_config_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 1, motif_width, None, None)
+                    .to_properties_iter(None)
+                    .collect()),
+            )])
+            .build();
 
         let loader = Arc::new(
             mock_tensor_loader::build()
@@ -1586,7 +1584,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockMotifsStoreBuilder::new().build());
+        let store = MockMotifsStoreBuilder::new().build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![100]));
         let motif_input_1 = MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![200]));

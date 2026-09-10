@@ -147,7 +147,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     motif_stats: Arc<MS>,
     _ctx: PhantomData<C>,
@@ -168,7 +168,7 @@ where
     MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
+    pub fn new(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
         Self {
             id: (MERGE_SELECTED_MOTIFS, "MergeSelectedMotifs").into(),
             store: Arc::clone(store),
@@ -401,43 +401,41 @@ mod tests {
         let select_run_config_id_0 = 100;
         let select_run_config_id_1 = 200;
         let merge_run_config_id = 300;
-        let store = Arc::new(
-            MockMotifsStoreBuilder::new()
-                .with_save_run_config(
-                    Some(vec![select_run_config_id_0, select_run_config_id_1]),
-                    "MergeMotifs",
-                    "MergeMotifs",
-                    "run_config_ids",
-                    HashMap::new(),
-                    Ok(merge_run_config_id),
-                )
-                .with_list_selected_motifs([
-                    (select_run_config_id_0, Ok(vec![vec![(1u32, 1.0f64)]])),
-                    (select_run_config_id_1, Ok(vec![vec![(2u32, 1.0f64)]])),
-                ])
-                .with_get_motif_meta([
-                    (1u32, Ok((0usize, find_run_config_id))),
-                    (2u32, Ok((0usize, find_run_config_id))),
-                ])
-                .with_run_config_descr([(
-                    find_run_config_id,
-                    Ok(RunConfigRow {
-                        id: find_run_config_id,
-                        r#type: "FindMotifsRunConfig".to_string(),
-                        descr: "test find motifs".to_string(),
-                        run_on: "2026-01-01 00:00:00".to_string(),
-                    }),
-                )])
-                .with_list_run_config_values([(
-                    find_run_config_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_run_config_id), 1, 3, None, Some(1.0)).to_properties_iter(None).collect()),
-                )])
-                .with_list_motif_slices(1u32, Some(vec![select_run_config_id_0]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
-                .with_list_motif_slices(2u32, Some(vec![select_run_config_id_1]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
-                .with_save_groups_as_motifs(vec![CheckGroups::Lengths(vec![4])])
-                .with_save_selected_motifs([(merge_run_config_id, vec![(1u32, 1.0f64)], Ok(merge_run_config_id))])
-                .build(),
-        );
+        let store =  MockMotifsStoreBuilder::new()
+            .with_save_run_config(
+                Some(vec![select_run_config_id_0, select_run_config_id_1]),
+                "MergeMotifs",
+                "MergeMotifs",
+                "run_config_ids",
+                HashMap::new(),
+                Ok(merge_run_config_id),
+            )
+            .with_list_selected_motifs([
+                (select_run_config_id_0, Ok(vec![vec![(1u32, 1.0f64)]])),
+                (select_run_config_id_1, Ok(vec![vec![(2u32, 1.0f64)]])),
+            ])
+            .with_get_motif_meta([
+                (1u32, Ok((0usize, find_run_config_id))),
+                (2u32, Ok((0usize, find_run_config_id))),
+            ])
+            .with_run_config_descr([(
+                find_run_config_id,
+                Ok(RunConfigRow {
+                    id: find_run_config_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_list_run_config_values([(
+                find_run_config_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_run_config_id), 1, 3, None, Some(1.0)).to_properties_iter(None).collect()),
+            )])
+            .with_list_motif_slices(1u32, Some(vec![select_run_config_id_0]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
+            .with_list_motif_slices(2u32, Some(vec![select_run_config_id_1]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
+            .with_save_groups_as_motifs(vec![CheckGroups::Lengths(vec![4])])
+            .with_save_selected_motifs([(merge_run_config_id, vec![(1u32, 1.0f64)], Ok(merge_run_config_id))])
+            .build();
         let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_run_config_id_0]));
         let motif_input_1 = MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_run_config_id_1]));
         let motif_loader = Arc::new(

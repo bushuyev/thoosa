@@ -390,7 +390,7 @@ where
     applied_motif_loader: Arc<LM>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     num_nets:u32,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
     sync_label_batch:Arc<DynSyncStageEnum<SyncLabelBatch<C>>>
@@ -437,7 +437,7 @@ pub async fn new_train_label_nets<L, AMN, C>(
     apply_motif_nets: Arc<AMN>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
     ) -> Result<TrainLabelNets<L, ABStage<L, AMN, C>, C>, ThoError>
@@ -489,7 +489,7 @@ where
         num_nets:u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         opt_config:Arc<OptConfig>,
         labels: Option<Vec<String>>,
     ) -> Result<Self, ThoError>
@@ -540,7 +540,7 @@ impl SavableResult for TrainLabelNetsOutput {
     type Store = dyn MotifsStore;
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
 
         let mut run_config_ids = Vec::with_capacity(self.results.len());
 
@@ -1266,8 +1266,7 @@ mod tests {
                 .finish(),
         );
 
-        let mut store = Arc::new(
-            MockMotifsStoreBuilder::new()
+        let mut store = MockMotifsStoreBuilder::new()
             .with_list_selected_motifs([
                 (select_motifs_run_config_id, Ok(
                     vec![
@@ -1311,7 +1310,7 @@ mod tests {
                     TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: PathBuf::new(), loss: 0.2f32 },
                 ])),
             ])
-            .build());
+            .build();
 
 
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
@@ -1546,10 +1545,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             create_motif_tables
-        ]).await?));
+        ]).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1625,7 +1624,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
