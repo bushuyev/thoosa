@@ -35,7 +35,7 @@ ctor = "0.2.6"
 regex = "1.10.3"
 tokio.workspace = true
 tracing.workspace = true
-
+async-trait.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"

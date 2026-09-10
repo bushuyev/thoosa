@@ -17,7 +17,7 @@ use thoosa_shared::tracked_await::track_await;
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-pub(crate) struct CollectEtaProgressSocketServer {
+pub struct CollectEtaProgressSocketServer {
     name: Name<'static>,
     shutdown_tx: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
@@ -25,7 +25,7 @@ pub(crate) struct CollectEtaProgressSocketServer {
 }
 
 impl CollectEtaProgressSocketServer {
-    pub(crate) fn start_default() -> io::Result<Self> {
+    pub fn start_default() -> io::Result<Self> {
         let mut server = Self::start_with_socket_id(COLLECT_ETA_PROGRESS_SOCKET_ID, collect_eta_subscribe_progress())?;
         server.stats_task = Some(server.spawn_device_stats_task());
         Ok(server)
@@ -136,7 +136,7 @@ impl CollectEtaProgressSocketServer {
         self.name.borrow()
     }
 
-    pub(crate) async fn shutdown(mut self) {
+    pub async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.take() {
             let _ = track_await(task).await;

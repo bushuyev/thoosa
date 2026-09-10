@@ -821,7 +821,7 @@ mod tests {
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_common::ws::{Workspace, WsConfigs};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
-    use thoosa_main::cli::{Cli, import_resources};
+    use thoosa_main::cli::{MotifAppArgs, import_resources};
     use thoosa_main::data::parquet_to_tensor_by_path;
     use thoosa_main::random_non_overlapping_slices;
     use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;

@@ -433,7 +433,7 @@ fn remove_disk_path(path: &Path) -> Result<bool, ThoError> {
 mod tests {
     use thoosa_motifs::motifs_store::{create_motif_tables, MotifsStore};
     use super::{PurgeDate, PurgeLabelModelsBy, PurgeMode, PurgeModelType, PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
-    use crate::cli::{Cli, Commands};
+    use crate::cli::{MotifAppArgs, Commands};
     use clap::Parser;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn test_purge_models_command_parses() {
-        let cli = Cli::parse_from(["thoosa_main", "purge-models", "--purge-mode", "label:loss:0.1"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "purge-models", "--purge-mode", "label:loss:0.1"]);
 
         match cli.old_command {
             Some(Commands::PurgeModels(args)) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),

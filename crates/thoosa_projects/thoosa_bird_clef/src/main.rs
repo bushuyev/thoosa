@@ -35,7 +35,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
+use thoosa_main::cli::{run_cli, MotifAppArgs, RunAllArgs};
 use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_main::stages::apply_label_nets::ApplyLabelNets;
 use thoosa_main::stages::stft::SyncStftSelector;
@@ -72,7 +72,7 @@ fn main() -> Result<(), ThoError>{
     // tch::set_num_threads(1);
     // tch::set_num_interop_threads(1);
 
-    let cli = Cli::parse();
+    let cli = MotifAppArgs::parse();
 
     info!("bird_clef main");
     if let Ok(thoosa_num_interop_threads)= std::env::var("THOOSA_NUM_INTEROP_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<u32>().map_err(|e|ThoError::from(e))){

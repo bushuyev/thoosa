@@ -41,3 +41,7 @@ pub mod tho_varstore;
 pub mod data_with_extra;
 pub mod args;
 pub mod stages;
+pub mod commands;
+pub mod progress_socket;
+
+mod version;
