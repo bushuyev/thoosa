@@ -132,7 +132,7 @@ impl StageCommand for MotifCommands {
     type Store = Arc<dyn MotifsStore>;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             // MotifCommands::ImportResources2(import_resources_args) => {
             //     debug!("MotifCommands::ImportResources2: args={import_resources_args:?}");
@@ -164,10 +164,61 @@ impl StageCommand for MotifCommands {
             //
             //     Ok(())
             // },
-            MotifCommands::FindMotifs2(args) => {
-                debug!("MotifCommands::FindMotifs: args={args:?}");
-                // let stage = FeatureA1Stage::new(args, service);
-                // stage.run();
+            MotifCommands::FindMotifs2(find_motifs_args) => {
+                debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
+
+                // let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
+                //     serde_json5::from_str(&find_motifs_args.run_config_cnt)
+                //         .expect("FindMotifsRunConfig2");
+                //
+                // debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
+                //
+                // let tensors_path = ws.read().tensors_path().clone();
+                //
+                // let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
+                //     move |key, _| {
+                //         ThoTensor::new(
+                //             SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
+                //             Tensor::load(tensors_path.join(format!(
+                //                 "{}_{}.pt",
+                //                 key.import_id(),
+                //                 key.file_stem()
+                //             )))?,
+                //         )
+                //     },
+                //     ThoDevice::from(Cpu),//it's always cpu
+                // ));
+                //
+                //
+                // let input_wrapper = Arc::new(ResourcesConfigInput::new(find_motifs_args.resource_config()));
+                //
+                // let mut init_ctx = ctx.branch(true);
+                // let init_loader = Arc::clone(&loader);
+                // let init_ws = Arc::clone(&ws);
+                // let init_store = Arc::clone(&store);
+                // let run_config_ids = track_await(run_grid (
+                //     None,
+                //     find_motifs_run_config_range_or_value,
+                //     input_wrapper,
+                //     &ws,
+                //     &store,
+                //     async move |run_configs| {
+                //         Ok(Arc::new(
+                //             track_await(crate::stages::find_motifs::FindMotifsStage::new(
+                //                 &init_ws,
+                //                 &init_store,
+                //                 init_loader,
+                //                 run_configs,
+                //                 find_motifs_args.fixed_config.clone(),
+                //                 init_ctx
+                //             )).await?,
+                //         ))
+                //     },
+                //     || ctx.branch(true),
+                //     "find motifs",
+                // )).await?;
+                //
+                // info!("FindMotifs done, run_config_ids={run_config_ids:?}");
                 Ok(())
             }
 
@@ -2127,6 +2178,7 @@ where
 
     Ok(())
 }
+
 
 pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     input_run_config_ids: Option<Vec<RunConfigId>>,
