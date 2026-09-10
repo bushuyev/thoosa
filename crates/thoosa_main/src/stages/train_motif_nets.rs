@@ -355,7 +355,7 @@ where
     motif_loader:Arc<MotifLoader<L,C>>,
     random_slices_loader:Arc<RandomSlicesLoader<L,C>>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     epoch_size: u32,
     descr: Option<String>,
     pd:PhantomData<C>,
@@ -423,7 +423,7 @@ where
     pub async fn new(
         loader:Arc<L>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         run_configs:  OptRunConfigs<
             Vec<NamedVal<TrainMotifNetRunConfigFields>>,
             Vec<NamedRange<TrainMotifNetRunConfigFields>>,
@@ -460,7 +460,7 @@ where
 }
 
 
-async fn completed_train_motif_trials(store: &Arc<Box<dyn MotifsStore>>, select_motifs_run_config_ids: &[RunConfigId]) -> Result<Vec<CompletedTrial>, ThoError> {
+async fn completed_train_motif_trials(store: &Arc<dyn MotifsStore>, select_motifs_run_config_ids: &[RunConfigId]) -> Result<Vec<CompletedTrial>, ThoError> {
     let mut train_parent_ids = Vec::new();
     let mut seen_parent_candidates = HashSet::new();
     for select_motifs_run_config_id in select_motifs_run_config_ids {
@@ -1497,8 +1497,7 @@ mod tests {
        });
 
         let motif_id = 10u32;
-        let mut store = Arc::new(
-            MockMotifsStoreBuilder::new()
+        let mut store = MockMotifsStoreBuilder::new()
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 50, 100, None, None).to_properties_iter(None).collect()),
@@ -1527,7 +1526,7 @@ mod tests {
                 .with_list_output_run_config_ids([(select_motifs_run_config_id, Ok(vec![]))])
                 .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_config_id)))])
 
-                .build());
+                .build();
 
         // let run_configs = cos_net_run_configs();
         let run_configs = cosine_net_run_configs();
@@ -1796,7 +1795,7 @@ impl SavableResult for TrainMotifNetsResult {
     type Store = dyn MotifsStore;
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<Box<dyn MotifsStore>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
 
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
@@ -1861,7 +1860,7 @@ impl SavableResult for TrainMotifNetResult {
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {

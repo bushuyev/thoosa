@@ -144,7 +144,7 @@ where
     id:MonoKey,
     motif_loader:Arc<ML>,
     ws:Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     pd:PhantomData<C>,
 }
 
@@ -168,7 +168,7 @@ where
     pub fn new(
         ws: Arc<RwLock<Box<dyn Workspace>>>,
         motif_loader: Arc<ML>,
-        store: Arc<Box<dyn MotifsStore>>) -> Self
+        store: Arc<dyn MotifsStore>) -> Self
     {
         Self {
             id: "StackedMotifsLoader".into(),

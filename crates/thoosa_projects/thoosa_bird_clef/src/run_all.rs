@@ -90,7 +90,7 @@ impl RunConfig for ClefRunConfig {
 
 pub(crate) async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn MotifsStore>>,
+    store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<RunCtxImpl>>,
     mut root_ctx: RunCtxImpl,
     run_all_args: &RunAllArgs,
@@ -810,7 +810,7 @@ mod tests {
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
 
-        let mut store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?));
+        let mut store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
         let mut conn = store.open_external_writer_conn()?;
 
 

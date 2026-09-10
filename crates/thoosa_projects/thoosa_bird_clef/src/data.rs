@@ -412,7 +412,7 @@ mod tests {
                            32000)
         )?));
 
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::from_path_(ws.read().store_path()).await?));
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
 
         plot_resource(
             Simple::new(ResourceType::List(vec![

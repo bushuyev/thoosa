@@ -52,7 +52,7 @@ impl SavableResult for SeqScanOutput {
 
     async fn save(
         &mut self,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
@@ -123,7 +123,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    store: Arc<Box<dyn MotifsStore>>,
+    store: Arc<dyn MotifsStore>,
     run_config_stages: Vec<SeqScanConfiguredStage<L, C>>,
     chunk_size: usize,
     pd: PhantomData<(RC, C)>,
@@ -137,7 +137,7 @@ where
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
     ) -> Result<Self, ThoError> {
@@ -146,7 +146,7 @@ where
 
     pub async fn new_with_chunk_size(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn MotifsStore>>,
+        store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
         chunk_size: usize,
@@ -724,14 +724,13 @@ mod tests {
 
         let resources = vec![Resource::new(1, 1, "r0", 6), Resource::new(2, 1, "r1", 6)];
         let resources_group = ResourceType::List(resources.iter().map(|resource| resource.file_stem().to_string()).collect());
-        let store = Arc::new(
+        let store =
             MockMotifsStoreBuilder::new()
                 .with_list_resources_by_file_stems(
                     resources.iter().map(|resource| resource.file_stem().to_string()).collect(),
                     Ok(resources.clone()),
                 )
-                .build(),
-        );
+                .build();
         let loader = Arc::new(
             mock_tensor_loader::build()
                 .with_out_id()

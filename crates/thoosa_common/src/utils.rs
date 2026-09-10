@@ -41,7 +41,7 @@ use thoosa_properties_map::FromHashmap;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
 // Keep the helper generic so callers retain specialized store trait objects across this common boundary.
-pub async fn load_run_config<FH, S>(store: &Arc<Box<S>>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
+pub async fn load_run_config<FH, S>(store: &Arc<S>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
 where
     FH: FromHashmap + RunConfig + Debug,
     S: Store + ?Sized,
