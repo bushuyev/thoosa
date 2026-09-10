@@ -174,7 +174,13 @@ fn main() -> Result<(), ThoError>{
             app_configs.clone(),
         )?));
 
-        let store = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
+        let store = Arc::new(SqlStore::from_path_with_tables(
+            ws.read().store_path(),
+            vec![
+                thoosa_store::create_tables,
+                thoosa_motifs::motifs_store::create_motif_tables
+            ]
+        ).await?);
 
         track_await(run_cli(
             cli.common_args,
