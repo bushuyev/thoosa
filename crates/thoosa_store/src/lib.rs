@@ -244,10 +244,6 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         &self,
         file_stem: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError>;
-    async fn list_label_nets_run_config_ids(
-        &self,
-        label: &str,
-    ) -> Result<Vec<RunConfigId>, ThoError>;
 
     async fn export_apply_label_nets_records(
         &self,
@@ -432,10 +428,6 @@ mock! {
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoError>;
-        async fn list_label_nets_run_config_ids(
-            &self,
-            label: &str,
-        ) -> Result<Vec<RunConfigId>, ThoError>;
 
         async fn export_apply_label_nets_records(
             &self,
@@ -922,7 +914,7 @@ impl ResourceStore for SqlStore {
 impl Store for SqlStore {
     fn open_external_writer_conn(&self) -> Result<Connection, ThoError> {
         let mut conn = Connection::open_with_flags(&self.conn_target, self.conn_flags)?;
-        Self::create_tables(&mut conn)?;
+        create_tables(&mut conn)?;
         Self::init_external_writer_conn(&mut conn)?;
         Ok(conn)
     }
@@ -1259,32 +1251,6 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_label_nets_run_config_ids(
-        &self,
-        label: &str,
-    ) -> Result<Vec<RunConfigId>, ThoError> {
-        let label = label.to_string();
-
-        self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
-            let r = conn.prepare(
-                "SELECT tn.run_config_id FROM trained_nets tn \
-                LEFT JOIN run_configs rc ON tn.run_config_id=rc.id \
-                WHERE \
-                    rc.run_id=? \
-                    AND rc.type='TrainLabelNetRunConfig' \
-                    AND net_path LIKE ? \
-                 ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
-            )?.query_map(params![
-                run_id(),
-                format!("{label}%")
-            ], |row| {
-                Ok(row.get::<usize, u32>(0)?)
-            })?.map(|v| v.unwrap()).collect();
-
-            Ok(r)
-        })
-            .await
-    }
     async fn export_apply_label_nets_records(
         &self,
         target_db_path: PathBuf,
@@ -1294,7 +1260,6 @@ impl Store for SqlStore {
             Self::export_apply_label_nets_records(conn, target_db_path, label_net_run_config_ids)
         }).await
     }
-
 
     async fn list_resources_by_ids(
         &self,
@@ -2580,6 +2545,8 @@ fn debug_trace_event(ev: TraceEvent) {
     }
 }
 
+type CreateTablesFn = fn(&mut Connection) -> Result<(), ThoError>;
+
 //TODO move all prepare to init
 impl SqlStore {
     fn trained_net_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrainedNetEntry> {
@@ -2862,7 +2829,7 @@ impl SqlStore {
 
     }
 
-    async fn with_reader_conn<T, F>(&self, ctx: &'static str, f: F) -> Result<T, ThoError>
+    pub async fn with_reader_conn<T, F>(&self, ctx: &'static str, f: F) -> Result<T, ThoError>
     where
         T: Send + Debug + 'static,
         F: FnOnce(&mut Connection) -> Result<T, ThoError> + Send + 'static,
@@ -3024,12 +2991,20 @@ impl SqlStore {
     }
 
     pub async fn from_path_<P: AsRef<Path>>(path: P) -> Result<SqlStore, ThoError> {
+
+        Self::from_path_with_tables(path, vec![crate::create_tables]).await
+    }
+
+    pub async fn from_path_with_tables<P: AsRef<Path>>(path: P, create_tables: Vec<CreateTablesFn>) -> Result<SqlStore, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
         let conn_target = path_buf.to_string_lossy().to_string();
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
         let mut conn = Connection::open_with_flags(&path_buf, conn_flags)?;
-        Self::create_tables(&mut conn)?;
+
+        for f in create_tables {
+            f(&mut conn)?;
+        }
 
         let writer = tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE).await?;
         writer.call(init_sqlite_writer).await?;
@@ -3057,7 +3032,6 @@ impl SqlStore {
             rr: AtomicUsize::new(0),
         })
     }
-
 
     pub async fn from_path_readonly<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
         Ok(Box::new(Self::from_path_readonly_(path).await?))
@@ -3090,11 +3064,13 @@ impl SqlStore {
 
     // #[cfg(test)]
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
-        Ok(Box::new(Self::in_mem_().await?))
+        Ok(Box::new(Self::in_mem_(vec![
+            create_tables,
+        ]).await?))
     }
 
     /// Returns the concrete in-memory store for specialized store trait objects in downstream tests.
-    pub async fn in_mem_() -> Result<SqlStore, ThoError> {
+    pub async fn in_mem_(create_tables: Vec<CreateTablesFn>) -> Result<SqlStore, ThoError> {
         let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
@@ -3110,7 +3086,10 @@ impl SqlStore {
         }
 
         let mut conn = Connection::open_with_flags(&uri, conn_flags)?;
-        Self::create_tables(&mut conn)?;
+        for f in create_tables {
+            f(&mut conn)?;
+        }
+
 
         let readers = if readers.is_empty() {
             vec![writer.clone()]
@@ -3291,229 +3270,6 @@ impl SqlStore {
         result
     }
 
-    fn create_tables( conn: &mut Connection) -> Result<(), ThoError> {
-
-            init_sqlite_writer(conn)?;
-
-            let t = conn.transaction()?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS imports (
-                id          INTEGER PRIMARY KEY,
-                descr       VARCHAR(256)
-            )",
-                (),
-            )?;
-
-            t.execute(
-                //TODO UNIQUE(key) doesn't work - no error
-                "CREATE TABLE IF NOT EXISTS resources (
-                id          INTEGER PRIMARY KEY,
-                key         VARCHAR(256),
-                length      INTEGER NOT NULL,
-                import_id   NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
-                UNIQUE(key) )",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_key ON resources (key);",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS resource_set_group (
-                id          INTEGER PRIMARY KEY,
-                descr       VARCHAR(256)
-            )",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS resource_set (
-                id          INTEGER PRIMARY KEY,
-                group_id    REFERENCES resource_set_group(id) ON DELETE CASCADE,
-                label_id    REFERENCES labels(id) ON DELETE CASCADE,
-                descr       VARCHAR(256))",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS resource_resources_set (
-                resource_id  NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-                set_id       NOT NULL REFERENCES resource_set(id) ON DELETE CASCADE,
-                PRIMARY KEY (resource_id, set_id)
-            )",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS labels (
-                id          INTEGER PRIMARY KEY,
-                label       VARCHAR(256),
-                UNIQUE(label)
-            )",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_label ON labels (label);",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS labeled_resources (
-                resource_id    NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-                label_id       NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
-                p              FLOAT NOT NULL,
-                PRIMARY KEY (resource_id, label_id)
-            )",
-                (),
-            )?;
-
-            t.execute("CREATE INDEX IF NOT EXISTS idx_labeled_resources_label_id ON labeled_resources(label_id)", ())?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS runs (
-                    id              INTEGER PRIMARY KEY,
-                    descr           VARCHAR(256),
-                    run_on          DATETIME DEFAULT CURRENT_TIMESTAMP
-                )",
-                (),
-            )?;
-
-
-        //descr - dist, dist etc
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS run_configs (
-                id          INTEGER PRIMARY KEY,
-                type        VARCHAR(256),
-                descr       VARCHAR(256),
-                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP,
-                run_id      NOT NULL REFERENCES runs(id) ON DELETE CASCADE
-            )",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS run_configs_input (
-                input_run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-
-                PRIMARY KEY (input_run_config_id, run_config_id)
-            )",
-                (),
-            )?;
-
-            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_type ON run_configs (type);", ())?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_run_on ON run_configs (run_on);", ())?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_input_run_config_id ON run_configs_input (run_config_id);", ())?;
-
-            //key - resource id  //TODO remove ord_id?
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS run_resources (
-                run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                ord_id     INTEGER NOT NULL,
-                key        VARCHAR(256),
-                PRIMARY KEY (run_config_id, ord_id)
-            )",
-                (),
-            )?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS run_config_values (
-                id          INTEGER PRIMARY KEY,
-                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                name        VARCHAR(256),
-                real_value  REAL,
-                int_value   INTEGER,
-                str_value   VARCHAR(256),
-                bool_value  INTEGER,
-                unsigned    INTEGER DEFAULT 0,
-                label_id    REFERENCES labels(id) ON DELETE CASCADE --TODO remove?
-                )",
-                (),
-            )?;
-            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_config_values_name_run_config_id ON run_config_values (run_config_id, name, label_id);", ())?;
-
-            t.execute(
-                //group - ordinal as appeared when grouping, not needed
-                "CREATE TABLE IF NOT EXISTS motifs (
-                id              INTEGER PRIMARY KEY,
-                group_ord       INTEGER NOT NULL,
-                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                channel_id      INTEGER NOT NULL
-            )",
-                (),
-            )?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_motifs_run_config_id ON motifs (run_config_id);", ())?;
-
-            //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS slices (
-                id              INTEGER PRIMARY KEY,
-                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
-                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                channel_id      INTEGER NOT NULL,
-                resource_id     REFERENCES resources(id) ON DELETE CASCADE,
-                slice_idx       INTEGER NOT NULL,
-                UNIQUE(motif_id, run_config_id, resource_id, slice_idx)
-            )",
-                (),
-            )?;
-            // The UNIQUE index on (motif_id, run_config_id, resource_id, slice_idx) already covers the
-            // motif_id-led access pattern used by list_run_motifs. Keep inserts fast by ensuring
-            // we do not maintain extra slices indexes.
-            t.execute("DROP INDEX IF EXISTS idx_slices_motif_id;", ())?;
-            t.execute("DROP INDEX IF EXISTS idx_slices_motif_id_resource_id;", ())?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS slice_matches (
-                id              INTEGER PRIMARY KEY,
-                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
-                slice_id_0      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
-                slice_id_1      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
-                dist            FLOAT NOT NULL
-            )",
-                (),
-            )?;
-
-            //labels_motifs on resource_set
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS selected_motifs (
-                motif_id   REFERENCES motifs(id),
-                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                rate    FLOAT NOT NULL
-            )",
-                (),
-            )?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_config_id_motif_id ON selected_motifs (run_config_id, motif_id);", ())?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS trained_nets (
-                id    INTEGER PRIMARY KEY,
-                net_path  VARCHAR(1024),
-                run_config_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                loss    FLOAT NOT NULL,
-                UNIQUE(net_path)
-            )",
-                (),
-            )?;
-
-            t.execute(
-            "CREATE TABLE IF NOT EXISTS trained_nets_input (
-                input_id  NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
-                net_id NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
-
-                PRIMARY KEY (input_id, net_id)
-            )",
-            (),
-        )?;
-
-            t.execute("commit", ())?;
-
-        Ok(())
-    }
 
     fn list_resource_set_resources(set_id: usize, conn: &Connection) -> Result<Vec<Resource>, ThoError> {
         let set_resources = {
@@ -4291,6 +4047,231 @@ impl SqlStore {
         Ok(())
     }
 }
+
+pub fn create_tables( conn: &mut Connection) -> Result<(), ThoError> {
+
+    init_sqlite_writer(conn)?;
+
+    let t = conn.transaction()?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS imports (
+                id          INTEGER PRIMARY KEY,
+                descr       VARCHAR(256)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        //TODO UNIQUE(key) doesn't work - no error
+        "CREATE TABLE IF NOT EXISTS resources (
+                id          INTEGER PRIMARY KEY,
+                key         VARCHAR(256),
+                length      INTEGER NOT NULL,
+                import_id   NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+                UNIQUE(key) )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_key ON resources (key);",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS resource_set_group (
+                id          INTEGER PRIMARY KEY,
+                descr       VARCHAR(256)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS resource_set (
+                id          INTEGER PRIMARY KEY,
+                group_id    REFERENCES resource_set_group(id) ON DELETE CASCADE,
+                label_id    REFERENCES labels(id) ON DELETE CASCADE,
+                descr       VARCHAR(256))",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS resource_resources_set (
+                resource_id  NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                set_id       NOT NULL REFERENCES resource_set(id) ON DELETE CASCADE,
+                PRIMARY KEY (resource_id, set_id)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS labels (
+                id          INTEGER PRIMARY KEY,
+                label       VARCHAR(256),
+                UNIQUE(label)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_label ON labels (label);",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS labeled_resources (
+                resource_id    NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                label_id       NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+                p              FLOAT NOT NULL,
+                PRIMARY KEY (resource_id, label_id)
+            )",
+        (),
+    )?;
+
+    t.execute("CREATE INDEX IF NOT EXISTS idx_labeled_resources_label_id ON labeled_resources(label_id)", ())?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS runs (
+                    id              INTEGER PRIMARY KEY,
+                    descr           VARCHAR(256),
+                    run_on          DATETIME DEFAULT CURRENT_TIMESTAMP
+                )",
+        (),
+    )?;
+
+
+    //descr - dist, dist etc
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS run_configs (
+                id          INTEGER PRIMARY KEY,
+                type        VARCHAR(256),
+                descr       VARCHAR(256),
+                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP,
+                run_id      NOT NULL REFERENCES runs(id) ON DELETE CASCADE
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS run_configs_input (
+                input_run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+
+                PRIMARY KEY (input_run_config_id, run_config_id)
+            )",
+        (),
+    )?;
+
+    t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_type ON run_configs (type);", ())?;
+    t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_run_on ON run_configs (run_on);", ())?;
+    t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_input_run_config_id ON run_configs_input (run_config_id);", ())?;
+
+    //key - resource id  //TODO remove ord_id?
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS run_resources (
+                run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                ord_id     INTEGER NOT NULL,
+                key        VARCHAR(256),
+                PRIMARY KEY (run_config_id, ord_id)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS run_config_values (
+                id          INTEGER PRIMARY KEY,
+                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                name        VARCHAR(256),
+                real_value  REAL,
+                int_value   INTEGER,
+                str_value   VARCHAR(256),
+                bool_value  INTEGER,
+                unsigned    INTEGER DEFAULT 0,
+                label_id    REFERENCES labels(id) ON DELETE CASCADE --TODO remove?
+                )",
+        (),
+    )?;
+    t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_config_values_name_run_config_id ON run_config_values (run_config_id, name, label_id);", ())?;
+
+    t.execute(
+        //group - ordinal as appeared when grouping, not needed
+        "CREATE TABLE IF NOT EXISTS motifs (
+                id              INTEGER PRIMARY KEY,
+                group_ord       INTEGER NOT NULL,
+                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                channel_id      INTEGER NOT NULL
+            )",
+        (),
+    )?;
+    t.execute("CREATE INDEX IF NOT EXISTS idx_motifs_run_config_id ON motifs (run_config_id);", ())?;
+
+    //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS slices (
+                id              INTEGER PRIMARY KEY,
+                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
+                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                channel_id      INTEGER NOT NULL,
+                resource_id     REFERENCES resources(id) ON DELETE CASCADE,
+                slice_idx       INTEGER NOT NULL,
+                UNIQUE(motif_id, run_config_id, resource_id, slice_idx)
+            )",
+        (),
+    )?;
+    // The UNIQUE index on (motif_id, run_config_id, resource_id, slice_idx) already covers the
+    // motif_id-led access pattern used by list_run_motifs. Keep inserts fast by ensuring
+    // we do not maintain extra slices indexes.
+    t.execute("DROP INDEX IF EXISTS idx_slices_motif_id;", ())?;
+    t.execute("DROP INDEX IF EXISTS idx_slices_motif_id_resource_id;", ())?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS slice_matches (
+                id              INTEGER PRIMARY KEY,
+                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
+                slice_id_0      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
+                slice_id_1      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
+                dist            FLOAT NOT NULL
+            )",
+        (),
+    )?;
+
+    //labels_motifs on resource_set
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS selected_motifs (
+                motif_id   REFERENCES motifs(id),
+                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                rate    FLOAT NOT NULL
+            )",
+        (),
+    )?;
+    t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_config_id_motif_id ON selected_motifs (run_config_id, motif_id);", ())?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS trained_nets (
+                id    INTEGER PRIMARY KEY,
+                net_path  VARCHAR(1024),
+                run_config_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                loss    FLOAT NOT NULL,
+                UNIQUE(net_path)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS trained_nets_input (
+                input_id  NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
+                net_id NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
+
+                PRIMARY KEY (input_id, net_id)
+            )",
+        (),
+    )?;
+
+    t.execute("commit", ())?;
+
+    Ok(())
+}
+
 
 fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
     assert!(input.len() > 0);

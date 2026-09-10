@@ -2466,7 +2466,9 @@ mod cli_tests {
                            32000)
         )?));
 
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+            thoosa_store::create_tables
+        ]).await?));
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
 
@@ -2513,7 +2515,10 @@ mod cli_tests {
                            100,
                            32000)
         )?));
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+           thoosa_store::create_tables
+       ]).await?));
+
         let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
             vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })],
             ws.read().channels() as i64,

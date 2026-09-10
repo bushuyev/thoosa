@@ -829,7 +829,7 @@ mod tests {
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;
-    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_motifs::motifs_store::{create_motif_tables, MockMotifsStoreBuilder, MotifsStore};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::comp_id::SynKey;
@@ -1006,7 +1006,10 @@ mod tests {
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_().await?));
+        let store: Arc<Box<dyn MotifsStore>> = Arc::new(Box::new(SqlStore::in_mem_(vec![
+            thoosa_store::create_tables,
+            create_motif_tables
+        ]).await?));
 
         let _resources = import_resources(
             &ws,

@@ -36,19 +36,61 @@ use thoosa_store::{CheckGroups, LimitBy, Store, SetCond, IdSlice, RunConfigEntry
 
 #[async_trait]
 /// Store boundary used by motif-search workflows while motif methods are migrated incrementally out of `Store`.
-pub trait MotifsStore: Store {}
+pub trait MotifsStore: Store {
+    async fn list_label_nets_run_config_ids(
+        &self,
+        label: &str,
+    ) -> Result<Vec<RunConfigId>, ThoError>;
+}
 
+#[async_trait]
 impl MotifsStore for SqlStore {
+    async fn list_label_nets_run_config_ids(
+        &self,
+        label: &str,
+    ) -> Result<Vec<RunConfigId>, ThoError> {
+        let label = label.to_string();
 
+        self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
+            let r = conn.prepare(
+                "SELECT tn.run_config_id FROM trained_nets tn \
+                LEFT JOIN run_configs rc ON tn.run_config_id=rc.id \
+                WHERE \
+                    rc.run_id=? \
+                    AND rc.type='TrainLabelNetRunConfig' \
+                    AND net_path LIKE ? \
+                 ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
+            )?.query_map(params![
+                run_id(),
+                format!("{label}%")
+            ], |row| {
+                Ok(row.get::<usize, u32>(0)?)
+            })?.map(|v| v.unwrap()).collect();
+
+            Ok(r)
+        })
+            .await
+    }
+
+}
+
+pub fn create_motif_tables( conn: &mut Connection) -> Result<(), ThoError> {
+
+    Ok(())
 }
 
 
 mock! {
-    pub MotifsStore {}
+    pub MotifsStore {
+
+    }
 
     #[async_trait]
     impl MotifsStore for MotifsStore {
-
+        async fn list_label_nets_run_config_ids(
+            &self,
+            label: &str,
+        ) -> Result<Vec<RunConfigId>, ThoError>;
     }
 
     #[async_trait]
@@ -112,10 +154,7 @@ mock! {
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoError>;
-        async fn list_label_nets_run_config_ids(
-            &self,
-            label: &str,
-        ) -> Result<Vec<RunConfigId>, ThoError>;
+
 
         async fn export_apply_label_nets_records(
             &self,
@@ -294,6 +333,7 @@ pub struct MockMotifsStoreBuilder {
     store: MockMotifsStore,
 }
 
+//TODO all expectations are copy-pasted from MockStoreBuilder, replace with macros
 impl MockMotifsStoreBuilder {
     pub fn new() -> Self {
         Self {
