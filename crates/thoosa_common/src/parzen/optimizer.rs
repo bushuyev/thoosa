@@ -10,6 +10,7 @@ use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use tch::Tensor;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
+use thoosa_shared::ThoError;
 use thoosa_shared::val::{NamedVal, Val};
 use crate::train_nets::OptConfig;
 use thoosa_shared::tracked_await::track_await;
@@ -84,7 +85,7 @@ pub trait ParzenEstimator: Send {
         &self,
         samples: &mut dyn Iterator<Item = Val>,
         weights: Option<Tensor>,
-    ) -> Box<dyn Distribution>;
+    ) -> Result<Box<dyn Distribution>, ThoError>;
 }
 
 pub trait Distribution: Debug + Send {
@@ -166,7 +167,7 @@ impl TreeStructuredParzenEstimator {
         }
     }
 
-    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) {
+    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) ->Result<(), ThoError>{
         self.observations.push(Reverse(RunResult::new(
             loss,
             eval_config.clone(),
@@ -183,25 +184,27 @@ impl TreeStructuredParzenEstimator {
 
         let (lower_vals, upper_vals) = self.split_observations(&sorted_observations, n_lower);
 
-        let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold(
+        let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().try_fold(
             (vec![], vec![]),
             |mut lower_upper_esitmators, (param_i, pe)| {
                 lower_upper_esitmators.0.push(
-                    pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v| v[param_i].clone()), None),
+                    pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v| v[param_i].clone()), None)?,
                 );
                 lower_upper_esitmators.1.push(
-                    pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v| v[param_i].clone()), None),
+                    pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v| v[param_i].clone()), None)?,
                 );
 
-                lower_upper_esitmators
+                Ok::<_, ThoError>(lower_upper_esitmators)
             },
-        );
+        )?;
 
         self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators));
         self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators));
 
         trace!("TreeStructuredParzenEstimator::update_observations: self.mvpe_lower={:?}", self.mvpe_lower);
         trace!("TreeStructuredParzenEstimator::update_observations: self.self.mvpe_upper={:?}", self.mvpe_upper);
+
+        Ok(())
     }
 
     fn sorted_observations(&self) -> Vec<RunResult> {
@@ -317,6 +320,7 @@ mod tree_structured_parzen_estimator_tests {
     use log::debug;
     use tch::{Kind, Tensor};
     use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::ThoError;
 
     #[test]
     fn test_percentile() {
@@ -326,7 +330,7 @@ mod tree_structured_parzen_estimator_tests {
     }
 
     #[test]
-    fn test_configuration_space() {
+    fn test_configuration_space() ->Result<(), ThoError> {
         let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
             Hyperparameter::UniformFloat {
                 name: "x_0".into(),
@@ -343,13 +347,13 @@ mod tree_structured_parzen_estimator_tests {
         let mut tree_structured_parzen_estimator = TreeStructuredParzenEstimator::new(&cs);
 
         tree_structured_parzen_estimator
-            .update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)], None);
+            .update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)], None)?;
         tree_structured_parzen_estimator
-            .update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)], None);
+            .update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)], None)?;
         tree_structured_parzen_estimator
-            .update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)], None);
+            .update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)], None)?;
         tree_structured_parzen_estimator
-            .update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)], None);
+            .update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)], None)?;
 
         // debug!("{:?}", tree_structured_parzen_estimator.observations);
 
@@ -396,7 +400,9 @@ mod tree_structured_parzen_estimator_tests {
                 .mvpe_lower
                 .expect("tree_structured_parzen_estimator")
                 .len()
-        )
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -621,7 +627,7 @@ where
         }
     }
 
-    async fn optimize(&mut self) -> Vec<Val> {
+    async fn optimize(&mut self) -> Result<Vec<Val>, ThoError> {
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
         let mut bad_evals = 0_u32;
@@ -694,7 +700,7 @@ where
             debug!("AsyncTPEOptimizerImpl::optimize:sample done  i={i} ");
         }
 
-        best_config.unwrap_or(vec![]) //TODO
+        Ok(best_config.unwrap_or(vec![]))
     }
 
     fn sample(&self) -> Vec<Val> {
@@ -761,7 +767,7 @@ where
         }
     }
 
-    pub async fn optimize(&mut self) -> Vec<Val> {
+    pub async fn optimize(&mut self) -> Result<Vec<Val>, ThoError> {
         track_await(self.inner.optimize()).await
     }
 
@@ -806,7 +812,7 @@ where
         }
     }
 
-    pub async fn optimize(&mut self) -> Vec<Val> {
+    pub async fn optimize(&mut self) -> Result<Vec<Val>, ThoError> {
         track_await(self.inner.optimize()).await
     }
 
@@ -840,6 +846,7 @@ mod tpe_optimizer_tests {
     use std::sync::{Arc, Mutex};
     use tch::Tensor;
     use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::ThoError;
     use thoosa_shared::val::NamedVal;
     use crate::tho_tensor::ThoTensor;
 
@@ -876,7 +883,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_numeric() {
+    async fn test_optimize_numeric() ->Result<(), ThoError>{
         let sphere = sphere(300);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
@@ -893,16 +900,18 @@ mod tpe_optimizer_tests {
             "n/a",
         );
 
-        let best_config = opt.optimize().await;
+        let best_config = opt.optimize().await?;
 
         debug!("best_config={best_config:?}");
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[2]).unwrap()).abs() < 3.);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_optimize_numeric_int() {
+    async fn test_optimize_numeric_int()->Result<(), ThoError> {
         let sphere = sphere(300);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
@@ -919,16 +928,18 @@ mod tpe_optimizer_tests {
             "n/a",
         );
 
-        let best_config = opt.optimize().await;
+        let best_config = opt.optimize().await?;
 
         debug!("best_config={best_config:?}");
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
         assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[2]).unwrap()).abs() < 3.);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_optimize_categoric() {
+    async fn test_optimize_categoric() ->Result<(), ThoError> {
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| {
                 debug!("params={params:?}");
@@ -976,16 +987,18 @@ mod tpe_optimizer_tests {
             "n/a",
         );
 
-        let best_config = opt.optimize().await;
+        let best_config = opt.optimize().await?;
 
         debug!("best_config={best_config:?}");
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
         assert_eq!(Int(1), best_config[2]);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_optimize_constrained() {
+    async fn test_optimize_constrained() ->Result<(), ThoError> {
         let mut opt: AsyncCTPEOptimizer<_, String> = AsyncCTPEOptimizer::new(
             async move |params| {
                 let x: f32 = (&params[0]).try_into().unwrap();
@@ -1014,11 +1027,13 @@ mod tpe_optimizer_tests {
             "n/a",
         );
 
-        let best_config = opt.optimize().await;
+        let best_config = opt.optimize().await?;
 
         assert!(!best_config.is_empty());
         assert!((<&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()) <= 1.0);
         assert!((<&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()) <= 1.0);
+
+        Ok(())
     }
 
     #[tokio::test]

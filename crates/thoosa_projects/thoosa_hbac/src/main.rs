@@ -30,7 +30,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{run_cli, CommonCommands, MotifAppArgs, RunAllArgs, MotifCommands, Commands, ImportResourcesArgs, import_resources, import_resources2, run_grid};
+use thoosa_main::cli::{run_cli, CommonCommands, MotifAppArgs, RunAllArgs, MotifCommands, Commands, ImportResourcesArgs, import_resources, run_grid, init_loader};
 use thoosa_main::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
 use thoosa_main::stages::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
 use thoosa_main::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
@@ -150,6 +150,7 @@ pub struct HbacArgs {
 #[derive(Debug, Subcommand, Clone)]
 pub enum HbacCommands {
     ImportResources2(ImportResourcesArgs),
+    RunAll(RunAllArgs)
 }
 
 const LABELS: [&str; 6] = ["seizure", "lpd", "gpd", "lrda", "grda", "other"];
@@ -174,7 +175,7 @@ impl StageCommand for HbacCommands {
                         ctx.tho_device_idx(),
                     ))?))
                 };
-                track_await(import_resources2(
+                track_await(import_resources(
                     &ws,
                     store,
                     &LABELS,
@@ -204,6 +205,22 @@ impl StageCommand for HbacCommands {
 
                 Ok(())
             }
+            HbacCommands::RunAll(run_all_args) => {
+                let loader = init_loader(ws);
+
+                let all_configs = run_all_config_0(&run_all_args);
+
+                track_await(run_all(
+                    &ws,
+                    &store,
+                    &loader,
+                    ctx,
+                    &run_all_args,
+                    all_configs
+                )).await?;
+
+                Ok(())
+            }
         }
     }
 }
@@ -214,7 +231,9 @@ fn main() -> Result<(), ThoError> {
     let cdt = cdt_for_dir();
     let app_configs = WsConfigs::new(20, 684400, 200);
 
-    // CudaWorker::run_if_sock(&cdt, &app_configs, cuda_worker_endpoint_inits())?;
+    let args = HbacArgs::parse();
+
+    CudaWorker::run_if_sock(&cdt, &app_configs, cuda_worker_endpoint_inits())?;
 
     println!("CudaWorker::run_if_sock: running main");
 
@@ -233,7 +252,7 @@ fn main() -> Result<(), ThoError> {
     */
     let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
 
-    let args = HbacArgs::parse();
+
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
@@ -269,7 +288,7 @@ fn main() -> Result<(), ThoError> {
             ]
         ).await?);
 
-        if run_common_cli(
+        run_common_cli(
             args.common_args.clone(),
             Arc::clone(&store) as Arc<dyn MotifsStore>,
             Arc::clone(&ws),
@@ -283,55 +302,9 @@ fn main() -> Result<(), ThoError> {
                 )
             },
             cdt.clone()
-        ).await?.is_break() {
-            return Ok(())
-        }
-        // panic!("zzz");
-        track_await(run_cli(
-            args.common_args,
-            args.old_command,
-            Arc::clone(&store) as Arc<dyn MotifsStore>,
-            |source_path| data::labeled_resourses(source_path, "train.csv"),
-            |source_path, key| {
-                thoosa_main::data::parquet_to_tensor_by_path(
-                    source_path
-                        .as_ref()
-                        .join("train_eegs")
-                        .join(format!("{}.parquet", key)),
-                    Cpu,
-                )
-            },
-            |t: &Transaction|{
+        ).await?;
 
-                for pure_sets_len in [(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)] {
-                    SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
-                }
-
-
-                SqlStore::save_groups_by_label_cnt(100, &t)?;
-
-                Ok(())
-            },
-            async |
-                ws: &Arc<RwLock<Box<dyn Workspace>>>,
-                store: &Arc<dyn MotifsStore>,
-                loader: &Arc<RawTensorLoader<RunCtxImpl>>,
-                root_ctx: RunCtxImpl,
-                run_all_args: &RunAllArgs,
-            |{
-
-                let all_configs = run_all_config_0(run_all_args);
-
-                track_await(run_all(ws, store, loader, root_ctx, run_all_args, all_configs)).await
-            },
-            &LABELS,
-            app_configs,
-            Some(async |_params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<dyn MotifsStore>,|{
-                debug!("bird_clef: infer");
-                todo!()
-            }),
-            cdt
-        )).await
+        Ok(())
     });
 
     match run_result {

@@ -8,6 +8,7 @@ use rand::RngExt;
 use rand::seq::IndexedRandom;
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_shared::opt_rng::opt_rnd;
+use thoosa_shared::ThoError;
 use thoosa_shared::val::Val;
 
 #[allow(dead_code)]
@@ -144,15 +145,15 @@ where
         &self,
         samples: &mut dyn Iterator<Item = Val>,
         _weights: Option<Tensor>,
-    ) -> Box<dyn Distribution> {
-        Box::new(
-            self.clc_distr(Tensor::from_slice(
+    ) -> Result<Box<dyn Distribution>, ThoError> {
+        Ok(Box::new(
+            self.clc_distr(Tensor::f_from_slice(
                 samples
                     .map(|p| p.try_into().unwrap())
                     .collect::<Vec<f32>>()
                     .as_slice(),
-            )),
-        )
+            )?),
+        ))
     }
 }
 
