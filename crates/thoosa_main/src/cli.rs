@@ -134,91 +134,61 @@ impl StageCommand for MotifCommands {
 
     async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            // MotifCommands::ImportResources2(import_resources_args) => {
-            //     debug!("MotifCommands::ImportResources2: args={import_resources_args:?}");
-            //     let freq_filter = if import_resources_args.freq_filters.is_empty() {
-            //         None
-            //     } else {
-            //         Some(Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
-            //             import_resources_args.freq_filters.clone(),
-            //             ws.read().channels() as i64,
-            //             ws.read().sample_rate() as f64,
-            //             0,
-            //             root_ctx.tho_device_idx(),
-            //         ))?))
-            //     };
-            //     track_await(import_resources(
-            //         &ws,
-            //         store,
-            //         labels,
-            //         || labeled_resources(&import_resources_args.source_path),
-            //         |key: String| {
-            //             resource_to_tensor(&import_resources_args.source_path, key.as_str())
-            //         },
-            //         freq_filter,
-            //         true,
-            //         init_data
-            //     )).await?;
-            //
-            //     info!("ImportResources done");
-            //
-            //     Ok(())
-            // },
             MotifCommands::FindMotifs2(find_motifs_args) => {
                 debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
 
-                // let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
-                //     serde_json5::from_str(&find_motifs_args.run_config_cnt)
-                //         .expect("FindMotifsRunConfig2");
-                //
-                // debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
-                //
-                // let tensors_path = ws.read().tensors_path().clone();
-                //
-                // let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
-                //     move |key, _| {
-                //         ThoTensor::new(
-                //             SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
-                //             Tensor::load(tensors_path.join(format!(
-                //                 "{}_{}.pt",
-                //                 key.import_id(),
-                //                 key.file_stem()
-                //             )))?,
-                //         )
-                //     },
-                //     ThoDevice::from(Cpu),//it's always cpu
-                // ));
-                //
-                //
-                // let input_wrapper = Arc::new(ResourcesConfigInput::new(find_motifs_args.resource_config()));
-                //
-                // let mut init_ctx = ctx.branch(true);
-                // let init_loader = Arc::clone(&loader);
-                // let init_ws = Arc::clone(&ws);
-                // let init_store = Arc::clone(&store);
-                // let run_config_ids = track_await(run_grid (
-                //     None,
-                //     find_motifs_run_config_range_or_value,
-                //     input_wrapper,
-                //     &ws,
-                //     &store,
-                //     async move |run_configs| {
-                //         Ok(Arc::new(
-                //             track_await(crate::stages::find_motifs::FindMotifsStage::new(
-                //                 &init_ws,
-                //                 &init_store,
-                //                 init_loader,
-                //                 run_configs,
-                //                 find_motifs_args.fixed_config.clone(),
-                //                 init_ctx
-                //             )).await?,
-                //         ))
-                //     },
-                //     || ctx.branch(true),
-                //     "find motifs",
-                // )).await?;
-                //
-                // info!("FindMotifs done, run_config_ids={run_config_ids:?}");
+                let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
+                    serde_json5::from_str(&find_motifs_args.run_config_cnt)
+                        .expect("FindMotifsRunConfig2");
+
+                debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
+
+                let tensors_path = ws.read().tensors_path().clone();
+
+                let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
+                    move |key, _| {
+                        ThoTensor::new(
+                            SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
+                            Tensor::load(tensors_path.join(format!(
+                                "{}_{}.pt",
+                                key.import_id(),
+                                key.file_stem()
+                            )))?,
+                        )
+                    },
+                    ThoDevice::from(Cpu),//it's always cpu
+                ));
+
+
+                let input_wrapper = Arc::new(ResourcesConfigInput::new(find_motifs_args.resource_config()));
+
+                let mut init_ctx = ctx.branch(true);
+                let init_loader = Arc::clone(&loader);
+                let init_ws = Arc::clone(&ws);
+                let init_store = Arc::clone(&store);
+                let run_config_ids = track_await(run_grid (
+                    None,
+                    find_motifs_run_config_range_or_value,
+                    input_wrapper,
+                    &ws,
+                    &store,
+                    async move |run_configs| {
+                        Ok(Arc::new(
+                            track_await(crate::stages::find_motifs::FindMotifsStage::new(
+                                &init_ws,
+                                &init_store,
+                                init_loader,
+                                run_configs,
+                                find_motifs_args.fixed_config.clone(),
+                                init_ctx
+                            )).await?,
+                        ))
+                    },
+                    || ctx.branch(true),
+                    "find motifs",
+                )).await?;
+
+                info!("FindMotifs done, run_config_ids={run_config_ids:?}");
                 Ok(())
             }
 

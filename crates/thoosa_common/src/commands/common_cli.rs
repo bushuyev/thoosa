@@ -19,6 +19,7 @@ use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::Store;
 use crate::args::{CommonArgs, StageCommand};
+use crate::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::train_nets::InferArgs;
@@ -111,6 +112,25 @@ where
     std::io::stdout().flush()?;
 
     debug!("run_common_cli: args={args:?}");
+
+    if args.ipc {
+        info!("Running in IPC mode");
+
+        if !std::env::var(CUDA_VISIBLE_DEVICES).map(|v|v.eq("-1")).unwrap_or(false) {
+            println!("Run with CUDA_VISIBLE_DEVICES=-1 in IPC mode");
+            std::process::exit(0);
+        }
+
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![
+            format!("--ws-path={}", args.ws_path),
+            format!("--term-logger-level={}", args.term_logger_level),
+            format!("--write-logger-level={}", args.write_logger_level)
+        ]).await?;
+    } else {
+        // kick_register_cuda_hooks();
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
+    }
+
 
     if let Some(command ) = args.command{
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
