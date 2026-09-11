@@ -9,6 +9,7 @@ use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Tensor;
 use thoosa_shared::opt_rng::opt_rnd;
+use thoosa_shared::ThoError;
 use thoosa_shared::val::Val;
 
 pub struct CategoricalParzenEstimator {
@@ -114,19 +115,19 @@ impl ParzenEstimator for CategoricalParzenEstimator {
         &self,
         samples: &mut dyn Iterator<Item = Val>,
         weights: Option<Tensor>,
-    ) -> Box<dyn Distribution> {
-        Box::new(
+    ) -> Result<Box<dyn Distribution>, ThoError> {
+        Ok(Box::new(
             self._clc_distr(
-                Tensor::from_slice(
+                Tensor::f_from_slice(
                     samples
                         .map(|p| p.try_into().unwrap())
                         .collect::<Vec<i64>>()
                         .as_slice(),
-                )
-                .totype(tch::Kind::Int64),//TODO f_
+                )?
+                .totype(tch::Kind::Int64),
                 weights,
             ),
-        )
+        ))
     }
 }
 

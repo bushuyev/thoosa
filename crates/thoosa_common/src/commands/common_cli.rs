@@ -6,21 +6,28 @@ use std::ops::ControlFlow;
 use std::ops::ControlFlow::{Break, Continue};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use clap::Subcommand;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tch::Tensor;
+use tokio::runtime::Handle;
+use tokio::sync::watch;
+use tokio::{select, time};
+use tokio::time::MissedTickBehavior;
 use torch_sys::at_grad_set_enabled;
-use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing};
+use tracing::Instrument;
+use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing, format_perf_map, PERF};
 use thoosa_shared::run_configs::{run_id, RUN_ID};
 use thoosa_shared::ThoError;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::{snapshot_not_ready, track_await};
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::Store;
 use crate::args::{CommonArgs, StageCommand};
 use crate::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
 use crate::progress_socket::CollectEtaProgressSocketServer;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::train_nets::InferArgs;
 use crate::utils::list_devices;
@@ -32,7 +39,7 @@ pub async fn run_common_cli<C, CS, R>(
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     resource_to_tensor: R,
     cdt_for_dir: String,
-) -> Result<ControlFlow<(), ()>, ThoError>
+) -> Result<(), ThoError>
 where
     C: Subcommand + StageCommand<Store=Arc<CS>, Ctx=RunCtxImpl>+ Clone + std::fmt::Debug + Debug,
     CS:?Sized + Store,
@@ -132,13 +139,94 @@ where
     }
 
 
+
+    let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
+    let metrics = Handle::current().metrics();
+    let workers = metrics.num_workers();
+    let mut prev_poll = vec![0u64; workers];
+    let mut prev_park = vec![0u64; workers];
+    let mut prev_busy = vec![std::time::Duration::ZERO; workers];
+
+    let purge_cpu_worker = tokio::spawn(async move {
+        let mut ticker = time::interval(Duration::from_secs(60));
+        track_await(ticker.tick()).await; //
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            select! {
+                _ = ticker.tick() => {
+
+                    #[cfg(tho_debug)]
+                    {
+                        info!(
+                            "[tokio] alive_tasks={} global_q={} blocking_q={}",
+                            metrics.num_alive_tasks(),
+                            metrics.global_queue_depth(),
+                            metrics.blocking_queue_depth(),
+                        );
+                    }
+
+                    for w in 0..workers {
+                           let poll = metrics.worker_poll_count(w);
+                            let park = metrics.worker_park_count(w);
+                            let busy = metrics.worker_total_busy_duration(w);
+
+                            debug!(
+                                "  w{w}: poll+{} park+{} busy+{:?}",
+                                poll - prev_poll[w],
+                                park - prev_park[w],
+                                busy - prev_busy[w],
+                            );
+
+                            prev_poll[w] = poll;
+                            prev_park[w] = park;
+                            prev_busy[w] = busy;
+                    }
+                    let tasks = snapshot_not_ready();
+                    info!("TASKS pending={}", tasks.len());
+                    for task in tasks {
+                        info!("  {task}");
+                    }
+
+                    // if !cuda_activity_gate().is_paused() {
+                    //     debug!("run_cli: purge_cpu tick");
+                    //     GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
+                    //     debug!("run_cli: purge_cpu done");
+                    // }
+                }
+                _ = rx.changed() => {
+                    if *rx.borrow() {
+                        debug!("stopping cpu purger");
+                        break;
+                    }
+                }
+            }
+        }
+    }.instrument(tracing::info_span!(
+        "cli::purge_cpu_worker",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "periodically purge CPU caches and log Tokio metrics",
+    )));
+
     if let Some(command ) = args.command{
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
         debug!("run_common_cli: command={command:?}");
         command.run(&store, &ws, root_ctx).await?;
-
-        return Ok(Break(()))
     }
 
-    Ok(Continue(()))
+
+
+    info!("\n{}", format_perf_map(&PERF));
+
+    // std::process::exit(0);
+    track_await(GlobalCtx::global().shutdown()).await;
+
+    let _ = stop_cpu_purge_tx.send(true);
+    let _ = track_await(purge_cpu_worker).await;
+
+
+    info!("run_id {} done", run_id());
+
+    Ok(())
 }

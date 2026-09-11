@@ -16,7 +16,7 @@ use thoosa_main::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_
 use thoosa_main::stages::cross_loader::ResourcesConfigInput;
 use thoosa_main::stages::extend_motifs::ExtendMotifsStage;
 use thoosa_main::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
-use thoosa_main::stages::find_motifs_run_config::{AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_main::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_main::stages::motif_loader::MotifLoader;
 use thoosa_main::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_main::stages::train_final_net::new_train_final_net;
@@ -41,7 +41,7 @@ pub enum FindAndSelect {
     GridOnly{
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
         fixed_find_motifs_config:FixedFindMotifsConfig,
-        extend_motifs_run_config: Option<ExtendMotifsRunConfigRangeOrValue>,
+        extend_motifs_run_config: Option<ExtendMotifsRunConfigRangeOrValue<SelectMotifsRunConfigFields>>,
         select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
     },
     WithOpt{
@@ -316,22 +316,22 @@ pub(crate) async fn run_all(
 
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    // let find_and_select =  FindAndSelect::GridOnly {
-    //     find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
-    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-    //     extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
-    //     select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
-    // };
-
-    let find_and_select =  FindAndSelect::WithOpt {
-        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-            id: None,
-            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
-            select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
-        },
+    let find_and_select =  FindAndSelect::GridOnly {
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+        extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
+        select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
+
+    // let find_and_select =  FindAndSelect::WithOpt {
+    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
+    //         id: None,
+    //         find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
+    //         select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
+    //     },
+    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+    //     find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    // };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
@@ -517,6 +517,53 @@ fn run_all_extend_motifs_config_grid_0<P: FieldName + 'static>() -> ExtendMotifs
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
+
+fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
+
+    let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
+        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+            None => RangeOrValue::Value(100),
+            Some(value) => {
+                let window = value.val().to_i64(0) as u32;
+                // info!("Window: window={window}");
+                let end = window.saturating_mul(max_k);
+                let start = window / min_k;
+                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
+            }
+        }
+    };
+    FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(10),
+        // window: RangeOrValue::Value(200),
+        window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((50, 0)) },
+        freq_filter: Some(vec![
+            AverageFilter(AverageFilterParamsRangeOrValue {
+                window: RangeOrValue::dynamic(median_window),
+                step: RangeOrValue::Value(10),
+            }),
+            // SavGolFilter(SavGolFilterParamsRangeOrValue {
+            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
+            //     stride: RangeOrValue::Value(10),
+            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            // }),
+        ]),
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(
+            CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                        q: RangeOrValue::Value(0.05),
+                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                    }),
+                }),
+            }
+        ),
+    }
+}
+
 
 #[allow(dead_code)]
 fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
