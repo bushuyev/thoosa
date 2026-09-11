@@ -722,7 +722,7 @@ impl StageExecutor {
         // Declared after ResetPauseGuard so it is released before the gate is reopened.
         let _accept_guard = accept_guard;
 
-        if let Err(e) = track_await((reset_fn)(tho_device_idx)).await {
+        if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
             error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
         } else {
             info!("DynamicTaskExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");

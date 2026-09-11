@@ -161,7 +161,7 @@ impl GlobalCtx {
 
         Ok(Self {
             num_devices,
-            executors: (0..num_devices).map(|tho_device_idx| {
+            executors: (0..num_devices).map(|tho_device_idx| {//TODO make dummy CPU 0 executor
                 StageExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             }).collect(),
 
@@ -180,9 +180,6 @@ impl GlobalCtx {
             arena_fd: Some(arena_fd),
         })
     }
-
-
-
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
         let mut guard  = GlobalCtx::global().reset_mutex[tho_device_idx-1].lock();
@@ -417,7 +414,7 @@ impl GlobalCtx {
         assert_ne!(tho_device_idx, 0);
         info!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr}");
         let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
-        // let caches_lock = perf_log!(sync_read_lock!(self.caches));
+
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {

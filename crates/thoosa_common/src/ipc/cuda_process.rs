@@ -26,10 +26,12 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::{JoinHandle, spawn_blocking};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
+use thoosa_shims::context::ThoCudaContext;
 use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 
@@ -424,6 +426,11 @@ impl CudaIPCActor {
             }
             CudaIPCActorMessage::Reset { respond_to } => {
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
+
+                let mut cu_ctx = ThoCudaContext::new(self.tho_device_idx as i32 - 1)?;
+                cu_ctx.reset()?;
+                // timeout(Duration::from_millis(1000), copy_ctx.write()).await?.reset()
+
                 let replacement = match Self::spawn_worker_and_loops(self.tho_device_idx, &self.cuda_worker_args, self.arena_fd.as_fd()).await {
                     Ok(replacement) => replacement,
                     Err(error) => {

@@ -37,12 +37,9 @@ use crate::ipc::worker_msg::{CudaWorkerMsgOut, OpResult};
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
-pub enum CudaActorMessage {
+pub enum CudaLocalActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
-    SyncStream {
-        stream:Guard<ThoCudaStream>,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
+
     GetExecStream {
         respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
     },
@@ -217,13 +214,13 @@ impl dyn CudaActorHandle + '_ {
 
 struct CudaLocalActor {
     tho_device_idx:usize,
-    receiver: mpsc::Receiver<CudaActorMessage>,
+    receiver: mpsc::Receiver<CudaLocalActorMessage>,
     copy_ctx:Arc<RwLock<CopyCtx>>,
     is_resetting:Arc<AtomicBool>,
 }
 
 impl CudaLocalActor {
-    pub fn new(tho_device_idx:usize, receiver: mpsc::Receiver<CudaActorMessage>) -> Result<Self, ThoError> {
+    pub fn new(tho_device_idx:usize, receiver: mpsc::Receiver<CudaLocalActorMessage>) -> Result<Self, ThoError> {
         debug!("CudaActor::new: tho_device_idx={tho_device_idx}");
         assert!(tho_device_idx > 0);
 
@@ -235,10 +232,10 @@ impl CudaLocalActor {
         })
     }
 
-     fn handle_message(&mut self, msg: CudaActorMessage) {
+     fn handle_message(&mut self, msg: CudaLocalActorMessage) {
 
         match msg {
-            CudaActorMessage::Copy{ src, dst_device, respond_to } => {
+            CudaLocalActorMessage::Copy{ src, dst_device, respond_to } => {
                 if cuda_activity_gate().is_paused() {
                     let _ = respond_to.send(
                         Err(ThoError::new("CudaActor is offline"))
@@ -274,39 +271,7 @@ impl CudaLocalActor {
                      );
                  });
             }
-            CudaActorMessage::SyncStream { stream, respond_to } => {
-                if cuda_activity_gate().is_paused() {
-                    let _ = respond_to.send(
-                        Err(ThoError::new("CudaActor is offline"))
-                    );
-                    return;
-                }
-
-
-                let copy_ctx = Arc::clone(&self.copy_ctx);
-                let is_resetting = Arc::clone(&self.is_resetting);
-                let tho_device_idx = self.tho_device_idx;
-                tokio::spawn(async move {
-                    let result = match tokio::task::spawn_blocking(move || {
-                        stream.synchronize()
-
-                    }).await {
-                        Ok(result) => result,
-                        Err(e) => Err(ThoError::new(format!("CudaActor failed to join stream synchronization task: {e}"))),
-                    };
-
-                    if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
-                        if let Err(e) =Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "SyncStream").await {
-                            error!("CudaActor::handle_message, SyncStream:, e={e:?}");
-                        }
-                    }
-
-                    let _ = respond_to.send(result);
-
-                    Ok::<(), ThoError>(())
-                });
-            }
-            CudaActorMessage::Reset { respond_to } => {
+            CudaLocalActorMessage::Reset { respond_to } => {
                 if self.is_resetting.load(Relaxed) {
                     let _ = respond_to.send(
                         Err(ThoError::new("CudaActor is resetting"))
@@ -323,7 +288,7 @@ impl CudaLocalActor {
                     let _ = respond_to.send(Ok(()));
                 });
             }
-            CudaActorMessage::GetExecStream { respond_to } => {
+            CudaLocalActorMessage::GetExecStream { respond_to } => {
                 if cuda_activity_gate().is_paused() {
                     let _ = respond_to.send(
                         Err(ThoError::new("CudaActor is offline"))
@@ -381,7 +346,7 @@ impl CudaLocalActor {
 
 #[derive(Debug, Clone)]
 pub struct CudaLocalActorHandle {
-    sender: mpsc::Sender<CudaActorMessage>,
+    sender: mpsc::Sender<CudaLocalActorMessage>,
 }
 
 
@@ -401,21 +366,9 @@ impl CudaLocalActorHandle {
     async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::Copy {
+            CudaLocalActorMessage::Copy {
                 src,
                 dst_device,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
-    }
-
-    async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaActorMessage::SyncStream {
-                stream,
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
@@ -426,7 +379,7 @@ impl CudaLocalActorHandle {
     async fn reset_inner(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::Reset {
+            CudaLocalActorMessage::Reset {
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
@@ -438,7 +391,7 @@ impl CudaLocalActorHandle {
     async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::GetExecStream {
+            CudaLocalActorMessage::GetExecStream {
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
@@ -588,11 +541,10 @@ impl CopyCtx {
     pub fn reset(&mut self) -> Result<(), ThoError> {
         info!("CopyCtx::reset_cuda_context: about to reset cu_ctx.reset");
 
-
         let cuda_context = ThoCudaContext::new(self.cuda_device as i32)?;
         cuda_context.bind_to_thread()?;
-        let mut cu_ctx = ThoCudaContext::new(self.cuda_device as i32)?;
-        cu_ctx.reset()?;
+        // let mut cu_ctx = ThoCudaContext::new(self.cuda_device as i32)?;
+        // cu_ctx.reset()?;
 
         info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 
