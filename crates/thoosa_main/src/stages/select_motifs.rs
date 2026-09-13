@@ -26,7 +26,6 @@ use tokio::task::{JoinHandle, JoinSet};
 use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::cli::Commands::SelectMotifs;
 use crate::stages::cross_batch_clc::{CrossInput, UnfoldParams, unfold_and_cat};
 use crate::stages::cross_dims::ChannelsDataSelector;
 use crate::stages::cross_loader::{RangeOrSlice, ResourcesConfigInput};

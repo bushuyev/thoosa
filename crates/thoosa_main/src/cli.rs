@@ -1,7 +1,3 @@
-use crate::cli::Commands::{
-    ConvertPrecision, Export, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, PurgeModels, RunAll,
-    SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
-};
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::stages::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
@@ -50,22 +46,22 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_shared::traits::Stage;
 
-use crate::stages::apply_motif_nets::ApplyMotifNets;
+use crate::stages::apply_motif_nets::{ApplyMotifNets, APPLY_MOTIF_NET_ENDPOINT, apply_motif_net_endpoint_init, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
 use crate::stages::apply_motif_nets::apply_motif_net_forward;
 use crate::stages::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
 use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_sync_stage_endpoint_init, MOTIF_STATS_CONSUME_ENDPOINT, motif_stats_consume_stage_endpoint_init};
 use crate::stages::select_buckets::SelectBucketsRunConfigRangeOrValue;
 use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::stages::seq_scan::SeqScanStage;
 use crate::stages::slices_stats::{Aggr, Metrics};
-use crate::stages::train_final_net::{TrainFinalNetsRunConfigResult, new_train_final_net};
-use crate::stages::train_label_nets::{TrainLabelNetRunConfigResult, TrainLabelNets, new_train_label_nets};
-use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNetResult, TrainMotifNets, TrainMotifNetsResult};
-use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
+use crate::stages::train_final_net::{new_train_final_net, train_final_step_endpoint_inits, TrainFinalNetsRunConfigResult, SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init};
+use crate::stages::train_label_nets::{new_train_label_nets, train_label_step_endpoint_inits, TrainLabelNetRunConfigResult, TrainLabelNets, SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
+use crate::stages::train_motif_nets::{train_motif_step_endpoint_inits, TrainMotifNetInput, TrainMotifNetResult, TrainMotifNets, TrainMotifNetsResult};
+use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit, SYNC_FREQ_FILTER_ENDPOINT, sync_freq_filter_endpoint_init};
 use thoosa_common::args::{CommonArgs, StageCommand};
 use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::data_with_extra::DataWithExtra;
@@ -102,6 +98,7 @@ use tokio::time::MissedTickBehavior;
 use tokio::{select, sync::watch, time::{self, Duration}};
 use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
+use thoosa_common::ipc::cuda_wokrer::InitFn;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOMHandler};
@@ -118,15 +115,15 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shims::context::tho_cu_reset;
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
-
-
+use crate::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
+use crate::stages::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum MotifCommands {
-    FindMotifs2(FindMotifsArgs),
-    SeqScan2(SeqScanArgs),
-    SelectMotifs2(SelectMotifsArgs),
-    MergeSelectedMotifs2(MergeSelectedMotifsArgs),
+    FindMotifs(FindMotifsArgs),
+    SeqScan(SeqScanArgs),
+    SelectMotifs(SelectMotifsArgs),
+    MergeSelectedMotifs(MergeSelectedMotifsArgs),
     TrainMotifsNets(TrainMotifsNetsArgs),
     TrainLabelNets(TrainLabelNetsArgs),
     TrainFinalNet(TrainFinalNetArgs),
@@ -143,16 +140,13 @@ impl StageCommand for MotifCommands {
 
     async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            MotifCommands::FindMotifs2(find_motifs_args) => {
+            MotifCommands::FindMotifs(find_motifs_args) => {
                 debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
 
                 let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
-                    serde_json5::from_str(&find_motifs_args.run_config_cnt)
-                        .expect("FindMotifsRunConfig2");
+                    serde_json5::from_str(&find_motifs_args.run_config_cnt).expect("FindMotifsRunConfig");
 
                 debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
-
-
 
                 let loader = init_loader(ws);
 
@@ -189,7 +183,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::SeqScan2(seq_scan_args) => {
+            MotifCommands::SeqScan(seq_scan_args) => {
                 debug!("SeqScan: seq_scan_args={seq_scan_args:?}");
                 let loader = init_loader(ws);
 
@@ -219,7 +213,7 @@ impl StageCommand for MotifCommands {
                 info!("SeqScan done, run_config_ids={run_config_ids:?}");
                 Ok(())
             }
-            MotifCommands::SelectMotifs2(select_motifs_args) => {
+            MotifCommands::SelectMotifs(select_motifs_args) => {
                 debug!("SelectMotifs: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
                 let loader = init_loader(ws);
 
@@ -258,7 +252,7 @@ impl StageCommand for MotifCommands {
                 info!("SelectMotifs done, run_config_ids={run_config_ids:?}");
                 Ok(())
             }
-            MotifCommands::MergeSelectedMotifs2(merge_selected_motifs_args) => {
+            MotifCommands::MergeSelectedMotifs(merge_selected_motifs_args) => {
                 debug!("MergeSelectedMotifs: merge_selected_motifs_args{:?}",merge_selected_motifs_args);
                 let loader = init_loader(ws);
 
@@ -484,23 +478,12 @@ impl StageCommand for MotifAppCommands {
 }
 
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-pub struct MotifAppArgs {//should be HbacArgs, BirdClefArgs
-
-    #[command(flatten)]
-    pub common_args: CommonArgs<MotifAppCommands>,
-
-    #[command(subcommand)]
-    pub old_command: Option<Commands>,
-
-}
 /////////////////
 
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum CommonCommands {
-    ConvertPrecision2(ConvertPrecisionArgs),
-    SayHello2(SayHelloArgs),
+    ConvertPrecision(ConvertPrecisionArgs),
+    SayHello(SayHelloArgs),
 }
 
 #[async_trait]
@@ -510,7 +493,7 @@ impl StageCommand for CommonCommands {
 
     async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            CommonCommands::ConvertPrecision2(convert_precision_args) => {
+            CommonCommands::ConvertPrecision(convert_precision_args) => {
                 debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
                 let output = track_await(Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
                     .run(
@@ -521,7 +504,7 @@ impl StageCommand for CommonCommands {
                 info!("ConvertPrecision done, converted={}", output.converted().len());
             }
 
-            CommonCommands::SayHello2(args) => {
+            CommonCommands::SayHello(args) => {
                 debug!("CommonCommands::SayHello:run: args={args:?}");
             }
 
@@ -681,26 +664,6 @@ impl BucketOptArgs {
     }
 }
 
-#[derive(Debug, Subcommand, Clone)]
-pub enum Commands {
-    ImportResources(ImportResourcesArgs),
-    FindMotifs(FindMotifsArgs),
-    SeqScan(SeqScanArgs),
-    PlotData(PlotDataArgs),
-    MotifsToTensor(MotifsToTensorArgs),
-    SelectMotifs(SelectMotifsArgs),
-    MergeSelectedMotifs(MergeSelectedMotifsArgs),
-    TrainMotifsNets(TrainMotifsNetsArgs),
-    TrainLabelNets(TrainLabelNetsArgs),
-    TrainFinalNet(TrainFinalNetArgs),
-    ConvertPrecision(ConvertPrecisionArgs),
-    Export(ExportArgs),
-    PurgeModels(PurgeModelsArgs),
-    RunAll(RunAllArgs),
-    Infer(InferArgs),
-    SayHello(SayHelloArgs),
-}
-
 #[allow(dead_code)]
 fn set_oom_score_adj(score: i32) {
     let pid = process::id();
@@ -715,180 +678,55 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-
-pub async fn run_cli<C, CS, F, R, A, S, FI>(
-    args: CommonArgs<C>,
-    old_commands: Option<Commands>,
-    store2:Arc<CS>,
-    labeled_resources: F,
-    resource_to_tensor: R,
-    init_data:S,
-    run_all:A,
-    labels: &[&str],
-    app_configs: WsConfigs,
-    infer: Option<FI>,
-    cdt_for_dir: String,
-) -> Result<(), ThoError>
-where
-    C: Subcommand + StageCommand<Store=Arc<CS>>+ Clone + std::fmt::Debug,
-    CS:?Sized + MotifsStore,
-    F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
-    R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
-    A: AsyncFn(
-        &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<dyn MotifsStore>,
-        &Arc<RawTensorLoader<RunCtxImpl>>,
-        RunCtxImpl,
-        &RunAllArgs,
-    ) -> Result<(), ThoError>,
-    S: FnOnce(&Transaction) -> Result<(), ThoError>,
-    FI: AsyncFnOnce(
-        &InferArgs,
-        &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<dyn MotifsStore>,
-    ) -> Result<(), ThoError>
-{
-    // console_subscriber::init();
-    // if log::log_enabled!(log::Level::Trace) {
-    //     reset_print_options();
-    // }
-    //set_oom_score_adj(-1000);//TODO conf, needs sudo
-
-    //gpt Navigation note: project binaries such as thoosa_bird_clef provide the closures above.
-    //gpt This shared function handles CLI parsing, workspace/store setup, tensor cache loading, and command dispatch.
-    // unsafe {
-    //     at_grad_set_enabled(0);
-    // };
-
-    // let cli = Cli::parse();
-
-
-    let ws = match &old_commands {
-        Some(Infer(InferArgs{ models_dir: Some(models_dir), .. })) => {
-            info!("FsWorkspace: models_dir={models_dir:?}");
-            Arc::new(RwLock::new(FsWorkspace::new_with_models_dir(
-                args.ws_path.clone(),
-                &app_configs,
-                models_dir //to run inference on kaggle with model dir mounted under different dataset
-            )?))
-        }
-        _=> {
-            Arc::new(RwLock::new(FsWorkspace::new(
-                args.ws_path.clone(),
-                app_configs,
-            )?))
-        }
-    };
-
-
-    // let log_filename = ws.read()
-    //     .log_path()
-    //     .join(format!("thoosa_{}.log", cdt_for_dir).to_owned());
-    //
-    //
-    // let perf_path = if args.write_perf_log_file {
-    //     Some(
-    //         ws.read()
-    //             .log_path()
-    //             .join(format!("thoosa_perf_{}.log", cdt_for_dir).to_owned()),
-    //     )
-    // } else {
-    //     None
-    // };
-    //
-    // install_panic_hook(SyncMakeWriter::new(OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .open( ws.read()
-    //         .log_path()
-    //         .join(format!("thoosa_panic_{}.log", cdt_for_dir)))?));
-    //
-    //
-    // let _logging_guards = init_tracing(
-    //     args.term_logger_level,
-    //     args.term_logger_extra_fields,
-    //     args.write_logger_level,
-    //     args.write_logger_extra_fields,
-    //     log_filename,
-    //     "info",
-    //     perf_path,
-    //     None,
-    // )?;
-    //
-    // init_cpp_logging();
-    //
-    // let _collect_eta_progress_server = match CollectEtaProgressSocketServer::start_default() {
-    //     Ok(server) => Some(server),
-    //     Err(err) => {
-    //         warn!("run_cli: failed to start collect ETA progress socket server: {err}");
-    //         None
-    //     }
-    // };
-
-
-    // Build the concrete SQL store first so the CLI retains the motif-specific trait-object boundary.
-    let store: Arc<dyn MotifsStore> = match &old_commands {
-        Some(Infer(..)) => {
-            info!("reqd-only SqlStore");
-            Arc::new(SqlStore::from_path_readonly_(ws.read().store_path()).await?)
-        }
-        _=> {
-            Arc::new(SqlStore::from_path_(ws.read().store_path()).await?)
-        }
-    };
-
-
-    // RUN_ID.set(match args.run_id{
-    //     None => {
-    //
-    //         if let Some(Infer(_) | Export(_)) = &old_commands {
-    //             panic!("No run_id")
-    //         }
-    //         track_await(store.save_run(format!("{args:?}"))).await?
-    //     }
-    //     Some(run_id) => run_id
-    // }).expect("can't set run_id");
-
-    let devices = list_devices();
-    //
-    // let cpu_num = std::thread::available_parallelism()?;
-    //
-    // //TODO torch.backends.cuda.matmul.allow_tf32 = True
-    // info!(
-    //     "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={} run_id={}",
-    //     args.ws_path,
-    //     tch::get_num_interop_threads(),
-    //     tch::get_num_threads(),
-    //     run_id()
-    // );
-    // std::io::stdout().flush()?;
-
-    let tensors_path = ws.read().tensors_path().clone();
-
-    if args.ipc {
-        info!("Running in IPC mode");
-
-        if !std::env::var(CUDA_VISIBLE_DEVICES).map(|v|v.eq("-1")).unwrap_or(false) {
-            println!("Run with CUDA_VISIBLE_DEVICES=-1 in IPC mode");
-            std::process::exit(0);
-        }
-
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![
-            format!("--ws-path={}", args.ws_path),
-            format!("--term-logger-level={}", args.term_logger_level),
-            format!("--write-logger-level={}", args.write_logger_level)
-        ]).await?;
-    } else {
-        // kick_register_cuda_hooks();
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
-    }
-
-
-
-
-    Ok(())
+pub fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
+    let mut endpoints = train_motif_step_endpoint_inits();
+    // Label and final training now execute through the same worker-owned proxy lifecycle as motif training.
+    endpoints.extend(train_label_step_endpoint_inits());
+    endpoints.extend(train_final_step_endpoint_inits());
+    endpoints.extend([
+        (
+            CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
+            Box::new(sync_cross_unfold_clc_endpoint_init) as InitFn,
+        ),
+        (
+            MOTIF_STATS_SYNC_ENDPOINT.to_string(),
+            Box::new(motif_stats_sync_stage_endpoint_init) as InitFn,
+        ),
+        (
+            MOTIF_STATS_CONSUME_ENDPOINT.to_string(),
+            Box::new(motif_stats_consume_stage_endpoint_init) as InitFn,
+        ),
+        (
+            SYNC_FREQ_FILTER_ENDPOINT.to_string(),
+            Box::new(sync_freq_filter_endpoint_init) as InitFn,
+        ),
+        (
+            APPLY_MOTIF_NET_ENDPOINT.to_string(),
+            Box::new(apply_motif_net_endpoint_init) as InitFn,
+        ),
+        (
+            APPLY_LABEL_NET_ENDPOINT.to_string(),
+            Box::new(apply_label_net_endpoint_init) as InitFn,
+        ),
+        (
+            STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
+            Box::new(stack_applied_motif_nets_init) as InitFn,
+        ),
+        (
+            STACK_APPLIED_LABEL_NETS_ENDPOINT.to_string(),
+            Box::new(stack_applied_label_nets_init) as InitFn,
+        ),
+        (
+            SYNC_LABEL_BATCH_ENDPOINT.to_string(),
+            Box::new(sync_label_batch_endpoint_init) as InitFn,
+        ),
+        (
+            SYNC_LOGITS_BATCH_ENDPOINT.to_string(),
+            Box::new(sync_logits_batch_init) as InitFn,
+        ),
+    ]);
+    endpoints
 }
-
 
 fn resolve_median_window<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &P) -> RangeOrValue<u32> {
     match named_vals.iter().find(|field| field.path() == window_path) {
@@ -2022,7 +1860,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{MotifAppArgs, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
+    use crate::cli::{import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot, MotifAppCommands, RunAllArgs, CommonCommands, MotifCommands};
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::stages::find_motifs::FindMotifsStage;
@@ -2058,6 +1896,7 @@ mod cli_tests {
     use tch::display::{PrinterOptions, set_print_options};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Device, IndexOp, Tensor, nn};
+    use thoosa_common::args::CommonArgs;
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::ChannelsData;
@@ -2104,6 +1943,16 @@ mod cli_tests {
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
 
+    #[derive(Parser, Debug)]
+    #[command(version, about, long_about = None)]
+    pub struct MotifAppArgs {
+
+        #[command(flatten)]
+        pub common_args: CommonArgs<MotifAppCommands>,
+
+    }
+
+
     #[ctor::ctor]
     pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
@@ -2125,8 +1974,8 @@ mod cli_tests {
     fn test_plot_data_resolution_flag_parses_high() {
         let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
 
-        match cli.old_command {
-            Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.resolution(), Resolution::High),
+        match cli.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert_eq!(args.resolution(), Resolution::High),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -2135,8 +1984,8 @@ mod cli_tests {
     fn test_plot_data_stdout_flag_parses_true() {
         let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--stdout"]);
 
-        match cli.old_command {
-            Some(crate::cli::Commands::PlotData(args)) => assert!(args.print_to_stdout()),
+        match cli.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert!(args.print_to_stdout()),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -2145,8 +1994,8 @@ mod cli_tests {
     fn test_plot_data_motif_id_parses_multiple_ids() {
         let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:1,2,3"]);
 
-        match cli.old_command {
-            Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
+        match cli.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -2155,8 +2004,8 @@ mod cli_tests {
     fn test_plot_data_motif_id_parses_spaced_quoted_ids() {
         let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:'1, 2'"]);
 
-        match cli.old_command {
-            Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
+        match cli.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -2165,8 +2014,8 @@ mod cli_tests {
     fn test_convert_precision_command_parses() {
         let cli = MotifAppArgs::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
 
-        match cli.old_command {
-            Some(crate::cli::Commands::ConvertPrecision(args)) => {
+        match cli.common_args.command {
+            Some(MotifAppCommands::CommonCommands(CommonCommands::ConvertPrecision(args))) => {
                 assert_eq!(args.nets_by(), crate::stages::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
                 assert_eq!(args.target_precision(), crate::stages::convert_precision::ConvertPrecisionTarget::Bf16);
             }
@@ -2177,66 +2026,24 @@ mod cli_tests {
     #[test]
     fn test_merge_selected_motifs_ids_parse_single_spaced_and_csv_values() {
         let single = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1"]);
-        match single.old_command {
-            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
+        match &single.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
             other => panic!("unexpected command: {other:?}"),
         }
 
         let spaced = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids='1, 2'"]);
-        match spaced.old_command {
-            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
+        match &spaced.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
             other => panic!("unexpected command: {other:?}"),
         }
 
         let csv = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1,2,3"]);
-        match csv.old_command {
-            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
+        match &csv.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
-    #[test]
-    fn test_run_all_resolution_flag_parses_high() {
-        let cli = MotifAppArgs::parse_from([
-            "thoosa_main",
-            "run-all",
-            "--find-resources", "group:find",
-            "--select-resources", "group:select",
-            "--resolution", "high",
-        ]);
-
-        match cli.old_command {
-            Some(crate::cli::Commands::RunAll(args)) => assert_eq!(args.resolution, Resolution::High),
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_import_resources_freq_filters_parse() {
-        let cli = MotifAppArgs::parse_from([
-            "thoosa_main",
-            "import-resources",
-            "--source-path",
-            "/tmp/input",
-            "--freq-filters",
-            "{MedianFilter:{window:5}}",
-            "--freq-filters",
-            "{AverageFilter:{window:7,step:1}}",
-        ]);
-
-        match cli.old_command {
-            Some(crate::cli::Commands::ImportResources(args)) => {
-                assert_eq!(
-                    args.freq_filters,
-                    vec![
-                        InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
-                        InputFilter::AverageFilter(AverageFilterParams { window: 7, step: 1 }),
-                    ],
-                );
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
 
     #[test]
     fn test_seq_scan_command_parses() {
@@ -2247,8 +2054,8 @@ mod cli_tests {
             "--run-config-cnt", "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}",
         ]);
 
-        match cli.old_command {
-            Some(crate::cli::Commands::SeqScan(args)) => {
+        match cli.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::SeqScan(args))) => {
                 assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
                 assert_eq!(args.run_config_cnt, "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}");
             }

@@ -75,6 +75,88 @@ impl MotifsStore for SqlStore {
 }
 
 pub fn create_motif_tables( conn: &mut Connection) -> Result<(), ThoError> {
+    let t = conn.transaction()?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS labels (
+                id          INTEGER PRIMARY KEY,
+                label       VARCHAR(256),
+                UNIQUE(label)
+            )",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_label ON labels (label);",
+        (),
+    )?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS labeled_resources (
+                resource_id    NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                label_id       NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+                p              FLOAT NOT NULL,
+                PRIMARY KEY (resource_id, label_id)
+            )",
+        (),
+    )?;
+
+    t.execute("CREATE INDEX IF NOT EXISTS idx_labeled_resources_label_id ON labeled_resources(label_id)", ())?;
+
+    t.execute("commit", ())?;//TODO commit together with common tables
+
+    t.execute(
+        //group - ordinal as appeared when grouping, not needed
+        "CREATE TABLE IF NOT EXISTS motifs (
+                id              INTEGER PRIMARY KEY,
+                group_ord       INTEGER NOT NULL,
+                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                channel_id      INTEGER NOT NULL
+            )",
+        (),
+    )?;
+    t.execute("CREATE INDEX IF NOT EXISTS idx_motifs_run_config_id ON motifs (run_config_id);", ())?;
+
+    //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS slices (
+                id              INTEGER PRIMARY KEY,
+                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
+                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                channel_id      INTEGER NOT NULL,
+                resource_id     REFERENCES resources(id) ON DELETE CASCADE,
+                slice_idx       INTEGER NOT NULL,
+                UNIQUE(motif_id, run_config_id, resource_id, slice_idx)
+            )",
+        (),
+    )?;
+    // The UNIQUE index on (motif_id, run_config_id, resource_id, slice_idx) already covers the
+    // motif_id-led access pattern used by list_run_motifs. Keep inserts fast by ensuring
+    // we do not maintain extra slices indexes.
+    t.execute("DROP INDEX IF EXISTS idx_slices_motif_id;", ())?;
+    t.execute("DROP INDEX IF EXISTS idx_slices_motif_id_resource_id;", ())?;
+
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS slice_matches (
+                id              INTEGER PRIMARY KEY,
+                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
+                slice_id_0      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
+                slice_id_1      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
+                dist            FLOAT NOT NULL
+            )",
+        (),
+    )?;
+
+    //labels_motifs on resource_set
+    t.execute(
+        "CREATE TABLE IF NOT EXISTS selected_motifs (
+                motif_id   REFERENCES motifs(id),
+                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                rate    FLOAT NOT NULL
+            )",
+        (),
+    )?;
+    t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_config_id_motif_id ON selected_motifs (run_config_id, motif_id);", ())?;
 
     Ok(())
 }

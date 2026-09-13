@@ -5,7 +5,7 @@
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::{StreamExt, TryStreamExt};
 use log::{LevelFilter, debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -19,9 +19,11 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use async_trait::async_trait;
 use tch::Kind::{BFloat16, Float};
 use tch::kind::FLOAT_CPU;
 use tch::{Cuda, Device, IndexOp, Kind, Tensor};
+use tch::Device::Cpu;
 use thoosa_common::dims::{ChannelsData, LabelProbability};
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
@@ -35,7 +37,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{run_cli, MotifAppArgs, RunAllArgs};
+use thoosa_main::cli::{RunAllArgs, ImportResourcesArgs, CommonCommands, MotifCommands, import_resources, init_loader};
 use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_main::stages::apply_label_nets::ApplyLabelNets;
 use thoosa_main::stages::stft::SyncStftSelector;
@@ -48,6 +50,9 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
 use tokio::task::JoinHandle;
+use thoosa_common::args::{CommonArgs, StageCommand};
+use thoosa_common::commands::common_cli::run_common_cli;
+use thoosa_main::stages::transforms::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_motifs::motifs_store::MotifsStore;
 
 mod data;
@@ -64,15 +69,163 @@ thread_local! {
 }
 
 
+#[derive(clap::Subcommand, Clone, Debug)]
+pub enum BirdClefAppCommands {
+    #[command(flatten)]
+    CommonCommands(CommonCommands),
+
+    #[command(flatten)]
+    Motifs(MotifCommands),
+
+    #[command(flatten)]
+    BirdClef(BirdClefCommands),
+}
+
+#[async_trait]
+impl StageCommand for BirdClefAppCommands {
+    type Store = Arc<dyn MotifsStore>;
+    type Ctx = RunCtxImpl;
+
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            BirdClefAppCommands::CommonCommands(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
+            }
+            BirdClefAppCommands::Motifs(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
+            }
+            BirdClefAppCommands::BirdClef(c) => {
+                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
+            }
+        }
+    }
+}
+
+
+#[derive(Debug, Subcommand, Clone)]
+pub enum BirdClefCommands {
+    ImportResources(ImportResourcesArgs),
+    RunAll(RunAllArgs)
+}
+
+#[async_trait]
+impl StageCommand for BirdClefCommands {
+    type Store = Arc<dyn MotifsStore>;
+    type Ctx = RunCtxImpl;
+
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx: RunCtxImpl) -> Result<(), ThoError> {
+        match self {
+            BirdClefCommands::ImportResources(import_resources_args) => {
+                debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
+                let freq_filter = if import_resources_args.freq_filters.is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
+                        import_resources_args.freq_filters.clone(),
+                        ws.read().channels() as i64,
+                        ws.read().sample_rate() as f64,
+                        0,
+                        ctx.tho_device_idx(),
+                    ))?))
+                };
+                track_await(import_resources(
+                    &ws,
+                    store,
+                    &LABELS,
+                    || data::labeled_resourses(&import_resources_args.source_path),
+
+                    | key| {
+                        thoosa_main::data::parquet_to_tensor_by_path(
+                            PathBuf::from(&import_resources_args.source_path)
+                                .join("train_eegs")
+                                .join(format!("{}.parquet", key)),
+                            Cpu,
+                        )
+                    },
+                    freq_filter,
+                    true,
+                    |t: &Transaction|{
+
+                        SqlStore::save_all_sets(&t)?;
+
+                        //gpt This import-resources hook seeds named resource sets. Later CLI args like --find-resources=H1000000 resolve through these generated sets.
+                        //resources used in previous N-set not included, sorted by size
+                        SqlStore::save_leaky_data_sets("A", LimitBy::Count(1), None, 0.6, 0.2, 1.0, &t)?;
+                        SqlStore::save_leaky_data_sets("A", LimitBy::Count(3), None, 0.6, 0.2, 1.0, &t)?;
+                        SqlStore::save_leaky_data_sets("A", LimitBy::Count(6), None, 0.6, 0.2, 1.0, &t)?;
+
+                        SqlStore::save_leaky_data_sets("B", LimitBy::Count(3), Some(32000), 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("B", LimitBy::Count(6), Some(32000), 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("B", LimitBy::Count(10), Some(32000), 0.6, 0.2, 0.9, &t)?;
+
+                        SqlStore::save_leaky_data_sets("C", LimitBy::Count(10), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("C", LimitBy::Count(20), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("C", LimitBy::Count(30), None, 0.6, 0.2, 0.9, &t)?;
+
+                        SqlStore::save_leaky_data_sets("D", LimitBy::Count(100), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("E", LimitBy::Count(200), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("F", LimitBy::Count(300), None, 0.6, 0.2, 0.9, &t)?;
+
+                        SqlStore::save_leaky_data_sets("G", LimitBy::Length(500_000), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("H", LimitBy::Length(1_000_000), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("I", LimitBy::Length(3_000_000), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("J", LimitBy::Length(10_000_000), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("K", LimitBy::Length(30_000_000), None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("L", LimitBy::Length(60_000_000), None, 0.6, 0.2, 0.9, &t)?;
+
+
+                        //shuffles randomly
+                        SqlStore::save_leaky_data_sets("X", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("Y", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
+                        SqlStore::save_leaky_data_sets("Z", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
+
+
+                        Ok(())
+                    }
+                )).await?;
+
+                Ok(())
+            }
+            BirdClefCommands::RunAll(run_all_args) => {
+                debug!("bird_clef run all");
+                let loader = init_loader(ws);
+
+                let run_mode = run_all_config_0(&run_all_args);
+                // let run_mode = run_labels_config_0(run_all_args);
+
+                //gpt run-all starts here after run_cli has opened the workspace/store and built the RawTensorLoader over saved *.pt tensors.
+                track_await(run_all(
+                    ws,
+                    store,
+                    &loader,
+                    ctx,
+                    &run_all_args,
+                    run_mode
+                )).await?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+pub struct BirdClefArgs {
+
+    #[command(flatten)]
+    pub common_args: CommonArgs<BirdClefAppCommands>,
+}
+
+
 
 fn main() -> Result<(), ThoError>{
     let cdt = cdt_for_dir();
+    let args = BirdClefArgs::parse();
     let app_configs = WsConfigs::new(1, u32::MAX, 32000);
     CudaWorker::run_if_sock(&cdt, &app_configs, HashMap::new())?;
     // tch::set_num_threads(1);
     // tch::set_num_interop_threads(1);
 
-    let cli = MotifAppArgs::parse();
 
     info!("bird_clef main");
     if let Ok(thoosa_num_interop_threads)= std::env::var("THOOSA_NUM_INTEROP_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<u32>().map_err(|e|ThoError::from(e))){
@@ -167,12 +320,31 @@ fn main() -> Result<(), ThoError>{
             ThoError::from_error("tokio runtime build failed", err)
         })?;
 
-    let run_result = rt.block_on(async move {
+    let run_result:Result<(), ThoError> = rt.block_on(async move {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            cli.common_args.ws_path.clone(),
+            args.common_args.ws_path.clone(),
             app_configs.clone(),
         )?));
+
+        //TODO
+        // let ws = match &old_commands {
+        //     Some(Infer(InferArgs{ models_dir: Some(models_dir), .. })) => {
+        //         info!("FsWorkspace: models_dir={models_dir:?}");
+        //         Arc::new(RwLock::new(FsWorkspace::new_with_models_dir(
+        //             args.ws_path.clone(),
+        //             &app_configs,
+        //             models_dir //to run inference on kaggle with model dir mounted under different dataset
+        //         )?))
+        //     }
+        //     _=> {
+        //         Arc::new(RwLock::new(FsWorkspace::new(
+        //             args.ws_path.clone(),
+        //             app_configs,
+        //         )?))
+        //     }
+        // };
+
 
         let store = Arc::new(SqlStore::from_path_with_tables(
             ws.read().store_path(),
@@ -182,80 +354,23 @@ fn main() -> Result<(), ThoError>{
             ]
         ).await?);
 
-        track_await(run_cli(
-            cli.common_args,
-            cli.old_command,
+        run_common_cli(
+            args.common_args.clone(),
             Arc::clone(&store) as Arc<dyn MotifsStore>,
-            |source_path| data::labeled_resourses(source_path),
-            resource_to_tensor,
-            |t: &Transaction|{
-                SqlStore::save_all_sets(&t)?;
-
-                //gpt This import-resources hook seeds named resource sets. Later CLI args like --find-resources=H1000000 resolve through these generated sets.
-                //resources used in previous N-set not included, sorted by size
-                SqlStore::save_leaky_data_sets("A", LimitBy::Count(1), None, 0.6, 0.2, 1.0, &t)?;
-                SqlStore::save_leaky_data_sets("A", LimitBy::Count(3), None, 0.6, 0.2, 1.0, &t)?;
-                SqlStore::save_leaky_data_sets("A", LimitBy::Count(6), None, 0.6, 0.2, 1.0, &t)?;
-
-                SqlStore::save_leaky_data_sets("B", LimitBy::Count(3), Some(32000), 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("B", LimitBy::Count(6), Some(32000), 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("B", LimitBy::Count(10), Some(32000), 0.6, 0.2, 0.9, &t)?;
-
-                SqlStore::save_leaky_data_sets("C", LimitBy::Count(10), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("C", LimitBy::Count(20), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("C", LimitBy::Count(30), None, 0.6, 0.2, 0.9, &t)?;
-
-                SqlStore::save_leaky_data_sets("D", LimitBy::Count(100), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("E", LimitBy::Count(200), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("F", LimitBy::Count(300), None, 0.6, 0.2, 0.9, &t)?;
-
-                SqlStore::save_leaky_data_sets("G", LimitBy::Length(500_000), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("H", LimitBy::Length(1_000_000), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("I", LimitBy::Length(3_000_000), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("J", LimitBy::Length(10_000_000), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("K", LimitBy::Length(30_000_000), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("L", LimitBy::Length(60_000_000), None, 0.6, 0.2, 0.9, &t)?;
-
-
-                //shuffles randomly
-                SqlStore::save_leaky_data_sets("X", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("Y", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("Z", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
-
-                Ok(())
+            Arc::clone(&ws),
+            |source_path, key| {
+                thoosa_main::data::parquet_to_tensor_by_path(
+                    source_path
+                        .as_ref()
+                        .join("train_eegs")
+                        .join(format!("{}.parquet", key)),
+                    Cpu,
+                )
             },
-            async |
-                ws: &Arc<RwLock<Box<dyn Workspace>>>,
-                store: &Arc<dyn MotifsStore>,
-                loader: &Arc<RawTensorLoader<RunCtxImpl>>,
-                root_ctx: RunCtxImpl,
-                run_all_args: &RunAllArgs
-            |{
-                debug!("bird_clef run all");
-                let run_mode = run_all_config_0(run_all_args);
-                // let run_mode = run_labels_config_0(run_all_args);
+            cdt.clone()
+        ).await?;
 
-                //gpt run-all starts here after run_cli has opened the workspace/store and built the RawTensorLoader over saved *.pt tensors.
-                track_await(run_all(
-                    ws,
-                    store,
-                    loader,
-                    root_ctx,
-                    run_all_args,
-                    run_mode
-                )).await?;
-
-                Ok(())
-            },
-            &LABELS,
-            app_configs,
-            Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<dyn MotifsStore>,|{
-                debug!("bird_clef: infer");
-                track_await(infer_labels(params, ws, store)).await
-
-            }),
-            cdt
-        )).await
+        Ok(())
     });
 
 
