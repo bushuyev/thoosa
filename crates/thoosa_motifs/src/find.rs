@@ -38,8 +38,8 @@ use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
 use thoosa_shared::val::Val;
 use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoError};
 use thoosa_shared::{avg_hist, parse_key_val};
-use thoosa_store::{IdSlice, MotifGroupsStore, MotifTrackerStore, SqlStore, Store};
-use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
+use thoosa_store::{SqlStore, Store};
+use crate::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
 
 use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeQuantile, LocalMin, Tril};
 use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t, MaskMaker};
@@ -77,7 +77,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::Data;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::panic_to_err;
-use thoosa_store::fs_store::FileMotifTrackerStore;
+use crate::fs_store::FileMotifTrackerStore;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsArgs {
@@ -288,6 +288,7 @@ mod motif_find_tests {
     use thoosa_shared::*;
 
     use crate::distance::clc_dist_d2;
+    use crate::motifs_store::MotifsStore;
     use crate::find::{
         FixedFindMotifsConfig, MotifTrackerStore,
     };
@@ -301,7 +302,8 @@ mod motif_find_tests {
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val;
     use thoosa_shared::val::Val::UInt;
-    use thoosa_store::{IdSlice, MotifGroupsStore, SlicesMatch, SqlStore, Store};
+    use crate::motif_tracker_store::{IdSlice, SlicesMatch};
+    use thoosa_store::{SqlStore, Store};
 
     #[ctor::ctor]
     fn init() {
@@ -440,7 +442,7 @@ mod motif_find_tests {
 
         async fn load_slices_into_groups(
             &mut self,
-            _store: &dyn MotifGroupsStore,
+            _store: &dyn MotifsStore,
             max_slices_counts: Option<u32>,
         ) -> Result<usize, ThoError> {
             todo!()

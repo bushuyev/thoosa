@@ -1275,9 +1275,10 @@ mod tests {
     use thoosa_shared::run_configs::RUN_ID;
     use thoosa_shared::traits::ConsumeResult;
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir};
-    use thoosa_store::fs_store::ChunkedSlicesReader;
+    use thoosa_motifs::fs_store::ChunkedSlicesReader;
     use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
-    use thoosa_store::{SlicesMatch, SqlStore};
+    use thoosa_motifs::motif_tracker_store::SlicesMatch;
+    use thoosa_store::SqlStore;
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use tracing::subscriber::NoSubscriber;

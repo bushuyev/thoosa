@@ -37,7 +37,8 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError, collect_futures_with_progress, panic_to_err};
-use thoosa_store::{IdSlice, Store};
+use thoosa_motifs::motif_tracker_store::IdSlice;
+use thoosa_store::Store;
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
 
@@ -1369,7 +1370,8 @@ mod tests {
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_store::{IdSlice, SqlStore, Store};
+    use thoosa_motifs::motif_tracker_store::IdSlice;
+    use thoosa_store::{SqlStore, Store};
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()

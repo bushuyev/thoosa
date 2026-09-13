@@ -1,4 +1,5 @@
 #![feature(unboxed_closures)]
+#![feature(iter_array_chunks)]
 #![allow(
     unused_imports,
     unused_variables,
@@ -19,4 +20,6 @@ pub mod fragments;
 pub mod pearson_corr;
 pub mod criteria;
 pub mod common_stats;
+pub mod fs_store;
+pub mod motif_tracker_store;
 pub mod motifs_store;

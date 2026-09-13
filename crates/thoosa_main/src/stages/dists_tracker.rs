@@ -34,8 +34,9 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
-use thoosa_store::fs_store::FileMotifTrackerStore;
-use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
+use thoosa_motifs::fs_store::FileMotifTrackerStore;
+use thoosa_motifs::motif_tracker_store::{SlicesMatch, SqlMotifTrackerStore};
+use thoosa_store::Store;
 
 type DistsMaskTensor = ThoTensor<AnyDims, SynKey>;
 
@@ -1592,7 +1593,8 @@ where
                 let mut tracker = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(mt));
                 (tracker.take_dumper()?, tracker.max_slices_counts())
             };
-            let groups_inserted = track_await(dumper.load_slices_into_groups(&self.store, max_slices_counts)).await?;
+            // Trackers now consume the motif store directly because both APIs share the same crate boundary.
+            let groups_inserted = track_await(dumper.load_slices_into_groups(self.store.as_ref(), max_slices_counts)).await?;
             channels_groups.push((channel, groups_inserted));
         }
 
