@@ -30,7 +30,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{run_cli, CommonCommands, MotifAppArgs, RunAllArgs, MotifCommands, Commands, ImportResourcesArgs, import_resources, run_grid, init_loader};
+use thoosa_main::cli::{CommonCommands, RunAllArgs, MotifCommands, ImportResourcesArgs, import_resources, run_grid, init_loader, cuda_worker_endpoint_inits};
 use thoosa_main::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
 use thoosa_main::stages::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
 use thoosa_main::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
@@ -50,55 +50,6 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
 
-fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
-    let mut endpoints = train_motif_step_endpoint_inits();
-    // Label and final training now execute through the same worker-owned proxy lifecycle as motif training.
-    endpoints.extend(train_label_step_endpoint_inits());
-    endpoints.extend(train_final_step_endpoint_inits());
-    endpoints.extend([
-        (
-            CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
-            Box::new(sync_cross_unfold_clc_endpoint_init) as InitFn,
-        ),
-        (
-            MOTIF_STATS_SYNC_ENDPOINT.to_string(),
-            Box::new(motif_stats_sync_stage_endpoint_init) as InitFn,
-        ),
-        (
-            MOTIF_STATS_CONSUME_ENDPOINT.to_string(),
-            Box::new(motif_stats_consume_stage_endpoint_init) as InitFn,
-        ),
-        (
-            SYNC_FREQ_FILTER_ENDPOINT.to_string(),
-            Box::new(sync_freq_filter_endpoint_init) as InitFn,
-        ),
-        (
-            APPLY_MOTIF_NET_ENDPOINT.to_string(),
-            Box::new(apply_motif_net_endpoint_init) as InitFn,
-        ),
-        (
-            APPLY_LABEL_NET_ENDPOINT.to_string(),
-            Box::new(apply_label_net_endpoint_init) as InitFn,
-        ),
-        (
-            STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_motif_nets_init) as InitFn,
-        ),
-        (
-            STACK_APPLIED_LABEL_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_label_nets_init) as InitFn,
-        ),
-        (
-            SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as InitFn,
-        ),
-        (
-            SYNC_LOGITS_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_logits_batch_init) as InitFn,
-        ),
-    ]);
-    endpoints
-}
 
 
 
@@ -141,10 +92,6 @@ pub struct HbacArgs {
 
     #[command(flatten)]
     pub common_args: CommonArgs<HbacAppCommands>,
-
-    #[command(subcommand)]
-    pub old_command: Option<Commands>,
-
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -226,7 +173,6 @@ impl StageCommand for HbacCommands {
 }
 
 
-
 fn main() -> Result<(), ThoError> {
     let cdt = cdt_for_dir();
     let app_configs = WsConfigs::new(20, 684400, 200);
@@ -267,13 +213,12 @@ fn main() -> Result<(), ThoError> {
         .enable_all()
         .build()
         .map_err(|err| {
-            // error!("main: {err:?}");
+            error!("main: {err:?}");
             ThoError::from_error("tokio runtime build failed", err)
         })?;
 
 
     let run_result = rt.block_on(async move {
-        // let cdt = cdt_for_dir();
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             args.common_args.ws_path.clone(),
@@ -319,4 +264,57 @@ fn main() -> Result<(), ThoError> {
         }
     }
     
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use thoosa_common::transforms::filters::{AverageFilterParams, InputFilter, MedianFilterParams};
+    use thoosa_main::cli::{MotifAppCommands, MotifCommands};
+    use thoosa_motifs::fragments::Resolution;
+    use crate::{HbacAppCommands, HbacArgs, HbacCommands};
+
+    #[test]
+    fn test_import_resources_freq_filters_parse() {
+        let cli = HbacArgs::parse_from([
+            "thoosa_main",
+            "import-resources2",
+            "--source-path",
+            "/tmp/input",
+            "--freq-filters",
+            "{MedianFilter:{window:5}}",
+            "--freq-filters",
+            "{AverageFilter:{window:7,step:1}}",
+        ]);
+
+        match cli.common_args.command {
+            Some(HbacAppCommands::Hbac(HbacCommands::ImportResources2(args))) => {
+                assert_eq!(
+                    args.freq_filters,
+                    vec![
+                        InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
+                        InputFilter::AverageFilter(AverageFilterParams { window: 7, step: 1 }),
+                    ],
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_run_all_resolution_flag_parses_high() {
+        let cli = HbacArgs::parse_from([
+            "thoosa_main",
+            "run-all",
+            "--find-resources", "group:find",
+            "--select-resources", "group:select",
+            "--resolution", "high",
+        ]);
+
+        match cli.common_args.command {
+            Some(HbacAppCommands::Hbac(HbacCommands::RunAll(args))) => assert_eq!(args.resolution, Resolution::High),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
 }

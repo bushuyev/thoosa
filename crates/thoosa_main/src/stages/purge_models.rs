@@ -433,12 +433,13 @@ fn remove_disk_path(path: &Path) -> Result<bool, ThoError> {
 mod tests {
     use thoosa_motifs::motifs_store::{create_motif_tables, MotifsStore};
     use super::{PurgeDate, PurgeLabelModelsBy, PurgeMode, PurgeModelType, PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
-    use crate::cli::{MotifAppArgs, Commands};
+    use crate::cli::{CommonCommands, MotifAppCommands, MotifCommands};
     use clap::Parser;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use thoosa_common::args::CommonArgs;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -449,12 +450,22 @@ mod tests {
     use thoosa_shared::{ThoError, cdt_for_dir};
     use thoosa_store::{SqlStore, Store, TrainedNetsBy};
 
+    #[derive(Parser, Debug)]
+    #[command(version, about, long_about = None)]
+    pub struct MotifAppArgs {
+
+        #[command(flatten)]
+        pub common_args: CommonArgs<MotifAppCommands>,
+
+    }
+
+
     #[test]
     fn test_purge_models_command_parses() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "purge-models", "--purge-mode", "label:loss:0.1"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "purge-models2", "--purge-mode", "label:loss:0.1"]);
 
-        match cli.old_command {
-            Some(Commands::PurgeModels(args)) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),
+        match cli.common_args.command {
+            Some(MotifAppCommands::Motifs(MotifCommands::PurgeModels2(args))) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),
             other => panic!("unexpected command: {other:?}"),
         }
     }
