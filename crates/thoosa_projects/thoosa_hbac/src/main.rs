@@ -96,7 +96,7 @@ pub struct HbacArgs {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum HbacCommands {
-    ImportResources2(ImportResourcesArgs),
+    ImportResources(ImportResourcesArgs),
     RunAll(RunAllArgs)
 }
 
@@ -109,7 +109,7 @@ impl StageCommand for HbacCommands {
 
     async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            HbacCommands::ImportResources2(import_resources_args) => {
+            HbacCommands::ImportResources(import_resources_args) => {
                 debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
                 let freq_filter = if import_resources_args.freq_filters.is_empty() {
                     None
@@ -278,7 +278,7 @@ mod tests {
     fn test_import_resources_freq_filters_parse() {
         let cli = HbacArgs::parse_from([
             "thoosa_main",
-            "import-resources2",
+            "import-resources",
             "--source-path",
             "/tmp/input",
             "--freq-filters",
@@ -288,7 +288,7 @@ mod tests {
         ]);
 
         match cli.common_args.command {
-            Some(HbacAppCommands::Hbac(HbacCommands::ImportResources2(args))) => {
+            Some(HbacAppCommands::Hbac(HbacCommands::ImportResources(args))) => {
                 assert_eq!(
                     args.freq_filters,
                     vec![

@@ -465,7 +465,7 @@ mod tests {
         let cli = MotifAppArgs::parse_from(["thoosa_main", "purge-models2", "--purge-mode", "label:loss:0.1"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::PurgeModels2(args))) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),
+            Some(MotifAppCommands::Motifs(MotifCommands::PurgeModels(args))) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),
             other => panic!("unexpected command: {other:?}"),
         }
     }

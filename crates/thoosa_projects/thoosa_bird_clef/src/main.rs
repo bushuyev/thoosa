@@ -104,7 +104,7 @@ impl StageCommand for BirdClefAppCommands {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum BirdClefCommands {
-    ImportResources2(ImportResourcesArgs),
+    ImportResources(ImportResourcesArgs),
     RunAll(RunAllArgs)
 }
 
@@ -115,7 +115,7 @@ impl StageCommand for BirdClefCommands {
 
     async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx: RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            BirdClefCommands::ImportResources2(import_resources_args) => {
+            BirdClefCommands::ImportResources(import_resources_args) => {
                 debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
                 let freq_filter = if import_resources_args.freq_filters.is_empty() {
                     None

@@ -120,16 +120,16 @@ use crate::stages::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum MotifCommands {
-    FindMotifs2(FindMotifsArgs),
-    SeqScan2(SeqScanArgs),
-    SelectMotifs2(SelectMotifsArgs),
-    MergeSelectedMotifs2(MergeSelectedMotifsArgs),
-    TrainMotifsNets2(TrainMotifsNetsArgs),
-    TrainLabelNets2(TrainLabelNetsArgs),
-    TrainFinalNet2(TrainFinalNetArgs),
-    Export2(ExportArgs),
-    PurgeModels2(PurgeModelsArgs),
-    PlotData2(PlotDataArgs)
+    FindMotifs(FindMotifsArgs),
+    SeqScan(SeqScanArgs),
+    SelectMotifs(SelectMotifsArgs),
+    MergeSelectedMotifs(MergeSelectedMotifsArgs),
+    TrainMotifsNets(TrainMotifsNetsArgs),
+    TrainLabelNets(TrainLabelNetsArgs),
+    TrainFinalNet(TrainFinalNetArgs),
+    Export(ExportArgs),
+    PurgeModels(PurgeModelsArgs),
+    PlotData(PlotDataArgs)
 
 }
 
@@ -140,16 +140,13 @@ impl StageCommand for MotifCommands {
 
     async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            MotifCommands::FindMotifs2(find_motifs_args) => {
+            MotifCommands::FindMotifs(find_motifs_args) => {
                 debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
 
                 let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
-                    serde_json5::from_str(&find_motifs_args.run_config_cnt)
-                        .expect("FindMotifsRunConfig2");
+                    serde_json5::from_str(&find_motifs_args.run_config_cnt).expect("FindMotifsRunConfig");
 
                 debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
-
-
 
                 let loader = init_loader(ws);
 
@@ -186,7 +183,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::SeqScan2(seq_scan_args) => {
+            MotifCommands::SeqScan(seq_scan_args) => {
                 debug!("SeqScan: seq_scan_args={seq_scan_args:?}");
                 let loader = init_loader(ws);
 
@@ -216,7 +213,7 @@ impl StageCommand for MotifCommands {
                 info!("SeqScan done, run_config_ids={run_config_ids:?}");
                 Ok(())
             }
-            MotifCommands::SelectMotifs2(select_motifs_args) => {
+            MotifCommands::SelectMotifs(select_motifs_args) => {
                 debug!("SelectMotifs: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
                 let loader = init_loader(ws);
 
@@ -255,7 +252,7 @@ impl StageCommand for MotifCommands {
                 info!("SelectMotifs done, run_config_ids={run_config_ids:?}");
                 Ok(())
             }
-            MotifCommands::MergeSelectedMotifs2(merge_selected_motifs_args) => {
+            MotifCommands::MergeSelectedMotifs(merge_selected_motifs_args) => {
                 debug!("MergeSelectedMotifs: merge_selected_motifs_args{:?}",merge_selected_motifs_args);
                 let loader = init_loader(ws);
 
@@ -279,7 +276,7 @@ impl StageCommand for MotifCommands {
                 info!("MergeSelectedMotifs done, output={output:?}");
                 Ok(())
             }
-            MotifCommands::TrainMotifsNets2(train_motif_nets_args) => {
+            MotifCommands::TrainMotifsNets(train_motif_nets_args) => {
                 debug!("TrainMotifsNets: train_motif_nets_args.run_config_cnt={:?}",train_motif_nets_args.run_config_cnt);
 
                 let loader = init_loader(ws);
@@ -312,7 +309,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::TrainLabelNets2(train_label_nets_args) => {
+            MotifCommands::TrainLabelNets(train_label_nets_args) => {
                 debug!("TrainLabelNets: train_label_nets_args.run_config_cnt={:?}",train_label_nets_args.run_config_cnt);
                 let loader = init_loader(ws);
                 let train_motif_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
@@ -359,7 +356,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::TrainFinalNet2(train_final_net_args) => {
+            MotifCommands::TrainFinalNet(train_final_net_args) => {
                 debug!("TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}",train_final_net_args.run_config_cnt);
                 let loader = init_loader(ws);
                 let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
@@ -398,7 +395,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::Export2(export_args) => {
+            MotifCommands::Export(export_args) => {
                 debug!("Export: export_args={export_args:?}");
                 let output = track_await(Arc::new(ExportStage::<RunCtxImpl>::new(&ws, store, export_args.clone()))
                     .run(
@@ -411,7 +408,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::PurgeModels2(purge_models_args) => {
+            MotifCommands::PurgeModels(purge_models_args) => {
                 debug!("PurgeModels: purge_models_args={purge_models_args:?}");
                 let output = track_await(Arc::new(PurgeModelsStage::<RunCtxImpl>::new(&ws, &store, purge_models_args.clone()))
                     .run(
@@ -424,7 +421,7 @@ impl StageCommand for MotifCommands {
                 Ok(())
             }
 
-            MotifCommands::PlotData2(plot_slices_args) => {
+            MotifCommands::PlotData(plot_slices_args) => {
                 let loader = init_loader(ws);
                 track_await(run_plot(&ws, &store, &loader, &plot_slices_args, plot_slices_args.resolution(), &Cpu, ctx)).await?;
 
@@ -485,8 +482,8 @@ impl StageCommand for MotifAppCommands {
 
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum CommonCommands {
-    ConvertPrecision2(ConvertPrecisionArgs),
-    SayHello2(SayHelloArgs),
+    ConvertPrecision(ConvertPrecisionArgs),
+    SayHello(SayHelloArgs),
 }
 
 #[async_trait]
@@ -496,7 +493,7 @@ impl StageCommand for CommonCommands {
 
     async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            CommonCommands::ConvertPrecision2(convert_precision_args) => {
+            CommonCommands::ConvertPrecision(convert_precision_args) => {
                 debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
                 let output = track_await(Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
                     .run(
@@ -507,7 +504,7 @@ impl StageCommand for CommonCommands {
                 info!("ConvertPrecision done, converted={}", output.converted().len());
             }
 
-            CommonCommands::SayHello2(args) => {
+            CommonCommands::SayHello(args) => {
                 debug!("CommonCommands::SayHello:run: args={args:?}");
             }
 
@@ -1975,50 +1972,50 @@ mod cli_tests {
 
     #[test]
     fn test_plot_data_resolution_flag_parses_high() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data2", "--data-by", "motif_id:7", "--resolution", "high"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--resolution", "high"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::PlotData2(args))) => assert_eq!(args.resolution(), Resolution::High),
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert_eq!(args.resolution(), Resolution::High),
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[test]
     fn test_plot_data_stdout_flag_parses_true() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data2", "--data-by", "motif_id:7", "--stdout"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:7", "--stdout"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::PlotData2(args))) => assert!(args.print_to_stdout()),
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert!(args.print_to_stdout()),
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[test]
     fn test_plot_data_motif_id_parses_multiple_ids() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data2", "--data-by", "motif_id:1,2,3"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:1,2,3"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::PlotData2(args))) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[test]
     fn test_plot_data_motif_id_parses_spaced_quoted_ids() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data2", "--data-by", "motif_id:'1, 2'"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:'1, 2'"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::PlotData2(args))) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
+            Some(MotifAppCommands::Motifs(MotifCommands::PlotData(args))) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[test]
     fn test_convert_precision_command_parses() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "convert-precision2", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::CommonCommands(CommonCommands::ConvertPrecision2(args))) => {
+            Some(MotifAppCommands::CommonCommands(CommonCommands::ConvertPrecision(args))) => {
                 assert_eq!(args.nets_by(), crate::stages::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
                 assert_eq!(args.target_precision(), crate::stages::convert_precision::ConvertPrecisionTarget::Bf16);
             }
@@ -2028,21 +2025,21 @@ mod cli_tests {
 
     #[test]
     fn test_merge_selected_motifs_ids_parse_single_spaced_and_csv_values() {
-        let single = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs2", "--select-motifs-run-config-ids=1"]);
+        let single = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1"]);
         match &single.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs2(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
+            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let spaced = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs2", "--select-motifs-run-config-ids='1, 2'"]);
+        let spaced = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids='1, 2'"]);
         match &spaced.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs2(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
+            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let csv = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs2", "--select-motifs-run-config-ids=1,2,3"]);
+        let csv = MotifAppArgs::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1,2,3"]);
         match &csv.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs2(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
+            Some(MotifAppCommands::Motifs(MotifCommands::MergeSelectedMotifs(args))) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -2052,13 +2049,13 @@ mod cli_tests {
     fn test_seq_scan_command_parses() {
         let cli = MotifAppArgs::parse_from([
             "thoosa_main",
-            "seq-scan2",
+            "seq-scan",
             "--resources", "group:find",
             "--run-config-cnt", "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}",
         ]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::Motifs(MotifCommands::SeqScan2(args))) => {
+            Some(MotifAppCommands::Motifs(MotifCommands::SeqScan(args))) => {
                 assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
                 assert_eq!(args.run_config_cnt, "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}");
             }

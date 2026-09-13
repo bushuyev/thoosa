@@ -574,7 +574,7 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
                 }),
-                min: RangeOrValue::Value(0.8),
+                min: RangeOrValue::Value(0.95),
             },
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {

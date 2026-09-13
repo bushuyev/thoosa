@@ -50,7 +50,6 @@ where
     #[arg(long)]
     pub ipc:bool,
 
-
     #[command(subcommand)]
     pub command: Option<C>,
 }
