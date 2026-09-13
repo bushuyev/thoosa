@@ -667,7 +667,8 @@ mod tests {
     use thoosa_shared::traits::{AsyncStage, DataId, RunCtx, Stage};
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp};
     use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
-    use thoosa_store::{CheckGroups, RunConfigRow, SqlStore};
+    use thoosa_motifs::motif_tracker_store::CheckGroups;
+    use thoosa_store::{RunConfigRow, SqlStore};
 
     #[ctor::ctor]
     pub fn init() {

@@ -810,7 +810,11 @@ mod tests {
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
 
-        let mut store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
+        // This fresh workflow database stores labels and motifs, so initialize the motif schema explicitly.
+        let mut store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_with_tables(
+            ws.read().store_path(),
+            vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables],
+        ).await?);
         let mut conn = store.open_external_writer_conn()?;
 
 

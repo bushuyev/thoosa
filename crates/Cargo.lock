@@ -5424,6 +5424,7 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "async-trait",
+ "bytemuck",
  "chrono",
  "clap",
  "crossbeam-channel",
@@ -5453,8 +5454,10 @@ dependencies = [
  "thoosa_run_config_args_derive",
  "thoosa_shared",
  "thoosa_store",
+ "tokio",
  "torch-sys",
  "tracing",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -5589,11 +5592,8 @@ name = "thoosa_store"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bytemuck",
  "crossbeam-channel",
- "ctor 0.5.0",
  "futures",
- "futures-util",
  "log",
  "mockall",
  "parking_lot",
@@ -5603,7 +5603,6 @@ dependencies = [
  "thoosa_shared",
  "tokio",
  "tracing",
- "zstd 0.13.3",
 ]
 
 [[package]]
@@ -5618,6 +5617,7 @@ dependencies = [
  "log",
  "ratatui",
  "serde_json",
+ "thoosa_motifs",
  "thoosa_shared",
  "thoosa_store",
  "tokio",

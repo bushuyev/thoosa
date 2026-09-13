@@ -2318,7 +2318,7 @@ mod train_tests {
     use thoosa_shared::traits::SimpleId;
     use thoosa_shared::val::Val;
     use thoosa_shared::{CopyToDevice, ThoError, batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len};
-    use thoosa_store::{MockStore, SqlStore, TrainedNet, TrainedNetsBy, mock_store_with_find_motifs_run_config};
+    use thoosa_store::{MockStore, SqlStore, TrainedNet, TrainedNetsBy};
     use torch_sys::at_autocast_clear_cache;
 
 

@@ -26,7 +26,8 @@ use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEt
 use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::val::Val;
 use thoosa_shared::ThoError;
-use thoosa_store::{RunConfigEntry, RunConfigFilter, RunMotifEntry, SqlStore, Store};
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_store::{RunConfigEntry, RunConfigFilter, RunMotifEntry, SqlStore};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -298,7 +299,7 @@ impl NormalizedRunConfigSearch {
 }
 
 struct App {
-    store: Arc<dyn Store>,
+    store: Arc<dyn MotifsStore>,
     ws_path: PathBuf,
     db_path: PathBuf,
     all_run_configs: Vec<RunConfigEntry>,
@@ -400,7 +401,7 @@ impl SearchField {
 }
 
 impl App {
-    fn new(store: Arc<dyn Store>, ws_path: PathBuf, db_path: PathBuf) -> Self {
+    fn new(store: Arc<dyn MotifsStore>, ws_path: PathBuf, db_path: PathBuf) -> Self {
         Self {
             store,
             ws_path,
@@ -3731,7 +3732,7 @@ mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use interprocess::local_socket::ListenerOptions;
-    use thoosa_store::MockStore;
+    use thoosa_motifs::motifs_store::MockMotifsStore;
     use tokio::io::AsyncWriteExt;
     use thoosa_shared::run_configs::RUN_ID;
 
@@ -3747,7 +3748,7 @@ mod tests {
 
     #[test]
     fn test_render_run_value_lines_excludes_db_path() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         assert!(!render_run_value_lines(&app).iter().any(|line| line.starts_with("db: ")));
@@ -3755,7 +3756,7 @@ mod tests {
 
     #[test]
     fn test_apply_view_mode_from_popup_switches_focus() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.open_view_popup();
@@ -3818,7 +3819,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_search_from_popup_filters_visible_rows() ->Result<(), ThoError>{
-        let store = SqlStore::in_mem().await?;
+        // The TUI displays motif rows, so its test store must include the motif schema and trait boundary.
+        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables]).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let alpha_run_config_id = store.save_run_config(None, "select_motifs", "first alpha", HashMap::new()).await.unwrap();
@@ -3846,7 +3848,7 @@ mod tests {
 
     #[test]
     fn test_rebuild_visible_run_configs_groups_runs_under_run_on_date() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
@@ -3884,7 +3886,7 @@ mod tests {
 
     #[test]
     fn test_collapse_selected_run_collapses_run_on_date_group() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
@@ -3905,8 +3907,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filtered_view_deduplicates_shared_descendants() {
-        let store = MockStore::new();
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let store = MockMotifsStore::new();
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
             RunConfigEntry {
@@ -3943,7 +3945,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_refresh_run_configs_uses_paged_startup_loading() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_configs_page().times(1).returning(|limit, offset| {
             assert!(limit >= 1);
             assert_eq!(0, offset);
@@ -3970,7 +3972,7 @@ mod tests {
             assert_eq!(vec![2, 1], ids.to_vec());
             Ok(vec![(2, 1)])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.refresh_run_configs().await;
 
@@ -3984,7 +3986,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_refresh_run_configs_marks_visible_leaf_without_lazy_triangle() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_configs_page().times(1).returning(|limit, offset| {
             assert!(limit >= 1);
             assert_eq!(0, offset);
@@ -4003,7 +4005,7 @@ mod tests {
             assert_eq!(vec![7], ids.to_vec());
             Ok(vec![])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
 
         app.refresh_run_configs().await;
 
@@ -4017,7 +4019,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_expand_selected_run_lazy_loads_children() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_output_run_config_ids().times(1).returning(|run_config_id| {
             assert_eq!(1, run_config_id);
             Ok(vec![2])
@@ -4035,7 +4037,7 @@ mod tests {
             assert_eq!(vec![2], ids.to_vec());
             Ok(vec![(2, 1)])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = true;
         app.all_run_configs = vec![RunConfigEntry {
             id: 1,
@@ -4056,12 +4058,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_refresh_selected_details_skips_motif_loading_until_requested() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_config_values().times(1).returning(|run_config_id| {
             assert_eq!(7, run_config_id);
             Ok(HashMap::new())
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 7,
@@ -4079,7 +4081,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_selected_run_motifs_fetches_on_demand() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_config_id| {
             assert_eq!(7, run_config_id);
             Ok(vec![RunMotifEntry {
@@ -4091,7 +4093,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 7,
@@ -4109,7 +4111,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_motifs_opens_motifs_for_leaf() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_config_id| {
             assert_eq!(86439, run_config_id);
             Ok(vec![RunMotifEntry {
@@ -4121,7 +4123,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86439,
@@ -4140,7 +4142,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_toggle_selected_run_motifs_panel_hides_loaded_motifs() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_config_id| {
             assert_eq!(86439, run_config_id);
             Ok(vec![RunMotifEntry {
@@ -4152,7 +4154,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86439,
@@ -4176,7 +4178,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_motifs_opens_motifs_even_with_children() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_config_id| {
             assert_eq!(86439, run_config_id);
             Ok(vec![RunMotifEntry {
@@ -4188,7 +4190,7 @@ mod tests {
                 resources_cnt: 3,
             }])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![
             RunConfigEntry {
@@ -4219,7 +4221,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_from_left_expands_find_motifs_inline() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_config_id| {
             assert_eq!(86434, run_config_id);
             Ok(vec![RunMotifEntry {
@@ -4231,7 +4233,7 @@ mod tests {
                 resources_cnt: 7,
             }])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86434,
@@ -4251,7 +4253,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_right_expands_find_motifs_inline() {
-        let mut store = MockStore::new();
+        let mut store = MockMotifsStore::new();
         store.expect_list_run_motifs().times(1).returning(|run_config_id| {
             assert_eq!(86434, run_config_id);
             Ok(vec![RunMotifEntry {
@@ -4263,7 +4265,7 @@ mod tests {
                 resources_cnt: 7,
             }])
         });
-        let mut app = App::new(Arc::new(store) as Arc<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        let mut app = App::new(Arc::new(store) as Arc<dyn MotifsStore>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.has_more_paged_run_configs = false;
         app.all_run_configs = vec![RunConfigEntry {
             id: 86434,
@@ -4283,7 +4285,7 @@ mod tests {
 
     #[test]
     fn test_move_main_to_bottom_updates_offset() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.run_configs = (0..30)
             .map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true))
@@ -4296,7 +4298,7 @@ mod tests {
 
     #[test]
     fn test_move_main_up_keeps_offset_until_top_visible_row() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.run_configs = (0..30)
             .map(|idx| VisibleRunConfigRow::run_config(idx as u32, 0, false, true))
@@ -4318,7 +4320,7 @@ mod tests {
 
     #[test]
     fn test_progress_lines_include_device_stats() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.progress_state = CollectEtaProgressState {
             invocations: vec![],
@@ -4345,7 +4347,7 @@ mod tests {
 
     #[test]
     fn test_buffer_limit_lines_use_known_labels() {
-        let store = Arc::new(MockStore::new()) as Arc<dyn Store>;
+        let store = Arc::new(MockMotifsStore::new()) as Arc<dyn MotifsStore>;
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.progress_state.futures_limits = vec![
             FutureLimitProgressEntry {

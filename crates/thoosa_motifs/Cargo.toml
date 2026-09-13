@@ -19,6 +19,7 @@ parking_lot.workspace = true
 futures.workspace = true
 futures-util.workspace = true
 async-trait.workspace = true
+bytemuck.workspace = true
 clap.workspace = true
 regex.workspace = true
 crossbeam-channel.workspace = true
@@ -33,6 +34,7 @@ mockall.workspace = true
 rusqlite.workspace = true
 sci-rs = "0"
 plotters = { version = "0"}
+zstd = "0.13"
 
 
 
@@ -48,6 +50,7 @@ tracing.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"
+tokio.workspace = true
 
 [build-dependencies]
 chrono = { version = "0.4.32" }

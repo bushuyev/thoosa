@@ -45,7 +45,8 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_store::{IdSlice, Store};
+use thoosa_motifs::motif_tracker_store::IdSlice;
+use thoosa_store::Store;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+thoosa_motifs = { path = "../thoosa_motifs" }
 thoosa_store = { path = "../thoosa_store" }
 thoosa_shared = { path = "../thoosa_shared" }
 clap.workspace = true

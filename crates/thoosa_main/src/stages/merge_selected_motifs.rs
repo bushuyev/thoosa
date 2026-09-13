@@ -19,7 +19,8 @@ use thoosa_shared::group_slices;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
-use thoosa_store::{IdSlice, Store};
+use thoosa_motifs::motif_tracker_store::IdSlice;
+use thoosa_store::Store;
 
 use crate::stages::motif_loader::MotifLoaderInput;
 use crate::stages::motif_stats::{MotifStatsInput, MotifStatsOutput};
@@ -385,7 +386,8 @@ mod tests {
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
-    use thoosa_store::{CheckGroups, RunConfigRow};
+    use thoosa_motifs::motif_tracker_store::CheckGroups;
+    use thoosa_store::RunConfigRow;
 
     use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};
     use crate::stages::motif_stats::MotifStats;
