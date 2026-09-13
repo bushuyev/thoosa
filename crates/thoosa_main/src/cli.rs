@@ -1941,7 +1941,8 @@ mod cli_tests {
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
+    use thoosa_motifs::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
+    use thoosa_store::{SqlStore, Store};
 
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
@@ -2173,8 +2174,10 @@ mod cli_tests {
                            32000)
         )?));
 
+        // Import persists labels through MotifsStore, so the test database needs both schemas.
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
-            thoosa_store::create_tables
+            thoosa_store::create_tables,
+            thoosa_motifs::motifs_store::create_motif_tables,
         ]).await?);
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
@@ -2222,9 +2225,11 @@ mod cli_tests {
                            100,
                            32000)
         )?));
+        // Import persists labels through MotifsStore, so the test database needs both schemas.
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
-           thoosa_store::create_tables
-       ]).await?);
+            thoosa_store::create_tables,
+            thoosa_motifs::motifs_store::create_motif_tables,
+        ]).await?);
 
         let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
             vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })],

@@ -61,7 +61,8 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId, hump};
 use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_store::{IdSlice, Store};
+use thoosa_motifs::motif_tracker_store::IdSlice;
+use thoosa_store::Store;
 
 pub use crate::stages::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
@@ -516,7 +517,8 @@ pub mod tests {
     use thoosa_shared::traits::{DataId, RunCtx};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir};
     use thoosa_motifs::motifs_store::{MockMotifsStore, MockMotifsStoreBuilder, MotifsStore};
-    use thoosa_store::{IdSlice, RunConfigRow, Store};
+    use thoosa_motifs::motif_tracker_store::IdSlice;
+    use thoosa_store::{RunConfigRow, Store};
     use tokio::fs;
 
     #[ctor::ctor]

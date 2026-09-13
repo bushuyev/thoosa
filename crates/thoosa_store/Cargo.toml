@@ -8,17 +8,13 @@ path = "src/lib.rs"
 
 [dependencies]
 thoosa_shared = {path = "../thoosa_shared", features = ["rusqlite-error"] }
-bytemuck.workspace = true
 rand.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 mockall.workspace = true
-ctor.workspace = true
 rusqlite.workspace = true
 #tokio-rusqlite  = {path = "../../../tokio-rusqlite"}
-zstd = "0.13"
 tokio.workspace = true
-futures-util.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
