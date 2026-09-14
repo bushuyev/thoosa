@@ -316,14 +316,15 @@ where
 
             let mut best_valid_loss = f32::MAX;
 
-            let mut saved_best = false;
+            let mut save_var_store = false;//the var store is saved in TrainStep stage to keep it on worker side in IPC mode
+            let mut best_saved = false;
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             for idx in 0..epochs {
 
-                debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?} epoch={idx} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
+                debug!("TrainNet::run_inner, train: descr={descr} 0. cuda_mem={:?} epoch={idx} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
 
                 let mut batches = batch.train_batch_stream(ctx.branch(false));
-                debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
+                debug!("TrainNet::run_inner, train: descr={descr} 1. cuda_mem={:?} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
 
                 let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
 
@@ -334,8 +335,8 @@ where
                     .await {
                     // A failed batch invalidates the trial instead of ending this epoch early.
                     let (x_t_0, lengths, expected_y) = batch_result?;
-                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, saved_best)));
-                    saved_best = false;
+                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, save_var_store)));
+                    save_var_store = false;
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
@@ -362,10 +363,10 @@ where
                 }
 
                 if idx % validation_step == 0 || idx == epochs - 1 {
-                    debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?} tokio::task_id={:?}", maybe_cuda_mem(&device), tokio::task::try_id());
+                    debug!("TrainNet::run_inner, valid: descr={descr} 0. cuda_mem={:?} tokio::task_id={:?}", maybe_cuda_mem(&device), tokio::task::try_id());
 
                     let mut batches = batch.valid_batch_stream(ctx.branch(false));
-                    debug!("TrainNet::run_inner, valid: descr={descr}  1. cuda_mem={:?}",maybe_cuda_mem(&device));
+                    debug!("TrainNet::run_inner, valid: descr={descr} 1. cuda_mem={:?}",maybe_cuda_mem(&device));
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
 
@@ -402,13 +403,9 @@ where
                         if avg_valid_loss < best_valid_loss - min_delta {
                             best_valid_loss = avg_valid_loss;
                             bad_epochs = 0;
-                            {
 
-                                // TODO(perf): best-checkpoint saves block the training loop; save on a background CPU task or only after a minimum score delta when configs produce many small improvements.
-                                // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO - download vs from Cuda/IPC
-                                // panic_to_err!(vs_guard.save(&best_checkpoint_path))?;//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
-                            }
-                            saved_best = true;
+                            save_var_store = true;
+                            best_saved = true;
                         } else {
                             bad_epochs += 1;
                             if bad_epochs >= patience {
@@ -426,10 +423,10 @@ where
                 collect_eta_record_completion(epochs_eta_guard.id());
             }
 
-            if saved_best {
+            if best_saved {
                 // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO
                 // vs_guard.load(&best_checkpoint_path)?;
-                debug!("TrainNet::run_inner: descr={descr} final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
+                info!("TrainNet::run_inner: descr={descr} final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
             } else {
                 warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
             }

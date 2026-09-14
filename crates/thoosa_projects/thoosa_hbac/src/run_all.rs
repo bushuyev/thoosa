@@ -448,7 +448,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         train_final_net_run_config_range_or_value,
         train_motifs_opt_config: Arc::new(OptConfig::new(50, 10)),
         train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
-        train_final_opt_config: Arc::new(OptConfig::new(30, 10))
+        train_final_opt_config: Arc::new(OptConfig::new(100, 10))
     }
 }
 
@@ -660,7 +660,7 @@ mod tests {
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
-    use thoosa_motifs::motifs_store::MotifsStore;
+    use thoosa_motifs::motifs_store::{create_motif_tables, MotifsStore};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::copy_mode::CpuOnly;
@@ -672,7 +672,7 @@ mod tests {
     use thoosa_shared::traits::{OutId, Stage, SyncStage};
     use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
     use thoosa_shims::context::ThoCudaContext;
-    use thoosa_store::{SqlStore, TrainedNetsBy, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE};
+    use thoosa_store::{SqlStore, TrainedNetsBy, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, create_tables};
     use thoosa_store::rusqlite::Transaction;
 
 
@@ -927,7 +927,10 @@ mod tests {
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let mut store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(ws.read().store_path()).await?);
+        let mut store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![
+            create_tables,
+            create_motif_tables
+        ]).await?);
 
         debug!("heavy_test_run_all: import_hash={import_hash:?}");
 
