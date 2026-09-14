@@ -26,6 +26,7 @@ use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Con
 use thoosa_common::runs::SavableResult;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
+use thoosa_motifs::motif_tracker_store::IdSlice;
 use thoosa_named_derive::Named;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -37,7 +38,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError, collect_futures_with_progress, panic_to_err};
-use thoosa_motifs::motif_tracker_store::IdSlice;
 use thoosa_store::Store;
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
@@ -1322,7 +1322,6 @@ impl Default for BucketRunConfig {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_motifs::motifs_store::MotifsStore;
     use super::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups};
     use crate::RawTensorLoader;
     use crate::cli::{import_resources, plot_motif};
@@ -1345,6 +1344,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tch::Device::Cuda;
     use tch::{Device, Tensor};
+    use thoosa_common::common_nets::OptConfig;
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
@@ -1356,21 +1356,21 @@ mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::OptConfig;
     use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
     use thoosa_motifs::distance::{EucDistConfig, SimilarityMetric, clc_d2_similarity};
     use thoosa_motifs::fragments::Resolution;
+    use thoosa_motifs::motif_tracker_store::IdSlice;
+    use thoosa_motifs::motifs_store::MotifsStore;
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
     use thoosa_shared::run_configs::{RunConfig, RunConfigId};
-    use thoosa_shared::test_utils::{MotifKind, gen_motif};
+    use thoosa_shared::test_utils::{TestSignalKind, gen_motif};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_motifs::motif_tracker_store::IdSlice;
     use thoosa_store::{SqlStore, Store};
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1505,14 +1505,14 @@ mod tests {
                 if key.starts_with("t_0") {
 
                     let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, MotifKind::ChirpUp)],
+                        vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)],
                     ], motif_gap, 10.0, false, true)?;//TODO set motif_from_zero to false and z-normalize
 
                     Ok(resource_t)
                 } else if key.starts_with("t_1") {
 
                     let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, MotifKind::Trill)],
+                        vec![(num_motifs, motif_len, TestSignalKind::Trill)],
                     ], motif_gap, 10.0, false, true)?;
 
                     Ok(resource_t)
@@ -1755,18 +1755,18 @@ mod tests {
                 if key.starts_with("t_0") {
 
                     let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, MotifKind::ChirpUp)],
-                        vec![(num_motifs, motif_len, MotifKind::ChirpDown)],
-                        vec![(num_motifs, motif_len, MotifKind::HarmonicStack)]
+                        vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)],
+                        vec![(num_motifs, motif_len, TestSignalKind::ChirpDown)],
+                        vec![(num_motifs, motif_len, TestSignalKind::HarmonicStack)]
                     ], motif_gap, 10.0, false, true)?;//TODO set motif_from_zero to false and z-normalize
 
                     Ok(resource_t)
                 } else if key.starts_with("t_1") {
 
                     let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
-                        vec![(num_motifs, motif_len, MotifKind::ChirpDown)],
-                        vec![(num_motifs, motif_len, MotifKind::ChirpUp)],
-                        vec![(num_motifs, motif_len, MotifKind::Trill)]
+                        vec![(num_motifs, motif_len, TestSignalKind::ChirpDown)],
+                        vec![(num_motifs, motif_len, TestSignalKind::ChirpUp)],
+                        vec![(num_motifs, motif_len, TestSignalKind::Trill)]
                     ], motif_gap, 10.0, false, true)?;
 
                     Ok(resource_t)
@@ -1871,7 +1871,7 @@ mod tests {
 
         }
 
-        let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
+        let all_motifs = [TestSignalKind::ChirpUp, TestSignalKind::ChirpDown, TestSignalKind::Trill, TestSignalKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(TestSignalKind, Tensor)>>();
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {

@@ -1,3 +1,4 @@
+use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams, final_net};
 use log::{debug, info};
 use mockall::mock;
 use std::collections::{HashMap, HashSet};
@@ -6,13 +7,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tch::nn;
 use tch::{Device, Tensor};
+use thoosa_common::common_nets::ThoModuleWithStore;
 use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, LabelsProbabilities, MotifProbability, Slice};
-use thoosa_common::train_nets::{final_net, FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore};
-use thoosa_common::ws::{FsWorkspace, VarStoreOrPath, Workspace, WsConfigs, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
-use thoosa_shared::run_configs::RunConfigId;
+use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, VarStoreOrPath, Workspace, WsConfigs};
 use thoosa_shared::resource::{Resource, ResourceStats};
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ToJsonFile;
-use thoosa_shared::{cdt_for_dir, mono_key, panic_to_err, recurse_files, ThoError};
+use thoosa_shared::{ThoError, cdt_for_dir, mono_key, panic_to_err, recurse_files};
 
 const MOTIFS_MODELS: &str = "motifs";
 const LABELS_MODELS: &str = "labels";
@@ -361,16 +362,17 @@ impl MotifsWsMockBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::train_nets::{FinalNetParams, LabelNetTypeParams, MotifNetTypeParams, conv_motif_node, cosine_motif_node};
     use std::path::Path;
     use std::sync::Arc;
-    use tch::kind::FLOAT_CPU;
     use tch::Device::Cpu;
-    use tch::nn::VarStore;
     use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::VarStore;
+    use thoosa_common::common_nets::LinLenNetParams;
     use thoosa_common::dims::AnyDims;
-    use thoosa_common::my_tch::{InitDummy, MotifInitMode, ThoModule};
+    use thoosa_common::my_tch::{InitDummy, InitMode, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{conv_motif_node, cosine_motif_node, FinalNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetTypeParams};
     use thoosa_shared::cdt_for_dir;
 
     fn test_workspace(channels: u32) -> Result<Box<dyn MotifsWorkspace>, ThoError> {
@@ -440,7 +442,7 @@ mod tests {
     #[test]
     fn test_load_cosine_motif_net() -> Result<(), ThoError> {
         let ws = test_workspace(2)?;
-        let params = MotifNetParams::new_cosine(1234, 5.0, 0.0, MotifInitMode::Mean(InitDummy {}));
+        let params = MotifNetParams::new_cosine(1234, 5.0, 0.0, InitMode::Mean(InitDummy {}));
         let mut vs = VarStore::new(Cpu);
         let motif = Arc::new(ThoTensor::new(((0u32), "motif_id").into(), Tensor::rand([123, 1234], FLOAT_CPU))?);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_motif_node(match &params.net_type {

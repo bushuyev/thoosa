@@ -1,5 +1,4 @@
 use crate::ApplyMotifNets;
-use thoosa_motifs::motifs_store::MotifsStore;
 use crate::stages::apply_motif_nets::{StackAppliedMotifNets, StackAppliedMotifNetsInput};
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
@@ -16,6 +15,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Device::Cuda;
 use tch::{IndexOp, Kind, Tensor};
+use thoosa_common::common_nets::{StftRunConfig, ThoModuleWithStore};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
@@ -27,10 +27,11 @@ use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster,
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::MotifNetTypeArgs::Cosine2DNet;
-use thoosa_common::train_nets::{MotifCosine2DNetArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
 use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::train_nets::MotifNetTypeArgs::Cosine2DNet;
+use thoosa_motifs::train_nets::{MotifCosine2DNetArgs, TrainMotifNetRunConfig};
 use thoosa_named_derive::Named;
 use thoosa_properties_map::FromHashmap;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -43,7 +44,6 @@ use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_wit
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
-
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_shared::tracked_await::track_await;
@@ -999,7 +999,6 @@ fn cosine_conv2d_tensor_part_id(channel: u32, motif_width: u32, stft_hash_value:
 
 #[cfg(test)]
 mod tests {
-    use thoosa_motifs::motifs_store::MotifsStore;
     use crate::ApplyMotifNets;
     use crate::stages::apply_cosine2d_motif_nets::{ApplyCosine2DMotifNets, apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d};
     use crate::stages::apply_motif_nets::dummy_motif_net;
@@ -1013,13 +1012,15 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
     use tch::{Device, IndexOp, Tensor};
+    use thoosa_common::common_nets::{StftRunConfig, ThoModuleWithStore};
     use thoosa_common::dims::{AnyDims, Batch, MotifProbability, Slice, Spectorgram};
-    use thoosa_common::my_tch::{InitDummy, MotifInitMode, MySequential, ThoModule};
+    use thoosa_common::my_tch::{InitDummy, InitMode, MySequential, ThoModule};
     use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{MotifCosine2dNetParams, MotifNetParams, MotifNetTypeParams, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig, cosine_2d_motif_node};
     use thoosa_common::ws::Workspace;
+    use thoosa_motifs::motifs_store::MotifsStore;
+    use thoosa_motifs::train_nets::{MotifCosine2dNetParams, MotifNetParams, MotifNetTypeParams, TrainMotifNetRunConfig, cosine_2d_motif_node};
     use thoosa_properties_map::FromHashmap;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
@@ -1044,14 +1045,14 @@ mod tests {
         let kernel_1 = rand_kernel()?;
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_1={kernel_1:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_1=\n{kernel_1}");
-        let mut net_1:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{}), motif_width), Some(Arc::new(ThoTensor::new("motifs".into(), kernel_1.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_1:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, InitMode::Mean(InitDummy{}), motif_width), Some(Arc::new(ThoTensor::new("motifs".into(), kernel_1.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
 
         let kernel_2 = rand_kernel()?;
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2={kernel_2:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2=\n{kernel_2}");
 
-        let mut net_2:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{}), motif_width), Some(Arc::new(ThoTensor::new("motifs".into(), kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_2:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, InitMode::Mean(InitDummy{}), motif_width), Some(Arc::new(ThoTensor::new("motifs".into(), kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
         // let raw_tensor = Tensor::arange(1000.0, FLOAT_CPU);
         // debug!("raw_tensor=\n{raw_tensor}");

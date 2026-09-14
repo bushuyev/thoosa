@@ -1,9 +1,11 @@
-use std::any::Any;
+use crate::common_nets::ThoModuleWithStore;
 use crate::dims::{Batch, Dims};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{CudaIPCActorHandle};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
+use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::WorkerWrapperWithState;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
@@ -11,7 +13,7 @@ use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::train_nets::ThoModuleWithStore;
+use crate::ws::Workspace;
 use async_trait::async_trait;
 use futures_util::future::{BoxFuture, FutureExt, ready};
 use futures_util::{StreamExt, ready};
@@ -19,6 +21,7 @@ use log::debug;
 use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -32,9 +35,6 @@ use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, D
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
-use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
-use crate::ws::Workspace;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
@@ -320,11 +320,10 @@ pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Wo
 }
 
 mod tests {
-    use std::time::Duration;
-    use crate::ipc::codec::{JsonIpcCodec};
+    use crate::ipc::codec::JsonIpcCodec;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
+    use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -336,6 +335,7 @@ mod tests {
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
     use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::Tensor;

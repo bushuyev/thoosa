@@ -6,13 +6,13 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Kind::Float;
 use tch::Tensor;
+use thoosa_common::common_nets::StftRunConfig;
 use thoosa_common::dims::{Batch, Dims, LocalSelect, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::StftRunConfig;
 use thoosa_named_derive::Named;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -249,8 +249,8 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 #[cfg(test)]
 mod tests {
     use tch::{Device, Kind, Tensor};
+    use thoosa_common::common_nets::StftRunConfig;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::train_nets::StftRunConfig;
     use thoosa_shared::ThoError;
 
     use crate::stages::stft::{SyncStft, stft_stage_id};

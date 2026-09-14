@@ -8,7 +8,7 @@ use thoosa_shared::traits::SimpleId;
 use crate::batches::BatchLengths;
 use crate::debug_plot;
 use crate::dims::{Dims, MotifSlices, Spectorgram};
-use crate::my_tch::{MotifInitMode, MyCosineConv1d, ThoModule, path_var};
+use crate::my_tch::{InitMode, MyCosineConv1d, ThoModule, path_var};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::z_norm_dims;
 use crate::utils::plot_spectrogram;
@@ -440,7 +440,7 @@ mod tests {
     use tch::nn::VarStore;
     use tch::Tensor;
     use thoosa_shared::ThoError;
-    use crate::my_tch::{InitDummy, MotifInitMode};
+    use crate::my_tch::{InitDummy, InitMode};
     use crate::nodes::cosine_2d::MyCosineConv2d;
     use crate::tho_tensor::ThoTensor;
 

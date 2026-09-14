@@ -2,7 +2,7 @@ use tch::Tensor;
 use rand::{Rng, RngExt, SeedableRng};
 use rand::prelude::{SliceRandom, StdRng};
 use log::debug;
-use thoosa_shared::test_utils::{gen_motif, MotifKind};
+use thoosa_shared::test_utils::{gen_motif, TestSignalKind};
 use thoosa_shared::ThoError;
 use crate::utils::to_vec_f32;
 
@@ -64,13 +64,13 @@ pub fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[V
     Ok((t, channels_intervals))
 }
 
-pub fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
+pub fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: TestSignalKind) -> Tensor {
     let mut motif = vec![0.0f32; motif_len];
     let width = motif_len; //(motif_len / 10).max(1);
     let (start, end) = match motif_kind {
-        MotifKind::Pulse => (0, width),
-        MotifKind::Triangle => (motif_len / 3, (motif_len / 3 + width).min(motif_len)),
-        MotifKind::Sin => (2 * motif_len / 3, (2 * motif_len / 3 + width).min(motif_len)),
+        TestSignalKind::Pulse => (0, width),
+        TestSignalKind::Triangle => (motif_len / 3, (motif_len / 3 + width).min(motif_len)),
+        TestSignalKind::Sin => (2 * motif_len / 3, (2 * motif_len / 3 + width).min(motif_len)),
         _ => {
             todo!()
         }
@@ -113,7 +113,7 @@ pub fn generate_series_with_motif(
     step_sigma: f32,
     _amp_range: (f32, f32),
     seed: Option<u64>,
-    motif_kind: &MotifKind, // "triangle" or "sine"
+    motif_kind: &TestSignalKind, // "triangle" or "sine"
 ) -> Result<(Vec<f32>, Vec<Interval>), ThoError> {
     let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(rand::make_rng());
 
@@ -176,7 +176,7 @@ pub fn generate_series_with_motif(
 
 #[cfg(test)]
 mod tests {
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::test_utils::TestSignalKind;
     use crate::tch_test_utils::generate_series_with_motif;
 
     #[ctor::ctor]
@@ -199,7 +199,7 @@ mod tests {
             0.4,
             (0.8, 1.8),
             Some(42),
-            &MotifKind::Triangle,
+            &TestSignalKind::Triangle,
         ).expect("motifs should be placed");
 
         assert_eq!(intervals.len(), repeats);
@@ -217,7 +217,7 @@ mod tests {
             0.4,
             (0.8, 1.8),
             None,
-            &MotifKind::Triangle,
+            &TestSignalKind::Triangle,
         );
 
         assert!(result.is_err());
@@ -336,10 +336,10 @@ pub fn generate_motifs_with_avg_distance(
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
 pub fn resource_tensor(
     resource_len:usize,
-    channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>],
+    channels_motif_kinds:&[Vec<(usize, usize, TestSignalKind)>],
     gap: usize, motif_ampl: f32,
-    add_to_prev_step: bool,//TODO rename
-    motif_from_zero: bool//TODO rename
+    add_to_prev_step: bool, //TODO rename
+    motif_from_zero: bool //TODO rename
 ) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
     use rand::rngs::StdRng;
     use log::debug;
@@ -494,9 +494,9 @@ pub fn resource_tensor_two_easy_motifs(
     channels: usize,
     motif_len: usize,
     repeats0: usize,
-    kind0: MotifKind,
+    kind0: TestSignalKind,
     repeats1: usize,
-    kind1: MotifKind,
+    kind1: TestSignalKind,
     gap: usize,
     bg_sigma: f32,
     motif_amp: f32,
@@ -674,7 +674,7 @@ pub fn resource_tensor_two_easy_motifs(
 
 ///found motif's slices of same kind
 //TODO make slices a bit different
-pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: MotifKind, d0: f32, d1: f32) -> Tensor {
+pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: TestSignalKind, d0: f32, d1: f32) -> Tensor {
 
 
     let t = Tensor::stack(

@@ -8,7 +8,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, Th
 use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
 use thoosa_shared::traits::MaxParallelCtx;
 
-use crate::stages::train_label_nets::TrainLabelNetRunConfigResult;
+use crate::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigResult};
 use crate::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use futures_util::{StreamExt, future::BoxFuture};
 use log::{debug, info, trace, warn};
@@ -27,6 +27,7 @@ use std::time::{Instant, SystemTime};
 use tch::Device;
 use tch::Kind::Float;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
@@ -36,9 +37,9 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRu
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetRunConfig, TrainMotifNetRunConfig, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::utils::{TrainListener, optimizer_mem_size};
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::train_nets::{LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, TrainMotifNetRunConfig};
 use thoosa_properties_map::ToHashmap;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -534,7 +535,6 @@ pub mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::{AsyncStage, RunCtx};
     #[allow(unused_imports)]
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue};
     use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
     use crate::stages::train_step::{TrainStep, TrainStepXFn};
     use async_trait::async_trait;
@@ -543,10 +543,14 @@ pub mod tests {
     use log::debug;
     use mockall::PredicateBoxExt;
     use parking_lot::Mutex;
+    #[allow(unused_imports)]
+    use thoosa_common::common_nets::CommonTrainingRunConfig;
+    #[allow(unused_imports)]
+    use thoosa_common::common_nets::{AdamWRangeOrValue, WithCommonTrainingRunConfig};
+    use thoosa_common::common_nets::{CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, opt_train};
     use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-    use thoosa_common::train_nets::{AdamWRangeOrValue, WithCommonTrainingRunConfig};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;

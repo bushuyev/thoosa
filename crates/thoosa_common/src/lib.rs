@@ -27,7 +27,6 @@ mod opt;
 pub mod parzen;
 pub mod runs;
 pub mod tho_tensor;
-pub mod train_nets;
 pub mod transforms;
 pub mod ws;
 pub mod torch_runner;
@@ -45,3 +44,4 @@ pub mod commands;
 pub mod progress_socket;
 
 mod version;
+pub mod common_nets;

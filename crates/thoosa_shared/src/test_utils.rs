@@ -182,7 +182,7 @@ mod tests {
 }
 
 #[derive(Clone, Debug)]
-pub enum MotifKind {
+pub enum TestSignalKind {
     Triangle,
     Sin,
     Pulse,
@@ -203,45 +203,45 @@ pub enum MotifKind {
     Trill,
 }
 
-pub fn gen_motif(motif_len: usize, motif_kind: &MotifKind) -> Vec<f32> {
+pub fn gen_motif(motif_len: usize, motif_kind: &TestSignalKind) -> Vec<f32> {
     match motif_kind {
-        MotifKind::Triangle => generate_triangle_wave(motif_len)
+        TestSignalKind::Triangle => generate_triangle_wave(motif_len)
             .into_iter()
             .map(|v| v as f32)
             .collect(),
 
-        MotifKind::Sin => generate_sine_wave::<f32>(motif_len),
+        TestSignalKind::Sin => generate_sine_wave::<f32>(motif_len),
 
-        MotifKind::Pulse => {
+        TestSignalKind::Pulse => {
             crate::pulse_v(motif_len as f32 / 2., motif_len as f32 / 4., motif_len as i64, 10.)
         }
 
-        MotifKind::HarmonicStack => {
+        TestSignalKind::HarmonicStack => {
             harmonic_stack(motif_len, 8.0, &[1.0, 0.55, 0.30, 0.18])
         }
 
-        MotifKind::HarmonicSyllable => {
+        TestSignalKind::HarmonicSyllable => {
             let mut x = harmonic_stack(motif_len, 9.0, &[1.0, 0.60, 0.35, 0.20]);
             apply_syllable_envelope(&mut x);
             normalize_peak(&mut x, 1.0);
             x
         }
 
-        MotifKind::ChirpUp => {
+        TestSignalKind::ChirpUp => {
             let mut x = chirp(motif_len, 5.0, 16.0);
             apply_syllable_envelope(&mut x);
             normalize_peak(&mut x, 1.0);
             x
         }
 
-        MotifKind::ChirpDown => {
+        TestSignalKind::ChirpDown => {
             let mut x = chirp(motif_len, 16.0, 5.0);
             apply_syllable_envelope(&mut x);
             normalize_peak(&mut x, 1.0);
             x
         }
 
-        MotifKind::Trill => {
+        TestSignalKind::Trill => {
             let mut x = trill(motif_len, 5, 10.0);
             normalize_peak(&mut x, 1.0);
             x

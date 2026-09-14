@@ -807,6 +807,7 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
+    use thoosa_common::common_nets::{CommonTrainingRunConfigFields, OptConfig};
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::MockRunCtx;
@@ -815,12 +816,11 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifNetRunConfigFields};
     use thoosa_common::transforms::filters::{InputFilter, NotchBandFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_common::ws::{Workspace, WsConfigs};
-    use thoosa_main::cli::{import_resources};
+    use thoosa_main::cli::import_resources;
     use thoosa_main::data::parquet_to_tensor_by_path;
     use thoosa_main::random_non_overlapping_slices;
     use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;
@@ -828,7 +828,8 @@ mod tests {
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;
-    use thoosa_motifs::motifs_store::{create_motif_tables, MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
+    use thoosa_motifs::train_nets::{MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, TrainMotifNetRunConfigFields};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::comp_id::SynKey;
@@ -1257,7 +1258,7 @@ mod tests {
         let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100)), 10, None).await?);
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
-        let input = TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(100, 10)));
+        let input = TrainMotifNetInput::new(thoosa_motifs::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(100, 10)));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let result = train_motif_nets

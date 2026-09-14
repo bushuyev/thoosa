@@ -5,29 +5,29 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display};
 use std::iter::Map;
 
-use std::ops::Range;
-use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::{fs, ptr};
-use std::hash::{Hash, Hasher};
 use log::{debug, error, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
 use plotters::element::PathElement;
 use plotters::prelude::*;
-use rand::prelude::ThreadRng;
 use rand::RngExt;
+use rand::prelude::ThreadRng;
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
+use std::{fs, ptr};
+use tch::Kind::Float;
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-use tch::nn::{LinearConfig, Optimizer};
 use tch::nn::VarStore;
-use tch::Kind::Float;
-use tch::{nn, Device, IndexOp, Kind, TchError, Tensor};
-use thoosa_shared::{cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
-use torch_sys::cuda::atc_cuda_device_count;
+use tch::nn::{LinearConfig, Optimizer};
+use tch::{Device, IndexOp, Kind, TchError, Tensor, nn};
+use thoosa_shared::{ThoError, cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw};
 use thoosa_store::Store;
+use torch_sys::cuda::atc_cuda_device_count;
 
 use crate::batches::BatchLengths;
 use crate::builder::SeqBuilder;
@@ -35,22 +35,22 @@ use crate::dims::Dims;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
-use thoosa_shared::colors_iter::DistinctColorIter;
 use sha2::{Digest, Sha256};
 use thoosa_properties_map::FromHashmap;
+use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
 // Keep the helper generic so callers retain specialized store trait objects across this common boundary.
-pub async fn load_run_config<FH, S>(store: &Arc<S>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
+pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId) -> Result<FH, ThoError>
 where
     FH: FromHashmap + RunConfig + Debug,
     S: Store + ?Sized,
 {
-    let real_find_motifs_run_config_id = if track_await(store.run_config_descr(find_motifs_id)).await?.r#type == "FindMotifsRunConfig" {
-        find_motifs_id
+    let real_find_motifs_run_config_id = if track_await(store.run_config_descr(run_config_id)).await?.r#type == "FindMotifsRunConfig" {
+        run_config_id
     } else {
-        let find_motifs_run_config_ids = track_await(store.get_input_run_config_ids(find_motifs_id, Some("FindMotifsRunConfig"))).await?;
-        *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={find_motifs_id}")))?
+        let find_motifs_run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some("FindMotifsRunConfig"))).await?;
+        *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={run_config_id}")))?
     };
 
 
@@ -1292,7 +1292,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-use crate::train_nets::ThoModuleWithStore;
+use crate::common_nets::ThoModuleWithStore;
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -1825,24 +1825,24 @@ pub fn parse_run_config_ids(s: &str) -> Result<u32, String> {
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
-    use std::cmp::max;
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
+    use std::cmp::max;
 
-    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, tensor_digest, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{TrainListener, assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, tensor_digest, to_vec_f32, to_vec_i64};
     use clap::{Args, Parser, Subcommand};
 
     use log::{debug, set_max_level};
     use std::collections::{HashMap, HashSet};
 
-    use std::fmt::Debug;
-    use std::path::PathBuf;
     use log::LevelFilter::Trace;
     use serde::Deserialize;
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::VarStore;
+    use std::fmt::Debug;
+    use std::path::PathBuf;
     use tch::Device::Cpu;
     use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::VarStore;
     use tch::{Device, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -1851,13 +1851,14 @@ pub mod tests {
 
     use thoosa_shared::hyperparameter::Hyperparameter;
 
-    use thoosa_shared::val::Val::{Int, UInt};
-    use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{cdt_for_dir, clc_step, sin_v_f, RangeOrValue, ThoError};
-    use thoosa_shared::run_configs::RunConfigId;
+    use crate::common_nets::SelfAttentionNetParams;
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{self_attention_label_node, LabelNetParams, LabelNetTypeParams, SelfAttentionNetParams};
+
+    use thoosa_shared::run_configs::RunConfigId;
+    use thoosa_shared::val::Val::{Int, UInt};
+    use thoosa_shared::val::{NamedVal, Val};
+    use thoosa_shared::{RangeOrValue, ThoError, cdt_for_dir, clc_step, sin_v_f};
 
     #[ctor::ctor]
     fn init() {
@@ -2704,105 +2705,6 @@ pub mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_mix_masks_align_with_rows_2() -> Result<(), ThoError> {
-        // set_max_level(Trace);
-        //resource lengths (resources are the net's inputs, i.e. what needs to be classified)
-        let resource_0_len = 100;
-        let resource_1_len = 150;
-
-        let num_motif_nets = 3i64;
-        let motif_a_width = 20;
-        let motif_b_width = 10;
-        let motif_c_width = 30;
-
-        //all motif nets are applied using same stride (TrainLabelNetsArgs/RunAllArgs .motif_slices_step )
-        let stride = 2;
-        //motif_a on resource_0_len produces
-        let motif_a_on_resource_0_len = (resource_0_len - motif_a_width) / stride + 1; //
-        let motif_b_on_resource_0_len = (resource_0_len - motif_b_width) / stride + 1; //
-        let motif_c_on_resource_0_len = (resource_0_len - motif_c_width) / stride + 1; //
-
-        let motif_a_on_resource_0_t = Tensor::ones(motif_a_on_resource_0_len, FLOAT_CPU) * 0.1; //what is returned by ApplyMotifNets::run
-        let motif_b_on_resource_0_t = Tensor::ones(motif_b_on_resource_0_len, FLOAT_CPU) * 0.2; //what is returned by ApplyMotifNets::run
-        let motif_c_on_resource_0_t = Tensor::ones(motif_c_on_resource_0_len, FLOAT_CPU) * 0.3; //what is returned by ApplyMotifNets::run
-
-        let max_len_0 = *[motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len].iter().max().unwrap();
-        let resource_0_t_after_nets_applied = Tensor::f_vstack(
-            &[
-                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-            ]
-        )?;
-
-        debug!("motif_a_on_resource_0_len={motif_a_on_resource_0_len} motif_b_on_resource_0_len={motif_b_on_resource_0_len} motif_c_on_resource_0_len={motif_c_on_resource_0_len}");
-
-        let motif_a_on_resource_1_len = (resource_1_len - motif_a_width) / stride + 1; //
-        let motif_b_on_resource_1_len = (resource_1_len - motif_b_width) / stride + 1; //
-        let motif_c_on_resource_1_len = (resource_1_len - motif_c_width) / stride + 1; //
-
-        let motif_a_on_resource_1_t = Tensor::ones(motif_a_on_resource_1_len, FLOAT_CPU) * 1.1; //what is returned by ApplyMotifNets::run
-        let motif_b_on_resource_1_t = Tensor::ones(motif_b_on_resource_1_len, FLOAT_CPU) * 1.2; //what is returned by ApplyMotifNets::run
-        let motif_c_on_resource_1_t = Tensor::ones(motif_c_on_resource_1_len, FLOAT_CPU) * 1.3; //what is returned by ApplyMotifNets::run
-
-        let max_len_1 = *[motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len].iter().max().unwrap();
-        let resource_1_t_after_nets_applied = Tensor::f_vstack(
-            &[
-                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-            ]
-        )?;
-
-        debug!("motif_a_on_resource_1_len={motif_a_on_resource_1_len} motif_b_on_resource_1_len={motif_b_on_resource_1_len} motif_c_on_resource_1_len={motif_c_on_resource_1_len}");
-
-        debug!("resource_0_t_after_nets_applied=\n{resource_0_t_after_nets_applied}");
-        debug!("resource_1_t_after_nets_applied=\n{resource_1_t_after_nets_applied}");
-        debug!("resource_0_t_after_nets_applied.size={:?}, resource_1_t_after_nets_applied.size={:?}", resource_0_t_after_nets_applied.size(), resource_1_t_after_nets_applied.size());
-
-        // TrainLabelNets, ResourcesBatch
-        let max_input = max(resource_0_t_after_nets_applied.size()[1], resource_1_t_after_nets_applied.size()[1]);
-        debug!("max_input={max_input}");
-
-
-        let (x_0_batch, lengths_0) = pad_stack_with_mask(&[&resource_0_t_after_nets_applied], num_motif_nets, max_input)?;
-        let (x_1_batch, lengths_1) = pad_stack_with_mask(&[&resource_1_t_after_nets_applied], num_motif_nets, max_input)?;
-
-        let lengths_0 = BatchLengths::new(lengths_0);
-        let lengths_1 = BatchLengths::new(lengths_1);
-
-        debug!("max_input={max_input}");
-        let (x, mut lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))?;
-
-        let idx_0 = y.eq(0.0).nonzero().double_value(&[0, 0]) as i64;
-        let idx_1 = idx_0 ^ 1;
-
-        debug!("x=\n{x}");
-        debug!("y=\n{y}");
-        debug!("lengths={lengths:?}");
-        debug!("idx_0={idx_0} idx_1={idx_1}");
-
-        let self_attention_net_params = SelfAttentionNetParams::new(64, 4, 4, 0.1);
-
-        let params = LabelNetParams::new(
-            3,
-            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
-        );
-
-        let mut vs_0 = VarStore::new(Cpu);
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
-        vs_0.freeze();
-
-        let _ = net.tho_forward(
-            &x.into(),
-            lengths.as_mut(),
-            false,
-        )?;
-
-
-        Ok(())
-    }
 
     #[test]
     fn test_mix_masks_align_with_rows() -> Result<(), ThoError> {

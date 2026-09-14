@@ -48,22 +48,23 @@ use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batc
 use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::common_nets::{OptConfig, StftRunConfig};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::{Batch, MotifProbability, MotifSlices, Slice, ThoBatch};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
-use thoosa_common::my_tch::MotifInitMode;
+use thoosa_common::my_tch::InitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::{Empty, SavableResult};
 use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, lin_motif_node};
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, lin_motif_node};
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -1405,6 +1406,8 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Reduction, Tensor};
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::builder::{Node, SeqBuilder};
+    use thoosa_common::common_nets::{CommonTrainingRunConfig, OptConfig, ThoModuleWithStore};
+    use thoosa_common::common_nets::{CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::MotifSlices;
@@ -1417,7 +1420,7 @@ mod tests {
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
     use thoosa_common::ipc::wraps::WorkerWrapperWithState;
-    use thoosa_common::my_tch::MotifInitModeFields;
+    use thoosa_common::my_tch::InitModeFields;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
@@ -1430,20 +1433,20 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, final_net};
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::{Workspace, mock_ws_simp};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_motifs::train_nets::{FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, final_net};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::{AsyncStage, DynSyncStage, DynSyncStageBox, MonoMetrics, Named, RunCtx, SimpleId, SyncStage};
     use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key, simple_id};
-    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
     use thoosa_store::RunConfigRow;
     use tokio::fs;
 
@@ -1477,8 +1480,8 @@ mod tests {
             let (t, intervals) = resource_tensor(
                 r.length() as usize,
                  &[
-                    vec![(3, motif_width, MotifKind::Pulse)],
-                    vec![(1, motif_width, MotifKind::Sin)],
+                    vec![(3, motif_width, TestSignalKind::Pulse)],
+                    vec![(1, motif_width, TestSignalKind::Sin)],
                     vec![]
                 ],
                  100, 10.0, true, true
@@ -1568,7 +1571,7 @@ mod tests {
             let (t, intervals) = resource_tensor(
                 1000usize,
                 &[
-                    vec![(2, 100, MotifKind::Pulse)],
+                    vec![(2, 100, TestSignalKind::Pulse)],
                 ],
                 100,
                 10.0,
@@ -1763,7 +1766,7 @@ mod tests {
                     // NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
                     // NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), Val::Real(5.0)),
                     NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)), Val::Real(0.0)),
-                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::InitMode(MotifInitModeFields::Mean__Selected))), Val::UInt(0)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::InitMode(InitModeFields::Mean__Selected))), Val::UInt(0)),
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifNetRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
