@@ -1,5 +1,5 @@
 use std::backtrace::Backtrace;
-use crate::dims::{AnyDims, Batch, ChannelsData, ChannelsMotifsSlices, Dims, LabelProbability, MotifProbability, MotifSlices};
+use crate::dims::{AnyDims, ChannelsData, Dims};
 use crate::runner::common::cachable::ThoDataRef;
 use thoosa_shared::traits::RunCtx;
 #[double]
@@ -286,6 +286,21 @@ where
     pub tracking: parking_lot::RwLock<Vec<&'static str>>,
 
     pub pd: PhantomData<D>,//TODO pub
+}
+
+/// Dimension-erased access used by common model builders without depending on feature-specific markers.
+pub trait TensorInitRef: Debug + Send + Sync {
+    fn tensor_ref(&self) -> &Tensor;
+}
+
+impl<D, Id> TensorInitRef for ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone + Send + Sync,
+{
+    fn tensor_ref(&self) -> &Tensor {
+        self.t_ref()
+    }
 }
 
 
@@ -729,33 +744,6 @@ impl WorkerOutput for ThoTensor {}
 #[typetag::serde(name = "ThoTensor_ChannelsData")]
 impl WorkerOutput for ThoTensor<ChannelsData, SynKey> {}
 
-#[typetag::serde(name = "ThoTensor_ChannelsMotifsSlices")]
-impl WorkerOutput for ThoTensor<ChannelsMotifsSlices, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_MotifSlices")]
-impl WorkerOutput for ThoTensor<MotifSlices, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_LabelProbability")]
-impl WorkerOutput for ThoTensor<LabelProbability, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_Batch_LabelProbability")]
-impl WorkerOutput for ThoTensor<Batch<LabelProbability>, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_MotifProbability")]
-impl WorkerOutput for ThoTensor<MotifProbability, SynKey>{}
-
 // Postcard stage calls need concrete typetag registrations for tensor inputs used across the main workflow.
 #[typetag::serde(name = "ThoTensor_ChannelsData_Input")]
 impl WorkerInput for ThoTensor<ChannelsData, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_ChannelsMotifsSlices_Input")]
-impl WorkerInput for ThoTensor<ChannelsMotifsSlices, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_MotifSlices_Input")]
-impl WorkerInput for ThoTensor<MotifSlices, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_LabelProbability_Input")]
-impl WorkerInput for ThoTensor<LabelProbability, SynKey> {}
-
-#[typetag::serde(name = "ThoTensor_MotifProbability_Input")]
-impl WorkerInput for ThoTensor<MotifProbability, SynKey> {}

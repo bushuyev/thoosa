@@ -46,7 +46,8 @@ use thoosa_common::common_nets::{BinaryHeadPoolArgs, BinaryHeadPoolArgsBuilder, 
                          SelfAttentionNetParams,
 };
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice, Spectorgram};
+use thoosa_common::dims::{Batch, Dims, Slice};
+use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Spectorgram};
 use thoosa_common::my_tch::InitModeBuilder;
 use thoosa_common::my_tch::InitModeFields;
 use thoosa_common::my_tch::InitModeRangeOrValue;
@@ -422,7 +423,7 @@ impl MotifNetParams {
     }
 
     //TODO
-    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_main/src/stages/apply_motif_nets.rs
+    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_motifs/src/stages/apply_motif_nets.rs
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
@@ -1324,10 +1325,8 @@ pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf
 mod train_tests {
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::builder::{Node, SeqBuilder};
-    use thoosa_common::dims::{
-        AnyDims, Batch, ChannelsMotifsData, Dims, LabelProbability, MotifProbability, Slice,
-        ThoBatch,
-    };
+    use thoosa_common::dims::{AnyDims, Batch, Dims, Slice, ThoBatch};
+    use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use thoosa_common::my_tch::{InitDummy, InitMode, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::common_nets::ConvNetArgsFields::Joint;
@@ -2698,9 +2697,9 @@ mod train_tests {
         let max_len_0 = *[motif_a_on_resource_0_len, motif_b_on_resource_0_len, motif_c_on_resource_0_len].iter().max().unwrap();
         let resource_0_t_after_nets_applied = Tensor::f_vstack(
             &[
-                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_0_t, max_len_0 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_0_t, max_len_0 as usize, 0)? //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
             ]
         )?;
 
@@ -2717,9 +2716,9 @@ mod train_tests {
         let max_len_1 = *[motif_a_on_resource_1_len, motif_b_on_resource_1_len, motif_c_on_resource_1_len].iter().max().unwrap();
         let resource_1_t_after_nets_applied = Tensor::f_vstack(
             &[
-                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
-                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_main/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_a_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_b_on_resource_1_t, max_len_1 as usize, 0)?, //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
+                stretch(&motif_c_on_resource_1_t, max_len_1 as usize, 0)? //corresponds to crates/thoosa_motifs/src/stages/apply_motif_nets.rs:525
             ]
         )?;
 
@@ -2773,4 +2772,3 @@ mod train_tests {
     }
 
 }
-

@@ -5,13 +5,13 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::batches::BatchLengths;
-use crate::dims::{AnyDims, Dims, MotifSlices, Spectorgram};
+use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, conv1d_from_path, conv2d_from_path, my_linear, InitMode};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
 use crate::nodes::cosine_2d::MyCosineConv2d;
-use crate::tho_tensor::ThoTensor;
+use crate::tho_tensor::{TensorInitRef, ThoTensor};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> Result<u32, ThoError> {
@@ -94,7 +94,7 @@ pub enum Node {
         kernel: u32,
         a: f64,
         b: f64,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init: Option<Arc<dyn TensorInitRef>>,
         init_mode: InitMode
     },
     CosineConv2d {
@@ -103,7 +103,7 @@ pub enum Node {
         kh_freq:i64,
         a: f64,
         b: f64,
-        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
+        init: Option<Arc<dyn TensorInitRef>>,
         init_mode: InitMode
     },
     SharpeningHead1d {
@@ -519,11 +519,11 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn cosine_conv_1d<P:ToString>(
+    pub fn cosine_conv_1d<P:ToString, D: Dims + 'static>(
         &mut self,
         path: P,
         kernel: u32,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init: Option<Arc<ThoTensor<D, SynKey>>>,
         a: f64,
         b: f64,
         init_mode: InitMode
@@ -533,7 +533,7 @@ impl SeqBuilder {
             path:path.to_string(),
             kernel,
             a, b,
-            init,
+            init: init.map(|tensor| tensor as Arc<dyn TensorInitRef>),
             init_mode
         });
 
@@ -543,12 +543,12 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn cosine_conv_2d<P:ToString>(
+    pub fn cosine_conv_2d<P:ToString, D: Dims + 'static>(
         &mut self,
         path: P,
         kw_time: u32,
         kh_freq: u32,
-        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
+        init: Option<Arc<ThoTensor<D, SynKey>>>,
         a: f64,
         b: f64,
         init_mode: InitMode
@@ -559,7 +559,7 @@ impl SeqBuilder {
             kw_time: kw_time as i64,
             kh_freq: kh_freq as i64,
             a, b,
-            init,
+            init: init.map(|tensor| tensor as Arc<dyn TensorInitRef>),
             init_mode
         });
 

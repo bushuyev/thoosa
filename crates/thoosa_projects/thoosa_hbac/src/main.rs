@@ -28,20 +28,19 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
-use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, cuda_worker_endpoint_inits, import_resources, init_loader, run_grid};
-use thoosa_main::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
-use thoosa_main::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
-use thoosa_main::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
-use thoosa_main::stages::cross_loader::ResourcesConfigInput;
-use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfigRangeOrValue;
-use thoosa_main::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
-use thoosa_main::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init, train_final_step_endpoint_inits};
-use thoosa_main::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
-use thoosa_main::stages::train_motif_nets::train_motif_step_endpoint_inits;
-use thoosa_main::stages::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit, sync_freq_filter_endpoint_init};
+use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, cuda_worker_endpoint_inits, import_resources, init_loader, run_grid};
 use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
+use thoosa_motifs::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
+use thoosa_motifs::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
+use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
+use thoosa_motifs::stages::find_motifs_run_config::FindMotifsRunConfigRangeOrValue;
+use thoosa_motifs::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
+use thoosa_motifs::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init, train_final_step_endpoint_inits};
+use thoosa_motifs::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
+use thoosa_motifs::stages::train_motif_nets::train_motif_step_endpoint_inits;
+use thoosa_motifs::stages::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit, sync_freq_filter_endpoint_init};
 use thoosa_motifs::train_nets::InferArgs;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;
@@ -129,7 +128,7 @@ impl StageCommand for HbacCommands {
                     || data::labeled_resourses(&import_resources_args.source_path, "train.csv"),
 
                     | key| {
-                        thoosa_main::data::parquet_to_tensor_by_path(
+                        thoosa_motifs::data::parquet_to_tensor_by_path(
                             PathBuf::from(&import_resources_args.source_path)
                                 .join("train_eegs")
                                 .join(format!("{}.parquet", key)),
@@ -238,7 +237,7 @@ fn main() -> Result<(), ThoError> {
             Arc::clone(&store) as Arc<dyn MotifsStore>,
             Arc::clone(&ws),
             |source_path, key| {
-                thoosa_main::data::parquet_to_tensor_by_path(
+                thoosa_motifs::data::parquet_to_tensor_by_path(
                     source_path
                         .as_ref()
                         .join("train_eegs")

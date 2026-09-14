@@ -6,12 +6,8 @@ use std::sync::Arc;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, ThoSelector};
 use thoosa_shared::traits::{Data, Select, WithId};
-use crate::dims::MotifProbability;
-use crate::ipc::worker_msg::WorkerOutput;
-use crate::tho_tensor::ThoTensor;
 
 #[derive(Debug)]
 pub struct DataWithExtra<D, E>
@@ -167,7 +163,3 @@ where
     D: Data + CopyToDevice + WithId + Send + Sync,
     E:Debug + Send + Sync,
 {}
-
-
-#[typetag::serde()]
-impl WorkerOutput for DataWithExtra<ThoTensor<MotifProbability, SynKey>, std::vec::Vec<i64>> {}
