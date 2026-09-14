@@ -1227,9 +1227,7 @@ where
 
         self.quantized =  Some(
             FastQuantizedLinear::from_float_weights(
-                // &Tensor::rand(ws.as_ref().size(), FLOAT_CPU),
                 &ws_fl,
-                // bs.as_ref().map(|t| Tensor::rand(t.size(), FLOAT_CPU)).as_ref()
                 bs_fl.as_ref()
             ).expect("can't quantize")
         );
