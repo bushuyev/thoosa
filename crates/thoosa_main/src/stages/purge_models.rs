@@ -10,6 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
+use thoosa_motifs::motifs_ws::MotifsWorkspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -198,7 +199,7 @@ pub struct PurgeModelsStage<C>
 where
     C: RunCtx + 'static,
 {
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     args: PurgeModelsArgs,
     pd: PhantomData<C>,
@@ -208,7 +209,7 @@ impl<C> PurgeModelsStage<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<dyn MotifsStore>, args: PurgeModelsArgs) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, args: PurgeModelsArgs) -> Self {
         Self {
             ws: Arc::clone(ws),
             store: Arc::clone(store),
@@ -235,7 +236,7 @@ where
     async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let roots = {
             let ws_guard = self.ws.read();
-            ModelRoots::from_ws(ws_guard.as_ref())
+            ModelRoots::from_ws(ws_guard.as_ref())?
         };
         let purge_mode = self.args.purge_mode();
         let entries = track_await(selected_purge_entries(&roots, &self.store, purge_mode)).await?;
@@ -294,12 +295,12 @@ struct ModelRoots {
 }
 
 impl ModelRoots {
-    fn from_ws(ws: &dyn Workspace) -> Self {
-        Self {
-            motifs: ws.motifs_nets_path().clone(),
-            labels: ws.labels_nets_path().clone(),
-            final_models: ws.final_nets_path().clone(),
-        }
+    fn from_ws(ws: &dyn MotifsWorkspace) -> Result<Self, ThoError> {
+        Ok(Self {
+            motifs: ws.motifs_nets_path()?,
+            labels: ws.labels_nets_path()?,
+            final_models: ws.final_nets_path()?,
+        })
     }
 
     fn root(&self, net_type: PurgeModelType) -> &Path {
@@ -462,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_purge_models_command_parses() {
-        let cli = MotifAppArgs::parse_from(["thoosa_main", "purge-models2", "--purge-mode", "label:loss:0.1"]);
+        let cli = MotifAppArgs::parse_from(["thoosa_main", "purge-models", "--purge-mode", "label:loss:0.1"]);
 
         match cli.common_args.command {
             Some(MotifAppCommands::Motifs(MotifCommands::PurgeModels(args))) => assert_eq!(args.purge_mode(), PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))),
@@ -483,10 +484,10 @@ mod tests {
 
         {
             let ws_guard = ws.read();
-            create_dummy_model(ws_guard.labels_nets_path(), &kept_path)?;
-            create_dummy_model(ws_guard.motifs_nets_path(), &lost_motif_path)?;
-            create_dummy_model(ws_guard.labels_nets_path(), &lost_label_path)?;
-            create_dummy_model(ws_guard.final_nets_path(), &lost_final_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &kept_path)?;
+            create_dummy_model(&ws_guard.motifs_nets_path()?, &lost_motif_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &lost_label_path)?;
+            create_dummy_model(&ws_guard.final_nets_path()?, &lost_final_path)?;
         }
 
         let run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "kept", HashMap::new()).await?;
@@ -495,10 +496,10 @@ mod tests {
         let output = run_stage(&ws, &store, PurgeMode::PurgeLost).await?;
         assert_eq!(output.purged().len(), 3);
         assert!(output.purged().iter().any(|model| model.net_type == PurgeModelType::Motifs && model.net_path == lost_motif_path));
-        assert!(ws.read().labels_nets_path().join(&kept_path).exists());
-        assert!(!ws.read().motifs_nets_path().join(&lost_motif_path).exists());
-        assert!(!ws.read().labels_nets_path().join(&lost_label_path).exists());
-        assert!(!ws.read().final_nets_path().join(&lost_final_path).exists());
+        assert!(ws.read().labels_nets_path()?.join(&kept_path).exists());
+        assert!(!ws.read().motifs_nets_path()?.join(&lost_motif_path).exists());
+        assert!(!ws.read().labels_nets_path()?.join(&lost_label_path).exists());
+        assert!(!ws.read().final_nets_path()?.join(&lost_final_path).exists());
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?.len(), 1);
 
         Ok(())
@@ -514,8 +515,8 @@ mod tests {
         let new_path = PathBuf::from("label").join("2");
         {
             let ws_guard = ws.read();
-            create_dummy_model(ws_guard.labels_nets_path(), &old_path)?;
-            create_dummy_model(ws_guard.labels_nets_path(), &new_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &old_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &new_path)?;
         }
 
         let old_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "old", HashMap::new()).await?;
@@ -530,8 +531,8 @@ mod tests {
         assert_eq!(output.purged()[0].net_path, old_path);
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![old_run_config_id]), None, None).await?.len(), 0);
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![new_run_config_id]), None, None).await?.len(), 1);
-        assert!(!ws.read().labels_nets_path().join("label").join("1").exists());
-        assert!(ws.read().labels_nets_path().join("label").join("2").exists());
+        assert!(!ws.read().labels_nets_path()?.join("label").join("1").exists());
+        assert!(ws.read().labels_nets_path()?.join("label").join("2").exists());
 
         Ok(())
     }
@@ -546,8 +547,8 @@ mod tests {
         let low_loss_path = PathBuf::from("label").join("2");
         {
             let ws_guard = ws.read();
-            create_dummy_model(ws_guard.labels_nets_path(), &high_loss_path)?;
-            create_dummy_model(ws_guard.labels_nets_path(), &low_loss_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &high_loss_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &low_loss_path)?;
         }
 
         let high_loss_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "high_loss", HashMap::new()).await?;
@@ -560,8 +561,8 @@ mod tests {
         assert_eq!(output.purged()[0].net_path, high_loss_path);
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![high_loss_run_config_id]), None, None).await?.len(), 0);
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![low_loss_run_config_id]), None, None).await?.len(), 1);
-        assert!(!ws.read().labels_nets_path().join("label").join("1").exists());
-        assert!(ws.read().labels_nets_path().join("label").join("2").exists());
+        assert!(!ws.read().labels_nets_path()?.join("label").join("1").exists());
+        assert!(ws.read().labels_nets_path()?.join("label").join("2").exists());
 
         Ok(())
     }
@@ -577,9 +578,9 @@ mod tests {
         let label_path = PathBuf::from("label").join("3");
         {
             let ws_guard = ws.read();
-            create_dummy_model(ws_guard.motifs_nets_path(), &used_motif_path)?;
-            create_dummy_model(ws_guard.motifs_nets_path(), &unused_motif_path)?;
-            create_dummy_model(ws_guard.labels_nets_path(), &label_path)?;
+            create_dummy_model(&ws_guard.motifs_nets_path()?, &used_motif_path)?;
+            create_dummy_model(&ws_guard.motifs_nets_path()?, &unused_motif_path)?;
+            create_dummy_model(&ws_guard.labels_nets_path()?, &label_path)?;
         }
 
         let used_motif_run_config_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "used", HashMap::new()).await?;
@@ -596,15 +597,15 @@ mod tests {
         assert_eq!(output.purged()[0].net_path, unused_motif_path);
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![used_motif_run_config_id]), None, None).await?.len(), 1);
         assert_eq!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![unused_motif_run_config_id]), None, None).await?.len(), 0);
-        assert!(ws.read().motifs_nets_path().join("0").join("10_1").exists());
-        assert!(!ws.read().motifs_nets_path().join("0").join("11_2").exists());
+        assert!(ws.read().motifs_nets_path()?.join("0").join("10_1").exists());
+        assert!(!ws.read().motifs_nets_path()?.join("0").join("11_2").exists());
 
         Ok(())
     }
 
-    async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<dyn MotifsStore>), ThoError> {
+    async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, Arc<dyn MotifsStore>), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("{name}_{}", cdt_for_dir()));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?));
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             create_motif_tables
@@ -614,7 +615,7 @@ mod tests {
     }
 
     async fn run_stage(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         purge_mode: PurgeMode,
     ) -> Result<super::PurgeModelsOutput, ThoError> {

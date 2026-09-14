@@ -10,8 +10,10 @@ use crate::ws::Workspace;
 #[async_trait]
 pub trait StageCommand {
     type Store;
+    /// Lets feature commands retain their extended workspace trait object at the common CLI boundary.
+    type Workspace: Workspace + ?Sized = dyn Workspace;
     type Ctx;
-    async fn run(self, store:&Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:Self::Ctx) -> Result<(), ThoError>;
+    async fn run(self, store:&Self::Store, ws: &Arc<RwLock<Box<Self::Workspace>>>, ctx:Self::Ctx) -> Result<(), ThoError>;
 }
 
 

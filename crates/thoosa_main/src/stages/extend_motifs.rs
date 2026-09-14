@@ -91,12 +91,13 @@ impl Output for ExtendMotifsSavableResult {}
 #[async_trait]
 impl SavableResult for ExtendMotifsSavableResult {
     type Store = dyn MotifsStore;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type R = u32;
 
     async fn save(
         &mut self,
         _store: &Arc<dyn MotifsStore>,
-        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        _ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         _p: Self::P<'_>,
     ) -> Result<u32, ThoError> {
         Ok(0)
@@ -113,7 +114,7 @@ where
     run_configs: Vec<ExtendMotifsRunConfig>,
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
     find_motifs_run_config_ids:Vec<RunConfigId>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     loader:Arc<L>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
@@ -138,7 +139,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
@@ -423,7 +424,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::extend_with_one_find_run"))]
     async fn extend_with_one_find_run(
         loader: Arc<L>,
-        ws: Arc<RwLock<Box<dyn Workspace>>>,
+        ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         clc_resources_motifs_dist: Arc<ClcResourcesMotifsDist<C>>,
         extend_motifs_run_config: ExtendMotifsRunConfig,
         find_motifs_run_config: Arc<FindMotifsRunConfig>,
@@ -1239,7 +1240,7 @@ mod tests {
     async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 2, 100, 1000)));
 
         let find_motifs_run_config_id = 7u32;
         let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 3, None, None));

@@ -23,3 +23,4 @@ pub mod common_stats;
 pub mod fs_store;
 pub mod motif_tracker_store;
 pub mod motifs_store;
+pub mod motifs_ws;

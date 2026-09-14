@@ -84,9 +84,10 @@ pub enum BirdClefAppCommands {
 #[async_trait]
 impl StageCommand for BirdClefAppCommands {
     type Store = Arc<dyn MotifsStore>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             BirdClefAppCommands::CommonCommands(c) => {
                 c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
@@ -111,9 +112,10 @@ pub enum BirdClefCommands {
 #[async_trait]
 impl StageCommand for BirdClefCommands {
     type Store = Arc<dyn MotifsStore>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx: RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx: RunCtxImpl) -> Result<(), ThoError> {
         match self {
             BirdClefCommands::ImportResources(import_resources_args) => {
                 debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
@@ -222,7 +224,7 @@ fn main() -> Result<(), ThoError>{
     let cdt = cdt_for_dir();
     let args = BirdClefArgs::parse();
     let app_configs = WsConfigs::new(1, u32::MAX, 32000);
-    CudaWorker::run_if_sock(&cdt, &app_configs, HashMap::new())?;
+    CudaWorker::run_if_sock_with_workspace(&cdt, &app_configs, HashMap::new(), thoosa_motifs::motifs_ws::new_motifs_workspace)?;
     // tch::set_num_threads(1);
     // tch::set_num_interop_threads(1);
 
@@ -322,7 +324,7 @@ fn main() -> Result<(), ThoError>{
 
     let run_result:Result<(), ThoError> = rt.block_on(async move {
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             args.common_args.ws_path.clone(),
             app_configs.clone(),
         )?));
@@ -338,7 +340,7 @@ fn main() -> Result<(), ThoError>{
         //         )?))
         //     }
         //     _=> {
-        //         Arc::new(RwLock::new(FsWorkspace::new(
+        //         Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
         //             args.ws_path.clone(),
         //             app_configs,
         //         )?))
@@ -387,7 +389,7 @@ fn main() -> Result<(), ThoError>{
 }
 
 
-async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<dyn MotifsStore>) -> Result<(), ThoError>{
+async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store:&Arc<dyn MotifsStore>) -> Result<(), ThoError>{
     let mut ctx = RunCtxImpl::new(0, "root");
 
 
@@ -506,7 +508,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     Ok(())
 }
 
-async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<dyn MotifsStore>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>>, ThoError> {
+async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: Arc<dyn MotifsStore>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_config_ids = track_await(store.list_label_nets_run_config_ids(label)).await?;
     debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_config_ids={run_config_ids:?}");
@@ -647,7 +649,7 @@ mod tests {
     use std::sync::Arc;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::train_nets::InferArgs;
-    use thoosa_common::ws::{FsWorkspace, WsConfigs, WsMockBuilder};
+    use thoosa_common::ws::{FsWorkspace, WsConfigs};
     use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_shared::ThoError;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
@@ -676,7 +678,7 @@ mod tests {
         //     .build(),
         // );
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             "/home/bu/tmp/ws_clef",
             WsConfigs::new(1,
                            0, //not used

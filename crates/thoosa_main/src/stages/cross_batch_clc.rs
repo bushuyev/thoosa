@@ -594,7 +594,7 @@ where
 #[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
 impl WorkerOutput for CrossUnfoldClcOutput<DistsMask>{}
 
-pub fn sync_cross_unfold_clc_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_cross_unfold_clc_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let init = *init.downcast::<crate::stages::find_motifs::FindMotifsCrossUnfoldClcInit>().map_err(|_| ThoError::new("CrossUnfoldClc endpoint received an unexpected initializer type"))?;

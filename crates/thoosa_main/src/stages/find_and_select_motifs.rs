@@ -102,12 +102,13 @@ impl FindAndSelectEvalMetrics {
 #[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
     type Store = dyn MotifsStore;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type R = Vec<u32>;
 
     async fn save(
         &mut self,
         store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> Result<Vec<u32>, ThoError> {
 
@@ -133,7 +134,7 @@ impl SavableResult for FindAndSelectMotifsResult {
 ///for each grid values combo search for optimal opt values (RangeOrValue::Range without step)
 #[derive(Debug)]
 pub struct FindAndSelectMotifsStage {
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     loader: Arc<RawTensorLoader<RunCtxImpl>>,
     run_configs: Arc<
@@ -152,7 +153,7 @@ pub struct FindAndSelectMotifsStage {
 impl FindAndSelectMotifsStage {
     pub fn new(
         loader: Arc<RawTensorLoader<RunCtxImpl>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         run_configs: OptRunConfigs<
             Vec<NamedVal<FindAndSelectMotifsRunConfigFields>>,
@@ -191,7 +192,7 @@ impl FindAndSelectMotifsStage {
     }
 
     async fn run_find_and_select<C: RunCtx + MaxParallelCtx + Adjustable>(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<RawTensorLoader<C>>,
         run_config: &mut FindAndSelectMotifsRunConfig,
@@ -277,7 +278,7 @@ impl FindAndSelectMotifsStage {
         grid_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         opt_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         min_loss_ref: &Arc<RwLock<(f32, Option<FindAndSelectMotifsRunConfig>)>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: &Arc<RawTensorLoader<C>>,
         find_resources: &ResourceType,

@@ -93,7 +93,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new<R>(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
@@ -138,7 +138,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new_with_apply_motif_nets<R>(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
@@ -184,7 +184,7 @@ where
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     pub async fn new_with_motif_nets_builder<R, F, Fut>(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx: R,
@@ -581,7 +581,7 @@ where
 
 }
 
-pub fn stack_applied_label_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_label_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>().map_err(|_| ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"))?;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
@@ -757,12 +757,12 @@ impl WorkerStageInput for ApplyLabelNetInit {
 impl WorkerInput for ApplyLabelNetInit {}
 
 #[async_trait]
-impl<C, RC> SyncStageInit<RC, DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>> for ApplyLabelNetInit
+impl<C, RC> SyncStageInit<RC, DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>, dyn thoosa_motifs::motifs_ws::MotifsWorkspace> for ApplyLabelNetInit
 where
     C: RunCtx + 'static,
     RC: RunCtx + Send + Sync + 'static,
 {
-    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
+    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
         let device: ThoDevice = run_context.tho_device_idx().into();
 
         if GlobalCtx::global().is_ipc() {
@@ -813,7 +813,7 @@ where
         trained_net_id: u32,
         sync_init: ApplyLabelNetInit,
         run_context: RC,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError>
     where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
@@ -854,7 +854,7 @@ where
     }
 }
 
-pub fn apply_label_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_label_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init as Box<dyn std::any::Any>).downcast::<ApplyLabelNetInit>().map_err(|_| ThoError::new("ApplyLabelNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
@@ -983,7 +983,6 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfig, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, to_vec_f32};
-    use thoosa_common::ws::WsMockBuilder;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
@@ -1261,7 +1260,7 @@ mod tests {
 
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, channels, 100, motif_width)
+            thoosa_motifs::motifs_ws::MotifsWsMockBuilder::new(None, channels, 100, motif_width)
                 .with_load_motif_net(motif_ws_entries)
                 .with_load_label_nets(label_ws_entries)
                 .with_load_label_net(single_label_ws_entries)

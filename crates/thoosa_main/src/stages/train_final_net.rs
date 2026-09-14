@@ -34,6 +34,8 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_s
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+
+type MotifsInitFn = InitFn<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>;
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
@@ -83,7 +85,7 @@ where
     label_loader: Arc<LL>,
     num_label_nets: u32,
     // label_net_run_config_ids: Vec<RunConfigId>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     opt_config: Arc<OptConfig>,
 }
@@ -92,7 +94,7 @@ pub async fn new_train_final_net<L, C, R>(
     train_label_nets_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     stage_ctx: R,
     opt_config: Arc<OptConfig>,
@@ -128,7 +130,7 @@ where
         label_loader: Arc<LL>,
         num_label_nets: u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
@@ -167,10 +169,11 @@ impl Output for TrainFinalNetOutput {}
 #[async_trait]
 impl SavableResult for TrainFinalNetOutput {
     type Store = dyn MotifsStore;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
 
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
         let _ = track_await(self.result.save(store, ws, ())).await;
 
         Ok(vec![0])//TODO
@@ -406,7 +409,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncLogitsBatchOutput{}
 
-pub fn sync_logits_batch_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_logits_batch_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
 
@@ -648,7 +651,7 @@ impl WorkerInput for TrainFinalStepIpcInit {}
 #[typetag::serde(name = "TrainFinalStepInput")]
 impl WorkerInput for crate::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities> {}
 
-fn train_final_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_final_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>().map_err(|_| ThoError::new("TrainFinalStep endpoint received invalid initializer"))?;
         let params = init.params.clone();
@@ -725,10 +728,10 @@ where
     }
 }
 
-pub fn train_final_step_endpoint_inits() -> HashMap<String, InitFn> {
+pub fn train_final_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
     HashMap::from([(
         TRAIN_FINAL_STEP_ENDPOINT.to_string(),
-        Box::new(train_final_step_endpoint_init) as InitFn
+        Box::new(train_final_step_endpoint_init) as MotifsInitFn
     )])
 }
 
@@ -761,7 +764,7 @@ mod tests {
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, FinalNetArgs, FinalNetArgsFields, FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainLabelNetRunConfig};
     use thoosa_common::train_nets::{ConvNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::utils::reset_print_options;
-    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs, WsMockBuilder};
+    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -828,7 +831,7 @@ mod tests {
         let label_b_run_config_id = 222;
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 1, 100, 1000)
+            thoosa_motifs::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, 1000)
                 .with_load_motif_net(vec![
                     (motif_net_0_path.clone(), motif_0_params, motif_0_net),
                     (motif_net_1_path.clone(), motif_1_params, motif_1_net),
@@ -967,7 +970,7 @@ mod tests {
         ]).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
+        let ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>> = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
         let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
         let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
         // Exercise the same checkpoint handoff used by local and IPC training.
@@ -1023,12 +1026,13 @@ impl TrainFinalNetsRunConfigResult {
 #[async_trait]
 impl SavableResult for TrainFinalNetsRunConfigResult {
     type Store = dyn MotifsStore;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         let run_config_id = track_await(store.save_run_config(

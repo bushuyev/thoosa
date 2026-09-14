@@ -61,7 +61,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
 
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     quantize: bool,
     pd:PhantomData<C>
 }
@@ -70,7 +70,7 @@ impl <C> LoadMotifNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, quantize: bool) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, quantize: bool) -> Self {
         Self {
             ws: Arc::clone(ws),
             quantize,
@@ -126,7 +126,7 @@ where
 
         let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(ctx.tho_device_idx()).into(), input.quantize, true)?;
 
-        let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
+        let (channel, motif_id) = thoosa_motifs::motifs_ws::parse_motif_path(&input.net_id)?;
 
         Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module.expect("no module"), MotifNetMeta::new(motif_id, channel, params)))))
     }
