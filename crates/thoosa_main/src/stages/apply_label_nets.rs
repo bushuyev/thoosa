@@ -1,6 +1,5 @@
-use cached_derive::Cached;
-use thoosa_motifs::motifs_store::MotifsStore;
 use async_trait::async_trait;
+use cached_derive::Cached;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, trace, warn};
@@ -17,6 +16,7 @@ use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
 use thoosa_common::batches::BatchLengths;
+use thoosa_common::common_nets::ThoModuleWithStore;
 use thoosa_common::cuda_utils::split_padded_motif_scores;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, MotifProbability, Slice};
@@ -30,8 +30,9 @@ use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster,
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{LabelNetParams, MotifNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::train_nets::{LabelNetParams, MotifNetParams};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::{SynKey, hashmap_as_vec};
@@ -51,9 +52,9 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -973,6 +974,7 @@ mod tests {
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
     use thoosa_common::batches::BatchLengths;
+    use thoosa_common::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, MotifProbability, Slice};
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
@@ -981,15 +983,15 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, to_vec_f32};
+    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
+    use thoosa_motifs::train_nets::{LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{ThoError, mono_key};
-    use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
     use thoosa_store::{RunConfigRow, TrainedNet};
 
     fn const_motif_net(

@@ -512,7 +512,7 @@ pub mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::test_utils::{MotifKind, gen_motif};
+    use thoosa_shared::test_utils::{TestSignalKind, gen_motif};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::{DataId, RunCtx};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir};
@@ -574,7 +574,7 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, MotifKind::Pulse)]], 100, 10.0f32, true, true)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, TestSignalKind::Pulse)]], 100, 10.0f32, true, true)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals)];
 
         let mut store = MockMotifsStoreBuilder::new()
@@ -603,7 +603,7 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
+        let motif_t = tch_test_utils::motifs_tensor(100, 3, TestSignalKind::Pulse, 0.3, 0.4);
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -649,8 +649,8 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(3, 100, MotifKind::Pulse)]], 100, 10.0f32, true, true)?;
-        let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, MotifKind::Pulse)]], 200, 10.0f32, true, true)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(3, 100, TestSignalKind::Pulse)]], 100, 10.0f32, true, true)?;
+        let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, TestSignalKind::Pulse)]], 200, 10.0f32, true, true)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals), (&resource_b, &[channel_0_motifs_ids.as_slice()][..],  &resource_b_intervals)];
 
         let mut store = MockMotifsStoreBuilder::new()
@@ -679,7 +679,7 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
+        let motif_t = tch_test_utils::motifs_tensor(100, 3, TestSignalKind::Pulse, 0.3, 0.4);
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -726,7 +726,7 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)]], 300, 10.0f32, true, true)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(1, 100, TestSignalKind::Pulse), (1, 100, TestSignalKind::Triangle)]], 300, 10.0f32, true, true)?;
 
         let resources_channels_intervals = [(&resource_a, &[motifs_ids.as_slice()][..], &resource_a_intervals)];
 
@@ -757,8 +757,8 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_0_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
-        let motif_1_t = tch_test_utils::motifs_tensor(100, 2, MotifKind::Triangle, 0.3, 0.4);
+        let motif_0_t = tch_test_utils::motifs_tensor(100, 3, TestSignalKind::Pulse, 0.3, 0.4);
+        let motif_1_t = tch_test_utils::motifs_tensor(100, 2, TestSignalKind::Triangle, 0.3, 0.4);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t.shallow_clone())),
@@ -834,22 +834,22 @@ pub mod tests {
         let resources_group = "group";
 
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[
-                    vec![(3, 100, MotifKind::Pulse)],
-                    vec![(2, 100, MotifKind::Sin)],
+                    vec![(3, 100, TestSignalKind::Pulse)],
+                    vec![(2, 100, TestSignalKind::Sin)],
                     vec![]
                 ], 100, 10.0f32,
                                                                                    true,
                                                                                    true)?;
         let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[
-                    vec![(2, 100, MotifKind::Pulse)],
-                    vec![(1, 100, MotifKind::Sin)],
+                    vec![(2, 100, TestSignalKind::Pulse)],
+                    vec![(1, 100, TestSignalKind::Sin)],
                     vec![]
                 ], 100, 10.0f32,
                                                                                    true,
                                                                                    true)?;
         let (resource_c_t, resource_c_intervals) = tch_test_utils::resource_tensor(resource_c.length() as usize, &[
-                    vec![(2, 100, MotifKind::Triangle)],
-                    vec![(1, 100, MotifKind::Sin)],
+                    vec![(2, 100, TestSignalKind::Triangle)],
+                    vec![(1, 100, TestSignalKind::Sin)],
                     vec![]
                 ], 100, 10.0f32,
                                                                                    true,
@@ -900,9 +900,9 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_0_0_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
-        let motif_0_1_t = tch_test_utils::motifs_tensor(100, 2, MotifKind::Triangle, 0.3, 0.4);
-        let motif_1_0_t = tch_test_utils::motifs_tensor(100, 4, MotifKind::Sin, 0.3, 0.4);
+        let motif_0_0_t = tch_test_utils::motifs_tensor(100, 3, TestSignalKind::Pulse, 0.3, 0.4);
+        let motif_0_1_t = tch_test_utils::motifs_tensor(100, 2, TestSignalKind::Triangle, 0.3, 0.4);
+        let motif_1_0_t = tch_test_utils::motifs_tensor(100, 4, TestSignalKind::Sin, 0.3, 0.4);
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(channel_0_motif_0)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_0_t.shallow_clone())),
             (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_0, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_0_t)),
@@ -1181,7 +1181,7 @@ pub mod tests {
     fn resource_tensor_supports_multiple_kinds_per_channel() -> Result<(), ThoError> {
         let (tensor, intervals) = tch_test_utils::resource_tensor(
             1000,
-            &[vec![(1, 50, MotifKind::Pulse), (1, 60, MotifKind::Sin)], vec![(2, 80, MotifKind::Triangle)]], 300, 10.0f32,
+            &[vec![(1, 50, TestSignalKind::Pulse), (1, 60, TestSignalKind::Sin)], vec![(2, 80, TestSignalKind::Triangle)]], 300, 10.0f32,
             true,
             true,
         )?;
@@ -1204,7 +1204,7 @@ pub mod tests {
     fn resource_tensor_offsets_channels_when_space_allows() -> Result<(), ThoError> {
         let (_, intervals) = tch_test_utils::resource_tensor(
             1200,
-            &[vec![(1, 100, MotifKind::Pulse)], vec![(1, 120, MotifKind::Triangle)]], 300, 10.0f32,
+            &[vec![(1, 100, TestSignalKind::Pulse)], vec![(1, 120, TestSignalKind::Triangle)]], 300, 10.0f32,
             true,
             true,
         )?;
@@ -1628,8 +1628,8 @@ pub mod tests {
                     resources_label_0.iter().chain(resources_label_1.iter()).map(|resouce|{
                         (resouce.clone(),
                             tch_test_utils::resource_tensor(resource_len as usize, &[
-                                                            vec![(3, 100, MotifKind::Pulse)],
-                                                            vec![(3, 100, MotifKind::Sin)],
+                                                            vec![(3, 100, TestSignalKind::Pulse)],
+                                                            vec![(3, 100, TestSignalKind::Sin)],
                                                             vec![]
                                                         ], 100, 10.0f32,
                                                             true,
@@ -1641,7 +1641,7 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached(
-            motif_ids.iter().map(|m|((*m).into(), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4))))
+            motif_ids.iter().map(|m|((*m).into(), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, tch_test_utils::motifs_tensor(100, 3, TestSignalKind::Pulse, 0.3, 0.4))))
         ).finish());
 
 

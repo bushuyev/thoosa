@@ -15,7 +15,6 @@
 pub mod cli;
 pub mod data;
 pub mod stages;
-pub mod version;
 
 //TODO use directly?
 pub use thoosa_common::dims::ChannelsData;

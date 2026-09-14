@@ -1,19 +1,19 @@
+use crate::common_nets::OptConfig;
+// use rand_distr::{Uniform, Distribution};
+use crate::parzen::cpe::CategoricalParzenEstimator;
+use crate::parzen::mvpe::MultiVariateParzenEstimator;
+use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use log::{debug, trace};
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-// use rand_distr::{Uniform, Distribution};
-use crate::parzen::cpe::CategoricalParzenEstimator;
-use crate::parzen::mvpe::MultiVariateParzenEstimator;
-use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use tch::Tensor;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::ThoError;
-use thoosa_shared::val::{NamedVal, Val};
-use crate::train_nets::OptConfig;
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
+use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::val::{NamedVal, Val};
 
 #[derive(Debug, Clone)]
 struct RunResult {
@@ -319,8 +319,8 @@ mod tree_structured_parzen_estimator_tests {
     };
     use log::debug;
     use tch::{Kind, Tensor};
-    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::ThoError;
+    use thoosa_shared::hyperparameter::Hyperparameter;
 
     #[test]
     fn test_percentile() {
@@ -838,17 +838,17 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tpe_optimizer_tests {
+    use crate::common_nets::OptConfig;
     use crate::parzen::optimizer::Val::Int;
     use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection, Val, stack_params};
-    use crate::train_nets::OptConfig;
+    use crate::tho_tensor::ThoTensor;
     use log::debug;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tch::Tensor;
-    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::ThoError;
+    use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
-    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {

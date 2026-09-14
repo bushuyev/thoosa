@@ -663,7 +663,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::{AsyncStage, DataId, RunCtx, Stage};
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp};
     use thoosa_motifs::motifs_store::MockMotifsStoreBuilder;
@@ -705,9 +705,9 @@ mod tests {
 
 
             let (resource_t, resource_intervals) = tch_test_utils::resource_tensor(resource.length() as usize, &[
-                            vec![(size as usize, 100, MotifKind::Pulse)],
-                            vec![(size as usize, 100, MotifKind::Sin)],
-                            vec![(size as usize, 100, MotifKind::Triangle)]
+                            vec![(size as usize, 100, TestSignalKind::Pulse)],
+                            vec![(size as usize, 100, TestSignalKind::Sin)],
+                            vec![(size as usize, 100, TestSignalKind::Triangle)]
                         ], 100, 10.0, true, true)?;
 
 

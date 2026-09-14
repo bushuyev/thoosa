@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use thoosa_motifs::motifs_store::MotifsStore;
 use cached_derive::Cached;
 use futures::FutureExt;
 use futures::Stream;
@@ -23,6 +22,7 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_motifs::motifs_store::MotifsStore;
 
 type MotifsInitFn = InitFn<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>;
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
@@ -46,8 +46,10 @@ use crate::stages::stage_ids::RAW_TENSOR_LOADER;
 use crate::stages::stft::SyncStftSelector;
 use crate::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
 use crate::stages::train_step::{TrainStep, TrainStepXFn};
+use clap::Args;
 use rand::rng;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream, preload_one};
+use thoosa_common::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
@@ -58,11 +60,13 @@ use thoosa_common::runs::{Labeled, NetResources, SavableResult};
 use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
-use thoosa_common::train_nets::{CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResultParams, conv_label_node, lin_label_node, opt_train, self_attention_label_node};
 use thoosa_common::utils::{ListenerResponse, TrainListener, mix_x_binary_with_labels, pad_stack_with_mask};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsBuilder, LabelNetTypeArgsFields, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, TrainLabelNetRunConfigResultParams, conv_label_node, lin_label_node, self_attention_label_node};
 use thoosa_properties_map::ToHashmap;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -79,7 +83,7 @@ use tokio::{join, try_join};
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
 pub(crate) const TRAIN_LABEL_STEP_ENDPOINT: &str = "TrainLabelStep";
 
-type AppliedMotifOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
+pub type AppliedMotifOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
 
 #[derive(Debug)]
 pub struct SyncLabelBatchInput<'a> {
@@ -1094,7 +1098,7 @@ mod tests {
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::mock_tensor_loader;
-    use crate::stages::train_label_nets::{new_train_label_nets, ResourcesBatch, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsOutput};
+    use crate::stages::train_label_nets::{ResourcesBatch, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsOutput, new_train_label_nets};
     use futures::FutureExt;
     use futures_util::StreamExt;
     use futures_util::future::try_join_all;
@@ -1112,6 +1116,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
     use thoosa_common::batches::AsyncDataBatch;
+    use thoosa_common::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, LinLenNetParams, OptConfig};
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability};
@@ -1124,23 +1129,23 @@ mod tests {
     use thoosa_common::tch_test_utils::motifs_tensor;
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsFields, LabelNetTypeParams, LinLenNetParams, LinNetArgs, LinNetArgsFields, OptConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
     use thoosa_common::utils;
     use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, reset_print_options};
-    use thoosa_common::ws::{mock_ws_simp, Workspace, FsWorkspace, WsConfigs};
+    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs, mock_ws_simp};
+    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
+    use thoosa_motifs::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsFields, LabelNetTypeParams, LinNetArgs, LinNetArgsFields, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
-    use thoosa_shared::{cdt_for_dir, mono_key};
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{RunConfigId, RUN_ID, RunConfig};
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::run_configs::{RUN_ID, RunConfig, RunConfigId};
+    use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Named, RunCtx};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_motifs::motifs_store::{create_motif_tables, MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_shared::{cdt_for_dir, mono_key};
     use thoosa_store::{SqlStore, TrainedNet, TrainedNetsBy};
     use tokio::fs;
     use tokio::io::Join;
@@ -1176,9 +1181,9 @@ mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 0; //channel 1 motif 0
 
-        let pulse_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4))?);
-        let triangle_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, MotifKind::Triangle, 0.3, 0.4))?);
-        let sin_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Sin, 0.3, 0.4))?);
+        let pulse_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, TestSignalKind::Pulse, 0.3, 0.4))?);
+        let triangle_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, TestSignalKind::Triangle, 0.3, 0.4))?);
+        let sin_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, TestSignalKind::Sin, 0.3, 0.4))?);
         let train_group = "train_group";
         let valid_group = "valid_group";
 
@@ -1209,8 +1214,8 @@ mod tests {
         let (mut resources_map, _motif_intervals) = resources_a.iter().zip(resources_b.iter().zip(resources_c.iter().zip(resources_x.iter()))).try_fold((HashMap::new(), vec![]), |mut a, (r_a, (r_b, (r_c, r_x)))| {
 
             let (t, intervals) = resource_tensor(r_a.length() as usize, &[
-                            vec![(3, motif_width, MotifKind::Pulse)],
-                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![(3, motif_width, TestSignalKind::Pulse)],
+                            vec![(1, motif_width, TestSignalKind::Sin)],
                             vec![]
                         ], 100, 10.0,
                                                  true,
@@ -1222,8 +1227,8 @@ mod tests {
 
 
             let (t, intervals) = resource_tensor(r_b.length() as usize, &[
-                            vec![(3, motif_width, MotifKind::Triangle)],
-                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![(3, motif_width, TestSignalKind::Triangle)],
+                            vec![(1, motif_width, TestSignalKind::Sin)],
                             vec![]
                         ], 100, 10.0,
                                                  true,
@@ -1235,8 +1240,8 @@ mod tests {
 
 
             let (t, intervals) = resource_tensor(r_c.length() as usize, &[
-                            vec![(3, motif_width, MotifKind::Sin)],
-                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![(3, motif_width, TestSignalKind::Sin)],
+                            vec![(1, motif_width, TestSignalKind::Sin)],
                             vec![]
                         ], 100, 10.0,
                                                  true,
@@ -1653,5 +1658,100 @@ impl SavableResult for TrainLabelNetRunConfigResult {
         track_await(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).await?;
 
         Ok(run_config_id)
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct TrainLabelNetsArgs {
+    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_config_ids)]
+    pub train_motif_nets_run_config_ids: Vec<RunConfigId>,
+
+    #[arg(long)]
+    pub train_resource_group: String,
+
+    #[arg(long)]
+    valid_resource_group: String,
+
+    #[command(flatten)]
+    pub opt_config: OptConfig,
+
+    #[arg(long)]
+    pub run_config_cnt: String, //TrainLabelNetRunConfig
+
+    #[arg(long)]
+    pub max_motif_net_loss: Option<f32>,
+
+    #[arg(long)]
+    pub selected_motif_nets_limit: Option<usize>,
+
+    #[arg(long)]
+    pub motif_slices_step: Option<u32>,
+
+    #[arg(long)]
+    pub labels: Option<String>,
+}
+
+impl TrainLabelNetsArgs {
+    pub fn resource_config(&self) -> NetResources<Labeled> {
+        NetResources::new(
+            Labeled::new(self.train_resource_group.clone()),
+            Labeled::new(self.valid_resource_group.clone()),
+        )
+    }
+
+    fn parse_labels_csv(raw: &str) -> Vec<String> {
+        raw.split(',').map(|label| label.trim().to_string()).filter(|label| !label.is_empty()).collect()
+    }
+
+    pub fn labels_filter(&self) -> Option<Vec<String>> {
+        self.labels.as_deref().map(Self::parse_labels_csv).filter(|labels| !labels.is_empty())
+    }
+}
+
+#[allow(non_snake_case, unused_assignments, unused_variables)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_opt]
+pub struct TrainLabelNetRunConfig {
+    #[in_map]
+    pub id: Option<RunConfigId>,
+
+    #[in_map]
+    #[run_config]
+    pub common_training_args: CommonTrainingRunConfig,
+
+    #[in_map]
+    #[run_config]
+    pub net: LabelNetTypeArgs,
+
+    #[in_map]
+    #[run_config]
+    pub validation_step: u32,
+}
+
+impl WithCommonTrainingRunConfig for TrainLabelNetRunConfig {
+    fn config(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
+impl AsRef<CommonTrainingRunConfig> for TrainLabelNetRunConfig {
+    fn as_ref(&self) -> &CommonTrainingRunConfig {
+        &self.common_training_args
+    }
+}
+
+impl TrainLabelNetRunConfig {
+    pub fn new(
+        id: Option<RunConfigId>,
+        common_training_args: CommonTrainingRunConfig,
+        net: LabelNetTypeArgs,
+        validation_step: u32,
+    ) -> Self {
+        Self {
+            id,
+            common_training_args,
+            net,
+            validation_step,
+        }
     }
 }

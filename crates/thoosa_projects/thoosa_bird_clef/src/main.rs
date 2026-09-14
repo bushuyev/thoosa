@@ -5,6 +5,7 @@
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use futures::{StreamExt, TryStreamExt};
 use log::{LevelFilter, debug, error, info, trace, warn};
@@ -19,11 +20,12 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use async_trait::async_trait;
+use tch::Device::Cpu;
 use tch::Kind::{BFloat16, Float};
 use tch::kind::FLOAT_CPU;
 use tch::{Cuda, Device, IndexOp, Kind, Tensor};
-use tch::Device::Cpu;
+use thoosa_common::args::{CommonArgs, StageCommand};
+use thoosa_common::commands::common_cli::run_common_cli;
 use thoosa_common::dims::{ChannelsData, LabelProbability};
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
@@ -33,14 +35,16 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{RunAllArgs, ImportResourcesArgs, CommonCommands, MotifCommands, import_resources, init_loader};
+use thoosa_main::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, import_resources, init_loader};
 use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_main::stages::apply_label_nets::ApplyLabelNets;
 use thoosa_main::stages::stft::SyncStftSelector;
+use thoosa_main::stages::transforms::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::train_nets::InferArgs;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::AsyncStage;
@@ -50,10 +54,6 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
 use tokio::task::JoinHandle;
-use thoosa_common::args::{CommonArgs, StageCommand};
-use thoosa_common::commands::common_cli::run_common_cli;
-use thoosa_main::stages::transforms::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
-use thoosa_motifs::motifs_store::MotifsStore;
 
 mod data;
 mod labels;
@@ -637,7 +637,6 @@ fn write_csv_field<W: Write>(w: &mut W, s: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_motifs::motifs_store::MotifsStore;
     use crate::labels::LABELS;
     use crate::{infer_labels, write_birdclef_submission_csv};
     use log::LevelFilter::Trace;
@@ -648,9 +647,10 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::train_nets::InferArgs;
     use thoosa_common::ws::{FsWorkspace, WsConfigs};
     use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_motifs::motifs_store::MotifsStore;
+    use thoosa_motifs::train_nets::InferArgs;
     use thoosa_shared::ThoError;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::val::Val;
