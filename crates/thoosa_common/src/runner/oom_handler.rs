@@ -301,12 +301,12 @@ where
 /// The workspace is passed by `Arc` because construction may run in the same dynamic executor
 /// used for synchronous CUDA work and therefore must own everything held across the await.
 #[async_trait]
-pub trait SyncStageInit<RC, St>: Clone + Debug + Send + Sync + 'static
+pub trait SyncStageInit<RC, St, W: Workspace + ?Sized = dyn Workspace>: Clone + Debug + Send + Sync + 'static
 where
     RC: RunCtx,
     St: SyncStage + Send + Sync + 'static,
 {
-    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<St>, ThoError>;
+    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<W>>>) -> Result<Arc<St>, ThoError>;
 }
 
 #[doc(hidden)]
@@ -672,13 +672,13 @@ struct SyncStageInitOutput<St>(Arc<St>);
 
 impl<St> thoosa_shared::applicables_runner::Output for SyncStageInitOutput<St> where St: Debug {}
 
-struct SyncStageInitImpl<I, RC, St> {
+struct SyncStageInitImpl<I, RC, St, W: ?Sized> {
     init: I,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<W>>>,
     pd: PhantomData<fn(RC) -> St>,
 }
 
-impl<I, RC, St> Debug for SyncStageInitImpl<I, RC, St>
+impl<I, RC, St, W: ?Sized> Debug for SyncStageInitImpl<I, RC, St, W>
 where
     I: Debug,
 {
@@ -687,11 +687,12 @@ where
     }
 }
 
-impl<I, RC, St> Stage for SyncStageInitImpl<I, RC, St>
+impl<I, RC, St, W> Stage for SyncStageInitImpl<I, RC, St, W>
 where
     I: Debug,
     RC: RunCtx,
     St: SyncStage + Send + Sync + 'static,
+    W: Workspace + ?Sized,
 {
     type Ctx = RC;
     type In<'a> = SyncStageInitInput;
@@ -1017,19 +1018,20 @@ where
     /// Constructs a sync stage with the same run-context adjustment and retry machinery used by execution.
     /// Input and task adjusters are intentionally unavailable because neither exists before construction succeeds.
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::new_stage"))]
-    pub async fn new_stage<I, RC, St, C>(
+    pub async fn new_stage<I, RC, St, C, W>(
         &self,
         sync_init: I,
         run_context: RC,
         contexts: C,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<W>>>,
     ) -> Result<Arc<St>, ThoError>
     where
-        I: SyncStageInit<RC, St>,
+        I: SyncStageInit<RC, St, W>,
         RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
         St: SyncStage + Send + Sync + 'static,
         CA: RunContextAdjustment<RC, C>,
         C: Debug,
+        W: Workspace + ?Sized + 'static,
     {
         if run_context.tho_device_idx() == 0 {
             // Match do_run behavior: CPU construction does not enter CUDA OOM retry handling.
@@ -1114,15 +1116,16 @@ where
 
 struct SyncStageInitRetryAdapter;
 
-impl<'z, I, RC, St> RunnerRetryAdapter<'z, SyncStageInitImpl<I, RC, St>, ()> for SyncStageInitRetryAdapter
+impl<'z, I, RC, St, W> RunnerRetryAdapter<'z, SyncStageInitImpl<I, RC, St, W>, ()> for SyncStageInitRetryAdapter
 where
-    I: SyncStageInit<RC, St>,
+    I: SyncStageInit<RC, St, W>,
     RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
     St: SyncStage + Send + Sync + 'static,
+    W: Workspace + ?Sized + 'static,
 {
     async fn run(
         &mut self,
-        task: Arc<SyncStageInitImpl<I, RC, St>>,
+        task: Arc<SyncStageInitImpl<I, RC, St, W>>,
         _selector: Option<()>,
         device_idx: usize,
         run_ctx: RC,

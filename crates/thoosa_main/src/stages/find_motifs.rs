@@ -354,7 +354,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
@@ -596,7 +596,7 @@ where
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="config_to_stage"))]
-pub async fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, tho_device_idx: usize) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
+pub async fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, tho_device_idx: usize) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + MaxParallelCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
@@ -695,7 +695,7 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 100, 10000)));
         let find_motifs_run_config_id = 1;
 
 

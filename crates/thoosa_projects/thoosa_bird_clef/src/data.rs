@@ -404,7 +404,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_plot_resource() -> Result<(), ThoError> {
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             "/tmp/ws_clef",
             WsConfigs::new(1,
                            999,

@@ -159,7 +159,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
@@ -588,7 +588,7 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let resource_a = Resource::new(1, 1, "resource_a", 4);
         let resource_b = Resource::new(2, 1, "resource_b", 4);
         let resources_group = "group";

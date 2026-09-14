@@ -53,7 +53,7 @@ pub static DEBUG_DATA:LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::
 //1 cuda device per worker
 pub struct CudaWorker;
 
-pub type InitFn = Box<dyn for <'a> Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<dyn Workspace>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
+pub type InitFn<W = dyn Workspace> = Box<dyn for <'a> Fn(Box<dyn WorkerInput>, Arc<RwLock<Box<W>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
 type InstalledEndpoints = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
 
@@ -85,10 +85,9 @@ impl AllTensors {
 
 // SAFETY: every map access is synchronized, no mutable tensor reference is exposed, and callers preserve the read-only-storage invariant when using aliases.
 unsafe impl Sync for AllTensors {}
-#[derive(Clone)]
-struct WorkerRequestContext {
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
-    endpoint_inits: Arc<HashMap<String, InitFn>>,
+struct WorkerRequestContext<W: ?Sized> {
+    ws: Arc<RwLock<Box<W>>>,
+    endpoint_inits: Arc<HashMap<String, InitFn<W>>>,
     exec_stream_pool: Arc<Pool<ThoCudaStream>>,
     all_cuda_tensors: Arc<AllTensors>,
     // Retaining the mapping in every request context keeps all arena-derived pointers valid until in-flight copies finish.
@@ -98,6 +97,22 @@ struct WorkerRequestContext {
     installed_endpoints: InstalledEndpoints,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
+}
+
+impl<W: ?Sized> Clone for WorkerRequestContext<W> {
+    fn clone(&self) -> Self {
+        Self {
+            ws: Arc::clone(&self.ws),
+            endpoint_inits: Arc::clone(&self.endpoint_inits),
+            exec_stream_pool: Arc::clone(&self.exec_stream_pool),
+            all_cuda_tensors: Arc::clone(&self.all_cuda_tensors),
+            shared_arena: Arc::clone(&self.shared_arena),
+            copy_ctx: Arc::clone(&self.copy_ctx),
+            installed_endpoints: Arc::clone(&self.installed_endpoints),
+            reply_tx: self.reply_tx.clone(),
+            tho_device: self.tho_device,
+        }
+    }
 }
 
 pub trait Init {
@@ -152,6 +167,15 @@ pub struct WorkerCli {
 impl CudaWorker {
 
     pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn>) -> Result<(), ThoError>{
+        Self::run_if_sock_with_workspace(cdt, app_configs, init_map, FsWorkspace::new)
+    }
+
+    /// Lets feature crates construct their extended workspace trait object inside the CUDA worker.
+    pub fn run_if_sock_with_workspace<W, F>(cdt: &str, app_configs: &WsConfigs, init_map: HashMap<String, InitFn<W>>, workspace_factory: F) -> Result<(), ThoError>
+    where
+        W: Workspace + ?Sized + 'static,
+        F: FnOnce(PathBuf, WsConfigs) -> Result<Box<W>, ThoError>,
+    {
 
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
@@ -193,10 +217,7 @@ impl CudaWorker {
                 })
                 .build()?;
             rt.block_on(async move {
-                let ws = Arc::new(RwLock::new(FsWorkspace::new(
-                    ws_root.clone(),
-                    app_configs.clone(),
-                )?));
+                let ws = Arc::new(RwLock::new(workspace_factory(ws_root.clone(), app_configs.clone())?));
 
                 // Application workers use only postcard/typetag endpoint initializers after the proxy migration.
                 CudaWorker::run_worker(
@@ -213,12 +234,15 @@ impl CudaWorker {
         Ok(())
     }
 
-    pub async fn run_worker(
+    pub async fn run_worker<W>(
         sock_path:OsString,
-        ws:&Arc<RwLock<Box<dyn Workspace>>>,
-        endpoint_inits: HashMap<String, InitFn>,
+        ws:&Arc<RwLock<Box<W>>>,
+        endpoint_inits: HashMap<String, InitFn<W>>,
         tho_device: ThoDevice //handles execution on single Cuda device
-    ) -> Result<(), ThoError> {
+    ) -> Result<(), ThoError>
+    where
+        W: Workspace + ?Sized + 'static,
+    {
         info!("run_worker: sock_path={sock_path:?} tho_device={tho_device:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
@@ -330,7 +354,7 @@ impl CudaWorker {
         Ok(())
     }
 
-    async fn process_worker_request(request: CudaWorkerMsgIn, context: WorkerRequestContext) -> Result<(), ThoError> {
+    async fn process_worker_request<W: Workspace + ?Sized + 'static>(request: CudaWorkerMsgIn, context: WorkerRequestContext<W>) -> Result<(), ThoError> {
         let request_id = request.request_id;
         let op_r: Result<(), ThoError> = (async || {
             match request.operation {
@@ -497,7 +521,7 @@ impl CudaWorker {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaWorker::drop_tensor"))]
-    async fn drop_tensor(context: &WorkerRequestContext, request_id: u64, tensor_key: &u64) ->Result<(), ThoError>{
+    async fn drop_tensor<W: Workspace + ?Sized>(context: &WorkerRequestContext<W>, request_id: u64, tensor_key: &u64) ->Result<(), ThoError>{
         let removed = context.all_cuda_tensors.tensors.write().remove(&tensor_key);
         debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
         let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };

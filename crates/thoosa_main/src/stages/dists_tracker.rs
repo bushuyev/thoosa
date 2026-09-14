@@ -1535,7 +1535,7 @@ where
     C: RunCtx + 'static,
 {
     pub fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,

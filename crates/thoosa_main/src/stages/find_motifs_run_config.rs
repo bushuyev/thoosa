@@ -1503,12 +1503,13 @@ impl SelectMotifsSavableResult {
 #[async_trait]
 impl SavableResult for SelectMotifsSavableResult {
     type Store = dyn MotifsStore;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
 

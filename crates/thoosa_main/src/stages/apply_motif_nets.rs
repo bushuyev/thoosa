@@ -86,7 +86,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
-    ws:Arc<RwLock<Box<dyn Workspace>>>,
+    ws:Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store:Arc<dyn MotifsStore>,
     apply_motif_nets: Vec<(u32/*net_id*/, Option<(RunConfigId, Arc<FreqFilter<C>>)>, Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>)>,
     pub slice_step: u32,//should be in the input
@@ -319,7 +319,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     pub async fn new<R>(
-        ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<parking_lot::RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         train_motif_net_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx:R,
@@ -345,7 +345,7 @@ where
     }
 
     pub async fn from_trained_nets<R>(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>, //for logging only
         mut stage_ctx: R,
         slice_step: u32,
@@ -367,7 +367,7 @@ where
         let mut apply_motif_nets = vec![];
         for trained_net in trained_nets.into_iter() {
             let trained_net_id = trained_net.id;
-            let (channel, motif_id) = FsWorkspace::parse_motif_path(&trained_net.net_path)?;
+            let (channel, motif_id) = thoosa_motifs::motifs_ws::parse_motif_path(&trained_net.net_path)?;
 
             let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
 
@@ -787,7 +787,7 @@ where
 
 }
 
-pub fn stack_applied_motif_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_motif_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput>().map_err(|_| ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"))?;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedMotifNets::<WokerRunCtx>::new_local(init.id).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
@@ -942,12 +942,12 @@ impl WorkerStageInput for ApplyMotifNetInit {
 impl WorkerInput for ApplyMotifNetInit {}
 
 #[async_trait]
-impl<C, RC> SyncStageInit<RC, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>> for ApplyMotifNetInit
+impl<C, RC> SyncStageInit<RC, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>, dyn thoosa_motifs::motifs_ws::MotifsWorkspace> for ApplyMotifNetInit
 where
     C: RunCtx + 'static,
     RC: RunCtx + Send + Sync + 'static,
 {
-    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
+    async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
         let device: ThoDevice = run_context.tho_device_idx().into();
 
         if GlobalCtx::global().is_ipc() {
@@ -1158,7 +1158,7 @@ where
         trained_net_id: u32,
         sync_init: ApplyMotifNetInit,
         run_context: RC,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     ) -> Result<Arc<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>>, ThoError>
     where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
@@ -1213,7 +1213,7 @@ where
 
 }
 
-pub fn apply_motif_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_motif_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>().map_err(|_| ThoError::new("ApplyMotifNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
@@ -1592,7 +1592,7 @@ pub(crate) mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfig, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
-    use thoosa_common::ws::{Workspace, WsMockBuilder};
+    use thoosa_common::ws::Workspace;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
@@ -1652,7 +1652,7 @@ pub(crate) mod tests {
     pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig/*shouldn't be here, needed only for cosine 2d*/, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
     where
         for <'a> A:AsyncStage<In<'a>=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=MockRunCtx, Out=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, //+ thoosa_common::runner::common::runnable::WrappedRunInputStage,
-        F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<dyn MotifsStore>) -> Result<Arc<A>, ThoError>,
+        F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, &mut Arc<dyn MotifsStore>) -> Result<Arc<A>, ThoError>,
         MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
     {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
@@ -1681,7 +1681,7 @@ pub(crate) mod tests {
         let (params_1_0, module_1_0) = motif_net_fn_(Cpu, Arc::clone(&motif_1_0));
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 3, sample_rate, input_n_0 as u32)
+            thoosa_motifs::motifs_ws::MotifsWsMockBuilder::new(None, 3, sample_rate, input_n_0 as u32)
                 .with_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                     (net_id_0_1.clone(), params_0_1, module_0_1),
@@ -1790,7 +1790,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<dyn MotifsStore>) -> Result<Arc<ApplyMotifNets<MockRunCtx>>, ThoError> {
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: &mut Arc<dyn MotifsStore>) -> Result<Arc<ApplyMotifNets<MockRunCtx>>, ThoError> {
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
@@ -1845,7 +1845,7 @@ pub(crate) mod tests {
         let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step, 50);
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 1, 100, input_len as u32)
+            thoosa_motifs::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_len as u32)
                 .with_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                     (net_id_0_1.clone(), params_0_1, module_0_1),
@@ -1944,7 +1944,7 @@ pub(crate) mod tests {
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 1, 100, input_n_0 as u32)
+            thoosa_motifs::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_n_0 as u32)
                 .with_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                 ])

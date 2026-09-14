@@ -100,7 +100,7 @@ pub struct Export<C>
 where
     C: RunCtx + 'static,
 {
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     args: ExportArgs,
     pd: PhantomData<C>,
@@ -110,7 +110,7 @@ impl<C> Export<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<dyn MotifsStore>, args: ExportArgs) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: &Arc<dyn MotifsStore>, args: ExportArgs) -> Self {
         Self { ws: Arc::clone(ws), store: Arc::clone(store), args, pd: PhantomData }
     }
 }
@@ -162,12 +162,12 @@ impl<C> Export<C>
 where
     C: RunCtx + 'static,
 {
-    fn create_target_workspace(&self) -> Result<Arc<RwLock<Box<dyn Workspace>>>, ThoError> {
+    fn create_target_workspace(&self) -> Result<Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ThoError> {
         let (channels, max_input, sample_rate) = {
             let ws = self.ws.read();
             (ws.channels(), ws.max_input(), ws.sample_rate())
         };
-        Ok(Arc::new(RwLock::new(FsWorkspace::new(&self.args.target_dir, WsConfigs::new(channels, max_input, sample_rate))?)))
+        Ok(Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(&self.args.target_dir, WsConfigs::new(channels, max_input, sample_rate))?)))
     }
 
     async fn label_net_run_config_ids(&self) -> Result<Vec<RunConfigId>, ThoError> {
@@ -181,7 +181,7 @@ where
         Ok(ids)
     }
 
-    async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<dyn Workspace>>>, label_net_run_config_ids: &[RunConfigId]) -> Result<(Vec<RunConfigId>, Vec<PathBuf>), ThoError> {
+    async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, label_net_run_config_ids: &[RunConfigId]) -> Result<(Vec<RunConfigId>, Vec<PathBuf>), ThoError> {
         let label_nets = track_await(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(label_net_run_config_ids.to_vec()), None, None)).await?;
         let mut motif_net_run_config_ids = Vec::new();
         for label_net in &label_nets {
@@ -197,13 +197,13 @@ where
             let source_ws = self.ws.read();
             let target_ws = target_ws.read();
             for label_net in &label_nets {
-                let target_path = copy_net_path(source_ws.labels_nets_path(), target_ws.labels_nets_path(), &label_net.net_path)?;
+                let target_path = copy_net_path(&source_ws.labels_nets_path()?, &target_ws.labels_nets_path()?, &label_net.net_path)?;
                 if copied_targets.insert(target_path.clone()) {
                     copied.push(target_path);
                 }
             }
             for motif_net in &motif_nets {
-                let target_path = copy_net_path(source_ws.motifs_nets_path(), target_ws.motifs_nets_path(), &motif_net.net_path)?;
+                let target_path = copy_net_path(&source_ws.motifs_nets_path()?, &target_ws.motifs_nets_path()?, &motif_net.net_path)?;
                 if copied_targets.insert(target_path.clone()) {
                     copied.push(target_path);
                 }

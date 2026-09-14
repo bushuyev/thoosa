@@ -11,6 +11,7 @@ use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
+use thoosa_motifs::motifs_ws::MotifsWorkspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -75,12 +76,12 @@ impl ConvertPrecisionNetType {
         }
     }
 
-    fn root(self, ws: &dyn Workspace) -> &PathBuf {
+    fn root(self, ws: &dyn MotifsWorkspace) -> Result<PathBuf, ThoError> {
         match self {
             Self::Motifs => ws.motifs_nets_path(),
             Self::Labels => ws.labels_nets_path(),
             Self::Final => ws.final_nets_path(),
-            Self::All => ws.models_path(),
+            Self::All => Ok(ws.models_path().clone()),
         }
     }
 
@@ -209,7 +210,7 @@ pub struct ConvertPrecisionStage<C>
 where
     C: RunCtx + 'static,
 {
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     args: ConvertPrecisionArgs,
     pd: PhantomData<C>,
 }
@@ -218,7 +219,7 @@ impl<C> ConvertPrecisionStage<C>
 where
     C: RunCtx + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, args: ConvertPrecisionArgs) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, args: ConvertPrecisionArgs) -> Self {
         Self {
             ws: Arc::clone(ws),
             args,
@@ -290,7 +291,7 @@ struct NetEntry {
     weights_path: PathBuf,
 }
 
-fn selected_entries(ws: &dyn Workspace, selector: ConvertPrecisionBy) -> Result<Vec<NetEntry>, ThoError> {
+fn selected_entries(ws: &dyn MotifsWorkspace, selector: ConvertPrecisionBy) -> Result<Vec<NetEntry>, ThoError> {
     match selector {
         ConvertPrecisionBy::Path(path) => entries_for_path(ws, &path),
         ConvertPrecisionBy::RunId(run_config_ids) => {
@@ -316,28 +317,27 @@ impl DedupEntries for Vec<NetEntry> {
     }
 }
 
-fn entries_for_path(ws: &dyn Workspace, path: &Path) -> Result<Vec<NetEntry>, ThoError> {
+fn entries_for_path(ws: &dyn MotifsWorkspace, path: &Path) -> Result<Vec<NetEntry>, ThoError> {
     let candidates = if path.is_absolute() {
         vec![path.to_path_buf()]
     } else {
         vec![
             ws.models_path().join(path),
-            ws.motifs_nets_path().join(path),
-            ws.labels_nets_path().join(path),
-            ws.final_nets_path().join(path),
+            ws.motifs_nets_path()?.join(path),
+            ws.labels_nets_path()?.join(path),
+            ws.final_nets_path()?.join(path),
         ]
     };
 
-    let entries = candidates
-        .into_iter()
-        .flat_map(|candidate| {
-            ConvertPrecisionNetType::All
-                .concrete()
-                .iter()
-                .filter_map(move |net_type| entry_from_candidate(ws, *net_type, &candidate))
-        })
-        .collect::<Vec<_>>()
-        .dedup_entries()?;
+    let mut entries = Vec::new();
+    for candidate in candidates {
+        for net_type in ConvertPrecisionNetType::All.concrete() {
+            if let Some(entry) = entry_from_candidate(ws, *net_type, &candidate)? {
+                entries.push(entry);
+            }
+        }
+    }
+    let entries = entries.dedup_entries()?;
 
     if entries.is_empty() {
         return Err(ThoError::new(format!("ConvertPrecision: no net found for path {path:?}")));
@@ -348,10 +348,10 @@ fn entries_for_path(ws: &dyn Workspace, path: &Path) -> Result<Vec<NetEntry>, Th
     Ok(entries)
 }
 
-fn entries_for_type(ws: &dyn Workspace, net_type: ConvertPrecisionNetType) -> Result<Vec<NetEntry>, ThoError> {
+fn entries_for_type(ws: &dyn MotifsWorkspace, net_type: ConvertPrecisionNetType) -> Result<Vec<NetEntry>, ThoError> {
     let mut entries = Vec::new();
     for concrete_type in net_type.concrete() {
-        let root = concrete_type.root(ws).clone();
+        let root = concrete_type.root(ws)?;
         entries.extend(
             recurse_files(&root, &|path| path.extension().and_then(|ext| ext.to_str()) == Some("safetensors"))?
                 .into_iter()
@@ -361,11 +361,11 @@ fn entries_for_type(ws: &dyn Workspace, net_type: ConvertPrecisionNetType) -> Re
     entries.dedup_entries()
 }
 
-fn entry_from_candidate(ws: &dyn Workspace, net_type: ConvertPrecisionNetType, candidate: &Path) -> Option<NetEntry> {
-    if !candidate.starts_with(net_type.root(ws)) {
-        return None;
+fn entry_from_candidate(ws: &dyn MotifsWorkspace, net_type: ConvertPrecisionNetType, candidate: &Path) -> Result<Option<NetEntry>, ThoError> {
+    if !candidate.starts_with(net_type.root(ws)?) {
+        return Ok(None);
     }
-    net_entry_from_base(net_type, candidate)
+    Ok(net_entry_from_base(net_type, candidate))
 }
 
 fn net_entry_from_base(net_type: ConvertPrecisionNetType, base_path: &Path) -> Option<NetEntry> {
@@ -514,7 +514,7 @@ mod tests {
 
     async fn run_convert_precision_stage_final_net(precision_target: ConvertPrecisionTarget, kind: Kind) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
-        let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
+        let ws_box = thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?;
 
         let params = FinalNetParams::new(8, 100, 2, 1);
         let mut vs = VarStore::new(Device::Cpu);
@@ -545,7 +545,7 @@ mod tests {
 
     async fn run_convert_precision_stage_label_net(precision_target: ConvertPrecisionTarget, kind: Kind) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
-        let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
+        let ws_box = thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?;
 
         let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ motif_layers: 2, features: 10 }));
         let mut vs = VarStore::new(Device::Cpu);
@@ -581,8 +581,8 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
-        let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
-        let net_dir = ws_box.motifs_nets_path().join("0").join("34603_36472");
+        let ws_box = thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?;
+        let net_dir = ws_box.motifs_nets_path()?.join("0").join("34603_36472");
         std::fs::create_dir_all(&net_dir)?;
         std::fs::write(net_dir.join("parameters.json"), "{}")?;
         let weights_path = net_dir.join("weights.safetensors");

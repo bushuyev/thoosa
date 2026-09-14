@@ -48,12 +48,13 @@ impl Output for SeqScanOutput {}
 #[async_trait]
 impl SavableResult for SeqScanOutput {
     type Store = dyn MotifsStore;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         Ok(0)
@@ -136,7 +137,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
@@ -145,7 +146,7 @@ where
     }
 
     pub async fn new_with_chunk_size(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
@@ -543,7 +544,7 @@ fn reduce_slice_scores(values: &Tensor) -> Result<Tensor, ThoError> {
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "seq_scan_config_to_stage"))]
-pub async fn config_to_stage<L, C>(loader: &Arc<L>, run_config: &SeqScanRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
+pub async fn config_to_stage<L, C>(loader: &Arc<L>, run_config: &SeqScanRunConfig, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + MaxParallelCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C>,
@@ -755,7 +756,7 @@ mod tests {
                 .finish(),
         );
         let stage: Arc<SeqScanStage<Simple, _, _>> = Arc::new(SeqScanStage::new_with_chunk_size(
-            &Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000))),
+            &Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000))),
             &store,
             loader,
             vec![SeqScanRunConfig {

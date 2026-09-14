@@ -210,7 +210,7 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
     run_config: BucketRunConfig,
@@ -232,7 +232,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader: Arc<L>,
         run_config: BucketRunConfig,
@@ -1477,7 +1477,7 @@ mod tests {
         // let store = Arc::new(SqlStore::in_mem().await?);
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             test_dir,
             WsConfigs::new(1,
                            u32::MAX,
@@ -1678,7 +1678,7 @@ mod tests {
         Ok(())
     }
 
-    async fn plot_test_resources(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
+    async fn plot_test_resources(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
         for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
             // resource
 
@@ -1726,7 +1726,7 @@ mod tests {
         // let store = Arc::new(SqlStore::in_mem().await?);
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             test_dir,
             WsConfigs::new(3,
                            u32::MAX,

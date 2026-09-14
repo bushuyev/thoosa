@@ -56,7 +56,7 @@ use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, SimpleId, WithId};
+use thoosa_shared::traits::{Data, SimpleId, ToJsonFile, WithId};
 use thoosa_shims::inference_mode::InferenceModeGuard;
 
 #[derive(Args, Debug, Clone)]
@@ -413,36 +413,6 @@ where
             0
         }
     }
-}
-
-//TODO move to ws
-pub fn load_final_model(
-    run_config_id: RunConfigId,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    device: &Device,
-) -> Result<
-    (
-        FinalNetParams,
-        ThoModuleWithStore<Batch<LabelProbability>, Batch<LabelsProbabilities>>,
-    ),
-    ThoError,
-> {
-    let (model_path, params_path) = ws.read().final_model(run_config_id)?;
-    debug!("load_final_model: params_path={model_path:?} run_config_id={run_config_id}");
-
-    let final_node_params = FinalNetParams::from_file(&params_path)?;
-    debug!("load_final_model:  final_node_params={final_node_params:?}");
-
-    let final_params_for_builder = final_node_params.clone();
-    let node = ThoModuleWithStore::load(
-        mono_key!(run_config_id, "final_model").into(),
-        move |path: &nn::Path| final_net(&final_params_for_builder)?.build_tch_module(path),
-        model_path,
-        *device,
-        false,
-    )?;
-
-    Ok((final_node_params, node))
 }
 
 #[derive(Args, Debug, Clone)]
@@ -938,6 +908,14 @@ pub struct MotifNetParams {
     pub net_type: MotifNetTypeParams,
 }
 
+impl ToJsonFile for MotifNetParams {
+    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError> {
+        // Generic workspace persistence needs model parameters to provide the same JSON representation as the former specialized methods.
+        fs::write(path, serde_json5::to_string(self)?)?;
+        Ok(())
+    }
+}
+
 impl MotifNetParams {
     pub fn new(num_features: u32, conv_layers: u32, head_layers: u32, stride: u32, channels: u32, kernel: u32) -> Self {
         Self::new_conv(num_features, conv_layers, head_layers, stride, channels, kernel)
@@ -1236,6 +1214,14 @@ pub struct LabelNetParams {
     motif_nets: u32,
 
     pub net_type: LabelNetTypeParams,
+}
+
+impl ToJsonFile for LabelNetParams {
+    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError> {
+        // Generic workspace persistence needs model parameters to provide the same JSON representation as the former specialized methods.
+        fs::write(path, serde_json5::to_string(self)?)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1629,6 +1615,14 @@ pub struct FinalNetParams {
     mid_features: u32,
     out_features: u32,
     num_layers: u32,
+}
+
+impl ToJsonFile for FinalNetParams {
+    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError> {
+        // Generic workspace persistence needs model parameters to provide the same JSON representation as the former specialized methods.
+        fs::write(path, serde_json5::to_string(self)?)?;
+        Ok(())
+    }
 }
 
 impl FinalNetParams {
@@ -2285,7 +2279,7 @@ mod train_tests {
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };
-    use crate::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace, WsMockBuilder};
+    use crate::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace};
     use crate::ws::{WsConfigs, mock_ws_simp};
     use crate::{train_nets, utils};
     use async_trait::async_trait;
@@ -2427,17 +2421,16 @@ mod train_tests {
         }
 
 
-        let net_id = ws
+        let model_path = ws
             .write()
-            .save_label_net(1, &"test_label", (&vs_0).into(), &params)?;
+            .save_net(1, (&vs_0).into(), "labels/test_label", &params)?;
 
-        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
 
-        let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
                                                                                            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           model_path,
                                                                                            Cpu,
                                                                                            false,
         )?;
@@ -2925,17 +2918,16 @@ mod train_tests {
             )?;
         }
 
-        let net_id = ws
+        let model_path = ws
             .write()
-            .save_label_net(1, &"test_label", (&vs_0).into(), &params)?;
+            .save_net(1, (&vs_0).into(), "labels/test_label", &params)?;
 
-        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("model_path={model_path:?} vs_0.variables().len()={}",vs_0.variables().len());
 
-        let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
                                                                                            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           model_path,
                                                                                            Cpu,
                                                                                            false,
         )?;
@@ -3008,18 +3000,17 @@ mod train_tests {
             )?;
         }
 
-        let net_id = ws
+        let model_path = ws
             .write()
-            .save_label_net(1, &"test_label", module_with_store.var_store().into(), &params)?;
+            .save_net(1, module_with_store.var_store().into(), "labels/test_label", &params)?;
 
-        debug!("_test_save_load_self_attention_label_node: net_id={net_id:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
+        debug!("_test_save_load_self_attention_label_node: model_path={model_path:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
 
-        let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
             "".into(),
            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-           model_base_path.join(NET_WEIGHTS_FILE),
+           model_path,
            Cpu,
            false,
         )?;
@@ -3305,110 +3296,6 @@ mod train_tests {
 
     //6 corrs 4 motif models
     //TODO remove?
-    fn save_test_models(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        base_run_config_id: RunConfigId,
-        channels: u32,
-        max_motif_batches: u32,
-        max_batch_size: u32,
-        motif_node_params_run_config_id: RunConfigId,
-        window: u32,
-    ) -> Result<(), ThoError> {
-        // fs::create_dir_all(models_path)?;
-
-        // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
-
-        save_test_label_model(
-            &ws,
-            base_run_config_id + 1,
-            "seizure",
-            3,
-            4,
-            max_motif_batches,
-            max_batch_size,
-        )?;
-        // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
-
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "0", 1, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "0", 2, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "0", 3, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 11, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
-
-        save_test_label_model(
-            ws,
-            base_run_config_id + 1,
-            "lpd",
-            1,
-            1,
-            max_motif_batches,
-            max_batch_size,
-        )?;
-
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
-
-        save_test_label_model(
-            ws,
-            base_run_config_id + 1,
-            "gpd",
-            1,
-            1,
-            max_motif_batches,
-            max_batch_size,
-        )?;
-
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
-
-        save_test_label_model(
-            ws,
-            base_run_config_id + 1,
-            "lrda",
-            1,
-            1,
-            max_motif_batches,
-            max_batch_size,
-        )?;
-
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
-
-        save_test_label_model(
-            ws,
-            base_run_config_id + 1,
-            "grda",
-            1,
-            1,
-            max_motif_batches,
-            max_batch_size,
-        )?;
-
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
-
-        save_test_label_model(
-            ws,
-            base_run_config_id + 1,
-            "other",
-            1,
-            1,
-            max_motif_batches,
-            max_batch_size,
-        )?;
-
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
-        Ok(())
-    }
-
     pub fn save_test_tensor(input_path: &PathBuf, name: &str) {
         fs::create_dir_all(input_path).unwrap();
         fs::write(&input_path.join(name), "lalalal").unwrap();
@@ -3429,78 +3316,6 @@ mod train_tests {
             vs_0.variables()
         );
         vs_0.save(models_path.join("final.safetensors"))?;
-        Ok(())
-    }
-
-    fn save_test_label_model(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        run_config_id: RunConfigId,
-        label: &str,
-        channels: u32,
-        max_motif_nets: u32,
-        max_motif_batches: u32,
-        motif_batch_size: u32,
-    ) -> Result<(), ThoError> {
-        let label_node_params = LabelNetParams::new(
-            max_motif_nets,
-            train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(0, 3)),
-        ); //TODO slices_len, motif_layers
-
-        let mut vs_0 = VarStore::new(Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            LabelNetParams::label_net(&label_node_params)?.build_tch_module(&vs_0.root())?;
-        vs_0.freeze();
-        debug!(
-            "save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}",
-            channels,
-            max_motif_nets,
-            max_motif_batches,
-            motif_batch_size,
-            vs_0.variables()
-        );
-
-        ws.write()
-            .save_label_net(run_config_id, &label, (&vs_0).into(), &label_node_params)?;
-        Ok(())
-    }
-
-    fn save_test_motif_model(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        channel: &str,
-        motif_id: u32,
-        window: u32,
-        motif_node_params_run_config_id: RunConfigId,
-    ) -> Result<(), ThoError> {
-        let mut vs_0 = VarStore::new(Cpu);
-        let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            train_nets::lin_motif_node(&MotifLinNetParams::new(window, 1))?
-                .build_tch_module(&vs_0.root())?;
-
-        let test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)?
-            .linear_s_with_conf(
-                "todo",
-                1,
-                LinearConfig {
-                    ws_init: init::Init::Const(1.0),
-                    bs_init: None,
-                    bias: false,
-                },
-            )?
-            .end_seq()?
-            .build_tch_module(&vs_0.root())?;
-
-        vs_0.freeze();
-        debug!(
-            "save_test_motif_model: channel={channel} vs_0.variables()={:?}",
-            vs_0.variables()
-        );
-        ws.write().save_motif_net(
-            &channel,
-            &motif_node_params_run_config_id,
-            &motif_id,
-            (&vs_0).into(),
-            &MotifNetParams::new_conv(100, 1, 1, 100, 32, 10),
-        )?;
         Ok(())
     }
 
