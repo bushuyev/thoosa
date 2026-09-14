@@ -982,7 +982,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for MotifStatsOutput{}
 
-pub fn motif_stats_sync_stage_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_sync_stage_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput owns decoded motifs while the generic shared wrapper runs the calculation.
@@ -1096,7 +1096,7 @@ where
     }
 }
 
-pub fn motif_stats_consume_stage_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_consume_stage_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.
@@ -1152,7 +1152,7 @@ where
     id: SynKey,
     store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     pub motif_loader: Arc<ML>,
     _ctx: PhantomData<C>,
 }
@@ -1177,7 +1177,7 @@ where
     pub fn new(
         store: Arc<dyn MotifsStore>,
         loader: Arc<L>,
-        ws: Arc<RwLock<Box<dyn Workspace>>>,
+        ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         motif_loader: Arc<ML>,
     ) -> Self {
         Self {
@@ -1507,7 +1507,7 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 100, 1000)));
         let resources = vec![
             Resource::new(1, 1, "resource_a", 10),
             Resource::new(2, 1, "resource_b", 10),
@@ -1583,7 +1583,7 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let store = MockMotifsStoreBuilder::new().build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![100]));

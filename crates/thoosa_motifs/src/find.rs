@@ -137,12 +137,13 @@ impl FindMotifsSavableResult {
 #[async_trait]
 impl SavableResult for FindMotifsSavableResult {
     type Store = dyn MotifsStore;
+    type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = u32;
 
     async fn save(
         &mut self,
         store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
@@ -643,7 +644,7 @@ mod motif_find_tests {
 
 pub async fn plot_resource(
     resource_config: Simple,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
 ) -> Result<(), ThoError> {
     let tensors_path = ws.read().tensors_path().clone();

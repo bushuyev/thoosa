@@ -143,7 +143,7 @@ where
 {
     id:MonoKey,
     motif_loader:Arc<ML>,
-    ws:Arc<RwLock<Box<dyn Workspace>>>,
+    ws:Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     pd:PhantomData<C>,
 }
@@ -166,7 +166,7 @@ where
     C: RunCtx + Adjustable + 'static
 {
     pub fn new(
-        ws: Arc<RwLock<Box<dyn Workspace>>>,
+        ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         motif_loader: Arc<ML>,
         store: Arc<dyn MotifsStore>) -> Self
     {

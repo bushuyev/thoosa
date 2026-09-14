@@ -238,7 +238,7 @@ where
     id: SynKey,
     store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     pd: PhantomData<(RC, C)>,
 }
 
@@ -248,7 +248,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: Arc<dyn MotifsStore>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(store: Arc<dyn MotifsStore>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>) -> Self {
         Self {
             id: (WELCH_PSD, "WelchPSD").into(),
             store,

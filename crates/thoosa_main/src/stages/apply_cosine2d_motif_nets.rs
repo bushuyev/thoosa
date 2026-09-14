@@ -78,7 +78,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     pub async fn new<R>(
-        ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<parking_lot::RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         train_motif_net_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx:R,
@@ -106,7 +106,7 @@ where
     }
 
     pub async fn from_trained_nets<R>(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>, //for logging only
         mut stage_ctx: R,
         slice_step: u32,
@@ -1105,7 +1105,7 @@ mod tests {
         ), 40000, 32000).await
     }
 
-    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<dyn MotifsStore>) -> Result<Arc<ApplyCosine2DMotifNets<MockRunCtx>>, ThoError> {
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: &mut Arc<dyn MotifsStore>) -> Result<Arc<ApplyCosine2DMotifNets<MockRunCtx>>, ThoError> {
         let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
             &ws,
             &store,

@@ -1602,7 +1602,7 @@ mod tests {
 
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(1, 1000, 32000))?));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(1, 1000, 32000))?));
         let store_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).store_path().to_path_buf());
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(&store_path).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");

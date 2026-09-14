@@ -73,14 +73,17 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, Se
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, load_final_model, opt_train};
+use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, opt_train};
 use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
+use thoosa_motifs::motifs_ws::{load_final_model, parse_motif_path};
 use thoosa_motifs::fragments::{
     DataBy, MotifsToTensorArgs, PlotDataArgs, Resolution};
 use thoosa_properties_map::ToHashmap;
+
+type MotifsInitFn = InitFn<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
@@ -136,9 +139,10 @@ pub enum MotifCommands {
 #[async_trait]
 impl StageCommand for MotifCommands {
     type Store = Arc<dyn MotifsStore>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             MotifCommands::FindMotifs(find_motifs_args) => {
                 debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
@@ -432,7 +436,7 @@ impl StageCommand for MotifCommands {
 }
 
 
-pub fn init_loader(ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Arc<RawTensorLoader<RunCtxImpl>> {
+pub fn init_loader(ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>) -> Arc<RawTensorLoader<RunCtxImpl>> {
     let tensors_path = ws.read().tensors_path().clone();
 
     Arc::new(RawTensorLoader::<RunCtxImpl>::new(
@@ -463,9 +467,10 @@ pub enum MotifAppCommands {
 #[async_trait]
 impl StageCommand for MotifAppCommands {
     type Store = Arc<dyn MotifsStore>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             MotifAppCommands::CommonCommands(c) => {
                 c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
@@ -489,9 +494,10 @@ pub enum CommonCommands {
 #[async_trait]
 impl StageCommand for CommonCommands {
     type Store = Arc<dyn Store>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             CommonCommands::ConvertPrecision(convert_precision_args) => {
                 debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
@@ -678,7 +684,7 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-pub fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
+pub fn cuda_worker_endpoint_inits() -> HashMap<String, MotifsInitFn> {
     let mut endpoints = train_motif_step_endpoint_inits();
     // Label and final training now execute through the same worker-owned proxy lifecycle as motif training.
     endpoints.extend(train_label_step_endpoint_inits());
@@ -686,43 +692,43 @@ pub fn cuda_worker_endpoint_inits() -> HashMap<String, InitFn> {
     endpoints.extend([
         (
             CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
-            Box::new(sync_cross_unfold_clc_endpoint_init) as InitFn,
+            Box::new(sync_cross_unfold_clc_endpoint_init) as MotifsInitFn,
         ),
         (
             MOTIF_STATS_SYNC_ENDPOINT.to_string(),
-            Box::new(motif_stats_sync_stage_endpoint_init) as InitFn,
+            Box::new(motif_stats_sync_stage_endpoint_init) as MotifsInitFn,
         ),
         (
             MOTIF_STATS_CONSUME_ENDPOINT.to_string(),
-            Box::new(motif_stats_consume_stage_endpoint_init) as InitFn,
+            Box::new(motif_stats_consume_stage_endpoint_init) as MotifsInitFn,
         ),
         (
             SYNC_FREQ_FILTER_ENDPOINT.to_string(),
-            Box::new(sync_freq_filter_endpoint_init) as InitFn,
+            Box::new(sync_freq_filter_endpoint_init) as MotifsInitFn,
         ),
         (
             APPLY_MOTIF_NET_ENDPOINT.to_string(),
-            Box::new(apply_motif_net_endpoint_init) as InitFn,
+            Box::new(apply_motif_net_endpoint_init) as MotifsInitFn,
         ),
         (
             APPLY_LABEL_NET_ENDPOINT.to_string(),
-            Box::new(apply_label_net_endpoint_init) as InitFn,
+            Box::new(apply_label_net_endpoint_init) as MotifsInitFn,
         ),
         (
             STACK_APPLIED_MOTIF_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_motif_nets_init) as InitFn,
+            Box::new(stack_applied_motif_nets_init) as MotifsInitFn,
         ),
         (
             STACK_APPLIED_LABEL_NETS_ENDPOINT.to_string(),
-            Box::new(stack_applied_label_nets_init) as InitFn,
+            Box::new(stack_applied_label_nets_init) as MotifsInitFn,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as InitFn,
+            Box::new(sync_label_batch_endpoint_init) as MotifsInitFn,
         ),
         (
             SYNC_LOGITS_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_logits_batch_init) as InitFn,
+            Box::new(sync_logits_batch_init) as MotifsInitFn,
         ),
     ]);
     endpoints
@@ -861,7 +867,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
 }
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="hbac/import_resources"))]
 pub async fn import_resources<F, R, S>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     labels: &[&str],
     labeled_resources: F,
@@ -980,7 +986,7 @@ fn apply_import_freq_filter(
 }
 
 pub async fn run_plot<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     plot_params: &PlotDataArgs,
@@ -1193,7 +1199,7 @@ where
 }
 
 async fn plot_found_motifs<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     find_motifs_run_config_id: RunConfigId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
@@ -1248,7 +1254,7 @@ where
 }
 
 async fn plot_selected_motifs<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     select_motifs_run_config_id: RunConfigId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
@@ -1350,7 +1356,7 @@ fn sanitize_plot_path_segment(v: &str) -> String {
 }
 
 fn plot_resource_channels<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     resource_id: ResourceId,
     prefix: &str,
     suffix: &str,
@@ -1399,7 +1405,7 @@ where
 }
 
 fn plot_single_line_tensor(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     path_suffix: &str,
     caption: &str,
     line_t: &Tensor,
@@ -1425,7 +1431,7 @@ fn plot_single_line_tensor(
 }
 
 pub async fn plot_resource<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
@@ -1469,7 +1475,7 @@ where
 }
 
 async fn plot_motif_net_applied<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
@@ -1487,7 +1493,7 @@ where
     //     plot_resource_channels::<C>(ws, resource_id, "raw_all_channels", &format!("Resource {resource_id} raw (all channels)"), tensor, None)
     // }).await?;
 
-    let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
+    let (path_channel, motif_id) = parse_motif_path(&net_path)?;
     let (store_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
 
     let find_motifs_run_config:FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
@@ -1562,7 +1568,7 @@ where
 }
 
 pub async fn plot_motif<C>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     mut ctx: C,
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
@@ -1680,7 +1686,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     input_run_config_ids: Option<Vec<RunConfigId>>,
     rcrv: RCRV,
     input: ST::In<'static>,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     f: F,
     ctx_f: CtxF,
@@ -1688,13 +1694,13 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<dyn MotifsStore>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, Arc<dyn MotifsStore>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource + Debug,
     for<'c> <ST as Stage>::In<'c>: Send + Sync,
-    for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<Store = dyn MotifsStore, P<'a>:Default>,
+    for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<Store = dyn MotifsStore, Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace, P<'a>:Default>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     debug!("run_all_grid_step: rcrv={rcrv:?}");
@@ -1731,7 +1737,7 @@ where
 pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
     input: ST::In<'static>,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     init_stage: F,
     ctx_f: CtxF,
@@ -1749,7 +1755,7 @@ where
     + ToHashmap,
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Send + Sync,
-    for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<Store = dyn MotifsStore, P<'a>:Default, R=Vec<RunConfigId>>,
+    for<'a> <ST as Stage>::Out: Send + Sync + SavableResult<Store = dyn MotifsStore, Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace, P<'a>:Default, R=Vec<RunConfigId>>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
     let opt_run_configs = rcrv.opt_run_configs()?;
@@ -2167,7 +2173,7 @@ mod cli_tests {
     async fn test_import_resources() -> Result<(), ThoError> {
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             test_dir,
             WsConfigs::new(1,
                            2 * n as u32,
@@ -2219,7 +2225,7 @@ mod cli_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_import_resources_applies_freq_filter() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             test_dir,
             WsConfigs::new(1,
                            100,
@@ -2304,7 +2310,7 @@ mod cli_tests {
         )?;
         debug_plot!(&pulse_sin_t, "pulse_sin")?;
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 10000)));
 
         for freq in 0..100 {
             let freq_filter = FreqFilter::<MockRunCtx>::new(&[

@@ -149,7 +149,7 @@ where
 {
     id: SynKey,
     store: Arc<dyn MotifsStore>,
-    ws: Arc<RwLock<Box<dyn Workspace>>>,
+    ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     motif_stats: Arc<MS>,
     _ctx: PhantomData<C>,
 }
@@ -169,7 +169,7 @@ where
     MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
+    pub fn new(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, motif_stats: Arc<MS>) -> Self {
         Self {
             id: (MERGE_SELECTED_MOTIFS, "MergeSelectedMotifs").into(),
             store: Arc::clone(store),
@@ -398,7 +398,7 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let find_run_config_id = 10;
         let select_run_config_id_0 = 100;
         let select_run_config_id_1 = 200;

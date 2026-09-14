@@ -89,7 +89,7 @@ impl RunConfig for ClefRunConfig {
 }
 
 pub(crate) async fn run_all(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     loader: &Arc<RawTensorLoader<RunCtxImpl>>,
     mut root_ctx: RunCtxImpl,
@@ -801,7 +801,7 @@ mod tests {
         let base_path = test_dir.to_string_lossy().to_string();
 
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             test_dir.clone(),
             WsConfigs::new(1,
                            0,

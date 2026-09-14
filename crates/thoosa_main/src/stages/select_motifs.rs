@@ -208,7 +208,7 @@ where
 
     id: SynKey,
     store: Arc<dyn MotifsStore>,
-    ws:Arc<RwLock<Box<dyn Workspace>>>,
+    ws:Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
     loader:Arc<L>,
 
     run_configs:Vec<SelectMotifsRunConfig>,//TODO map to Vec<Arc in new
@@ -241,7 +241,7 @@ where
 {
 
     pub async fn new(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         loader:Arc<L>,
         motif_loader:Arc<ML>,
@@ -563,7 +563,7 @@ pub mod tests {
 
 
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 10000)));
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 10000);
 
@@ -637,7 +637,7 @@ pub mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 800);
         let resource_b: Resource = Resource::new(2, 1, "resource_b", 600);
@@ -715,7 +715,7 @@ pub mod tests {
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 1000);
 
@@ -814,7 +814,7 @@ pub mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 100, 10000)));
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 900);
         let resource_b: Resource = Resource::new(2, 1, "resource_b", 800);
@@ -939,7 +939,7 @@ pub mod tests {
         let find_motifs_run_config_id: RunConfigId = 11;
         let select_motifs_run_config_id: RunConfigId = 22;
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let store = MockMotifsStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
@@ -997,7 +997,7 @@ pub mod tests {
         let find_motifs_run_config_id: RunConfigId = 11;
         let select_motifs_run_config_id: RunConfigId = 22;
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let store = MockMotifsStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
@@ -1046,7 +1046,7 @@ pub mod tests {
         let find_motifs_run_config_id: RunConfigId = 41;
         let select_motifs_run_config_id: RunConfigId = 42;
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let store = MockMotifsStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2]))]).build();
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
@@ -1101,7 +1101,7 @@ pub mod tests {
         let norm_thickness_calls = Arc::new(AtomicUsize::new(0));
         let inlier_ratio_calls = Arc::new(AtomicUsize::new(0));
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let store =             MockMotifsStoreBuilder::new()
             .with_list_motifs([(find_motifs_run_config_id, Ok(vec![101, 102]))])
             .with_list_resources_not_in_group([
@@ -1228,7 +1228,7 @@ pub mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         // reset_print_options();
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let resources_group = "group";
         let resource_a = Resource::new(1, 1, "resource_a", 1000);
 
@@ -1303,7 +1303,7 @@ pub mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         reset_print_options();
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
         let resources_group = "group";
         let resource_a = Resource::new(1, 1, "resource_a", 1000);
 
@@ -1576,7 +1576,7 @@ pub mod tests {
         reset_print_options();
         GlobalCtx::init_devices(2)?;
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 100, 10000)));
         let run_config_id = 1;
 
 

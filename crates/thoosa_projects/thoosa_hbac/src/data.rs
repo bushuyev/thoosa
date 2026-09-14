@@ -1001,7 +1001,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_import_resources() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 1000, 1000)));
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
@@ -1157,7 +1157,7 @@ mod tests {
         let raw_loaded_for_apply = raw_loaded.shallow_clone();
 
         let channels = raw_loaded.size()[0] as u32;
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(Path::new("/tmp").join(cdt_for_dir()), WsConfigs::new(channels, raw_loaded.size()[1] as u32, 200))?));
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(Path::new("/tmp").join(cdt_for_dir()), WsConfigs::new(channels, raw_loaded.size()[1] as u32, 200))?));
 
         let raw_tensor = ThoTensor::<ChannelsData, SynKey>::new(
             SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),

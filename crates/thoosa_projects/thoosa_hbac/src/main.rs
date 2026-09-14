@@ -68,9 +68,10 @@ pub enum HbacAppCommands {
 #[async_trait]
 impl StageCommand for HbacAppCommands {
     type Store = Arc<dyn MotifsStore>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             HbacAppCommands::CommonCommands(c) => {
                 c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
@@ -105,9 +106,10 @@ const LABELS: [&str; 6] = ["seizure", "lpd", "gpd", "lrda", "grda", "other"];
 #[async_trait]
 impl StageCommand for HbacCommands {
     type Store = Arc<dyn MotifsStore>;
+    type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn Workspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
             HbacCommands::ImportResources(import_resources_args) => {
                 debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
@@ -179,7 +181,7 @@ fn main() -> Result<(), ThoError> {
 
     let args = HbacArgs::parse();
 
-    CudaWorker::run_if_sock(&cdt, &app_configs, cuda_worker_endpoint_inits())?;
+    CudaWorker::run_if_sock_with_workspace(&cdt, &app_configs, cuda_worker_endpoint_inits(), thoosa_motifs::motifs_ws::new_motifs_workspace)?;
 
     println!("CudaWorker::run_if_sock: running main");
 
@@ -220,7 +222,7 @@ fn main() -> Result<(), ThoError> {
 
     let run_result = rt.block_on(async move {
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             args.common_args.ws_path.clone(),
             app_configs.clone(),
         )?));
