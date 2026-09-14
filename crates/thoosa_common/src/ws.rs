@@ -815,6 +815,7 @@ impl Workspace for FsWorkspace {
     }
 }
 
+//TODO remove it - was used to migrate from saving VarStore directly to moving from tmp
 pub enum VarStoreOrPath<'a> {
     VarStore(&'a VarStore),
     Path(&'a Path)
