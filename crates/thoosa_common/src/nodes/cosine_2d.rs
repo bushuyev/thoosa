@@ -7,9 +7,9 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::batches::BatchLengths;
 use crate::debug_plot;
-use crate::dims::{Dims, MotifSlices, Spectorgram};
+use crate::dims::Dims;
 use crate::my_tch::{InitMode, MyCosineConv1d, ThoModule, path_var};
-use crate::tho_tensor::ThoTensor;
+use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use crate::utils::z_norm_dims;
 use crate::utils::plot_spectrogram;
 
@@ -227,7 +227,7 @@ impl MyCosineConv2d {
         vs: &Path,
         kh: i64,
         kw: i64,
-        init_patches: Option<Arc<ThoTensor<Spectorgram, SynKey>>>, //Option<&Tensor>, // [N,KH,KW] or [N,1,KH,KW]
+        init_patches: Option<Arc<dyn TensorInitRef>>, //Option<&Tensor>, // [N,KH,KW] or [N,1,KH,KW]
         a: f64,
         b: f64,
     ) -> Result<Self, ThoError> {
@@ -243,7 +243,7 @@ impl MyCosineConv2d {
                 }
 
                 Some(patches) => {
-                    let patches = patches.as_ref().as_ref();
+                    let patches = patches.tensor_ref();
                     let patches = Self::ensure_motif_patches_4d(patches)?; // [N,1,KH,KW]
                     let psz = patches.size();
 
@@ -439,9 +439,10 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
     use tch::Tensor;
-    use thoosa_shared::ThoError;
+    use thoosa_shared::{simple_id, ThoError};
     use crate::my_tch::{InitDummy, InitMode};
     use crate::nodes::cosine_2d::MyCosineConv2d;
+    use crate::dims::AnyDims;
     use crate::tho_tensor::ThoTensor;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -455,7 +456,7 @@ mod tests {
         let cosine_2d = MyCosineConv2d::new(
             &vs.root(),
             0, 0,
-            Some(Arc::new(ThoTensor::new("".into(), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),
+            Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::SimpleId>::new(simple_id!(""), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),
              1.0, 0.1,
         )?;//MotifInitMode::Mean(InitDummy{}),
 

@@ -4,9 +4,9 @@ use crate::batches::BatchLengths;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
 use crate::builder::{Node, clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out};
-use crate::dims::{AnyDims, Dims, MotifSlices};
+use crate::dims::{AnyDims, Dims};
 use crate::my_tch::InitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
-use crate::tho_tensor::ThoTensor;
+use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use crate::utils::*;
 use core::fmt;
 use log::{debug, error, info, trace};
@@ -582,7 +582,7 @@ impl MyCosineConv1d {
     pub fn new(
         vs: &Path,
         l: i64,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init: Option<Arc<dyn TensorInitRef>>,
         init_mode: InitMode,
         a: f64,
         b: f64,
@@ -600,7 +600,7 @@ impl MyCosineConv1d {
                     path_var(vs, "kernel", &[1, 1, l], nn::Init::Const(0.0))?
                 }
                 Some(motif_slices) => {
-                    let motif_slices = motif_slices.as_ref().as_ref(); // [N, L]
+                    let motif_slices = motif_slices.tensor_ref(); // [N, L]
                     debug!("MyCosineConv1d::new: motif_slices={motif_slices:?} motif_slices.isnan={:?}", motif_slices.isnan().any());
 
                     let sz = motif_slices.size();

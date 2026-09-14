@@ -25,3 +25,8 @@ pub mod motif_tracker_store;
 pub mod motifs_store;
 pub mod motifs_ws;
 pub mod train_nets;
+pub mod cli;
+pub mod data;
+pub mod dims;
+pub mod motif_tho_tensor;
+pub mod stages;

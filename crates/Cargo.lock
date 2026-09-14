@@ -5212,7 +5212,6 @@ dependencies = [
  "tch",
  "tempfile",
  "thoosa_common",
- "thoosa_main",
  "thoosa_motifs",
  "thoosa_properties_map",
  "thoosa_shared",
@@ -5340,7 +5339,6 @@ dependencies = [
  "serde_json",
  "tch",
  "thoosa_common",
- "thoosa_main",
  "thoosa_motifs",
  "thoosa_properties_map",
  "thoosa_shared",
@@ -5363,7 +5361,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "thoosa_main"
+name = "thoosa_motifs"
 version = "0.1.0"
 dependencies = [
  "ambassador",
@@ -5371,11 +5369,13 @@ dependencies = [
  "approx",
  "async-trait",
  "blake3",
+ "bytemuck",
  "cached_derive",
  "chrono",
  "clap",
  "console-subscriber",
  "crossbeam-channel",
+ "crossbeam-utils",
  "ctor 0.5.0",
  "dashmap 6.1.0",
  "file-rotate",
@@ -5395,6 +5395,8 @@ dependencies = [
  "rand_distr 0.6.0",
  "rayon",
  "regex",
+ "rusqlite",
+ "sci-rs",
  "serde",
  "serde_json",
  "serde_json5",
@@ -5403,7 +5405,6 @@ dependencies = [
  "thoosa_digest_id",
  "thoosa_digest_id_derive",
  "thoosa_dummy_data_derive",
- "thoosa_motifs",
  "thoosa_named_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
@@ -5416,50 +5417,6 @@ dependencies = [
  "torch-sys",
  "tracing",
  "typetag",
-]
-
-[[package]]
-name = "thoosa_motifs"
-version = "0.1.0"
-dependencies = [
- "approx",
- "async-trait",
- "bytemuck",
- "chrono",
- "clap",
- "crossbeam-channel",
- "crossbeam-utils",
- "ctor 0.5.0",
- "futures",
- "futures-util",
- "libloading 0.9.0",
- "log",
- "mockall",
- "mockall_double",
- "parking_lot",
- "plotters",
- "rand 0.10.0",
- "rand_chacha 0.3.1",
- "rand_distr 0.6.0",
- "rayon",
- "regex",
- "rusqlite",
- "sci-rs",
- "serde",
- "serde_json5",
- "tch",
- "thoosa_common",
- "thoosa_dummy_data_derive",
- "thoosa_properties_map",
- "thoosa_properties_map_derive",
- "thoosa_run_config_args",
- "thoosa_run_config_args_derive",
- "thoosa_shared",
- "thoosa_shims",
- "thoosa_store",
- "tokio",
- "torch-sys",
- "tracing",
  "zstd 0.13.3",
 ]
 
