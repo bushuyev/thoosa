@@ -6,7 +6,7 @@ use tch::{Tensor, nn, no_grad};
 
 use crate::batches::BatchLengths;
 use crate::dims::{AnyDims, Dims, MotifSlices, Spectorgram};
-use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, conv1d_from_path, conv2d_from_path, my_linear, MotifInitMode};
+use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, conv1d_from_path, conv2d_from_path, my_linear, InitMode};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
@@ -95,7 +95,7 @@ pub enum Node {
         a: f64,
         b: f64,
         init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
-        init_mode:MotifInitMode
+        init_mode: InitMode
     },
     CosineConv2d {
         path:String,
@@ -104,7 +104,7 @@ pub enum Node {
         a: f64,
         b: f64,
         init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
-        init_mode:MotifInitMode
+        init_mode: InitMode
     },
     SharpeningHead1d {
         path: String,
@@ -526,7 +526,7 @@ impl SeqBuilder {
         init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
         a: f64,
         b: f64,
-        init_mode: MotifInitMode
+        init_mode: InitMode
     ) -> Result<&mut Self, ThoError> {
 
         self.elts.push(Node::CosineConv1d {
@@ -551,7 +551,7 @@ impl SeqBuilder {
         init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
         a: f64,
         b: f64,
-        init_mode: MotifInitMode
+        init_mode: InitMode
     ) -> Result<&mut Self, ThoError> {
 
         self.elts.push(Node::CosineConv2d {

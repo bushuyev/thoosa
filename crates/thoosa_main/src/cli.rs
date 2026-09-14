@@ -6,7 +6,6 @@ use crate::stages::export::{Export as ExportStage, ExportArgs, ExportInput};
 use crate::stages::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
 use crate::stages::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
 use crate::stages::tensor_loader::RawTensorLoader;
-use crate::version::VERSION;
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand};
 use futures_util::future::{join_all, try_join_all};
@@ -46,22 +45,22 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_shared::traits::Stage;
 
-use crate::stages::apply_motif_nets::{ApplyMotifNets, APPLY_MOTIF_NET_ENDPOINT, apply_motif_net_endpoint_init, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
 use crate::stages::apply_motif_nets::apply_motif_net_forward;
+use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
 use crate::stages::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
 use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_sync_stage_endpoint_init, MOTIF_STATS_CONSUME_ENDPOINT, motif_stats_consume_stage_endpoint_init};
+use crate::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, MotifStats, MotifStatsInput, MotifStatsOutput, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
 use crate::stages::select_buckets::SelectBucketsRunConfigRangeOrValue;
 use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::stages::seq_scan::SeqScanStage;
 use crate::stages::slices_stats::{Aggr, Metrics};
-use crate::stages::train_final_net::{new_train_final_net, train_final_step_endpoint_inits, TrainFinalNetsRunConfigResult, SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init};
-use crate::stages::train_label_nets::{new_train_label_nets, train_label_step_endpoint_inits, TrainLabelNetRunConfigResult, TrainLabelNets, SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
-use crate::stages::train_motif_nets::{train_motif_step_endpoint_inits, TrainMotifNetInput, TrainMotifNetResult, TrainMotifNets, TrainMotifNetsResult};
-use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit, SYNC_FREQ_FILTER_ENDPOINT, sync_freq_filter_endpoint_init};
+use crate::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, TrainFinalNetsRunConfigResult, new_train_final_net, sync_logits_batch_init, train_final_step_endpoint_inits};
+use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsArgs, new_train_label_nets, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
+use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNetResult, TrainMotifNets, TrainMotifNetsResult, train_motif_step_endpoint_inits};
+use crate::stages::transforms::freq_filter::{FreqFilter, SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit, sync_freq_filter_endpoint_init};
 use thoosa_common::args::{CommonArgs, StageCommand};
 use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::data_with_extra::DataWithExtra;
@@ -72,18 +71,20 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef};
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, opt_train};
 use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
-use thoosa_motifs::motifs_ws::{load_final_model, parse_motif_path};
 use thoosa_motifs::fragments::{
     DataBy, MotifsToTensorArgs, PlotDataArgs, Resolution};
+use thoosa_motifs::motifs_ws::{load_final_model, parse_motif_path};
+use thoosa_motifs::train_nets;
+use thoosa_motifs::train_nets::{FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
 use thoosa_properties_map::ToHashmap;
 
 type MotifsInitFn = InitFn<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>;
+use thoosa_common::common_nets::{BinaryHeadLse, BinaryHeadPoolArgs, CommonTrainingRunConfig, OptConfig, PlotVecf32, SelfAttentionNetArgs, ThoModuleWithStore, opt_train};
+use thoosa_common::ipc::cuda_wokrer::InitFn;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
@@ -101,9 +102,10 @@ use tokio::time::MissedTickBehavior;
 use tokio::{select, sync::watch, time::{self, Duration}};
 use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
-use thoosa_common::ipc::cuda_wokrer::InitFn;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
+use crate::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOMHandler};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
@@ -118,8 +120,6 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shims::context::tho_cu_reset;
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
-use crate::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
-use crate::stages::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum MotifCommands {
@@ -1866,7 +1866,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot, MotifAppCommands, RunAllArgs, CommonCommands, MotifCommands};
+    use crate::cli::{CommonCommands, MotifAppCommands, MotifCommands, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::stages::find_motifs::FindMotifsStage;
@@ -1876,6 +1876,7 @@ mod cli_tests {
     use crate::stages::slices_stats::{Aggr, Metrics};
     use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::RawTensorLoader;
+    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use clap::Parser;
     use futures::executor::block_on;
@@ -1903,6 +1904,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Device, IndexOp, Tensor, nn};
     use thoosa_common::args::CommonArgs;
+    use thoosa_common::common_nets::{CommonTrainingRunConfig, OptConfig};
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::ChannelsData;
@@ -1921,7 +1923,6 @@ mod cli_tests {
     use thoosa_common::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue, lin_motif_node};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
     use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParams, NotchBandFilterParamsRangeOrValue, Padding};
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
@@ -1932,7 +1933,9 @@ mod cli_tests {
         FixedFindMotifsConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
+    use thoosa_motifs::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
     use thoosa_motifs::motifs_store::MotifsStore;
+    use thoosa_motifs::train_nets::{InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue, lin_motif_node};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
@@ -1941,19 +1944,17 @@ mod cli_tests {
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::{Data, DataId, RunCtx};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_motifs::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
     use thoosa_store::{SqlStore, Store};
 
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
     pub struct MotifAppArgs {
-
         #[command(flatten)]
         pub common_args: CommonArgs<MotifAppCommands>,
 
@@ -2284,9 +2285,9 @@ mod cli_tests {
             1,
             100,
             2,
-            MotifKind::Pulse,
+            TestSignalKind::Pulse,
             2,
-            MotifKind::Triangle,
+            TestSignalKind::Triangle,
             100,
             0.01,
             0.2,
@@ -2300,9 +2301,9 @@ mod cli_tests {
             1,
             100,
             2,
-            MotifKind::Pulse,
+            TestSignalKind::Pulse,
             2,
-            MotifKind::Sin,
+            TestSignalKind::Sin,
             100,
             0.01,
             0.2,

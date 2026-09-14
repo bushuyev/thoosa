@@ -9,6 +9,7 @@ path = "src/lib.rs"
 [dependencies]
 thoosa_common = {path = "../thoosa_common" }
 thoosa_store = {path = "../thoosa_store" }
+thoosa_shims = {path = "../thoosa_shims" }
 thoosa_shared = {path = "../thoosa_shared", features = ["tch-error", "serde-json5-error"] }
 rand.workspace = true
 log.workspace = true
@@ -35,7 +36,7 @@ rusqlite.workspace = true
 sci-rs = "0"
 plotters = { version = "0"}
 zstd = "0.13"
-
+rand_distr.workspace = true
 
 
 
@@ -51,6 +52,7 @@ tracing.workspace = true
 rand_chacha = "0.3.1"
 approx = "0.5.1"
 tokio.workspace = true
+mockall_double.workspace = true
 
 [build-dependencies]
 chrono = { version = "0.4.32" }

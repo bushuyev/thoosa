@@ -6,15 +6,15 @@ mod data;
 mod run_all;
 
 use crate::run_all::{run_all, run_all_config_0};
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use log::{debug, error, info};
 use parking_lot::RwLock;
+use polars::polars_utils::itertools::Itertools;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use async_trait::async_trait;
-use polars::polars_utils::itertools::Itertools;
 use tch::Device;
 use tch::Device::{Cpu, Cuda};
 use tch::nn::Path;
@@ -26,31 +26,29 @@ use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{CommonCommands, RunAllArgs, MotifCommands, ImportResourcesArgs, import_resources, run_grid, init_loader, cuda_worker_endpoint_inits};
-use thoosa_main::stages::apply_label_nets::{apply_label_net_endpoint_init, APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, stack_applied_label_nets_init};
-use thoosa_main::stages::apply_motif_nets::{apply_motif_net_endpoint_init, ApplyMotifNet, APPLY_MOTIF_NET_ENDPOINT, STACK_APPLIED_MOTIF_NETS_ENDPOINT, stack_applied_motif_nets_init};
+use thoosa_main::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, cuda_worker_endpoint_inits, import_resources, init_loader, run_grid};
+use thoosa_main::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
+use thoosa_main::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
 use thoosa_main::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use thoosa_main::stages::cross_loader::ResourcesConfigInput;
 use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfigRangeOrValue;
 use thoosa_main::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
-use thoosa_main::stages::train_final_net::{train_final_step_endpoint_inits, SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init};
-use thoosa_main::stages::train_label_nets::{train_label_step_endpoint_inits, SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
+use thoosa_main::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init, train_final_step_endpoint_inits};
+use thoosa_main::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
 use thoosa_main::stages::train_motif_nets::train_motif_step_endpoint_inits;
-use thoosa_main::stages::transforms::freq_filter::{sync_freq_filter_endpoint_init, SyncFreqFilter, SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilterIpcInit};
+use thoosa_main::stages::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit, sync_freq_filter_endpoint_init};
 use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::train_nets::InferArgs;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::{ThoError, cdt_for_dir};
 use thoosa_shared::traits::RunCtx;
+use thoosa_shared::{ThoError, cdt_for_dir};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
-
-
 
 
 #[derive(clap::Subcommand, Clone, Debug)]
@@ -270,11 +268,10 @@ fn main() -> Result<(), ThoError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::{HbacAppCommands, HbacArgs, HbacCommands};
     use clap::Parser;
     use thoosa_common::transforms::filters::{AverageFilterParams, InputFilter, MedianFilterParams};
-    use thoosa_main::cli::{MotifAppCommands, MotifCommands};
     use thoosa_motifs::fragments::Resolution;
-    use crate::{HbacAppCommands, HbacArgs, HbacCommands};
 
     #[test]
     fn test_import_resources_freq_filters_parse() {

@@ -28,6 +28,7 @@ use tch::nn::VarStore;
 use tch::{Device, IndexOp, Kind, Tensor, nn};
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::builder::SeqBuilder;
+use thoosa_common::common_nets::{StftRunConfig, ThoModuleWithStore};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
@@ -49,10 +50,10 @@ use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, SyncStageInit, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore};
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::train_nets::MotifNetParams;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
@@ -1578,6 +1579,7 @@ pub(crate) mod tests {
     use tch::nn::{LinearConfig, VarStore};
     use tch::{Device, IndexOp, Kind, Tensor, nn};
     use thoosa_common::builder::SeqBuilder;
+    use thoosa_common::common_nets::{CommonTrainingRunConfig, StftRunConfig, ThoModuleWithStore};
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
@@ -1590,21 +1592,21 @@ pub(crate) mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::Workspace;
+    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
+    use thoosa_motifs::train_nets::{MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::test_utils::{MotifKind, gen_motif};
+    use thoosa_shared::test_utils::{TestSignalKind, gen_motif};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, Named, RunCtx, SimpleId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_motifs::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
     use thoosa_store::{RunConfigRow, Store, TrainedNet};
 
     #[ctor::ctor]
@@ -1669,9 +1671,9 @@ pub(crate) mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 2; //channel 1 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
-        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
-        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, MotifKind::Sin).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?)?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Triangle).f_mul_scalar(0.2)?)?);
+        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Sin).f_mul_scalar(0.2)?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
@@ -1836,8 +1838,8 @@ pub(crate) mod tests {
 
         let motif_0_0_id = 0;
         let motif_0_1_id = 1;
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
-        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(60, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?)?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(60, 3, TestSignalKind::Triangle).f_mul_scalar(0.2)?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
@@ -1938,7 +1940,7 @@ pub(crate) mod tests {
         let train_motifs_run_config_id: RunConfigId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
@@ -2047,7 +2049,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_test_net() -> Result<(), ThoError> {
-        let motif_t = tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?;
+        let motif_t = tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?;
         let channels_patterns = vec![vec![motif_t.i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(2000, channels_patterns.as_slice(), 200, 1)?;
 

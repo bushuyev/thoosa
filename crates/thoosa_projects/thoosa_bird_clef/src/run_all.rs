@@ -6,14 +6,13 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tch::Device::Cpu;
-use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue, TrimmedMeanRangeOrValue};
+use thoosa_common::common_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue, StftRunConfig, StftRunConfigRangeOrValue};
+use thoosa_common::my_tch::{InitDummyRangeOrValue, InitModeRangeOrValue, TrimmedMeanRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
 use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosine2DNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, StftRunConfig, StftRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;
 use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZNormFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
@@ -30,11 +29,14 @@ use thoosa_main::stages::motif_stats::{MotifStats, MotifStatsInput};
 use thoosa_main::stages::select_buckets::{BestSelectionModeRangeOrValue, FilterSelectionModeRangeOrValue, SelectBucketsRunConfigRangeOrValue, SelectBucketsStage, SelectionModeRangeOrValue};
 use thoosa_main::stages::select_motifs::SelectMotifsInput;
 use thoosa_main::stages::stft::Stft;
-use thoosa_main::stages::train_label_nets::new_train_label_nets;
+use thoosa_main::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, new_train_label_nets};
 use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, stages};
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::train_nets;
+use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosine2DNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_shared::ResourceType::NotInGroup;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::futures_limits::ENTRY;
@@ -43,7 +45,6 @@ use thoosa_shared::run_configs::{RunConfig, RunConfigId, run_id};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::{FuturesOrdering, RangeOrValue, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async};
-use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_store::TrainedNetsBy;
 use tracing::Instrument;
 
@@ -684,14 +685,14 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
                 // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
                 a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
                 b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-                init_mode: MotifInitModeRangeOrValue::Vec(vec![
-                    MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    // MotifInitModeRangeOrValue::Median(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    // MotifInitModeRangeOrValue::TrimmedMean(TrimmedMeanRangeOrValue { trim_frac: RangeOrValue::Value(0.3) }),
-                    // MotifInitModeRangeOrValue::CenteredMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    MotifInitModeRangeOrValue::L2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    // MotifInitModeRangeOrValue::ZScoreMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    // MotifInitModeRangeOrValue::CenteredL2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                init_mode: InitModeRangeOrValue::Vec(vec![
+                    InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    // InitModeRangeOrValue::Median(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    // InitModeRangeOrValue::TrimmedMean(TrimmedMeanRangeOrValue { trim_frac: RangeOrValue::Value(0.3) }),
+                    // InitModeRangeOrValue::CenteredMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    InitModeRangeOrValue::L2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    // InitModeRangeOrValue::ZScoreMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    // InitModeRangeOrValue::CenteredL2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
                 ]),
                 stft_config: StftRunConfigRangeOrValue {
                     n_fft: RangeOrValue::Value(16000),

@@ -1,14 +1,14 @@
-use std::collections::HashMap;
 use log::{debug, info};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use tch::Device::Cpu;
-use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
+use thoosa_common::common_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue};
+use thoosa_common::my_tch::{InitDummyRangeOrValue, InitModeRangeOrValue};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
@@ -20,20 +20,21 @@ use thoosa_main::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, A
 use thoosa_main::stages::motif_loader::MotifLoader;
 use thoosa_main::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_main::stages::train_final_net::new_train_final_net;
-use thoosa_main::stages::train_label_nets::new_train_label_nets;
+use thoosa_main::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, new_train_label_nets};
 use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, stages};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::train_nets;
+use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
-use thoosa_motifs::motifs_store::MotifsStore;
 use tracing::Instrument;
-use thoosa_common::runner::global_ctx::GlobalCtx;
 
 #[derive(Debug)]
 pub enum FindAndSelect {
@@ -364,7 +365,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
             a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
             b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-            init_mode: MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+            init_mode: InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
         })
 
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
@@ -636,11 +637,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tch::{Device, Tensor};
-    use tracing::field::debug;
+    use thoosa_common::common_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, OptConfig, OptimizersRangeOrValue};
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::ipc::tests::run_ipc_test;
-    use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
+    use thoosa_common::my_tch::{InitDummyRangeOrValue, InitModeRangeOrValue};
     use thoosa_common::runner::common::cachable::BorrowRef;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
@@ -648,33 +649,35 @@ mod tests {
     use thoosa_common::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
-    use thoosa_common::{debug_plot, train_nets};
+    use thoosa_common::debug_plot;
     use thoosa_main::RawTensorLoader;
     use thoosa_main::cli::{RunAllArgs, import_resources};
     use thoosa_main::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use thoosa_main::stages::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_main::stages::train_label_nets::TrainLabelNetRunConfigRangeOrValue;
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
-    use thoosa_motifs::motifs_store::{create_motif_tables, MotifsStore};
+    use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
+    use thoosa_motifs::train_nets;
+    use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::hyperparameter::FieldName;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::run_configs::RUN_ID;
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::traits::{OutId, Stage, SyncStage};
     use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
     use thoosa_shims::context::ThoCudaContext;
-    use thoosa_store::{SqlStore, TrainedNetsBy, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, create_tables};
     use thoosa_store::rusqlite::Transaction;
-
+    use thoosa_store::{SqlStore, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetsBy, create_tables};
+    use tracing::field::debug;
 
     #[ctor::ctor]
     fn init() {
@@ -1014,9 +1017,9 @@ mod tests {
             1,
             100,
             2,
-            MotifKind::Pulse,
+            TestSignalKind::Pulse,
             2,
-            MotifKind::Triangle,
+            TestSignalKind::Triangle,
             100,
             0.01,
             0.2,
@@ -1072,8 +1075,8 @@ mod tests {
             net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
                 a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
                 b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-                init_mode: MotifInitModeRangeOrValue::Vec(vec![
-                    MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() })
+                init_mode: InitModeRangeOrValue::Vec(vec![
+                    InitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() })
                 ])
             }),
             // num_layers: RangeOrValue::Range { range: Range { start: 2, end: 8 }, step: None },
@@ -1164,9 +1167,9 @@ mod tests {
             1,
             100,
             2,
-            MotifKind::Sin,
+            TestSignalKind::Sin,
             2,
-            MotifKind::Trill,
+            TestSignalKind::Trill,
             100,
             0.01,
             0.2,

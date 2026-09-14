@@ -1,36 +1,36 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
+use crate::batches::BatchLengths;
+// use crate::{data, utils};
+use crate::builder::SeqBuilder;
+use crate::builder::{Node, clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out};
+use crate::dims::{AnyDims, Dims, MotifSlices};
+use crate::my_tch::InitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
+use crate::tho_tensor::ThoTensor;
+use crate::utils::*;
 use core::fmt;
+use log::{debug, error, info, trace};
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ptr;
 use std::sync::Arc;
-use log::{debug, error, info, trace};
-use serde::{Deserialize, Serialize};
-use tch::{nn, Kind, TchError, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
-use tch::nn::{ConvConfig, Module};
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LayerNormConfig, LinearConfig, ModuleT, Path, batch_norm1d,
 };
-use torch_sys::C_tensor;
+use tch::nn::{ConvConfig, Module};
+use tch::{Kind, TchError, Tensor, nn};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
+use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shims::quantized_linear::FastQuantizedLinear;
-use crate::batches::BatchLengths;
-use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Node};
-// use crate::{data, utils};
-use crate::builder::SeqBuilder;
-use crate::dims::{AnyDims, Dims, MotifSlices};
-use crate::my_tch::MotifInitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
-use crate::tho_tensor::ThoTensor;
-use crate::utils::*;
+use torch_sys::C_tensor;
 
 #[derive(Debug)]
 pub struct MySequential<DI: Dims, DO: Dims> {
@@ -534,7 +534,7 @@ pub struct TrimmedMean {
 }
 
 #[derive(Serialize, Deserialize, ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
-pub enum MotifInitMode {
+pub enum InitMode {
     Mean(InitDummy),
     Median(InitDummy),
     TrimmedMean (TrimmedMean),
@@ -544,12 +544,12 @@ pub enum MotifInitMode {
     CenteredL2NormalizedMean(InitDummy),
 }
 
-impl MotifInitMode {
-    pub fn list(trim_frac: f64) ->Vec<MotifInitMode> {
+impl InitMode {
+    pub fn list(trim_frac: f64) ->Vec<InitMode> {
         vec![
-            MotifInitMode::Mean(InitDummy{}),
-            MotifInitMode::Median(InitDummy{}),
-            MotifInitMode::TrimmedMean(TrimmedMean{ trim_frac }),
+            InitMode::Mean(InitDummy{}),
+            InitMode::Median(InitDummy{}),
+            InitMode::TrimmedMean(TrimmedMean{ trim_frac }),
             CenteredMean(InitDummy{}),
             L2NormalizedMean(InitDummy{}),
             ZScoreMean(InitDummy{}),
@@ -558,9 +558,9 @@ impl MotifInitMode {
     }
 }
 
-impl Default for MotifInitMode {
-    fn default() -> MotifInitMode {
-        MotifInitMode::CenteredMean(InitDummy{})
+impl Default for InitMode {
+    fn default() -> InitMode {
+        InitMode::CenteredMean(InitDummy{})
     }
 }
 
@@ -583,7 +583,7 @@ impl MyCosineConv1d {
         vs: &Path,
         l: i64,
         init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
-        init_mode: MotifInitMode,
+        init_mode: InitMode,
         a: f64,
         b: f64,
     ) -> Result<Self, ThoError> {
@@ -713,20 +713,20 @@ impl MyCosineConv1d {
 
     fn build_motif_prototype(
         motif_slices: &Tensor, // [N, L]
-        mode: MotifInitMode,
+        mode: InitMode,
     ) -> Result<Tensor, TchError> {
         match mode {
-            MotifInitMode::Mean(..) => Self::motif_proto_mean(motif_slices),
-            MotifInitMode::Median(..) => Self::motif_proto_median(motif_slices),
-            MotifInitMode::TrimmedMean(TrimmedMean{trim_frac}) => {
+            InitMode::Mean(..) => Self::motif_proto_mean(motif_slices),
+            InitMode::Median(..) => Self::motif_proto_median(motif_slices),
+            InitMode::TrimmedMean(TrimmedMean{trim_frac}) => {
                 Self::motif_proto_trimmed_mean(motif_slices, trim_frac)
             }
-            MotifInitMode::CenteredMean(..) => Self::motif_proto_centered_mean(motif_slices),
-            MotifInitMode::L2NormalizedMean(..) => {
+            InitMode::CenteredMean(..) => Self::motif_proto_centered_mean(motif_slices),
+            InitMode::L2NormalizedMean(..) => {
                 Self::motif_proto_l2_normalized_mean(motif_slices)
             }
-            MotifInitMode::ZScoreMean(..) => Self::motif_proto_zscore_mean(motif_slices),
-            MotifInitMode::CenteredL2NormalizedMean(..) => {
+            InitMode::ZScoreMean(..) => Self::motif_proto_zscore_mean(motif_slices),
+            InitMode::CenteredL2NormalizedMean(..) => {
                 Self::motif_proto_centered_l2_normalized_mean(motif_slices)
             }
         }
@@ -1659,25 +1659,25 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
 
 #[cfg(test)]
 mod tch_tests {
+    use log::debug;
     use std::ptr;
     use std::sync::Arc;
     use std::time::Instant;
-    use log::debug;
 
     use crate::batches::BatchLengths;
-    use tch::Device::Cpu;
-    use tch::Kind::{Bool, Float};
-    use tch::{Device, IndexOp, Kind, Tensor, nn};
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, VarStore};
-    use torch_sys::C_tensor;
-    use thoosa_shared::ThoError;
-    use thoosa_shims::quantized_linear::FastQuantizedLinear;
     use crate::builder::SeqBuilder;
     use crate::builder::{Node, clc_conv1d_out};
+    use crate::common_nets::ThoModuleWithStore;
     use crate::dims::{AnyDims, Batch, Dims};
-    use crate::my_tch::{valid_time_mask, InitDummy, MotifInitMode, MyLinear, ThoModule};
-    use crate::train_nets::ThoModuleWithStore;
+    use crate::my_tch::{InitDummy, InitMode, MyLinear, ThoModule, valid_time_mask};
+    use tch::Device::Cpu;
+    use tch::Kind::{Bool, Float};
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, VarStore};
+    use tch::{Device, IndexOp, Kind, Tensor, nn};
+    use thoosa_shared::ThoError;
+    use thoosa_shims::quantized_linear::FastQuantizedLinear;
+    use torch_sys::C_tensor;
 
     #[test]
     pub fn test_conv1_out() {

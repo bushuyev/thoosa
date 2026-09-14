@@ -1,5 +1,4 @@
 use clap::Args;
-use thoosa_motifs::motifs_store::MotifsStore;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashSet;
@@ -10,15 +9,16 @@ use std::str::FromStr;
 use std::sync::Arc;
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
-use thoosa_motifs::motifs_ws::MotifsWorkspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::motifs_ws::MotifsWorkspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::traits::Data;
+use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
-use thoosa_store::{Store, TrainedNetEntry, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE};
+use thoosa_store::{Store, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetEntry};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,9 +432,9 @@ fn remove_disk_path(path: &Path) -> Result<bool, ThoError> {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_motifs::motifs_store::{create_motif_tables, MotifsStore};
     use super::{PurgeDate, PurgeLabelModelsBy, PurgeMode, PurgeModelType, PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
-    use crate::cli::{CommonCommands, MotifAppCommands, MotifCommands};
+    use crate::cli::{MotifAppCommands, MotifCommands};
+    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use clap::Parser;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -444,8 +444,9 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::train_nets::{TrainLabelNetRunConfig, TrainMotifNetRunConfig};
-    use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace, WsConfigs};
+    use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, WsConfigs};
+    use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
+    use thoosa_motifs::train_nets::TrainMotifNetRunConfig;
     use thoosa_shared::run_configs::{RUN_ID, RunConfig};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
@@ -454,7 +455,6 @@ mod tests {
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
     pub struct MotifAppArgs {
-
         #[command(flatten)]
         pub common_args: CommonArgs<MotifAppCommands>,
 
