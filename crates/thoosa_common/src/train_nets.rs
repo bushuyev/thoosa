@@ -1831,7 +1831,7 @@ where
         .grid_run_config_source()
         .const_params()
         .clone();
-    const MAX_LOSS:f32 = 1f32;
+    const MAX_LOSS:f32 = f32::MAX;
     let min_loss = Arc::new(RwLock::new(MAX_LOSS));
 
     let min_var_store: Arc<RwLock<Option<(A, N, R, f32)>>> = Arc::new(RwLock::new(None));
@@ -1874,7 +1874,7 @@ where
                 ); //motif_id ?train_net
 
                 let train_result = panic_to_err_async!(
-                    train_clone(//TODO spawn
+                    train_clone(
                         run_config.clone(),
                         &mut listener
                     )
@@ -1946,6 +1946,9 @@ pub struct TrainFinalNetArgs {
 
     #[arg(long)]
     pub selected_motif_nets_limit: Option<usize>,
+
+    #[arg(long, default_value_t = 10)]
+    pub motif_slices_step: u32,
 }
 
 impl TrainFinalNetArgs {

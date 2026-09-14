@@ -19,7 +19,7 @@ use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
 use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing, format_perf_map, PERF};
 use thoosa_shared::run_configs::{run_id, RUN_ID};
-use thoosa_shared::ThoError;
+use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::{snapshot_not_ready, track_await};
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
@@ -148,8 +148,8 @@ where
     let mut prev_busy = vec![std::time::Duration::ZERO; workers];
 
     let purge_cpu_worker = tokio::spawn(async move {
-        let mut ticker = time::interval(Duration::from_secs(60));
-        track_await(ticker.tick()).await; //
+        let mut ticker = time::interval(Duration::from_secs(60));//TODO config
+        track_await(ticker.tick()).await;
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             select! {
@@ -164,34 +164,36 @@ where
                             metrics.blocking_queue_depth(),
                         );
                     }
+                    if log::log_enabled!(log::Level::Debug) {
+                        for w in 0..workers {
+                               let poll = metrics.worker_poll_count(w);
+                                let park = metrics.worker_park_count(w);
+                                let busy = metrics.worker_total_busy_duration(w);
 
-                    for w in 0..workers {
-                           let poll = metrics.worker_poll_count(w);
-                            let park = metrics.worker_park_count(w);
-                            let busy = metrics.worker_total_busy_duration(w);
+                                debug!(
+                                    "  w{w}: poll+{} park+{} busy+{:?}",
+                                    poll - prev_poll[w],
+                                    park - prev_park[w],
+                                    busy - prev_busy[w],
+                                );
 
-                            debug!(
-                                "  w{w}: poll+{} park+{} busy+{:?}",
-                                poll - prev_poll[w],
-                                park - prev_park[w],
-                                busy - prev_busy[w],
-                            );
+                                prev_poll[w] = poll;
+                                prev_park[w] = park;
+                                prev_busy[w] = busy;
+                        }
 
-                            prev_poll[w] = poll;
-                            prev_park[w] = park;
-                            prev_busy[w] = busy;
+                        let tasks = snapshot_not_ready();
+                        debug!("TASKS pending={}", tasks.len());
+                        for task in tasks {
+                            debug!("  {task}");
+                        }
                     }
-                    let tasks = snapshot_not_ready();
-                    info!("TASKS pending={}", tasks.len());
-                    for task in tasks {
-                        info!("  {task}");
-                    }
 
-                    // if !cuda_activity_gate().is_paused() {
-                    //     debug!("run_cli: purge_cpu tick");
-                    //     GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
-                    //     debug!("run_cli: purge_cpu done");
-                    // }
+                    if !cuda_activity_gate().is_paused() {
+                        debug!("run_cli: purge_cpu tick");
+                        GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
+                        debug!("run_cli: purge_cpu done");
+                    }
                 }
                 _ = rx.changed() => {
                     if *rx.borrow() {

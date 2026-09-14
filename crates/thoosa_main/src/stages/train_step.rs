@@ -188,9 +188,13 @@ where
 
             let predicted_y = train_module.module().tho_forward(&x_t, lengths.as_mut(), input.train)?;
 
-            debug!("TrainStep::do_run: predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
+            debug!("TrainStep::do_run: x_t={x_t:?} predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
+
 
             let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
+
+            trace!("TrainStep::do_run: x_t=\n{x_t} predicted_y=\n{predicted_y} expected_y=\n{expected_y} loss=\n{loss}");
+
             Ok::<_, ThoError>((predicted_y, loss))
 
         };
@@ -200,7 +204,7 @@ where
             panic_to_err!(tch::no_grad(calculate_loss))?
         };
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
-        trace!("TrainStep::do_run: x_t=\n{x_t}");
+
 
         x_t.drop_inner();
         let loss_value = panic_to_err!(Ok::<_, ThoError>(loss.double_value(&[])))? as f32;
