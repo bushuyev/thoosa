@@ -366,7 +366,7 @@ impl StageCommand for MotifCommands {
 
                 let opt_config = Arc::new(train_final_net_args.opt_config.clone());
                 let init_ctx = ctx.branch(true);
-                let run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+                let run_config_ids = track_await(run_opt::< _, _, TrainFinalNetRunConfig, _, _>(
                     train_final_net_run_config_range_or_value,
                     input_wrapper,
                     &ws,
@@ -381,7 +381,7 @@ impl StageCommand for MotifCommands {
                             &store,
                             init_ctx,
                             opt_config,
-                            10,//TODO
+                            train_final_net_args.motif_slices_step,
                             train_final_net_args.selected_motif_nets_limit,
                         )).await.map(|v|Arc::new(v))
 

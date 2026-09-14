@@ -1339,21 +1339,20 @@ pub fn apply_motif_net_forward(
         pad_to(&t, &[motif_width], 0.0)?
     };
 
-    // TODO(perf): cache unfolded channel windows by (resource, channel, motif_width, slice_step) across motif nets; tracing shows this stage is invoked tens of thousands of times.
     let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
     debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
+    // TODO stft config
     // let stft_slices = stft.unwrap().build_spectrogram(&slices.totype(Float))?;
-    //
     // debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} stft_slices={stft_slices:?}");
-    //
     // let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(stft_slices); //.f_totype(Float)?
+
     let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
     let out_t = out.as_ref().f_view([-1])?; //.f_sigmoid()?;
-    // let out_t = out_t.f_sigmoid()?;
+
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
     trace!("ApplyMotifNet::do_run: out_t=\n{out_t}");
 

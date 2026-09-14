@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures_util::future::try_join_all;
 use futures_util::stream::BoxStream;
-use log::Level::Debug as DebugLevel;
+use log::Level::{Debug as DebugLevel, Trace};
 use log::{debug, info, log_enabled, trace};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -105,7 +105,7 @@ where
     R: RunCtx + MaxParallelCtx + Adjustable + 'static,
 
 {
-    //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
+    //Build a final-net application stage that wraps the raw loader with motif+label inference.
     let apply_label_nets = Arc::new(track_await(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step, 1)).await?);//TODO config batch_in_chunks
 
     let label_loader = Arc::new(ABStage::new(
@@ -537,7 +537,11 @@ where
 
                         if log_enabled!(DebugLevel) {
                             let val = BorrowRef::borrow_to(&out, 1).await?;
-                            debug!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.t_ref());
+                            debug!("LogitsResourcesBatch::build_batch_stream: out={val:?} \nlabels={labels:?}");
+                            if log::log_enabled!(Trace) && !GlobalCtx::global().is_ipc() {
+                                trace!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.t_ref());
+                            }
+
                         }
 
                         Ok::<_, ThoError>((out, labels))
@@ -623,8 +627,8 @@ type SyncTrainFinalStep<C> = TrainStep<TrainStepXFn<LabelProbability>, LabelProb
 /// `sum_dim_intlist(-1)` sums the per-class cross-entropy for each sample,
 /// producing [B], and `mean()` averages it over the batch.
 fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
-    debug!("train_final_loss: pred_y=\n{pred_y} target=\n{target}");
-
+    debug!("train_final_loss: pred_y={pred_y:?} target={target:?}");
+    trace!("train_final_loss: pred_y=\n{pred_y} target=\n{target}");
 
     let log_probs = pred_y.f_log_softmax(-1, Kind::Float)?;
 
