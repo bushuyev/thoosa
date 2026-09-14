@@ -6,7 +6,6 @@ members = [
     "thoosa_common",
     "thoosa_store",
     "thoosa_motifs",
-    "thoosa_main",
     "thoosa_tui",
 
     "thoosa_macros/thoosa_macros_utils",

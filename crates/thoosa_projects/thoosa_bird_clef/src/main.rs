@@ -26,7 +26,8 @@ use tch::kind::FLOAT_CPU;
 use tch::{Cuda, Device, IndexOp, Kind, Tensor};
 use thoosa_common::args::{CommonArgs, StageCommand};
 use thoosa_common::commands::common_cli::run_common_cli;
-use thoosa_common::dims::{ChannelsData, LabelProbability};
+use thoosa_common::dims::ChannelsData;
+use thoosa_motifs::dims::LabelProbability;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
 use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
@@ -37,13 +38,12 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
-use thoosa_main::RawTensorLoader;
-use thoosa_main::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, import_resources, init_loader};
-use thoosa_main::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use thoosa_main::stages::apply_label_nets::ApplyLabelNets;
-use thoosa_main::stages::stft::SyncStftSelector;
-use thoosa_main::stages::transforms::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
+use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, RunAllArgs, import_resources, init_loader};
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
+use thoosa_motifs::stages::apply_label_nets::ApplyLabelNets;
+use thoosa_motifs::stages::stft::SyncStftSelector;
+use thoosa_motifs::stages::transforms::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_motifs::train_nets::InferArgs;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
@@ -137,7 +137,7 @@ impl StageCommand for BirdClefCommands {
                     || data::labeled_resourses(&import_resources_args.source_path),
 
                     | key| {
-                        thoosa_main::data::parquet_to_tensor_by_path(
+                        thoosa_motifs::data::parquet_to_tensor_by_path(
                             PathBuf::from(&import_resources_args.source_path)
                                 .join("train_eegs")
                                 .join(format!("{}.parquet", key)),
@@ -361,7 +361,7 @@ fn main() -> Result<(), ThoError>{
             Arc::clone(&store) as Arc<dyn MotifsStore>,
             Arc::clone(&ws),
             |source_path, key| {
-                thoosa_main::data::parquet_to_tensor_by_path(
+                thoosa_motifs::data::parquet_to_tensor_by_path(
                     source_path
                         .as_ref()
                         .join("train_eegs")
@@ -648,8 +648,8 @@ mod tests {
     use std::sync::Arc;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::ws::{FsWorkspace, WsConfigs};
-    use thoosa_main::stages::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_motifs::motifs_store::MotifsStore;
+    use thoosa_motifs::stages::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_motifs::train_nets::InferArgs;
     use thoosa_shared::ThoError;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};

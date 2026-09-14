@@ -12,22 +12,22 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
-use thoosa_main::stages::cross_loader::ResourcesConfigInput;
-use thoosa_main::stages::extend_motifs::ExtendMotifsStage;
-use thoosa_main::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
-use thoosa_main::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-use thoosa_main::stages::motif_loader::MotifLoader;
-use thoosa_main::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
-use thoosa_main::stages::train_final_net::new_train_final_net;
-use thoosa_main::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, new_train_label_nets};
-use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, stages};
+use thoosa_motifs::stages::apply_motif_nets::{ApplyMotifNets};
+use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_motifs::motifs_store::MotifsStore;
-use thoosa_motifs::train_nets;
+use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
+use thoosa_motifs::stages::extend_motifs::ExtendMotifsStage;
+use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
+use thoosa_motifs::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_motifs::stages::motif_loader::MotifLoader;
+use thoosa_motifs::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use thoosa_motifs::stages::train_final_net::new_train_final_net;
+use thoosa_motifs::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, new_train_label_nets};
 use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
+use thoosa_motifs::{stages, train_nets};
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
@@ -35,6 +35,8 @@ use thoosa_shared::traits::RunCtx;
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
 use tracing::Instrument;
+use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
+use thoosa_motifs::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
 #[derive(Debug)]
 pub enum FindAndSelect {
@@ -638,6 +640,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tch::{Device, Tensor};
     use thoosa_common::common_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, OptConfig, OptimizersRangeOrValue};
+    use thoosa_common::debug_plot;
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::ipc::tests::run_ipc_test;
@@ -652,16 +655,14 @@ mod tests {
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
-    use thoosa_common::debug_plot;
-    use thoosa_main::RawTensorLoader;
-    use thoosa_main::cli::{RunAllArgs, import_resources};
-    use thoosa_main::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
-    use thoosa_main::stages::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-    use thoosa_main::stages::train_label_nets::TrainLabelNetRunConfigRangeOrValue;
+    use thoosa_motifs::cli::{RunAllArgs, import_resources};
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
+    use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
+    use thoosa_motifs::stages::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_motifs::stages::train_label_nets::TrainLabelNetRunConfigRangeOrValue;
     use thoosa_motifs::train_nets;
     use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_shared::applicables_runner::{Input, Output};
@@ -678,6 +679,7 @@ mod tests {
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::{SqlStore, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetsBy, create_tables};
     use tracing::field::debug;
+    use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
 
     #[ctor::ctor]
     fn init() {
