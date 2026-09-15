@@ -30,7 +30,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
@@ -193,7 +193,7 @@ where
                 motif_ids,
                 init_ctx.branch(true),
             )).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, *find_motifs_run_config_id)).await?;
+            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
             let reference_energy = track_await(Self::reference_energy_for_find_run(
                 &motif_stats,
                 resources.as_ref(),

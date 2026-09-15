@@ -61,7 +61,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, ErasedStageWithState, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
@@ -374,7 +374,7 @@ where
 
             let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
 
-            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
+            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
            let maybe_freq_filter= match find_motifs_run_config.freq_filter.as_ref() {
                None => None,

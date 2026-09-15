@@ -1496,7 +1496,7 @@ where
     let (path_channel, motif_id) = parse_motif_path(&net_path)?;
     let (store_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
 
-    let find_motifs_run_config:FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
+    let find_motifs_run_config:FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
