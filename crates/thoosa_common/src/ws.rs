@@ -17,7 +17,7 @@ use thoosa_shared::traits::ToJsonFile;
 pub const NET_PARAMS_FILE: &str = "parameters.json";
 pub const NET_WEIGHTS_FILE: &str = "weights.safetensors";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct WsConfigs {
     pub channels: u32,
     pub max_input: u32,
@@ -41,9 +41,7 @@ pub struct FsWorkspace {
     log_path: PathBuf,
     tmp_path: PathBuf,
 
-    channels: u32, //TODO move into input meta
-    sample_rate: u32,
-    max_input: u32, //TODO move into input meta
+    ws_configs:WsConfigs
 }
 
 impl FsWorkspace {
@@ -86,9 +84,7 @@ impl FsWorkspace {
             plots_path,
             log_path,
             tmp_path,
-            channels: ws_configs.channels,
-            sample_rate: ws_configs.sample_rate,
-            max_input: ws_configs.max_input,
+            ws_configs,
         })
     }
 
@@ -133,9 +129,7 @@ impl FsWorkspace {
             plots_path,
             log_path,
             tmp_path,
-            channels:app_configs.channels,
-            sample_rate:app_configs.sample_rate,
-            max_input:app_configs.max_input,
+            ws_configs:app_configs.clone()
         })
     }
 
@@ -235,16 +229,20 @@ impl Workspace for FsWorkspace {
 
     #[inline]
     fn channels(&self) -> u32 {
-        self.channels
+        self.ws_configs.channels
     }
 
     fn sample_rate(&self) -> u32 {
-        self.sample_rate
+        self.ws_configs.sample_rate
     }
 
     #[inline]
     fn max_input(&self) -> u32 {
-        self.max_input
+        self.ws_configs.max_input
+    }
+
+    fn ws_configs(&self)->WsConfigs {
+        self.ws_configs
     }
 
     fn clc_records(&self, _resource_ids: &Vec<String>) -> Result<i64, ThoError> {
@@ -365,6 +363,7 @@ pub trait Workspace: Sync + Send + Debug {
     fn sample_rate(&self) -> u32;
     fn max_input(&self) -> u32;
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoError>;
+    fn ws_configs(&self)->WsConfigs;
 }
 
 pub fn mock_ws_simp(

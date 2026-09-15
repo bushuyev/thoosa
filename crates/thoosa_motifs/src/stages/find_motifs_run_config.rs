@@ -415,9 +415,17 @@ mod tests {
     use crate::distance::{EucDistConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue};
     use log::debug;
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use tch::kind::FLOAT_CPU;
     use tch::Tensor;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilter::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
     use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParams, MedianFilterParamsRangeOrValue, NotchBandFilterParams, Padding, PaddingRangeOrValue, SavGolFilterParams, ZeroPaddingRangeOrValue};
+    use thoosa_common::ws::WsConfigs;
     use crate::stages::find_motifs_run_config::Aggr::Mean;
     use crate::stages::find_motifs_run_config::MaxSlices::Abs;
     use crate::stages::find_motifs_run_config::SlicesFilter::Precalculate;
@@ -426,7 +434,10 @@ mod tests {
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{F64BitsKey, RangeOrValue};
+    use thoosa_shared::{mono_key, F64BitsKey, RangeOrValue, ThoError};
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::traits::{AsyncStage, RunCtx};
+    use crate::stages::transforms::freq_filter::FreqFilter;
 
     #[ctor::ctor]
     fn test_init() {
@@ -852,6 +863,70 @@ mod tests {
         assert_eq!(params, loaded_params);
     }
 
+    async fn run_freq_filter(filter_configs: Vec<InputFilter>) -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
+
+        let bf = FreqFilter::new(&filter_configs, WsConfigs::new(20, 10000, 100), 0, 0).await?;
+
+        let mut ctx = RunCtxImpl::new(1, "test");
+
+        let size = [20, 12800];
+        let r = bf.run(
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)),
+            ctx.branch(false)
+        ).await?;
+
+        let find_motifs_run_config = FindMotifsRunConfig::new_with_running_mean(None, 10, 100, Some(filter_configs), None);
+
+        let adjuster = find_motifs_run_config.input_len_adjuster();
+
+
+        let ThoDataRef::ReadLocked(rr) = BorrowRef::borrow_to(&r,0).await? else {
+            panic!("no result");
+        };
+
+        assert_eq!(rr.t_ref().size()[0], size[0]);
+        assert_eq!(rr.t_ref().size()[1] as u32, adjuster(size[1] as u32));
+
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_band_pass() -> Result<(), ThoError> {
+        let filter_configs = vec![
+
+            InputFilter::BandPassFilter(BandPassFilterParams{
+                low_hz: 0.0,
+                band_hz: 100.0,
+                kernel_size: 859,
+                stride: 10,
+                padding: Padding::zero(),
+            }),
+        ];
+
+
+        run_freq_filter(filter_configs).await
+    }
+
+    #[tokio::test]
+    async fn test_savitzky_golay() ->Result<(), ThoError> {
+
+        let filter_configs = vec![
+
+            InputFilter::SavGolFilter(SavGolFilterParams {
+                window_len: 11,
+                poly_order: 2,
+                stride: 1,
+                padding: Padding::reflect(),
+            }),
+        ];
+
+
+        run_freq_filter(filter_configs).await
+    }
 }
 
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
