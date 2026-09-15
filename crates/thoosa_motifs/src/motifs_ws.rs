@@ -281,10 +281,11 @@ mock! {
         fn sample_rate(&self) -> u32;
         fn max_input(&self) -> u32;
         fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoError>;
+        fn ws_configs(&self)->WsConfigs;
     }
 }
 
-fn mock_motifs_ws_base(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> MockMotifsWorkspace {
+pub fn mock_motifs_ws_base(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> MockMotifsWorkspace {
     let base = path.cloned().unwrap_or_else(|| {
         let path = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&path).expect("can't create tmp dir");

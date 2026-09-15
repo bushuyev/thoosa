@@ -131,6 +131,7 @@ pub enum MotifCommands {
     TrainLabelNets(TrainLabelNetsArgs),
     TrainFinalNet(TrainFinalNetArgs),
     Export(ExportArgs),
+    ConvertPrecision(ConvertPrecisionArgs),
     PurgeModels(PurgeModelsArgs),
     PlotData(PlotDataArgs)
 
@@ -411,6 +412,17 @@ impl StageCommand for MotifCommands {
 
                 Ok(())
             }
+            MotifCommands::ConvertPrecision(convert_precision_args) => {
+                debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
+                let output = track_await(Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
+                    .run(
+                        ConvertPrecisionInput::new(),
+                        ctx.branch(true),
+                    )).await?;
+                // let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
+                info!("ConvertPrecision done, converted={}", output.converted().len());
+                Ok(())
+            }
 
             MotifCommands::PurgeModels(purge_models_args) => {
                 debug!("PurgeModels: purge_models_args={purge_models_args:?}");
@@ -483,11 +495,9 @@ impl StageCommand for MotifAppCommands {
 }
 
 
-/////////////////
-
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum CommonCommands {
-    ConvertPrecision(ConvertPrecisionArgs),
+
     SayHello(SayHelloArgs),
 }
 
@@ -499,17 +509,6 @@ impl StageCommand for CommonCommands {
 
     async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
         match self {
-            CommonCommands::ConvertPrecision(convert_precision_args) => {
-                debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
-                let output = track_await(Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
-                    .run(
-                        ConvertPrecisionInput::new(),
-                        ctx.branch(true),
-                    )).await?;
-                // let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
-                info!("ConvertPrecision done, converted={}", output.converted().len());
-            }
-
             CommonCommands::SayHello(args) => {
                 debug!("CommonCommands::SayHello:run: args={args:?}");
             }
@@ -1458,7 +1457,8 @@ where
 
     if let Some(freq_filters) = freq_filters {
         let filter_frag = sanitize_plot_path_segment(&freq_filters.iter().map(|f|format!("{:?}", f)).collect::<String>());//TODO remove "*Params"
-        let filtered = track_await(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id, ctx.tho_device_idx()).await?
+        let configs = ws.read().ws_configs();
+        let filtered = track_await(FreqFilter::<C>::new(freq_filters.as_slice(), configs, resource_id, ctx.tho_device_idx()).await?
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
@@ -1511,7 +1511,8 @@ where
 
 
     let filtered_or_raw = if let Some(freq_filters) = find_motifs_run_config.freq_filter.clone() {
-        let filtered = track_await(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id, ctx.tho_device_idx()).await?
+        let configs = ws.read().ws_configs();
+        let filtered = track_await(FreqFilter::<C>::new(freq_filters.as_slice(), configs, find_motifs_run_config_id, ctx.tho_device_idx()).await?
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
@@ -2025,7 +2026,7 @@ mod cli_tests {
         let cli = MotifAppArgs::parse_from(["thoosa_motifs", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
 
         match cli.common_args.command {
-            Some(MotifAppCommands::CommonCommands(CommonCommands::ConvertPrecision(args))) => {
+            Some(MotifAppCommands::Motifs(MotifCommands::ConvertPrecision(args))) => {
                 assert_eq!(args.nets_by(), crate::stages::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
                 assert_eq!(args.target_precision(), crate::stages::convert_precision::ConvertPrecisionTarget::Bf16);
             }
@@ -2316,6 +2317,7 @@ mod cli_tests {
         let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 10000)));
 
         for freq in 0..100 {
+            let configs = ws.read().ws_configs();
             let freq_filter = FreqFilter::<MockRunCtx>::new(&[
                             InputFilter::BandPassFilter(BandPassFilterParams {
                                 low_hz: freq as f64,
@@ -2324,8 +2326,8 @@ mod cli_tests {
                                 stride: 1,
                                 padding: Padding::zero(),
                             })
-                        ], &ws,
-                                                                     0, 0).await?;
+                        ], configs,
+                                                            0, 0).await?;
 
             let mut ctx = mock_run_ctx::default(1);
 

@@ -1,5 +1,10 @@
 use crate::find::FindMotifsSavableResult;
 use crate::motifs_store::MotifsStore;
+#[cfg(test)]
+use crate::stages::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
+use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
+use crate::stages::tensor_loader::RawTensorLoader;
+use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -24,22 +29,17 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
-#[cfg(test)]
-use crate::stages::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
-use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
-use crate::stages::cross_dims::ChannelsDataSelector;
-use crate::stages::tensor_loader::RawTensorLoader;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{CopyToDevice, ThoError, simple_id};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use crate::stages::dists_tracker::DistsMask;
+use crate::stages::slices_iter::SlicesIter;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
 use thoosa_dummy_data_derive::DummyData;
-use crate::stages::dists_tracker::DistsMask;
-use crate::stages::slices_iter::SlicesIter;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
@@ -991,10 +991,10 @@ impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
 
 #[cfg(test)]
 pub mod mock_cross_loader_clc {
+    use crate::stages::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use std::fmt::Debug;
     use std::marker::PhantomData;
     use std::sync::Arc;
-    use crate::stages::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
@@ -1236,6 +1236,15 @@ mod tests {
     use crate::fs_store::ChunkedSlicesReader;
     use crate::motif_tracker_store::SlicesMatch;
     use crate::motifs_store::MockMotifsStoreBuilder;
+    use crate::stages::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
+    use crate::stages::cross_loader::{
+        CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
+    };
+    use crate::stages::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
+    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::stages::slices_iter::SlicesIter;
+    use crate::stages::tensor_loader::RawTensorLoader;
+    use crate::stages::tensor_loader::mock_tensor_loader;
     // use thoosa_common::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::LevelFilter::{Debug, Info};
@@ -1260,15 +1269,6 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::{FsWorkspace, WsConfigs};
-    use crate::stages::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
-    use crate::stages::cross_loader::{
-        CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
-    };
-    use crate::stages::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::slices_iter::SlicesIter;
-    use crate::stages::tensor_loader::RawTensorLoader;
-    use crate::stages::tensor_loader::mock_tensor_loader;
     use thoosa_shared::Cause::SomethingElse;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::comp_id::SynKey;
