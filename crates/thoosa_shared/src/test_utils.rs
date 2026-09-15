@@ -203,7 +203,7 @@ pub enum TestSignalKind {
     Trill,
 }
 
-pub fn gen_motif(motif_len: usize, motif_kind: &TestSignalKind) -> Vec<f32> {
+pub fn gen_signal(motif_len: usize, motif_kind: &TestSignalKind) -> Vec<f32> {
     match motif_kind {
         TestSignalKind::Triangle => generate_triangle_wave(motif_len)
             .into_iter()

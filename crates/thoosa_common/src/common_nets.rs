@@ -531,13 +531,13 @@ impl SelfAttentionNetParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinLenNetParams {
-    pub motif_layers: u32,
+    pub layers: u32,
     pub features: u32,
 }
 
 impl LinLenNetParams {
-    pub fn new(features: u32, motif_layers: u32) -> Self {
-        Self { motif_layers, features }
+    pub fn new(features: u32, layers: u32) -> Self {
+        Self { layers, features }
     }
 }
 
@@ -585,24 +585,6 @@ impl PlotVecf32 {
         }
     }
 
-    #[allow(dead_code)]
-    fn plot(&self) {
-        plot_series(
-            vec![(
-                self.id.clone(),
-                BLACK,
-                self.data
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| (i as f32, *v))
-                    .collect::<Vec<(f32, f32)>>(),
-            )],
-            self.id.clone().as_str(),
-            (2000, 1000),
-            &format!("/tmp/plots/motif_train_{}.png", self.id),
-        )
-        .unwrap();
-    }
 }
 
 impl TrainListener for PlotVecf32 {

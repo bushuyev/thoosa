@@ -30,3 +30,4 @@ pub mod data;
 pub mod dims;
 pub mod motif_tho_tensor;
 pub mod stages;
+pub mod tch_test_utils;

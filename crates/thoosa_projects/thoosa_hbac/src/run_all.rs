@@ -12,20 +12,22 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::stages::apply_motif_nets::{ApplyMotifNets};
 use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_motifs::motifs_store::MotifsStore;
+use thoosa_motifs::stages::apply_motif_nets::ApplyMotifNets;
 use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
 use thoosa_motifs::stages::extend_motifs::ExtendMotifsStage;
 use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use thoosa_motifs::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_motifs::stages::motif_loader::MotifLoader;
 use thoosa_motifs::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
 use thoosa_motifs::stages::train_final_net::new_train_final_net;
 use thoosa_motifs::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, new_train_label_nets};
+use thoosa_motifs::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_motifs::{stages, train_nets};
 use thoosa_shared::hyperparameter::FieldName;
@@ -35,8 +37,6 @@ use thoosa_shared::traits::RunCtx;
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
 use tracing::Instrument;
-use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
-use thoosa_motifs::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
 #[derive(Debug)]
 pub enum FindAndSelect {
@@ -292,7 +292,7 @@ pub(crate) async fn run_all(
     let loader_in_train_final = Arc::clone(&loader);
 
     //gpt Run a grid over final-net training configs; consumes label-net run ids and produces final models.
-    let _run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+    let _run_config_ids = track_await(run_opt::< _, _, TrainFinalNetRunConfig, _, _>(
         all_config.train_final_net_run_config_range_or_value,
         train_final_input,
         &ws,
@@ -624,7 +624,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 
 #[cfg(test)]
 mod tests {
-    use crate::run_all::{run_all, run_all_config_0, AllConfigs, FindAndSelect};
+    use crate::run_all::{AllConfigs, FindAndSelect, run_all, run_all_config_0};
     use futures::executor::block_on;
     use futures::future::BoxFuture;
     use log::LevelFilter::Debug;
@@ -649,7 +649,6 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
@@ -662,7 +661,9 @@ mod tests {
     use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
     use thoosa_motifs::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use thoosa_motifs::stages::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
     use thoosa_motifs::stages::train_label_nets::TrainLabelNetRunConfigRangeOrValue;
+    use thoosa_motifs::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_motifs::train_nets;
     use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_shared::applicables_runner::{Input, Output};
@@ -679,7 +680,6 @@ mod tests {
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::{SqlStore, TRAIN_FINAL_NETS_RUN_CONFIG_TYPE, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetsBy, create_tables};
     use tracing::field::debug;
-    use thoosa_motifs::stages::tensor_loader::RawTensorLoader;
 
     #[ctor::ctor]
     fn init() {
@@ -863,34 +863,34 @@ mod tests {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
-        // let settings = RunAllSettings {
-        //     resources_per_label: 30,
-        //     pure_sets_len: [(10, true), (20, true)],
-        //     train_resource_group: "pure group 20".to_string(),
-        //     valid_resource_group: "pure group 10".to_string(),
-        //
-        //     motifs_epochs : 30,
-        //     labels_epochs : 30,
-        //     final_epochs : 30,
-        //     train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
-        //     train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
-        //     train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
-        //     max_batch_size : 10,
-        // };
         let settings = RunAllSettings {
-            resources_per_label: 90,
-            pure_sets_len: [(30, true), (60, true)],
-            train_resource_group: "pure group 60".to_string(),
-            valid_resource_group: "pure group 30".to_string(),
+            resources_per_label: 30,
+            pure_sets_len: [(10, true), (20, true)],
+            train_resource_group: "pure group 20".to_string(),
+            valid_resource_group: "pure group 10".to_string(),
 
             motifs_epochs : 30,
-            labels_epochs : 50,
-            final_epochs : 50,
-            train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
-            train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
-            train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
-            max_batch_size : 20,
+            labels_epochs : 30,
+            final_epochs : 30,
+            train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
+            train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
+            train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
+            max_batch_size : 10,
         };
+        // let settings = RunAllSettings {
+        //     resources_per_label: 90,
+        //     pure_sets_len: [(30, true), (60, true)],
+        //     train_resource_group: "pure group 60".to_string(),
+        //     valid_resource_group: "pure group 30".to_string(),
+        //
+        //     motifs_epochs : 30,
+        //     labels_epochs : 50,
+        //     final_epochs : 50,
+        //     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
+        //     train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
+        //     train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
+        //     max_batch_size : 20,
+        // };
         // let settings = RunAllSettings {
         //     resources_per_label: 300,
         //     pure_sets_len: [(100, true), (200, true)],

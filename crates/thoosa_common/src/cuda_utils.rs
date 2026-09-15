@@ -1,27 +1,27 @@
+use crate as thoosa_common;
+use crate::runner::global_ctx::GlobalCtx;
+use crate::tho_device::ThoDevice;
+use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+use log::debug;
 use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::Duration;
-use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use log::debug;
 use tch::Device::Cpu;
-use tch::{Device, Kind, Tensor};
 use tch::Kind::Float;
 use tch::nn::VarStore;
-use tokio::task::{spawn_blocking, JoinError};
-use thoosa_shared::{collect_futures_with_progress, Cause, FuturesOrdering, ThoError};
+use tch::{Device, Kind, Tensor};
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
+use thoosa_shared::os_thread_id;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::{Cause, FuturesOrdering, ThoError, collect_futures_with_progress};
+use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::cuda_result::check_cuda_status;
+use thoosa_shims::stream::{CUDA_SUCCESS, ThoCudaStream, ThoStreamGuard};
+use tokio::task::{JoinError, spawn_blocking};
 use tokio_utils::Pool;
 use torch_sys::at_grad_set_enabled;
 use tub::Guard;
-use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::cuda_result::check_cuda_status;
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
-use thoosa_shared::os_thread_id;
-use crate as thoosa_common;
-use crate::runner::global_ctx::GlobalCtx;
-use crate::tho_device::ThoDevice;
-use thoosa_shared::tracked_await::track_await;
 
 // One contiguous byte range in the source/destination tensor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -551,137 +551,6 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
     unsafe { std::slice::from_raw_parts(pa, nbytes) == std::slice::from_raw_parts(pb, nbytes) }
 }
 
-//TODO for var_store.copy(&self.var_store)?; in copy_to_device
-// pub async fn copy_vs(src: &VarStore, dst: &VarStore) -> Result<(), ThoError> {
-//     let mut variables = dst.variables_.lock().unwrap();
-//     let src_variables = src.variables_.lock().unwrap();
-//
-//     for name in variables.named_variables.keys() {
-//         if !src_variables.named_variables.contains_key(name) {
-//             return Err(ThoError::new(
-//                 name.to_string(),//TODO not found...
-//             ));
-//         }
-//     }
-//     let tho_device_idx = ThoDevice::from(dst.device()).ordinal();
-//     for (name, var) in variables.named_variables.iter_mut() {
-//         let src_var = src_variables.named_variables.get(name).unwrap();
-//
-//         let prev = unsafe{at_grad_set_enabled(i32::from(false))};
-//
-//         GlobalCtx::global().copy_ctx(tho_device_idx).await.copy(src_var, tho_device_idx, src_var.kind()).await?;
-//
-//         unsafe{at_grad_set_enabled(prev)};
-//     }
-//     Ok(())
-// }
-
-
-
-/// Input:
-///   scores:       [M, Slices] padded tensor
-///   real_lengths: real valid slice length for each motif detector, len == M
-///   n_chunks:     N
-///
-/// Output:
-///   chunks:       Vec of N tensors, each [M, ceil(Slices / N)]
-///   chunk_lengths: [N][M] real lengths inside every produced chunk
-///
-/// Each row m in every output chunk is compacted to the left and padded
-/// with `pad_value`.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores"))]
-pub fn split_padded_motif_scores( //TODO move to utils.rs
-    scores: &Tensor,
-    real_lengths: &[i64],
-    n_chunks: i64,
-    pad_value: f64,
-) -> Result<(Vec<Tensor>, Vec<Vec<i64>>), ThoError> {
-    let size = scores.size();
-
-    if size.len() != 2 {
-        return Err(ThoError::new(format!("expected scores shape [M, Slices], got {size:?}")));
-    }
-
-    if n_chunks <= 0 {
-        return Err(ThoError::new(format!("n_chunks must be > 0, got {n_chunks}")));
-    }
-
-    let m_count = size[0];
-    let padded_slices = size[1];
-
-    if real_lengths.len() != m_count as usize {
-        return Err(ThoError::new(format!("real_lengths.len() must be M={m_count}, got {}", real_lengths.len())));
-    }
-
-    for (m, &len) in real_lengths.iter().enumerate() {
-        if len < 0 || len > padded_slices {
-            return Err(ThoError::new(format!("bad real length for motif {m}: {len}, padded_slices={padded_slices}")));
-        }
-    }
-
-    let out_width = ceil_div(padded_slices, n_chunks);
-
-    let mut chunks: Vec<Tensor> = (0..n_chunks)
-        .map(|_| {
-            Tensor::full(
-                &[m_count, out_width],
-                pad_value,
-                (scores.kind(), scores.device()),
-            )
-        })
-        .collect();
-
-    let mut chunk_lengths =
-        vec![vec![0_i64; m_count as usize]; n_chunks as usize];
-
-    for m in 0..m_count {
-        let real_len = real_lengths[m as usize];
-
-        for chunk_idx in 0..n_chunks {
-            let start = real_len * chunk_idx / n_chunks;
-            let end = real_len * (chunk_idx + 1) / n_chunks;
-            let len = end - start;
-
-            chunk_lengths[chunk_idx as usize][m as usize] = len;
-
-            if len == 0 {
-                continue;
-            }
-
-
-            copy_chunk(scores, &mut chunks, m, chunk_idx, start, len)?;
-        }
-    }
-
-    Ok((chunks, chunk_lengths))
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores/copy_chunk"))]
-fn copy_chunk(scores: &Tensor, chunks: &mut Vec<Tensor>, m: i64, chunk_idx: i64, start: i64, len: i64) -> Result<(), ThoError> {
-    {
-        // src shape: [1, len]
-        let src = scores
-            .f_narrow(0, m, 1)?
-            .f_narrow(1, start, len)?;
-
-        // dst shape: [1, len], points into the output chunk.
-        let mut dst = chunks[chunk_idx as usize]
-            .f_narrow(0, m, 1)?
-            .f_narrow(1, 0, len)?;
-
-        dst.f_copy_(&src)?;
-    };
-    Ok(())
-}
-
-fn ceil_div(a: i64, b: i64) -> i64 {
-    if a == 0 {
-        0
-    } else {
-        (a + b - 1) / b
-    }
-}
-
 
 pub fn fail_with_unrecoverable_error(){
     debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run");
@@ -713,6 +582,7 @@ pub fn fail_with_unrecoverable_error(){
 mod tests {
     use crate::copy_ctx::CopyCtx;
     use crate::cuda_utils::{
+        PinnedHostBuffer,
         copy_d2h_from_ptr,
         copy_h2d_from_ptr,
         cuda_mem,
@@ -720,36 +590,35 @@ mod tests {
         pack_bits_bool,
         speed_gb_per_s,
         unpack_bits_u8,
-        PinnedHostBuffer,
     };
+    use crate::dims::AnyDims;
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::tho_device::ThoDevice;
+    use crate::tho_tensor::ThoTensor;
     use crate::utils::lin_for_size;
+    use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+    use futures_util::StreamExt;
     use log::{debug, info};
     use rand::random_range;
     use std::cell::UnsafeCell;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
-    use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-    use futures_util::StreamExt;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Float, Int64, Uint8};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Kind, Tensor};
     use thoosa_shared::ThoError;
+    use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, futures_limits};
+    use thoosa_shared::perf_logging::{PERF, format_perf_map};
+    use thoosa_shared::traits::SimpleId;
+    use thoosa_shims::cpp_log::init_cpp_logging;
+    use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
-    use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::futures_limits::{futures_limits, COPY_D2H, COPY_H2D};
-    use thoosa_shared::perf_logging::{format_perf_map, PERF};
-    use crate::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::traits::SimpleId;
-    use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
-    use thoosa_shims::cpp_log::{init_cpp_logging};
-    use crate::dims::AnyDims;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_device::ThoDevice;
-    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn init() {

@@ -30,7 +30,6 @@ pub mod tho_tensor;
 pub mod transforms;
 pub mod ws;
 pub mod torch_runner;
-pub mod tch_test_utils;
 pub mod runner;
 pub mod audio;
 pub mod nodes;

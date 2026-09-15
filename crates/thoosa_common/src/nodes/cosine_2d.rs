@@ -247,15 +247,14 @@ impl MyCosineConv2d {
                     let patches = Self::ensure_motif_patches_4d(patches)?; // [N,1,KH,KW]
                     let psz = patches.size();
 
-                    // if psz[2] != kh || psz[3] != kw {
-                    //     return Err(ThoError::new(format!("init patches must have spatial size [{kh},{kw}], got {psz:?}")));
-                    // }
+                    if psz[2] != kh || psz[3] != kw {
+                        return Err(ThoError::new(format!("init patches must have spatial size [{kh},{kw}], got {psz:?}")));
+                    }
                     let kh_freq = psz[2];//frequencies
                     let kw_time = psz[3];//time
                     debug!("MyCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
 
-                    // Simple mean prototype. You can replace this with your
-                    // existing Mean / Median / TrimmedMean / CenteredL2NormalizedMean logic.
+                    // TODO add  / Median / TrimmedMean / CenteredL2NormalizedMean.
                     let proto = patches.f_mean_dim(&[0i64][..], false, Kind::Float)?;
                     // proto: [1,KH,KW]
 

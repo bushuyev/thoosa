@@ -138,14 +138,12 @@ where
     ) -> Result<Self, ThoError> {
         debug!("TrainFinalNet::new: train_label_nets_run_config_ids={train_label_nets_run_config_ids:?}");
 
-
         Ok(Self {
             train_label_nets_run_config_ids,
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
             label_loader,
             num_label_nets,
-            // label_net_run_config_ids,
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             opt_config,

@@ -39,6 +39,14 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId
 use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use crate::dims::{LabelProbability, MotifProbability};
+use crate::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
+use crate::stages::apply_motif_nets::ApplyMotifNets;
+use crate::stages::cross_loader::ResourcesConfigInput;
+use crate::stages::stage_ids::RAW_TENSOR_LOADER;
+use crate::stages::stft::SyncStftSelector;
+use crate::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
+use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use crate::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsBuilder, LabelNetTypeArgsFields, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, TrainLabelNetRunConfigResultParams, conv_label_node, lin_label_node, self_attention_label_node};
 use clap::Args;
 use rand::rng;
@@ -46,7 +54,6 @@ use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_s
 use thoosa_common::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use crate::dims::{LabelProbability, MotifProbability};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
@@ -58,13 +65,6 @@ use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::utils::{ListenerResponse, TrainListener, mix_x_binary_with_labels, pad_stack_with_mask};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use crate::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use crate::stages::apply_motif_nets::ApplyMotifNets;
-use crate::stages::cross_loader::ResourcesConfigInput;
-use crate::stages::stage_ids::RAW_TENSOR_LOADER;
-use crate::stages::stft::SyncStftSelector;
-use crate::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
-use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -1095,7 +1095,15 @@ pub fn train_label_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 
 #[cfg(test)]
 mod tests {
+    use crate::dims::{LabelProbability, MotifProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
+    use crate::stages::apply_motif_nets::{ApplyMotifNets, motif_test_net_};
+    use crate::stages::cross_loader::ResourcesConfigInput;
+    use crate::stages::stft::SyncStftSelector;
+    use crate::stages::tensor_loader::mock_tensor_loader;
+    use crate::stages::train_label_nets::{ResourcesBatch, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsOutput, new_train_label_nets};
+    use crate::tch_test_utils::motifs_tensor;
+    use crate::tch_test_utils::resource_tensor;
     use crate::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsFields, LabelNetTypeParams, LinNetArgs, LinNetArgsFields, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
     use futures::FutureExt;
     use futures_util::StreamExt;
@@ -1116,26 +1124,18 @@ mod tests {
     use thoosa_common::batches::AsyncDataBatch;
     use thoosa_common::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, LinLenNetParams, OptConfig};
     use thoosa_common::data_with_extra::DataWithExtra;
-    use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::Batch;
-    use crate::dims::{LabelProbability, MotifProbability};
+    use thoosa_common::dims::ChannelsData;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-    use thoosa_common::tch_test_utils::motifs_tensor;
-    use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils;
     use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, reset_print_options};
     use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs, mock_ws_simp};
-    use crate::stages::apply_motif_nets::{ApplyMotifNets, motif_test_net_};
-    use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::stft::SyncStftSelector;
-    use crate::stages::tensor_loader::mock_tensor_loader;
-    use crate::stages::train_label_nets::{ResourcesBatch, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsOutput, new_train_label_nets};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
