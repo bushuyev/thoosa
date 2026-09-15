@@ -86,7 +86,6 @@ where
 {
     id: SynKey,
     apply_nets: Vec<ApplyNets<C, AMN>>,
-    batch_in_chunks: usize,
     pd: PhantomData<C>,
 }
 
@@ -100,7 +99,7 @@ where
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
-        batch_in_chunks: usize, run_stft: bool,
+        run_stft: bool,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + MaxParallelCtx + Adjustable + 'static,
@@ -113,7 +112,6 @@ where
             store,
             train_label_nets_run_config_ids,
             stage_ctx,
-            batch_in_chunks,
             move |stage_ctx, motif_nets| {
                 let ws = Arc::clone(&motif_ws);
                 let store = Arc::clone(&motif_store);
@@ -145,7 +143,6 @@ where
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
-        batch_in_chunks: usize,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + MaxParallelCtx + Adjustable + 'static,
@@ -158,7 +155,6 @@ where
             store,
             train_label_nets_run_config_ids,
             stage_ctx,
-            batch_in_chunks,
             move |stage_ctx, motif_nets| {
                 let ws = Arc::clone(&motif_ws);
                 let store = Arc::clone(&motif_store);
@@ -190,7 +186,6 @@ where
         store: &Arc<dyn MotifsStore>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx: R,
-        batch_in_chunks: usize,
         mut build_motif_nets: F,
     ) -> Result<Self, ThoError>
     where
@@ -236,7 +231,6 @@ where
                     label.clone(),
                     train_label_net_run_config_id,
                     label_net.net_path.clone(),
-                    batch_in_chunks,
                     false,
                 );
                 apply_nets.push(ApplyNets {
@@ -250,7 +244,6 @@ where
         Ok(Self {
             id: mono_key!(0, "todo").into(),
             apply_nets,
-            batch_in_chunks,
             pd: PhantomData,
         })
     }
@@ -742,13 +735,12 @@ pub struct ApplyLabelNetInit {
     label: String,
     train_label_net_run_config_id: RunConfigId,
     label_net_path:PathBuf,
-    batch_in_chunks: usize,
     quantize:bool
 }
 
 impl ApplyLabelNetInit {
-    pub fn new(trained_net_id: u32, label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, batch_in_chunks: usize, quantize:bool) -> Self {
-        Self { trained_net_id, label, train_label_net_run_config_id, label_net_path, batch_in_chunks, quantize }
+    pub fn new(trained_net_id: u32, label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, quantize:bool) -> Self {
+        Self { trained_net_id, label, train_label_net_run_config_id, label_net_path, quantize }
     }
 }
 
@@ -783,7 +775,6 @@ where
                 self.label,
                 self.train_label_net_run_config_id,
                 net,
-                self.batch_in_chunks,
             ).await?))))
         }
     }
@@ -801,7 +792,6 @@ where
     // Inference state is acquired once per sync run instead of being copied in every input.
     net: tokio::sync::Mutex<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
     pd: PhantomData<C>,
-    batch_in_chunks: usize
 }
 
 // Loading a trained label net repeatedly must reuse both its module state and installed endpoint.
@@ -843,14 +833,12 @@ where
         label: String,
         train_label_net_run_config_id: RunConfigId,
         net: ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
-        batch_in_chunks: usize,
     ) -> Result<Self, ThoError> {
         Ok(Self {
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
             train_label_net_run_config_id,
             net: tokio::sync::Mutex::new(net),
-            batch_in_chunks,
             pd: PhantomData,
         })
     }
@@ -872,7 +860,6 @@ pub fn apply_label_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwL
            init.label,
            init.train_label_net_run_config_id,
            net.expect("net"),
-           init.batch_in_chunks
         ).await?;
 
         // The common stateful wrapper performs state preparation and converts worker outputs back to references.
@@ -1240,7 +1227,6 @@ mod tests {
         motif_width: u32,
         step: u32,
         channels: u32,
-        batch_chunks: usize,
     ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
         GlobalCtx::init_devices(1)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -1353,7 +1339,6 @@ mod tests {
             labels.iter().map(|label| label.train_run_config_id).collect(),
             mock_run_ctx::default(0),
             step,
-            batch_chunks,
         ).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 
@@ -1389,7 +1374,7 @@ mod tests {
             // TestLabelNetSpec::new("B", 200, 20000, vec![20], vec![0.2, 0.2], 0.1),
         ];
 
-        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3, 1).await?;
+        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
         let expected = labels
             .iter()
             .map(|label| expected_label_value(label, &motifs, motif_width, step))
@@ -1402,48 +1387,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_apply_label_nets_orders_and_values_two_chunks() -> Result<(), ThoError> {
-        // set_max_level(Trace);
-        debug!("test_apply_label_nets_orders_and_values_two_chunks: logit(0.1)={}, logit(0.2)={}", logit(0.1)?, logit(0.2)?);
-        let motif_width = 4;
-        let step = 1;
-        let motifs = vec![
-            TestMotifNetSpec::new(10, 1000, 1, 0, logit(0.1)?, 0.1),
-            TestMotifNetSpec::new(20, 2000, 2, 0, logit(0.2)?, 0.2),
-            // TestMotifNetSpec::new(30, 3000, 3, 0, 2.0, 0.2),
-        ];
-        let labels = vec![
-            TestLabelNetSpec::new("A", 100, 10000, vec![10, 20/*, 30*/], vec![0.1, 0.1/*, 0.1*/], 0.1),
-            // TestLabelNetSpec::new("B", 200, 20000, vec![20], vec![0.2, 0.2], 0.1),
-        ];
-
-        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 1, 2).await?;
-        let expected = labels
-            .iter()
-            .map(|label| expected_label_value(label, &motifs, motif_width, step))
-            .collect::<Vec<_>>();
-
-        debug!("test_apply_label_nets_orders_and_values: values={values:?} expected={expected:?}");
-        /*
-        motif probabilities are split in padded chunks of equal size:
-        [
-          [//chunk 0 - sum  (label net) 0.12
-               [0.1000, 0.1000, 0.1000, 0.1000, 0.0000],
-               [0.2000, 0.2000, 0.2000, 0.2000, 0.0000]
-          ],
-
-          [//chunk 1 - sum 0.15
-              [0.1000, 0.1000, 0.1000, 0.1000, 0.1000],
-              [0.2000, 0.2000, 0.2000, 0.2000, 0.2000]
-          ]
-        ]
-       */
-        assert_eq!(vec![1, 2], size);
-        assert_values_close(&[values[0] + values[1]], &expected);
-
-        Ok(())
-    }
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1459,7 +1402,7 @@ mod tests {
             TestLabelNetSpec::new("A", 100, 2000, vec![10, 20, 30], vec![1.0, 10.0, 100.0], 0.1),
         ];
 
-        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3, 1).await?;
+        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
         let expected = vec![expected_label_value(&labels[0], &motifs, motif_width, step)];
 
         assert_eq!(vec![1, 1], size);
@@ -1484,7 +1427,7 @@ mod tests {
             TestLabelNetSpec::new("C", 300, 4000, vec![30], vec![4.0], 0.4),
         ];
 
-        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3, 1).await?;
+        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
         let expected = labels
             .iter()
             .map(|label| expected_label_value(label, &motifs, motif_width, step))
