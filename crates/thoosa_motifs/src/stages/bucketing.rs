@@ -1365,7 +1365,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
     use thoosa_shared::run_configs::{RunConfig, RunConfigId};
-    use thoosa_shared::test_utils::{TestSignalKind, gen_motif};
+    use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key};
@@ -1871,7 +1871,7 @@ mod tests {
 
         }
 
-        let all_motifs = [TestSignalKind::ChirpUp, TestSignalKind::ChirpDown, TestSignalKind::Trill, TestSignalKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(TestSignalKind, Tensor)>>();
+        let all_motifs = [TestSignalKind::ChirpUp, TestSignalKind::ChirpDown, TestSignalKind::Trill, TestSignalKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_signal(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(TestSignalKind, Tensor)>>();
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {

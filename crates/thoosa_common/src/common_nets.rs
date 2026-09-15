@@ -531,13 +531,13 @@ impl SelfAttentionNetParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinLenNetParams {
-    pub motif_layers: u32,
+    pub layers: u32,
     pub features: u32,
 }
 
 impl LinLenNetParams {
-    pub fn new(features: u32, motif_layers: u32) -> Self {
-        Self { motif_layers, features }
+    pub fn new(features: u32, layers: u32) -> Self {
+        Self { layers, features }
     }
 }
 

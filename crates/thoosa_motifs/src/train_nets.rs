@@ -964,7 +964,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         // )?
         .adaptive_avg_pool(lin_params.features,lin_params.features )?;
 
-        for layer in 0..lin_params.motif_layers {
+        for layer in 0..lin_params.layers {
             builder = builder.linear_feats(
                 "lin_label_node",
                 lin_params.features,

@@ -2,7 +2,7 @@ use tch::Tensor;
 use rand::{Rng, RngExt, SeedableRng};
 use rand::prelude::{SliceRandom, StdRng};
 use log::debug;
-use thoosa_shared::test_utils::{gen_motif, TestSignalKind};
+use thoosa_shared::test_utils::{gen_signal, TestSignalKind};
 use thoosa_shared::ThoError;
 use crate::utils::to_vec_f32;
 
@@ -75,7 +75,7 @@ pub fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: Test
             todo!()
         }
     };
-    for (v, motif_v) in motif.iter_mut().take(end).skip(start).zip(gen_motif(end-start, &motif_kind)) {
+    for (v, motif_v) in motif.iter_mut().take(end).skip(start).zip(gen_signal(end-start, &motif_kind)) {
         *v = motif_v;
     }
     let slices = (0..num_slices)
@@ -124,10 +124,10 @@ pub fn generate_series_with_motif(
     }
 
     let motif_0 =  generate_motifs_with_avg_distance(
-        gen_motif(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None, 10.0f32
+        gen_signal(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None, 10.0f32
     );
     // motif template (z-normalized)
-    let mut motif: Vec<f32> = gen_motif(motif_len, motif_kind);
+    let mut motif: Vec<f32> = gen_signal(motif_len, motif_kind);
 
     let m = motif.iter().sum::<f32>() / motif.len() as f32;
     let s = (motif.iter().map(|v| (v - m).powi(2)).sum::<f32>() / motif.len() as f32).sqrt().max(1e-6);
@@ -343,7 +343,7 @@ pub fn resource_tensor(
 ) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
     use rand::rngs::StdRng;
     use log::debug;
-    use thoosa_shared::test_utils::gen_motif;
+    use thoosa_shared::test_utils::gen_signal;
     const STEP_SIGMA: f32 = 0.4;
 
     fn normal_step(rng: &mut StdRng, sigma: f32) -> f32 {
@@ -407,7 +407,7 @@ pub fn resource_tensor(
                 Vec::new()
             } else {
                 generate_motifs_with_avg_distance(
-                    gen_motif(*motif_len, kind).as_slice(), //height 10
+                    gen_signal(*motif_len, kind).as_slice(), //height 10
                     (*repeats).max(2),
                     0.1,
                     0.11, //should be lower than in motif where it's 0.2-0.3, TODO move to params
@@ -556,7 +556,7 @@ pub fn resource_tensor_two_easy_motifs(
 
     // --- build two scaled templates (same length) ---
     let t0 = {
-        let base = gen_motif(motif_len, &kind0);
+        let base = gen_signal(motif_len, &kind0);
         let mut v = zero_mean_unit_l2(base);
         for x in &mut v {
             *x *= motif_amp;
@@ -564,7 +564,7 @@ pub fn resource_tensor_two_easy_motifs(
         v
     };
     let t1 = {
-        let base = gen_motif(motif_len, &kind1);
+        let base = gen_signal(motif_len, &kind1);
         let mut v = zero_mean_unit_l2(base);
         for x in &mut v {
             *x *= motif_amp;
@@ -679,7 +679,7 @@ pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: TestSignalK
 
     let t = Tensor::stack(
         generate_motifs_with_avg_distance(
-            gen_motif(motif_len, &motif_kind).as_slice(), num_slices, d0, d1, None, 10.0
+            gen_signal(motif_len, &motif_kind).as_slice(), num_slices, d0, d1, None, 10.0
         ).0.into_iter().map(|motif| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>().as_slice(), 0
     );
 

@@ -1606,7 +1606,7 @@ pub mod tests {
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::test_utils::{TestSignalKind, gen_motif};
+    use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, Named, RunCtx, SimpleId};
