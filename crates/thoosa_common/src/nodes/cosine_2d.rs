@@ -244,7 +244,7 @@ impl MyCosineConv2d {
 
                 Some(patches) => {
                     let patches = patches.tensor_ref();
-                    let patches = Self::ensure_motif_patches_4d(patches)?; // [N,1,KH,KW]
+                    let patches = Self::ensure_patches_4d(patches)?; // [N,1,KH,KW]
                     let psz = patches.size();
 
                     if psz[2] != kh || psz[3] != kw {
@@ -316,7 +316,7 @@ impl MyCosineConv2d {
     }
 
     /// Accept [N,KH,KW] or [N,1,KH,KW].
-    fn ensure_motif_patches_4d(x: &Tensor) -> Result<Tensor, ThoError> {
+    fn ensure_patches_4d(x: &Tensor) -> Result<Tensor, ThoError> {
         match x.size().as_slice() {
             [n, h, w] => Ok(x.f_view([*n, 1, *h, *w])?),
             [_, 1, _, _] => Ok(x.shallow_clone()),
