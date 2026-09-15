@@ -901,8 +901,8 @@ mod tests {
     use tracing::Instrument;
 
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_device_reset() -> Result<(), ThoError>{
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn heavy_device_reset() -> Result<(), ThoError>{//it's not heavy, but it does real device reset
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -921,18 +921,18 @@ mod tests {
             let t_0 = t_0.borrow_to(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
             Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
-        debug!("sum_0={sum_0}");
+        debug!("test_device_reset: sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
 
 
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         cuda_actor.reset().await?;
-        debug!("reset done");
+        debug!("test_device_reset: reset done");
 
         let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
         let t_cuda = cuda_actor.copy(t_cpu.into(), 1.into()).await?;
-        debug!("t_cuda={t_cuda:?}");
+        debug!("test_device_reset: t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = {
@@ -940,7 +940,7 @@ mod tests {
             Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
 
-        debug!("sum_1={sum_1}");
+        debug!("test_device_reset: sum_1={sum_1}");
 
         assert_eq!(sum_0, sum_1);
 

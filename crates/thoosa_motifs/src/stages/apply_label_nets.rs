@@ -1,10 +1,12 @@
+use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
+use crate::motif_tho_tensor::MotifThoTensor;
 use crate::motifs_store::MotifsStore;
 use crate::train_nets::{LabelNetParams, MotifNetParams};
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -19,11 +21,8 @@ use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::common_nets::ThoModuleWithStore;
-use thoosa_common::cuda_utils::split_padded_motif_scores;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{Batch, Slice};
-use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
-use crate::motif_tho_tensor::MotifThoTensor;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
@@ -45,6 +44,11 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedSt
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
+use crate::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
+use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
+use crate::stages::instance_cache::InstanceCache;
+use crate::stages::load_motif_net::MotifNetMeta;
+use crate::stages::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
@@ -52,11 +56,6 @@ use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use crate::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
-use crate::stages::instance_cache::InstanceCache;
-use crate::stages::load_motif_net::MotifNetMeta;
-use crate::stages::stft::SyncStftSelector;
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -225,7 +224,7 @@ where
 
                 if motif_net_run_config_ids.is_empty() {
                     warn!("no motifs for train_label_net_run_config_id={train_label_net_run_config_id}");
-                    continue//TODO, change to assert, just for tests
+                    continue//TODO, change to assert?
                 }
 
                 let motif_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids), None, None)).await?;
@@ -321,7 +320,7 @@ where
                         }?;
                     }
 
-                    //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
+                    //First apply motif nets to the raw input to produce motif probabilities used by label nets.
                     let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = apply_motif_nets
                         .run(input, ctx.branch(false))
                         .await?;
@@ -336,7 +335,7 @@ where
                         }?;
                     }
 
-                    //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
+                    //Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
                     let result = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?.into_inner();
@@ -924,12 +923,17 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
     fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data().t_ref());
+        debug!("ApplyLabelNet::do_run_with_state: id={:?} input={:?}", self.id, input);
         let out_id = self.out_id(input.id());
         let input = input.input.as_ref();
-        let batch_input_parts = split_padded_motif_scores(input.data().t_ref(), input.extra(), self.batch_in_chunks as i64, 0.0)?;
-        let batch_input = Tensor::f_stack(batch_input_parts.0.as_slice(), 1)?.f_transpose(0, 1)?;
-        let batch_input: ThoTensor<ChannelsMotifsData, SimpleId> = batch_input.into();
-        let mut lengths = BatchLengths::new(batch_input_parts.1.iter().map(|value| value[0]).collect());
+        let num_motifs = input.data().size()[0] as usize;
+        let batch_input: ThoTensor<ChannelsMotifsData, SimpleId> = input.data().t_ref().unsqueeze(0).into();//TODO unsqueeze is for dummy batch dimension, batching should be done in ApplyLabelNets
+
+        // Label nets receive one length per chunk, so use the longest motif row to keep every real score while shorter rows remain zero-padded.
+        let mut lengths = BatchLengths::new(vec![*input.extra.as_ref().iter().max().unwrap_or(&0)]);//there is always single element until batching is implemented
+
+        debug!("ApplyLabelNet::do_run_with_state: id={:?} batch_input={batch_input:?} lengths={lengths:?} ", self.id);
+
         let out = net.tho_forward(&batch_input, Some(&mut lengths), false)?;
 
         debug!("ApplyLabelNet::do_run_with_state: id={:?} out={}", self.id, out.t_ref());
@@ -962,7 +966,12 @@ pub fn logit(x: f64) -> Result<f64, ThoError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use crate::motifs_store::MockMotifsStoreBuilder;
+    use crate::stages::apply_label_nets::{ApplyLabelNet, ApplyLabelNetInput, ApplyLabelNets, logit, sigmoid};
+    use crate::stages::apply_motif_nets::ApplyMotifNets;
+    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::stages::stft::SyncStftSelector;
     use crate::train_nets::{LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use log::LevelFilter::{Trace, Warn};
     use log::{debug, set_max_level, trace};
@@ -977,23 +986,18 @@ mod tests {
     use thoosa_common::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::{Batch, Slice};
-    use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::data_with_extra::DataWithExtra;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef, ThoDataRef};
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{assert_close, to_vec_f32};
-    use crate::stages::apply_label_nets::{ApplyLabelNets, logit, sigmoid};
-    use crate::stages::apply_motif_nets::ApplyMotifNets;
-    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::stft::SyncStftSelector;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::traits::AsyncStage;
-    use thoosa_shared::traits::RunCtx;
+    use thoosa_shared::traits::{AsyncStage, RunCtx, StageWithState};
     use thoosa_shared::{ThoError, mono_key};
     use thoosa_store::{RunConfigRow, TrainedNet};
 
@@ -1228,6 +1232,7 @@ mod tests {
         values.sort_by(|a, b| a.partial_cmp(b).expect("test values must be comparable"));
         values
     }
+
 
     async fn run_apply_label_case(
         labels: &[TestLabelNetSpec],

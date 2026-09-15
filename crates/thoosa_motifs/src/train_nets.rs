@@ -1,6 +1,7 @@
 #![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
 
+use clap::clap_derive::Args;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::builder::{Node, SeqBuilder};
 use thoosa_common::my_tch::{BinaryHeadPool, InitMode, ThoModule};
@@ -9,7 +10,6 @@ use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use thoosa_common::utils::{ListenerResponse, TrainListener, plot_series};
 use thoosa_common::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
 use thoosa_common::ws::Workspace;
-use clap::clap_derive::Args;
 use thoosa_shared::{CopyToDevice, mono_key, panic_to_err, panic_to_err_async};
 
 use log::{debug, error, info, trace, warn};
@@ -35,19 +35,19 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 use torch_sys::at_grad_set_enabled;
 
+use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Spectorgram};
 use thoosa_common::common_nets;
 use thoosa_common::common_nets::{BinaryHeadPoolArgs, BinaryHeadPoolArgsBuilder, BinaryHeadPoolArgsFields, BinaryHeadPoolArgsRangeOrValue,
-                         CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue,
-                         StftRunConfig, StftRunConfigBuilder, StftRunConfigFields, StftRunConfigRangeOrValue,
-                         WithCommonTrainingRunConfig,
-                         ConvNetArgs, ConvNetArgsBuilder, ConvNetArgsFields, ConvNetArgsRangeOrValue,
-                         ConvNetJoint, ConvNetParams, LinLenNetParams, OptConfig,
-                         SelfAttentionNetArgs, SelfAttentionNetArgsBuilder, SelfAttentionNetArgsFields, SelfAttentionNetArgsRangeOrValue,
-                         SelfAttentionNetParams,
+                                 CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue,
+                                 ConvNetArgs, ConvNetArgsBuilder, ConvNetArgsFields, ConvNetArgsRangeOrValue,
+                                 ConvNetJoint, ConvNetParams, LinLenNetParams, OptConfig,
+                                 SelfAttentionNetArgs, SelfAttentionNetArgsBuilder, SelfAttentionNetArgsFields, SelfAttentionNetArgsRangeOrValue,
+                                 SelfAttentionNetParams,
+                                 StftRunConfig, StftRunConfigBuilder, StftRunConfigFields, StftRunConfigRangeOrValue,
+                                 WithCommonTrainingRunConfig,
 };
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{Batch, Dims, Slice};
-use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Spectorgram};
 use thoosa_common::my_tch::InitModeBuilder;
 use thoosa_common::my_tch::InitModeFields;
 use thoosa_common::my_tch::InitModeRangeOrValue;
@@ -945,7 +945,6 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     debug!("lin_label_node: params={params:?}");
 
     let LabelNetTypeParams::LinNetParams(lin_params) = &params.net_type else {
-        // return Err(ThoError::new(format!("Unexpected params type: {cnn_params:?}")));
         panic!("Unexpected params type: {:?}", params.net_type);
     };
 
@@ -964,7 +963,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         // )?
         .adaptive_avg_pool(lin_params.features,lin_params.features )?;
 
-        for layer in 0..lin_params.motif_layers {
+        for layer in 0..lin_params.layers {
             builder = builder.linear_feats(
                 "lin_label_node",
                 lin_params.features,
@@ -1323,25 +1322,12 @@ pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
 mod train_tests {
-    use thoosa_common::batches::BatchLengths;
-    use thoosa_common::builder::{Node, SeqBuilder};
-    use thoosa_common::dims::{AnyDims, Batch, Dims, Slice, ThoBatch};
-    use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
-    use thoosa_common::my_tch::{InitDummy, InitMode, ThoModule};
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::common_nets::ConvNetArgsFields::Joint;
     use super::{CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, MotifCosine2dNetParams, MotifCosineNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use super::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams,
     };
-    use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
-    use thoosa_common::utils::{debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, stretch, vs_mem_size, TrainListener};
-    use thoosa_common::utils::{
-        lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
-    };
-    use thoosa_common::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace};
-    use thoosa_common::ws::{WsConfigs, mock_ws_simp};
-    use super::{common_nets};
+    use super::common_nets;
+    use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use async_trait::async_trait;
     use futures::executor::block_on;
     use futures_util::FutureExt;
@@ -1353,6 +1339,7 @@ mod train_tests {
     use rand::prelude::SliceRandom;
     use rand::{Rng, RngExt, SeedableRng, random_range};
     use rayon::iter::IntoParallelRefMutIterator;
+    use std::cmp::max;
     use std::collections::HashMap;
     use std::ops::{Deref, RangeInclusive};
     use std::path::{Path, PathBuf};
@@ -1360,13 +1347,25 @@ mod train_tests {
     use std::rc::Rc;
     use std::sync::Arc;
     use std::{fs, mem};
-    use std::cmp::max;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Float, Half};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::nn::{AdamW, LinearConfig, Module, OptimizerConfig, VarStore, init};
     use tch::{Device, Tensor, nn};
     use tch::{IndexOp, Kind, Reduction};
+    use thoosa_common::batches::BatchLengths;
+    use thoosa_common::builder::{Node, SeqBuilder};
+    use thoosa_common::common_nets::ConvNetArgsFields::Joint;
+    use thoosa_common::dims::{AnyDims, Batch, Dims, Slice, ThoBatch};
+    use thoosa_common::my_tch::{InitDummy, InitMode, ThoModule};
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::transforms::filters::BandPassFilterParamsRangeOrValue;
+    use thoosa_common::utils::{TrainListener, debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, stretch, vs_mem_size};
+    use thoosa_common::utils::{
+        lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
+    };
+    use thoosa_common::ws::{FsWorkspace, NET_WEIGHTS_FILE, Workspace};
+    use thoosa_common::ws::{WsConfigs, mock_ws_simp};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
@@ -1380,12 +1379,12 @@ mod train_tests {
     use torch_sys::at_autocast_clear_cache;
 
 
-    use thoosa_common::common_nets::{CommonTrainingRunConfig, ConvNetArgs, ConvNetJoint, ConvNetParams, LinLenNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, ThoModuleWithStore};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::tch_test_utils::motifs_tensor;
     use super::LabelNetTypeParams::LinNetParams;
+    use crate::tch_test_utils::motifs_tensor;
     use rand::rngs::StdRng;
     use rand_distr::{Distribution, Normal};
+    use thoosa_common::common_nets::{CommonTrainingRunConfig, ConvNetArgs, ConvNetJoint, ConvNetParams, LinLenNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, ThoModuleWithStore};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::utils;
     use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shims::inference_mode::InferenceModeGuard;

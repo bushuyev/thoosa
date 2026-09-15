@@ -1156,7 +1156,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_shared::audio_utils::compose_freqs;
-    use thoosa_shared::test_utils::{gen_motif, TestSignalKind};
+    use thoosa_shared::test_utils::{gen_signal, TestSignalKind};
     use thoosa_shared::{sin_v_f, ThoError};
     use crate::audio::{assign_lsh_buckets_per_channel, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes, make_lsh_planes_for_buckets, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation};
     use crate::debug_plot;

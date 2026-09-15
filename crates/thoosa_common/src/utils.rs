@@ -40,28 +40,27 @@ use thoosa_properties_map::FromHashmap;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
-// Keep the helper generic so callers retain specialized store trait objects across this common boundary.
 pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId) -> Result<FH, ThoError>
 where
     FH: FromHashmap + RunConfig + Debug,
     S: Store + ?Sized,
 {
-    let real_find_motifs_run_config_id = if track_await(store.run_config_descr(run_config_id)).await?.r#type == "FindMotifsRunConfig" {
+    let real_run_config_id = if track_await(store.run_config_descr(run_config_id)).await?.r#type == "FindMotifsRunConfig" {
         run_config_id
     } else {
-        let find_motifs_run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some("FindMotifsRunConfig"))).await?;
-        *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={run_config_id}")))?
+        let run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some("FindMotifsRunConfig"))).await?;
+        *run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={run_config_id}")))?
     };
 
 
-    let map = track_await(store.list_run_config_values(real_find_motifs_run_config_id)).await?;
-    let mut find_motifs_run_config = FH::from_properties_map(None, &map)?;
+    let map = track_await(store.list_run_config_values(real_run_config_id)).await?;
+    let mut run_config = FH::from_properties_map(None, &map)?;
 
-    debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
+    debug!("load_run_config: run_config={run_config:?}");
 
-    find_motifs_run_config.set_id(real_find_motifs_run_config_id);
+    run_config.set_id(real_run_config_id);
 
-    Ok(find_motifs_run_config)
+    Ok(run_config)
 }
 
 #[macro_export]
@@ -1822,6 +1821,197 @@ pub fn parse_run_config_ids(s: &str) -> Result<u32, String> {
 }
 
 
+/// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
+/// Shape: [1, width]
+pub fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
+    let two_pi = std::f64::consts::TAU; // 2π
+    let k = Tensor::arange(width, (Kind::Float, Device::Cpu)); // [width]
+    let phi = k * (two_pi) * (periods as f64) / (width as f64);
+
+    // x = sin(phi) + 0.35 sin(3phi) + 0.15 sin(7phi)
+    let x = phi.sin()
+        + (&phi * 3.0).sin() * 0.35
+        + (&phi * 7.0).sin() * 0.15;
+
+    x.view([1, width])
+}
+
+
+
+
+#[derive(Debug, Clone)]
+pub struct TensorDigest {
+    pub hex: String,
+    pub shape: Vec<i64>,
+    pub stride: Vec<i64>,
+    pub kind: Kind,
+    pub device: Device,
+    pub requires_grad: bool,
+}
+
+/// Compute a debugging digest for a tensor.
+///
+/// The digest includes:
+/// - shape
+/// - stride
+/// - kind
+/// - device
+/// - requires_grad
+/// - tensor contents
+///
+/// Notes:
+/// - This is intended for debugging, not performance-sensitive code.
+/// - For best reproducibility, values are copied to CPU and made contiguous first.
+/// - Half/BFloat16 are converted to Float before hashing because extracting raw
+///   f16/bf16 bytes ergonomically in `tch` is awkward. If you need bit-exact
+///   distinction between Float16/BFloat16 payloads, that can be added separately.
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="tensor_digest"))]
+pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
+    let shape = t.size();
+    let stride = t.stride();
+    let kind = t.kind();
+    let device = t.device();
+    let requires_grad = t.requires_grad();
+
+    let mut hasher = Sha256::new();
+
+    // Hash metadata first.
+    hasher.update(b"shape");
+    for x in &shape {
+        hasher.update(x.to_le_bytes());
+    }
+
+    hasher.update(b"stride");
+    for x in &stride {
+        hasher.update(x.to_le_bytes());
+    }
+
+    hasher.update(b"kind");
+    hasher.update(format!("{kind:?}").as_bytes());
+
+    hasher.update(b"device");
+    hasher.update(format!("{device:?}").as_bytes());
+
+    hasher.update(b"requires_grad");
+    hasher.update([requires_grad as u8]);
+
+    // Normalize layout for stable content hashing.
+    let cpu = t.f_to_device(Device::Cpu)?.f_contiguous()?;
+
+    match kind {
+        Kind::Uint8 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
+            hasher.update(&v);
+        }
+        Kind::Int8 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i8> = Vec::<i8>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int16 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i16> = Vec::<i16>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i32> = Vec::<i32>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int64 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i64> = Vec::<i64>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Bool => {
+            let flat = cpu.f_to_kind(Kind::Uint8)?.f_view([-1])?;
+            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
+            hasher.update(&v);
+        }
+        Kind::Float => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        Kind::Double => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<f64> = Vec::<f64>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        Kind::Half | Kind::BFloat16 => {
+            // Preserves values well enough for debugging, but not the exact 16-bit payload.
+            let flat = cpu.f_to_kind(Kind::Float)?.f_view([-1])?;
+            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
+            hasher.update(format!("{kind:?}").as_bytes()); // keep original dtype distinct
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        other => {
+            return Err(tch::TchError::Torch(format!(
+                "tensor_digest: unsupported kind: {other:?}"
+            )));
+        }
+    }
+
+    let bytes = hasher.finalize();
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{:02x}", b).unwrap();
+    }
+
+    Ok(TensorDigest {
+        hex,
+        shape,
+        stride,
+        kind,
+        device,
+        requires_grad,
+    })
+}
+
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores/copy_chunk"))]
+fn copy_chunk(scores: &Tensor, chunks: &mut Vec<Tensor>, m: i64, chunk_idx: i64, start: i64, len: i64) -> Result<(), ThoError> {
+    {
+        // src shape: [1, len]
+        let src = scores
+            .f_narrow(0, m, 1)?
+            .f_narrow(1, start, len)?;
+
+        // dst shape: [1, len], points into the output chunk.
+        let mut dst = chunks[chunk_idx as usize]
+            .f_narrow(0, m, 1)?
+            .f_narrow(1, 0, len)?;
+
+        dst.f_copy_(&src)?;
+    };
+    Ok(())
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    if a == 0 {
+        0
+    } else {
+        (a + b - 1) / b
+    }
+}
+
+
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
@@ -2957,167 +3147,5 @@ pub mod tests {
         Ok(())
     }
 
-}
 
-/// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
-/// Shape: [1, width]
-pub fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
-    let two_pi = std::f64::consts::TAU; // 2π
-    let k = Tensor::arange(width, (Kind::Float, Device::Cpu)); // [width]
-    let phi = k * (two_pi) * (periods as f64) / (width as f64);
-
-    // x = sin(phi) + 0.35 sin(3phi) + 0.15 sin(7phi)
-    let x = phi.sin()
-        + (&phi * 3.0).sin() * 0.35
-        + (&phi * 7.0).sin() * 0.15;
-
-    x.view([1, width])
-}
-
-
-
-
-#[derive(Debug, Clone)]
-pub struct TensorDigest {
-    pub hex: String,
-    pub shape: Vec<i64>,
-    pub stride: Vec<i64>,
-    pub kind: Kind,
-    pub device: Device,
-    pub requires_grad: bool,
-}
-
-/// Compute a debugging digest for a tensor.
-///
-/// The digest includes:
-/// - shape
-/// - stride
-/// - kind
-/// - device
-/// - requires_grad
-/// - tensor contents
-///
-/// Notes:
-/// - This is intended for debugging, not performance-sensitive code.
-/// - For best reproducibility, values are copied to CPU and made contiguous first.
-/// - Half/BFloat16 are converted to Float before hashing because extracting raw
-///   f16/bf16 bytes ergonomically in `tch` is awkward. If you need bit-exact
-///   distinction between Float16/BFloat16 payloads, that can be added separately.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="tensor_digest"))]
-pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
-    let shape = t.size();
-    let stride = t.stride();
-    let kind = t.kind();
-    let device = t.device();
-    let requires_grad = t.requires_grad();
-
-    let mut hasher = Sha256::new();
-
-    // Hash metadata first.
-    hasher.update(b"shape");
-    for x in &shape {
-        hasher.update(x.to_le_bytes());
-    }
-
-    hasher.update(b"stride");
-    for x in &stride {
-        hasher.update(x.to_le_bytes());
-    }
-
-    hasher.update(b"kind");
-    hasher.update(format!("{kind:?}").as_bytes());
-
-    hasher.update(b"device");
-    hasher.update(format!("{device:?}").as_bytes());
-
-    hasher.update(b"requires_grad");
-    hasher.update([requires_grad as u8]);
-
-    // Normalize layout for stable content hashing.
-    let cpu = t.f_to_device(Device::Cpu)?.f_contiguous()?;
-
-    match kind {
-        Kind::Uint8 => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
-            hasher.update(&v);
-        }
-        Kind::Int8 => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<i8> = Vec::<i8>::try_from(&flat)?;
-            for x in v {
-                hasher.update(x.to_le_bytes());
-            }
-        }
-        Kind::Int16 => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<i16> = Vec::<i16>::try_from(&flat)?;
-            for x in v {
-                hasher.update(x.to_le_bytes());
-            }
-        }
-        Kind::Int => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<i32> = Vec::<i32>::try_from(&flat)?;
-            for x in v {
-                hasher.update(x.to_le_bytes());
-            }
-        }
-        Kind::Int64 => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<i64> = Vec::<i64>::try_from(&flat)?;
-            for x in v {
-                hasher.update(x.to_le_bytes());
-            }
-        }
-        Kind::Bool => {
-            let flat = cpu.f_to_kind(Kind::Uint8)?.f_view([-1])?;
-            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
-            hasher.update(&v);
-        }
-        Kind::Float => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
-            for x in v {
-                hasher.update(x.to_bits().to_le_bytes());
-            }
-        }
-        Kind::Double => {
-            let flat = cpu.f_view([-1])?;
-            let v: Vec<f64> = Vec::<f64>::try_from(&flat)?;
-            for x in v {
-                hasher.update(x.to_bits().to_le_bytes());
-            }
-        }
-        Kind::Half | Kind::BFloat16 => {
-            // Preserves values well enough for debugging, but not the exact 16-bit payload.
-            let flat = cpu.f_to_kind(Kind::Float)?.f_view([-1])?;
-            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
-            hasher.update(format!("{kind:?}").as_bytes()); // keep original dtype distinct
-            for x in v {
-                hasher.update(x.to_bits().to_le_bytes());
-            }
-        }
-        other => {
-            return Err(tch::TchError::Torch(format!(
-                "tensor_digest: unsupported kind: {other:?}"
-            )));
-        }
-    }
-
-    let bytes = hasher.finalize();
-    let mut hex = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        use std::fmt::Write as _;
-        write!(&mut hex, "{:02x}", b).unwrap();
-    }
-
-    Ok(TensorDigest {
-        hex,
-        shape,
-        stride,
-        kind,
-        device,
-        requires_grad,
-    })
 }

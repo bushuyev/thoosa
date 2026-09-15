@@ -548,7 +548,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
         let ws_box = crate::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(2, 100, 100))?;
 
-        let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ motif_layers: 2, features: 10 }));
+        let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ layers: 2, features: 10 }));
         let mut vs = VarStore::new(Device::Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
