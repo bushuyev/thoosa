@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::{fmt, fs};
 
 use tch::Device::Cpu;
-use tch::nn::{ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore, init};
+use tch::nn::{init, BatchNormConfig, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore};
 use tch::{Device, Kind, TchError, Tensor, nn};
 use thoosa_shared::ThoError;
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -422,7 +422,6 @@ impl MotifNetParams {
         )
     }
 
-    //TODO
     pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_motifs/src/stages/apply_motif_nets.rs
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
@@ -432,7 +431,6 @@ impl MotifNetParams {
         }
     }
 
-    //TODO
     pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
         debug!("motif_net: motif {motif:?}");
         match &self.net_type {
@@ -442,7 +440,7 @@ impl MotifNetParams {
             MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(
                 v,
                 motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t()).unwrap()))
-            )}//TODO
+            )}
         }
     }
 }
@@ -460,7 +458,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
     let hidden_config = ConvConfig::default();
 
     let mut net = builder
-        // .batch_norm(BatchNormConfig::default())?
+        .batch_norm(BatchNormConfig::default(), None)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 let r = t.unsqueeze(1);
@@ -478,7 +476,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
         .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
     let mut net = builder
-        // .batch_norm(BatchNormConfig::default())?
+        .batch_norm(BatchNormConfig::default(), None)?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 let r = t.shallow_clone();
@@ -523,33 +521,23 @@ net.closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             let r = t.squeeze();
 
-            // let max = r.f_amax(-1, true)?;
-            // let min = r.f_mean_dim(-1, true, None)?;
-            //
-            // let r1 = Tensor::f_cat(&[max.shallow_clone(), min.shallow_clone()], 1)?;
-            //
+            let max = r.f_amax(-1, true)?;
+            let min = r.f_mean_dim(-1, true, None)?;
+
+            let r1 = Tensor::f_cat(&[max.shallow_clone(), min.shallow_clone()], 1)?;
+
             // debug!("conv_motif_node: 1. t.size={:?} r.size={:?} r1.size={:?} max.size={:?}, min.size={:?}", t.size(), r.size(), r1.size(), max.size(), min.size());
             debug!("conv_motif_node: 1. t.size={:?}  r.size={:?}", t.size(), r.size());
 
-            Ok(r) //r/max
+            Ok(r1) //r/max
         })),
         None,
     )?
-    // .linear_feats(
-    //     "motif_first_head",
-    //     2,1
-    // )?
-  // .closure(
-  //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-  //         let r = t.shallow_clone();
-  //
-  //         debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
-  //
-  //         Ok(r)
-  //     })),
-  //     None,
-  // )?
-    // .linear("motif_first_head")?
+    .linear_feats(
+        "motif_first_head",
+        2,1
+    )?
+
     .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
     for i in 0..params.head_layers as usize {

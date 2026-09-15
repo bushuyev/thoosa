@@ -227,7 +227,7 @@ impl MyCosineConv2d {
         vs: &Path,
         kh: i64,
         kw: i64,
-        init_patches: Option<Arc<dyn TensorInitRef>>, //Option<&Tensor>, // [N,KH,KW] or [N,1,KH,KW]
+        init_patches: Option<Arc<dyn TensorInitRef>>, // [N,KH,KW] or [N,1,KH,KW]
         a: f64,
         b: f64,
     ) -> Result<Self, ThoError> {
@@ -454,10 +454,10 @@ mod tests {
         let vs = VarStore::new(Cpu);
         let cosine_2d = MyCosineConv2d::new(
             &vs.root(),
-            0, 0,
+            8000, 4,
             Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::SimpleId>::new(simple_id!(""), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),
              1.0, 0.1,
-        )?;//MotifInitMode::Mean(InitDummy{}),
+        )?;
 
 
         let y = cosine_2d.forward(&Tensor::rand(&[batch, 1, frequencies, time], FLOAT_CPU))?;
