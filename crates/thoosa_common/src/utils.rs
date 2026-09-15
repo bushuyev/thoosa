@@ -40,16 +40,16 @@ use thoosa_properties_map::FromHashmap;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
-pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId) -> Result<FH, ThoError>
+pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId, run_config_type: &str) -> Result<FH, ThoError>
 where
     FH: FromHashmap + RunConfig + Debug,
     S: Store + ?Sized,
 {
-    let real_run_config_id = if track_await(store.run_config_descr(run_config_id)).await?.r#type == "FindMotifsRunConfig" {
+    let real_run_config_id = if track_await(store.run_config_descr(run_config_id)).await?.r#type == run_config_type {
         run_config_id
     } else {
-        let run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some("FindMotifsRunConfig"))).await?;
-        *run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={run_config_id}")))?
+        let run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some(run_config_type))).await?;
+        *run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no {run_config_type} input for find_motifs_run_config_id={run_config_id}")))?
     };
 
 
@@ -674,41 +674,6 @@ where
         .background_style(&WHITE.mix(0.8))
         .border_style(&BLACK)
         .draw()?;
-
-    // if let Some(lanes) = lanes {
-    //     for lane in lanes {
-    //         let motif_area = |x_0: i32, x_1: i32| {
-    //             return EmptyElement::at((x_0 as f32 * scale_x, 0.))
-    //                 + Rectangle::new(
-    //                 [
-    //                      (0, 0),
-    //                      (((x_1-x_0) as f32 * scale_x) as i32, w_h.1 as i32 )
-    //                  ],
-    //                 &BLUE)
-    //                 + Text::new(format!("({:.2},{:.2})", x_0, x_1), (5, 5), ("sans-serif", 15.0).into_font(),
-    //             );
-    //         };
-    //         chart.plotting_area().draw(&motif_area(lane.0, lane.1)).expect("Drawing Failure");
-    //     }
-    // }
-
-
-
-    // let motif_area = |x_0: i32, x_1: i32| {
-    //     return EmptyElement::at((1000., 0.))
-    //         + Rectangle::new(
-    //         [
-    //             (0, 0),
-    //             (1000, w_h.1 as i32 )
-    //         ],
-    //         &BLUE)
-    //         + Text::new(format!("({:.2},{:.2})", x_0, x_1), (5, 5), ("sans-serif", 15.0).into_font(),
-    //     );
-    // };
-    // chart.plotting_area().draw(&motif_area(1000, 2000)).expect("Drawing Failure");
-
-
-
 
     if let Some(points) = points {
         for point in points {
@@ -1983,34 +1948,6 @@ pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
         requires_grad,
     })
 }
-
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores/copy_chunk"))]
-fn copy_chunk(scores: &Tensor, chunks: &mut Vec<Tensor>, m: i64, chunk_idx: i64, start: i64, len: i64) -> Result<(), ThoError> {
-    {
-        // src shape: [1, len]
-        let src = scores
-            .f_narrow(0, m, 1)?
-            .f_narrow(1, start, len)?;
-
-        // dst shape: [1, len], points into the output chunk.
-        let mut dst = chunks[chunk_idx as usize]
-            .f_narrow(0, m, 1)?
-            .f_narrow(1, 0, len)?;
-
-        dst.f_copy_(&src)?;
-    };
-    Ok(())
-}
-
-fn ceil_div(a: i64, b: i64) -> i64 {
-    if a == 0 {
-        0
-    } else {
-        (a + b - 1) / b
-    }
-}
-
 
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]

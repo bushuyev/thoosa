@@ -365,7 +365,7 @@ pub struct CommonTrainingRunConfig {
 
     #[in_map]
     #[run_config]
-    pub batch_size: u32, //number of the motif slices in a batch
+    pub batch_size: u32, //number of the slices in a batch
 
     #[in_map]
     #[run_config]
@@ -737,7 +737,7 @@ where
 
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
-                ); //motif_id ?train_net
+                ); 
 
                 let train_result = panic_to_err_async!(
                     train_clone(

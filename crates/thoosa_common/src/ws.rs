@@ -403,7 +403,7 @@ fn _mock_simp(
     ws_mock
 }
 
-/// Builds a common workspace mock; model-specific expectations live in `MotifsWsMockBuilder`.
+/// Builds a common workspace mock;
 pub struct WsMockBuilder {
     mock: MockWorkspace,
 }

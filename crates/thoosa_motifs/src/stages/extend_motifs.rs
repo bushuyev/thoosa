@@ -42,7 +42,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
-use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
@@ -192,7 +192,7 @@ where
 
 
         for find_motifs_run_config_id in find_motifs_run_config_ids {
-            find_motifs_run_configs.push(Arc::new(track_await(load_run_config(store, *find_motifs_run_config_id)).await?));
+            find_motifs_run_configs.push(Arc::new(track_await(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?));
         }
         let find_motifs_run_configs_len = find_motifs_run_configs.len();
 

@@ -17,7 +17,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::group_slices;
-use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use thoosa_store::Store;
@@ -196,7 +196,7 @@ where
                     }
 
                     if !run_config_cache.contains_key(&find_motifs_run_config_id) {
-                        let run_config = track_await(load_run_config(&self.store, find_motifs_run_config_id)).await?;
+                        let run_config = track_await(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
                         run_config_cache.insert(find_motifs_run_config_id, run_config);
                     }
 

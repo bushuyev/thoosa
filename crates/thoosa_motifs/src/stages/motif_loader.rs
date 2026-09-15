@@ -38,7 +38,7 @@ use crate::stages::cross_dims::ChannelsDataVec;
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use crate::stages::tensor_loader::RawTensorLoader;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage, SyncStage};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, OutId, RunCtx, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
@@ -709,7 +709,7 @@ where
             .store
             .list_motif_slices(motif_id_value.0, select_motifs_run_config_id, Some(1000), None)).await?;
 
-        let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(&self.store, find_motifs_run_config_id)).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
         let real_find_motifs_run_config_id = find_motifs_run_config.id.unwrap_or(find_motifs_run_config_id);
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_config_id={real_find_motifs_run_config_id}");
@@ -858,11 +858,10 @@ where
     {
 
         let (motif_id, limit) = (input.motif_id.clone(), input.limit);
-
-
+        
         let (channel, find_motifs_run_config_id) = track_await(self.store.get_motif_meta(*motif_id)).await?;
 
-        let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(&self.store, find_motifs_run_config_id)).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
 
         debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_config_id={find_motifs_run_config_id}");
@@ -1595,7 +1594,7 @@ where
     let device_idx = ctx.tho_device_idx();
     debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} slices={slices:?} descr={descr}");
 
-    let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(&store, find_motifs_run_config_id)).await?;
+    let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(&store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
     let resource_ids_slices = slices
         .iter()
