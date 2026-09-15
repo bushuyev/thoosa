@@ -624,7 +624,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 
 #[cfg(test)]
 mod tests {
-    use crate::run_all::{AllConfigs, FindAndSelect, run_all};
+    use crate::run_all::{run_all, run_all_config_0, AllConfigs, FindAndSelect};
     use futures::executor::block_on;
     use futures::future::BoxFuture;
     use log::LevelFilter::Debug;
@@ -753,7 +753,15 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct PrepareRunAllData;
+    struct PrepareRunAllData {
+        label_makers: Vec<fn() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError>>
+    }
+
+    impl PrepareRunAllData {
+        pub fn new(label_makers: Vec<fn() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError>>) -> Self {
+            Self { label_makers }
+        }
+    }
 
     impl Adjustable for PrepareRunAllData {}
 
@@ -771,18 +779,15 @@ mod tests {
         fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             let mut import_hash = HashMap::new();
             for i in 0..input.resources_per_label {
-                let (t, _intervals) = tensor_0()?;
-                let stem = format!("t_0_{i}");
-                debug_plot!(&t, &stem)?;
-                t.save(input.tensors_path.join(format!("{stem}.pt")))?;
-                t.save(input.tensors_path.join(&stem))?;
-                import_hash.insert(stem, vec![("label_0".to_string(), 1.0)]);
 
-                let (t, _intervals) = tensor_1()?;
-                let stem = format!("t_1_{i}");
-                debug_plot!(&t, &stem)?;
-                t.save(input.tensors_path.join(format!("{stem}.pt")))?;
-                import_hash.insert(stem, vec![("label_1".to_string(), 1.0)]);
+                for (label_i, maker) in self.label_makers.iter().enumerate() {
+                    let (t, _intervals) = maker()?;
+                    let stem = format!("t_{label_i}_{i}");
+                    debug_plot!(&t, &stem)?;
+                    t.save(input.tensors_path.join(format!("{stem}.pt")))?;
+
+                    import_hash.insert(stem, vec![(format!("label_{label_i}"), 1.0)]);
+                }
             }
             Ok(PrepareRunAllDataOutput { id: self.out_id(input.id()), import_hash })
         }
@@ -880,10 +885,10 @@ mod tests {
 
             motifs_epochs : 30,
             labels_epochs : 50,
-            final_epochs : 100,
+            final_epochs : 50,
             train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
             train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
-            train_final_opt_config : Arc::new(OptConfig::new(100, 10)),
+            train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
             max_batch_size : 20,
         };
         // let settings = RunAllSettings {
@@ -907,7 +912,7 @@ mod tests {
             fs::remove_dir_all(&test_dir)?;
         }
 
-        debug!("heavy_test_run_all: test_dir={test_dir:?}");
+        info!("heavy_test_run_all: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
         let base_path = test_dir.to_string_lossy().to_string();
@@ -923,7 +928,11 @@ mod tests {
         let max_y = 30.0;
 
 
-        let prepare_stage = Arc::new(PrepareRunAllData);
+        let prepare_stage = Arc::new(PrepareRunAllData::new(vec![
+            tensor_0,
+            tensor_1,
+            tensor_2,
+        ]));
         let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), settings.resources_per_label));
         let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
         let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
@@ -942,7 +951,7 @@ mod tests {
         let imported_ids = import_resources(
             &ws,
             &store,
-            &["label_0", "label_1"],
+            &["label_0", "label_1", "label_2"],
             move || {
                 Ok(import_hash.clone())
             },
@@ -994,6 +1003,7 @@ mod tests {
         };
 
         let all_configs = run_all_config_test_1(&run_all_args, &settings);
+        // let all_configs = run_all_config_0(&run_all_args);
 
         let r = panic_to_err_async!({run_all(
             &ws,
@@ -1015,7 +1025,7 @@ mod tests {
     fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
 
         let r = resource_tensor_two_easy_motifs(
-            2000, //rng().random_range(1000..2000),
+            rng().random_range(1000..2000),
             1,
             100,
             2,
@@ -1029,6 +1039,44 @@ mod tests {
         )?;
         Ok((r.0, r.1))
     }
+
+    fn tensor_1() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+
+        let r = resource_tensor_two_easy_motifs(
+            rng().random_range(1000..2000),
+            1,
+            100,
+            2,
+            TestSignalKind::Sin,
+            2,
+            TestSignalKind::Trill,
+            100,
+            0.01,
+            0.2,
+            None
+        )?;
+        Ok((r.0, r.1))
+    }
+
+    fn tensor_2() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+
+        let r = resource_tensor_two_easy_motifs(
+            2000, //rng().random_range(1000..2000),
+            1,
+            100,
+            2,
+            TestSignalKind::ChirpDown,
+            2,
+            TestSignalKind::ChirpUp,
+            100,
+            0.01,
+            0.2,
+            None
+        )?;
+        Ok((r.0, r.1))
+    }
+
+
 
     fn run_all_config_test_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
@@ -1047,16 +1095,13 @@ mod tests {
             extend_motifs_run_config: None,
             select_motifs_run_config,
         };
-        let find_and_select_opt =  FindAndSelect::WithOpt {
-            find_and_select_run_config_range_or_value,
-            fixed_find_motifs_config,
-            find_and_select_motifs_opt_config: OptConfig::new(100, 10),
-        };
+        // let find_and_select_opt =  FindAndSelect::WithOpt {
+        //     find_and_select_run_config_range_or_value,
+        //     fixed_find_motifs_config,
+        //     find_and_select_motifs_opt_config: OptConfig::new(100, 10),
+        // };
 
         /////////////////////train_motifs
-
-
-
         let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
             id: None,
             common_training_args: CommonTrainingRunConfigRangeOrValue {
@@ -1158,26 +1203,6 @@ mod tests {
             train_labels_opt_config: Arc::clone(&profile.train_labels_opt_config),
             train_final_opt_config: Arc::clone(&profile.train_final_opt_config),
         }
-    }
-
-    fn tensor_1() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
-        // tch_test_utils::resource_tensor(1000usize, &[
-        //     vec![(3, 100, MotifKind::Sin)],
-        // ], 100, 10.)
-        let r = resource_tensor_two_easy_motifs(
-            2000, //rng().random_range(1000..2000),
-            1,
-            100,
-            2,
-            TestSignalKind::Sin,
-            2,
-            TestSignalKind::Trill,
-            100,
-            0.01,
-            0.2,
-            None
-        )?;
-        Ok((r.0, r.1))
     }
 
     fn run_all_find_motifs_config_test_1<P: FieldName + 'static>() -> FindMotifsRunConfigRangeOrValue<P> {
