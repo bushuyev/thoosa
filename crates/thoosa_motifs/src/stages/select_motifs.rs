@@ -30,7 +30,6 @@ use crate::dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
 use crate::find::FixedFindMotifsConfig;
 use crate::motif_tracker_store::IdSlice;
 use crate::stages::cross_batch_clc::{CrossInput, UnfoldParams, unfold_and_cat};
-use crate::stages::cross_dims::ChannelsDataSelector;
 use crate::stages::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
 use crate::stages::find_motifs::config_to_stage;
@@ -41,6 +40,7 @@ use crate::stages::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResour
 use crate::stages::slices_stats::Aggr;
 use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::stages::tensor_loader::RawTensorLoader;
+use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::data_with_extra::DataWithExtra;

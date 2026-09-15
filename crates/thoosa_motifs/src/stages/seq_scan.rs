@@ -554,10 +554,11 @@ where
         Some(freq_filter) => {
             let run_config_id = run_config.id.ok_or_else(|| ThoError::new("seq_scan::config_to_stage: freq_filter requires SeqScanRunConfig.id"))?;
 
+            let configs = ws.read().ws_configs();
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!(run_config_id, "seq_scan_ab_stage")]),
                 Arc::clone(loader),
-                FreqFilter::<C>::new(freq_filter, ws, run_config_id, 0).await?,
+                FreqFilter::<C>::new(freq_filter, configs, run_config_id, 0).await?,
             ))))
         }
     };

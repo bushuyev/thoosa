@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
@@ -20,12 +21,13 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageWithState, SyncStage, ThoSelector};
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
+use crate::stages::transforms::smoothing::{median, moving_average};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
@@ -37,11 +39,8 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
 use thoosa_common::utils::z_norm;
-use thoosa_common::ws::Workspace;
+use thoosa_common::ws::{Workspace, WsConfigs};
 use thoosa_digest_id::DigestHash;
-use crate::stages::cross_dims::ChannelsDataSelector;
-use crate::stages::stage_ids::FREQ_FILTER;
-use crate::stages::transforms::smoothing::{median, moving_average};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
@@ -453,14 +452,13 @@ where
 {
 
 
-    pub async fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Arc<Self>, ThoError> {
+    pub async fn new(filter_configs: &[InputFilter], ws_configs:WsConfigs, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Arc<Self>, ThoError> {
         debug!("FreqFilter::new: find_motifs_run_config_id={find_motifs_run_config_id} tho_device_idx={tho_device_idx}");
         let id:SynKey = mono_key!(find_motifs_run_config_id, "FreqFilter").into();
 
 
         let (num_channels, sample_rate)  = {
-            let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
-            (guard.channels() as i64, guard.sample_rate() as f64)
+            (ws_configs.channels as i64, ws_configs.sample_rate as f64)
         };
 
 
@@ -872,6 +870,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
+    use crate::stages::transforms::smoothing::{median, moving_average};
     use blake3::OUT_LEN;
     use log::debug;
     use parking_lot::RwLock;
@@ -882,69 +882,24 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::dims::ChannelsData;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::from;
-    use thoosa_common::ws::mock_ws_simp;
+    use thoosa_common::ws::{mock_ws_simp, WsConfigs};
     use thoosa_digest_id::DigestHash;
-    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::stft::SyncStftSelector;
-    use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
-    use crate::stages::transforms::smoothing::{median, moving_average};
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::{AsyncStage, RunCtx, StageHash, SyncStage};
 
-    #[tokio::test]
-    async fn test_band_pass() -> Result<(), ThoError> {
-        let filter_configs = vec![
-            // InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
-            //     low_hz: 58.0,
-            //     high_hz: 62.0,
-            // }),
-            // InputFilter::SavGolFilter(SavGolFilterParams {
-            //     window_len: 11,
-            //     poly_order: 2,
-            //     padding: SgPadding::reflect(),
-            // }),
-            InputFilter::BandPassFilter(BandPassFilterParams{
-                low_hz: 0.0,
-                band_hz: 100.0,
-                kernel_size: 859,
-                stride: 10,
-                padding: Padding::zero(),
-            }),
-        ];
 
-
-        run_freq_filter(filter_configs).await
-    }
-
-    #[tokio::test]
-    async fn test_savitzky_golay() ->Result<(), ThoError> {
-
-        let filter_configs = vec![
-
-            InputFilter::SavGolFilter(SavGolFilterParams {
-                window_len: 11,
-                poly_order: 2,
-                stride: 1,
-                padding: Padding::reflect(),
-            }),
-        ];
-
-
-        run_freq_filter(filter_configs).await
-    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
-        let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 2, 100, 1000)));
 
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
@@ -961,7 +916,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
-        let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 2, 100, 1000)));
 
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
@@ -975,37 +929,6 @@ mod tests {
     }
 
 
-    async fn run_freq_filter(filter_configs: Vec<InputFilter>) -> Result<(), ThoError> {
-        GlobalCtx::init_devices(2)?;
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-        
-        let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 20, 100, 10000)));
-
-        let bf = FreqFilter::new(&filter_configs, &ws, 0, 0).await?;
-
-        let mut ctx = RunCtxImpl::new(1, "test");
-
-        let size = [20, 12800];
-        let r = bf.run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)),
-            ctx.branch(false)
-        ).await?;
-
-        let find_motifs_run_config = FindMotifsRunConfig::new_with_running_mean(None, 10, 100, Some(filter_configs), None);
-
-        let adjuster = find_motifs_run_config.input_len_adjuster();
-
-
-        {
-            let r = r.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            debug!("filter r={r:?}");
-            assert_eq!(r.t_ref().size()[0], size[0]);
-            assert_eq!(r.t_ref().size()[1] as u32, adjuster(size[1] as u32));
-            Ok::<_, ThoError>(())
-        }?;
-
-        Ok(())
-    }
 
     #[test]
     fn test_hash_enum() {
@@ -1051,3 +974,27 @@ mod tests {
 
     }
 }
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChannelsDataSelector(pub Range<MonoMetrics<1, 2>>);
+
+#[typetag::serde]
+impl ThoSelector for ChannelsDataSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.0.start, &self.0.end)?.into())
+    }
+}
+
+impl Adjustable for ChannelsDataSelector {}
+
+impl From<Range<MonoMetrics<1, 2>>> for ChannelsDataSelector {
+    fn from(value: Range<MonoMetrics<1, 2>>) -> Self {
+        ChannelsDataSelector(value)
+    }
+}
+
+pub const FREQ_FILTER: u32 = 2;

@@ -609,10 +609,11 @@ where
         Some(freq_filter_config) => {
             debug!("MotifLoader::run: find_motifs_run_config_id={:?} freq_filter={freq_filter_config:?}", find_motifs_run_config.id);
 
+            let configs = ws.read().ws_configs();
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!(find_motifs_run_config.id.expect("find_motifs_run_config"), "ab_stage")]),
                 Arc::clone(loader),
-                FreqFilter::<C>::new(freq_filter_config, ws, find_motifs_run_config.id.expect("find_motifs_run_config"), tho_device_idx).await?,
+                FreqFilter::<C>::new(freq_filter_config, configs, find_motifs_run_config.id.expect("find_motifs_run_config"), tho_device_idx).await?,
             ))))
         }
     };

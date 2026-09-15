@@ -69,12 +69,12 @@ use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 use tracing::field::debug;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::stages::cross_dims::ChannelsDataSelector;
 use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::stages::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::stages::stft::SyncStft;
 use crate::stages::train_motif_nets::TrainMotifNetsResult;
+use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use crate::stages::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
@@ -379,7 +379,8 @@ where
            let maybe_freq_filter= match find_motifs_run_config.freq_filter.as_ref() {
                None => None,
                Some(freq_filter_config) => {
-                   Some((find_motifs_run_config_id, FreqFilter::<C>::new(freq_filter_config.as_slice(), ws, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?))
+                   let configs = ws.read().ws_configs();
+                   Some((find_motifs_run_config_id, FreqFilter::<C>::new(freq_filter_config.as_slice(), configs, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?))
                }
            };
 

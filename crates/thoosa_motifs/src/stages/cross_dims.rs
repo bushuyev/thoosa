@@ -1,3 +1,4 @@
+use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use log::{debug, trace};
 use std::cmp::min;
 use std::ops::Range;
@@ -9,7 +10,6 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::traits::{Adjustable, DataId, Select, ThoSelector};
 use thoosa_shared::{ThoError, mono_key};
-
 
 #[derive(Clone, Debug, Default)]
 pub struct ChannelsDataVec {
@@ -45,20 +45,6 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
     }
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct ChannelsDataSelector(pub Range<MonoMetrics<1, 2>>);
-
-#[typetag::serde]
-impl ThoSelector for ChannelsDataSelector {
-    fn clone_box(&self) -> Box<dyn ThoSelector> {
-        Box::new(self.clone())
-    }
-
-    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
-        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.0.start, &self.0.end)?.into())
-    }
-}
-
 impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
@@ -79,13 +65,6 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
         let sub_tensor = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
 
         Ok(ThoTensor::new(id.clone(), sub_tensor)?)
-    }
-}
-
-impl Adjustable for ChannelsDataSelector {}
-impl From<Range<MonoMetrics<1, 2>>> for ChannelsDataSelector {
-    fn from(value: Range<MonoMetrics<1, 2>>) -> Self {
-        ChannelsDataSelector(value)
     }
 }
 
