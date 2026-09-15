@@ -1617,6 +1617,8 @@ where
         let slices_len = all_slices.len();
         let mut color_iter = DistinctColorIter::new();
 
+        /*
+        TODO param to enable stft
         let target_dit = ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}"));
 
         fs::create_dir_all(&target_dit)?;
@@ -1650,7 +1652,7 @@ where
             &target_dit.join(format!("spec_all_{}.png", motif_id)),
             1200,
             600,
-        )?;
+        )?;*/
 
         let plot_data = all_slices
             .into_iter()
