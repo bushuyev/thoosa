@@ -585,24 +585,6 @@ impl PlotVecf32 {
         }
     }
 
-    #[allow(dead_code)]
-    fn plot(&self) {
-        plot_series(
-            vec![(
-                self.id.clone(),
-                BLACK,
-                self.data
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| (i as f32, *v))
-                    .collect::<Vec<(f32, f32)>>(),
-            )],
-            self.id.clone().as_str(),
-            (2000, 1000),
-            &format!("/tmp/plots/motif_train_{}.png", self.id),
-        )
-        .unwrap();
-    }
 }
 
 impl TrainListener for PlotVecf32 {

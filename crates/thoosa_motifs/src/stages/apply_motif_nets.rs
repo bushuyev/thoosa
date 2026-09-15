@@ -1,6 +1,10 @@
 #![allow(unexpected_cfgs)]
 use crate::motifs_store::MotifsStore;
 
+use crate::dims::MotifProbability;
+use crate::motif_tho_tensor::{MotifProbabilitiesWorkerOutput, MotifThoTensor};
+use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+use crate::stages::instance_cache::InstanceCache;
 use crate::train_nets::MotifNetParams;
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -31,8 +35,6 @@ use thoosa_common::common_nets::{StftRunConfig, ThoModuleWithStore};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, Slice};
-use crate::dims::MotifProbability;
-use crate::motif_tho_tensor::{MotifProbabilitiesWorkerOutput, MotifThoTensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
@@ -54,8 +56,6 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
-use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-use crate::stages::instance_cache::InstanceCache;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
@@ -69,9 +69,6 @@ use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 use tracing::field::debug;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_common::runner::tmp_cache::TmpCached;
-use thoosa_common::transforms::filters::InputFilter;
 use crate::stages::cross_dims::ChannelsDataSelector;
 use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::stages::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
@@ -79,6 +76,9 @@ use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::stages::stft::SyncStft;
 use crate::stages::train_motif_nets::TrainMotifNetsResult;
 use crate::stages::transforms::freq_filter::FreqFilter;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::tmp_cache::TmpCached;
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::tracked_await::track_await;
 
 pub const APPLY_MOTIF_NET_ENDPOINT: &str = "APPLY_MOTIF_NET_ENDPOINT";
@@ -1566,7 +1566,14 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Int
 
 #[cfg(test)]
 pub mod tests {
+    use crate::dims::MotifProbability;
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
+    use crate::stages::apply_motif_nets::{ApplyMotifNets, dummy_motif_net, motif_test_net_, valid_partial_output_len};
+    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::stages::stft::SyncStftSelector;
+    use crate::stages::tensor_loader::mock_tensor_loader;
+    use crate::tch_test_utils;
+    use crate::tch_test_utils::Interval;
     use crate::train_nets::{MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use log::LevelFilter::{Debug, Trace};
     use log::{debug, trace};
@@ -1584,22 +1591,15 @@ pub mod tests {
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, Slice};
-    use crate::dims::MotifProbability;
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::tch_test_utils;
-    use thoosa_common::tch_test_utils::Interval;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::Workspace;
-    use crate::stages::apply_motif_nets::{ApplyMotifNets, dummy_motif_net, motif_test_net_, valid_partial_output_len};
-    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::stft::SyncStftSelector;
-    use crate::stages::tensor_loader::mock_tensor_loader;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;

@@ -1,6 +1,4 @@
 use crate::motifs_store::MotifsStore;
-use async_trait::async_trait;
-use std::collections::HashMap;
 use crate::stages::bucketing::{BucketingInput, BucketingStage};
 use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcDynSyncStage, CrossUnfoldClcOutput, UnfoldParams};
 use crate::stages::cross_loader::{
@@ -8,6 +6,8 @@ use crate::stages::cross_loader::{
 };
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType, DistsTracker, tensor_from_ipc_bytes, tensor_to_ipc_bytes};
 use crate::stages::tensor_loader::RawTensorLoader;
+use async_trait::async_trait;
+use std::collections::HashMap;
 
 use mockall_double::double;
 #[double]
@@ -21,8 +21,14 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use crate::dims::{ChannelsMotifsDists, MotifSlices};
 use crate::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use crate::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
+use crate::stages::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, FinderKind, MaxSlices, SlicesFilter};
+use crate::stages::motif_loader::{MotifLoader, MotifMeta};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+use crate::stages::slices_stats::{Aggr as StatsAggr, Metrics};
+use crate::stages::transforms::freq_filter::FreqFilter;
 use tch::Device::Cpu;
 use tch::Kind::{Bool, Float};
 use tch::kind::FLOAT_CPU;
@@ -31,7 +37,6 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use crate::dims::{ChannelsMotifsDists, MotifSlices};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
@@ -40,11 +45,6 @@ use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
-use crate::stages::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, FinderKind, MaxSlices, SlicesFilter};
-use crate::stages::motif_loader::{MotifLoader, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-use crate::stages::slices_stats::{Aggr as StatsAggr, Metrics};
-use crate::stages::transforms::freq_filter::FreqFilter;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
@@ -622,9 +622,19 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::cli::{import_resources, run_grid};
+    use crate::dims::MotifSlices;
     use crate::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
     use crate::motif_tracker_store::CheckGroups;
     use crate::motifs_store::MockMotifsStoreBuilder;
+    use crate::stages::cross_loader::ResourcesConfigInput;
+    use crate::stages::find_motifs::FindMotifsStage;
+    use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
+    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+    use crate::stages::motif_stats::RANDOM_STATS_GROUP;
+    use crate::stages::select_motifs::SelectMotifsStage;
+    use crate::stages::tensor_loader::{RawTensorLoader, mock_tensor_loader};
+    use crate::tch_test_utils;
     use log::LevelFilter::Trace;
     use log::{debug, set_max_level};
     use parking_lot::RwLock;
@@ -637,7 +647,6 @@ mod tests {
     use tch::kind::INT64_CPU;
     use tch::{Device, IndexOp, Tensor};
     use thoosa_common::data_with_extra::DataWithExtra;
-    use crate::dims::MotifSlices;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::Cached;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -650,15 +659,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{debug_plot_impl, lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
-    use thoosa_common::{debug_plot, tch_test_utils};
-    use crate::cli::{import_resources, run_grid};
-    use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::find_motifs::FindMotifsStage;
-    use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
-    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::stages::motif_stats::RANDOM_STATS_GROUP;
-    use crate::stages::select_motifs::SelectMotifsStage;
-    use crate::stages::tensor_loader::{RawTensorLoader, mock_tensor_loader};
+    use thoosa_common::debug_plot;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
     use thoosa_shared::applicables_runner::Input;

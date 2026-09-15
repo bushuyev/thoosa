@@ -1323,10 +1323,21 @@ impl Default for BucketRunConfig {
 #[cfg(test)]
 mod tests {
     use super::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups};
+    use crate::cli::{import_resources, plot_motif};
+    use crate::cli::{plot_resource, run_opt};
+    use crate::dims::MotifSlices;
     use crate::distance::{EucDistConfig, SimilarityMetric, clc_d2_similarity};
     use crate::fragments::Resolution;
     use crate::motif_tracker_store::IdSlice;
     use crate::motifs_store::MotifsStore;
+    use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
+    use crate::stages::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
+    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+    use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+    use crate::stages::slices_stats::euclidean_distance;
+    use crate::stages::stft::SyncStftSelector;
+    use crate::stages::tensor_loader::RawTensorLoader;
+    use crate::tch_test_utils;
     use futures_util::{StreamExt, TryStreamExt};
     use log::debug;
     use parking_lot::{RawRwLock, RwLock};
@@ -1341,25 +1352,15 @@ mod tests {
     use tch::{Device, Tensor};
     use thoosa_common::common_nets::OptConfig;
     use thoosa_common::data_with_extra::DataWithExtra;
-    use crate::dims::MotifSlices;
     use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::runs::Simple;
-    use thoosa_common::tch_test_utils;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
-    use crate::cli::{import_resources, plot_motif};
-    use crate::cli::{plot_resource, run_opt};
-    use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
-    use crate::stages::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
-    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-    use crate::stages::slices_stats::euclidean_distance;
-    use crate::stages::stft::SyncStftSelector;
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::comp_id::SynKey;
@@ -1371,7 +1372,6 @@ mod tests {
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key};
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::{SqlStore, Store};
-    use crate::stages::tensor_loader::RawTensorLoader;
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()

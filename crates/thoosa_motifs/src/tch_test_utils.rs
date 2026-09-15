@@ -4,7 +4,7 @@ use rand::prelude::{SliceRandom, StdRng};
 use log::debug;
 use thoosa_shared::test_utils::{gen_signal, TestSignalKind};
 use thoosa_shared::ThoError;
-use crate::utils::to_vec_f32;
+use thoosa_common::utils::to_vec_f32;
 
 pub fn deterministic_noise(len: usize, seed: u32, amp: f32) -> Vec<f32> {
     let mut out = Vec::with_capacity(len);
@@ -104,125 +104,6 @@ fn normal_step(rng: &mut impl Rng, sigma: f32) -> f32 {
     sigma * r * theta.cos()
 }
 
-//TODO remove? use resource_tensor?
-pub fn generate_series_with_motif(
-    len: usize,
-    motif_len: usize,
-    repeats: usize,
-    min_gap: usize,
-    step_sigma: f32,
-    _amp_range: (f32, f32),
-    seed: Option<u64>,
-    motif_kind: &TestSignalKind, // "triangle" or "sine"
-) -> Result<(Vec<f32>, Vec<Interval>), ThoError> {
-    let mut rng = seed.map(|seed|StdRng::seed_from_u64(seed)).unwrap_or(rand::make_rng());
-
-    // random-walk background using our own Normal(0, step_sigma)
-    let mut sig = vec![0f32; len];
-    for i in 1..len {
-        sig[i] = sig[i - 1] + normal_step(&mut rng, step_sigma);
-    }
-
-    let motif_0 =  generate_motifs_with_avg_distance(
-        gen_signal(motif_len, &motif_kind).as_slice(), repeats, 0.1, 0.2, None, 10.0f32
-    );
-    // motif template (z-normalized)
-    let mut motif: Vec<f32> = gen_signal(motif_len, motif_kind);
-
-    let m = motif.iter().sum::<f32>() / motif.len() as f32;
-    let s = (motif.iter().map(|v| (v - m).powi(2)).sum::<f32>() / motif.len() as f32).sqrt().max(1e-6);
-    for v in &mut motif { *v = (*v - m) / s; }
-
-    // place non-overlapping intervals
-    if repeats == 0 || motif_len == 0 {
-        return Ok((sig, Vec::new()));
-    }
-
-    let total_motif_space = motif_len.checked_mul(repeats).ok_or_else(|| {
-        ThoError::new("motif placement overflows usize")
-    })?;
-    let gaps_between = repeats.saturating_sub(1);
-    let total_gap_space = min_gap.checked_mul(gaps_between).ok_or_else(|| {
-        ThoError::new("motif gap sizing overflows usize")
-    })?;
-    let required_space = total_motif_space.checked_add(total_gap_space).ok_or_else(|| {
-        ThoError::new("motif layout exceeds addressable range")
-    })?;
-
-    if required_space > len {
-        return Err(ThoError::new(format!(
-            "cannot place {repeats} motifs (len={motif_len}) with min_gap={min_gap} into series len={len}"
-        )));
-    }
-
-    let extra_space = len - required_space;
-    let leading_gap = extra_space / 2;
-
-    let mut intervals = Vec::with_capacity(repeats);
-    let mut start = leading_gap;
-    for motif_idx in 0..repeats {
-        let _base = sig[start];
-        for (k, &mv) in motif_0.0[motif_idx].iter().enumerate() {
-            sig[start + k] = /*base +*/ mv;
-        }
-        intervals.push(Interval { start, end: start + motif_len });
-        if motif_idx + 1 < repeats {
-            start += motif_len + min_gap;
-        }
-    }
-
-    Ok((sig, intervals))
-}
-
-#[cfg(test)]
-mod tests {
-    use thoosa_shared::test_utils::TestSignalKind;
-    use crate::tch_test_utils::generate_series_with_motif;
-
-    #[ctor::ctor]
-    fn init() {
-        thoosa_shared::test_utils::init_test_logging();
-    }
-
-
-    #[test]
-    fn generate_series_with_motif_places_everything_when_space_allows() {
-        let len = 200;
-        let motif_len = 10;
-        let repeats = 3;
-        let min_gap = 5;
-        let (_, intervals) = generate_series_with_motif(
-            len,
-            motif_len,
-            repeats,
-            min_gap,
-            0.4,
-            (0.8, 1.8),
-            Some(42),
-            &TestSignalKind::Triangle,
-        ).expect("motifs should be placed");
-
-        assert_eq!(intervals.len(), repeats);
-        let starts: Vec<_> = intervals.into_iter().map(|iv| iv.start).collect();
-        assert_eq!(starts, vec![80, 95, 110]);
-    }
-
-    #[test]
-    fn generate_series_with_motif_errors_when_series_too_short() {
-        let result = generate_series_with_motif(
-            20,
-            10,
-            2,
-            5,
-            0.4,
-            (0.8, 1.8),
-            None,
-            &TestSignalKind::Triangle,
-        );
-
-        assert!(result.is_err());
-    }
-}
 
 fn z_norm(x: &mut [f32]) {
     let n = x.len() as f32;
