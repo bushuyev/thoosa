@@ -14,8 +14,8 @@ use tch::kind::Kind;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::runs::SavableResult;
-use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
 use thoosa_common::stages::freq_filter::FreqFilter;
+use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
 use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::InputFilter;
@@ -579,7 +579,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::Simple;
-    use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
+    use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
     use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::ResourceType;
