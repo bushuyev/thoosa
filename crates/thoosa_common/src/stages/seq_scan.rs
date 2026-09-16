@@ -1,7 +1,7 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
-use crate::transforms::filters::{InputFilter, InputFilterBuilder, InputFilterFields, InputFilterRangeOrValue};
 use crate::transforms::filters::InputFilterLengthAdjuster;
+use crate::transforms::filters::{InputFilter, InputFilterBuilder, InputFilterFields, InputFilterRangeOrValue};
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -120,7 +120,7 @@ impl Default for MeanPowerSeqScanMetricConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, MeanPowerSeqScanMetricConfigRangeOrValue, SeqScanMetric, SeqScanMetricRangeOrValue, SeqScanRunConfig, SeqScanRunConfigRangeOrValue};
+    use crate::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, MeanPowerSeqScanMetricConfigRangeOrValue, SeqScanMetric, SeqScanMetricRangeOrValue, SeqScanRunConfig, SeqScanRunConfigRangeOrValue};
     use crate::transforms::filters::{AverageFilterParamsRangeOrValue, InputFilterRangeOrValue};
     use log::debug;
     use std::collections::HashMap;
