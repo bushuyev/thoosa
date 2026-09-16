@@ -1982,7 +1982,7 @@ mod tests {
         let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(100))),
+                Arc::new(DevicesWrap::wrap_cpu(TestInput::new(100))),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -2027,7 +2027,7 @@ mod tests {
         let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
+                Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))),
                 ctx_mock,
                 WithRunnableContext::new(super::MockRunnableContext::new()),
             )
@@ -2060,7 +2060,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
+                Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))),
                 ctx_mock,
                 WithInputContext::new(
                     super::mock_input_context::build()
@@ -2100,7 +2100,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
+                Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1))),
                 ctx_mock,
                 WithRunCtxContext::new(super::MockRunCtxContext::new()),
             )
@@ -2128,7 +2128,7 @@ mod tests {
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
 
         let init_task1_arc = Arc::new(init_task1);
-        let input_arc = Arc::new(DevicesWrap::wrap_plain(TestInput::new(1)));
+        let input_arc = Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1)));
 
         let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
