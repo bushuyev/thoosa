@@ -567,43 +567,28 @@ impl From<usize> for MonoMetrics<0, 1> {
 pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
-    type M;//TODO remove
-
     fn size(&self) -> Self::Metrics;
 
-    fn track_used_in(&self, _token: &'static str) {}
-
-    fn device(&self) -> usize;//TODO rename tho_device_idx
+    fn tho_device_idx(&self) -> usize;
 
     fn mem_size(&self) -> u64;
 
-    async fn adrop(self)
-    where
-    Self:Sized{
-
-    }
 }
 
 impl <D:Data + ?Sized> Data for &D {
     type Metrics = D::Metrics;
-    type M = D::M;
 
     fn size(&self) -> Self::Metrics {
         <D as Data>::size(*self)
     }
 
-    fn track_used_in(&self, token: &'static str) {
-        <D as Data>::track_used_in(*self, token)
-    }
-
-    fn device(&self) -> usize {
-        <D as Data>::device(*self)
+    fn tho_device_idx(&self) -> usize {
+        <D as Data>::tho_device_idx(*self)
     }
 
     fn mem_size(&self) -> u64 {
         <D as Data>::mem_size(*self)
     }
-
 
 }
 
@@ -612,14 +597,13 @@ where
     D:Data
 {
     type Metrics = D::Metrics;
-    type M = D::M;
 
     fn size(&self) -> Self::Metrics {
         self.as_ref().size()
     }
 
-    fn device(&self) -> usize {
-        self.as_ref().device()
+    fn tho_device_idx(&self) -> usize {
+        self.as_ref().tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -629,13 +613,12 @@ where
 
 impl Data for (){
     type Metrics = ();
-    type M = CpuOnly<()>;
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

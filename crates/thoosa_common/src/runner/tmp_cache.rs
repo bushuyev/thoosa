@@ -329,13 +329,13 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         impl Data for TestData {
             type Metrics = ();
-            type M = CpuOrGpu<Self>;
+
 
             fn size(&self) -> Self::Metrics {
                 ()
             }
 
-            fn device(&self) -> usize {
+            fn tho_device_idx(&self) -> usize {
                 self.device
             }
 
@@ -419,13 +419,13 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         impl Data for TestData {
             type Metrics = ();
-            type M = CpuOrGpu<Self>;
+
 
             fn size(&self) -> Self::Metrics {
                 ()
             }
 
-            fn device(&self) -> usize {
+            fn tho_device_idx(&self) -> usize {
                 self.device
             }
 

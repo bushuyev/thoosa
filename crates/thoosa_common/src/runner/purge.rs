@@ -360,13 +360,13 @@ mod tests {
 
     impl Data for DummyOutput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+
 
         fn size(&self) -> Self::Metrics {
             [1]
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             1
         }
 

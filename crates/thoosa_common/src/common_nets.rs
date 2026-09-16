@@ -269,13 +269,12 @@ where
     DI: Dims + Send + 'static,
     DO: Dims + Send + 'static{
     type Metrics = ();
-    type M = CpuOrGpu<ThoModuleWithStore<DI, DO>>;
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         ThoDevice::from(self.var_store.device()).tho_device_idx()
     }
 
@@ -737,7 +736,7 @@ where
 
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
-                ); 
+                );
 
                 let train_result = panic_to_err_async!(
                     train_clone(

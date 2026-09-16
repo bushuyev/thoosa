@@ -280,14 +280,14 @@ impl WorkerInput for SyncLogitsBatchInput<'static> {}
 
 impl Data for SyncLogitsBatchInput<'_> {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.outputs.len() as i64
     }
 
-    fn device(&self) -> usize {
-        self.outputs.first().map(|output| output.as_ref().device()).unwrap_or(0)
+    fn tho_device_idx(&self) -> usize {
+        self.outputs.first().map(|output| output.as_ref().tho_device_idx()).unwrap_or(0)
     }
 
     fn mem_size(&self) -> u64 {

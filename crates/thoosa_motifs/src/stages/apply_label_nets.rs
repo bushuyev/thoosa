@@ -450,13 +450,13 @@ impl WithId for StackAppliedLabelNetsInput {
 
 impl Data for StackAppliedLabelNetsInput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.label_outputs.len().into()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.device_idx
     }
 
@@ -661,14 +661,14 @@ struct ApplyLabelNetInput<'a> {
 
 impl Data for ApplyLabelNetInput<'_> {
     type Metrics = <DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>> as Data>::Metrics;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.input.as_ref().size()
     }
 
-    fn device(&self) -> usize {
-        self.input.as_ref().device()
+    fn tho_device_idx(&self) -> usize {
+        self.input.as_ref().tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -900,7 +900,7 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut net = self.net.lock().await;
-            if net.device() != to_device_idx {
+            if net.tho_device_idx() != to_device_idx {
                 *net = net.copy_to_device(to_device_idx).await?;
             }
             Ok(net)

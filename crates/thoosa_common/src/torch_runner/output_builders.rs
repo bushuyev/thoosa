@@ -75,7 +75,7 @@ where
         }
 
         let partial = if let Some(device_idx) = self.partial_output_device_idx {
-            if partial.device() == device_idx {
+            if partial.tho_device_idx() == device_idx {
                 partial
             } else {
                 match partial.copy_to_device(device_idx).await {
@@ -103,7 +103,7 @@ where
             }
             BuildAs::Sum => {
                 debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: self.output.size={:?} partial_size={partial_size:?}", self.output.size());
-                if self.output.device() != partial.device() {
+                if self.output.tho_device_idx() != partial.tho_device_idx() {
                     let mut t = self.output.to_mut();
 
                     t.add_(&partial.copy_to_device(0).await.unwrap()).unwrap();

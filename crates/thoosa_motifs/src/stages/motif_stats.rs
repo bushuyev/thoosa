@@ -163,13 +163,13 @@ impl WithId for MotifStatsInput {
 
 impl Data for MotifStatsInput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         1usize.into()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 
@@ -250,7 +250,7 @@ impl WithId for MotifStatsCalcInput<'_> {
 
 impl Data for MotifStatsCalcInput<'_> {
     type Metrics = <ThoTensor<ChannelsMotifsSlices, SynKey> as Data>::Metrics;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         match self.data() {
@@ -259,10 +259,10 @@ impl Data for MotifStatsCalcInput<'_> {
         }
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         match self.data() {
-            MotifStatsCalcInputData::Managed(motif) => motif.as_ref().data().device(),
-            MotifStatsCalcInputData::Motifs(motifs) => motifs.first().map(|motif| motif.as_ref().data().device()).unwrap_or(0),
+            MotifStatsCalcInputData::Managed(motif) => motif.as_ref().data().tho_device_idx(),
+            MotifStatsCalcInputData::Motifs(motifs) => motifs.first().map(|motif| motif.as_ref().data().tho_device_idx()).unwrap_or(0),
         }
     }
 
@@ -398,14 +398,14 @@ impl WithId for MotifStatsLoadedChannelsInput {
 
 impl Data for MotifStatsLoadedChannelsInput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         1usize.into()
     }
 
-    fn device(&self) -> usize {
-        self.channels_motifs_slices.first().map(|tensor| tensor.device()).unwrap_or(0)
+    fn tho_device_idx(&self) -> usize {
+        self.channels_motifs_slices.first().map(|tensor| tensor.tho_device_idx()).unwrap_or(0)
     }
 
     fn mem_size(&self) -> u64 {
@@ -714,13 +714,13 @@ impl MotifStatsOutput {
 
 impl Data for MotifStatsOutput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         1usize.into()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

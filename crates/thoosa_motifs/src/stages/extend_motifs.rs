@@ -716,13 +716,13 @@ impl SelectMotifsInputSelectorWrap {
 
 impl Data for SelectMotifsInputSelectorWrap {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.batch.len() as i64
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

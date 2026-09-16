@@ -667,13 +667,13 @@ impl WithId for StackAppliedMotifNetsInput {
 
 impl Data for StackAppliedMotifNetsInput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.motif_nets_applied.len().into()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.device_idx
     }
 
@@ -1005,13 +1005,13 @@ impl WorkerInput for ApplyMotifNetInput<'static> {}
 
 impl Data for ApplyMotifNetInput<'_> {
     type Metrics = MonoMetrics<1, 2>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         MonoMetrics::<1, 2>::try_from(self.batch.size()).unwrap_or_default()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.batch.tho_device_idx()
     }
 
@@ -1291,7 +1291,7 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut motif_net = self.motif_net.lock().await;
-            if motif_net.device() != to_device_idx {
+            if motif_net.tho_device_idx() != to_device_idx {
                 *motif_net = motif_net.copy_to_device(to_device_idx).await?;
             }
             Ok(motif_net)

@@ -701,11 +701,11 @@ mod tests {
 
     impl Data for PrepareRunAllDataInput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+
 
         fn size(&self) -> Self::Metrics {}
 
-        fn device(&self) -> usize { 0 }
+        fn tho_device_idx(&self) -> usize { 0 }
 
         fn mem_size(&self) -> u64 { 0 }
     }
@@ -735,11 +735,11 @@ mod tests {
 
     impl Data for PrepareRunAllDataOutput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+
 
         fn size(&self) -> Self::Metrics {}
 
-        fn device(&self) -> usize { 0 }
+        fn tho_device_idx(&self) -> usize { 0 }
 
         fn mem_size(&self) -> u64 { 0 }
     }
