@@ -116,13 +116,13 @@ impl Select<RangeSelector> for MockDataWithId {
 #[cfg(test)]
 impl Data for MockDataWithId {
     type Metrics = [usize; 1];
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.data.size()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.device
     }
 

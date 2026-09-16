@@ -80,11 +80,11 @@ impl From<&'static str> for FileInput {
 #[async_trait]
 impl Data for FileInput {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {}
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 
@@ -118,11 +118,11 @@ impl WithId for FileListInput {
 #[async_trait]
 impl Data for FileListInput {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {}
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

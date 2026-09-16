@@ -215,13 +215,13 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for CrossInput<'a, R> {
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.resources_1.len() as i64
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 
@@ -698,13 +698,13 @@ impl<R: Debug> WithId for CrossUnfoldClcOutput<R> {
 }
 impl<R: Debug> Data for CrossUnfoldClcOutput<R> {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

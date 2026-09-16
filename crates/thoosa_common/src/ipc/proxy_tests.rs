@@ -86,7 +86,7 @@ impl<'a> BorrowRef for TestInputA<'a> {
         Self: 'o
     {
         async move {
-            if self.value.device() == to_tho_device_idx {
+            if self.value.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(TestInputA {

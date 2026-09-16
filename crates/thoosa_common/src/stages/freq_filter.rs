@@ -572,7 +572,7 @@ impl OutputBuilder for FreqFilterOutputBuilder {
             return;
         }
 
-        let partial = if partial.device() == 0 {
+        let partial = if partial.tho_device_idx() == 0 {
             partial
         } else {
             match track_await(partial.copy_to_device(0)).await {
@@ -718,10 +718,10 @@ where
             let mut filters = self.filters.lock().await;
             for filter in filters.iter_mut() {
                 match filter {
-                    PreparedFilter::BandPass { kernel, .. } if kernel.device() != to_device_idx => {
+                    PreparedFilter::BandPass { kernel, .. } if kernel.tho_device_idx() != to_device_idx => {
                         *kernel = track_await(kernel.copy_to_device(to_device_idx)).await?;
                     }
-                    PreparedFilter::SavGol { weights, .. } if weights.device() != to_device_idx => {
+                    PreparedFilter::SavGol { weights, .. } if weights.tho_device_idx() != to_device_idx => {
                         *weights = track_await(weights.copy_to_device(to_device_idx)).await?;
                     }
                     _ => {}
@@ -746,10 +746,10 @@ where
         let mut filters = self.filters.lock().await;
         for filter in filters.iter_mut() {
             match filter {
-                PreparedFilter::BandPass { kernel, .. } if kernel.device() != 0 => {
+                PreparedFilter::BandPass { kernel, .. } if kernel.tho_device_idx() != 0 => {
                     return  true
                 }
-                PreparedFilter::SavGol { weights, .. } if weights.device() != 0 => {
+                PreparedFilter::SavGol { weights, .. } if weights.tho_device_idx() != 0 => {
                     return  true
                 }
                 _ => {}
@@ -763,10 +763,10 @@ where
         let mut filters = self.filters.lock().await;
         for filter in filters.iter_mut() {
             match filter {
-                PreparedFilter::BandPass { kernel, .. } if kernel.device() != 0 => {
+                PreparedFilter::BandPass { kernel, .. } if kernel.tho_device_idx() != 0 => {
                     *kernel = track_await(kernel.copy_to_device(0)).await?;
                 }
-                PreparedFilter::SavGol { weights, .. } if weights.device() != 0 => {
+                PreparedFilter::SavGol { weights, .. } if weights.tho_device_idx() != 0 => {
                     *weights = track_await(weights.copy_to_device(0)).await?;
                 }
                 _ => {}

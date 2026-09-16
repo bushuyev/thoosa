@@ -258,7 +258,7 @@ impl StageWithState for SyncClcStage {
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut k = self.k.lock().await;
-            if k.device() != to_device_idx {
+            if k.tho_device_idx() != to_device_idx {
                 *k = k.copy_to_device(to_device_idx).await?;
             }
             Ok(k)

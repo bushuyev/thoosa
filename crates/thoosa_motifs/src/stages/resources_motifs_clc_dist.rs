@@ -240,13 +240,13 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapper {
 //stacked_motifs_output can't be adjusted since moitfs' ranges do not match in different channels
 impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.batch.len() as i64
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 
@@ -391,13 +391,13 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
 
 impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.batch.len() as i64
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.batch[0].tho_device_idx()
     }
 
@@ -469,13 +469,13 @@ impl ClcResourcesMotifsDistOutput {
 
 impl Data for ClcResourcesMotifsDistOutput {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

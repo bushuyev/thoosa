@@ -86,7 +86,7 @@ impl BorrowRef for TestInputB {
         Self: 'o
     {
         async move {
-            if self.value.device() == to_tho_device_idx {
+            if self.value.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(TestInputB {
@@ -261,7 +261,7 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
         async move {
             let mut guard = self.k.lock().await;
-            if guard.device() != to_device_idx {
+            if guard.tho_device_idx() != to_device_idx {
                 *guard = guard.copy_to_device(to_device_idx).await?;
             }
             Ok(guard)

@@ -97,14 +97,14 @@ pub struct SyncLabelBatchInput<'a> {
 
 impl Data for SyncLabelBatchInput<'_> {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         (self.x_1.len() + self.x_0.len()) as i64
     }
 
-    fn device(&self) -> usize {
-        self.x_1.iter().chain(self.x_0.iter()).next().map(|value| value.as_ref().device()).unwrap_or(0)
+    fn tho_device_idx(&self) -> usize {
+        self.x_1.iter().chain(self.x_0.iter()).next().map(|value| value.as_ref().tho_device_idx()).unwrap_or(0)
     }
 
     fn mem_size(&self) -> u64 {

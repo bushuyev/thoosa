@@ -100,14 +100,13 @@ where
     E:Debug + Send + Sync,
 {
     type Metrics = D::Metrics;
-    type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.data.size()
     }
 
-    fn device(&self) -> usize {
-        self.data.device()
+    fn tho_device_idx(&self) -> usize {
+        self.data.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

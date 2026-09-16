@@ -449,7 +449,7 @@ impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
-    ResourcesConfigInput<ResC>: Data<M=CpuOnly<ResourcesConfigInput<ResC>>> + WithId + Send + Sync,
+    ResourcesConfigInput<ResC>: Data + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
@@ -575,13 +575,13 @@ struct CrossInputSelectorWrap {
 
 impl Data for CrossInputSelectorWrap {
     type Metrics = i64;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.resources_1.len() as i64
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

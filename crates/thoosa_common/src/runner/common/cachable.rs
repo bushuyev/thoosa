@@ -529,70 +529,6 @@ where
 
 }
 
-
-struct TracingWrapper<O, D>
-where
-    O: Data + Send + Sync,
-    D: Deref<Target = O>,
-{
-    o: D,
-    ctx: Option<&'static str>,
-}
-
-impl<O, D> Debug for TracingWrapper<O, D>
-where
-    O: Data + Send + Sync,
-    D: Deref<Target = O>,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TracingWrapper").finish()
-    }
-}
-impl<O, D> TracingWrapper<O, D>
-where
-    O: Data + Send + Sync,
-    D: Deref<Target = O>,
-{
-    pub fn new(o: D, init_ctx: Option<&'static str>) -> Self {
-        if let Some(ctx) = init_ctx {
-            o.track_used_in(ctx);
-        }
-
-        Self { o, ctx: init_ctx }
-    }
-}
-
-impl<O, D> Drop for TracingWrapper<O, D>
-where
-    O: Data + Send + Sync,
-    D: Deref<Target = O>,
-{
-    fn drop(&mut self) {
-        if let Some(ctx) = self.ctx {
-            self.o.track_used_in(format!("{} removed", ctx).leak())
-        }
-    }
-}
-
-impl<O, D> Deref for TracingWrapper<O, D>
-where
-    O: Data + Send + Sync,
-    D: Deref<Target = O>,
-{
-    type Target = O;
-
-    fn deref(&self) -> &Self::Target {
-        &self.o
-    }
-}
-
-unsafe impl<O, D> Send for TracingWrapper<O, D>
-where
-    O: Data + Send + Sync,
-    D: Deref<Target = O>,
-{
-}
-
 impl<O> DevicesWrap<O>
 where
     O: Data + Send + Sync,
@@ -608,7 +544,7 @@ where
     where
         O: WithId,
     {
-        assert_eq!(o.device(), 0);
+        assert_eq!(o.tho_device_idx(), 0);
         Self::wrap_inner(o, None)
     }
 
@@ -618,7 +554,7 @@ where
     {
         let id = o.id().clone();
         let size = o.size();
-        let device_ordinal = o.device();
+        let device_ordinal = o.tho_device_idx();
         let mem_size = o.mem_size();
         let num_devices: usize = GlobalCtx::global().device_count();
         let (resident_devices, gpu_resident_count) = initial_residency(num_devices, device_ordinal);
@@ -686,7 +622,6 @@ where
                 }
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
                 debug!("DevicesWrap::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
-                // o.adrop().await;
                 drop(o);
 
 
@@ -695,7 +630,6 @@ where
             } else {
                 let o = lock.take().expect(&format!("no locked {:?}", self.id));
                 debug!("DevicesWrap::dump_to_cpu: id={:?} dropping {o:?}", self.id);
-                // o.adrop().await;
                 drop(o);
 
                 self.mark_not_resident_on_device(device_idx);
@@ -859,43 +793,6 @@ where
         self.id.as_ref().downcast_ref::<O::ID>().expect("DevicesWrap stored an unexpected ID type")
     }
 
-
-    pub async fn clone_from_cpu(&self) -> Result<O, ThoError>
-    where O: Clone {
-        let lock = &self.cached_data[0];
-        Ok(track_await(lock.read()).await.clone().expect("no data in cpu"))
-    }
-
-
-
-    fn do_run_trace_ref<R>(
-        trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&O) -> Result<R, ThoError>,
-        data: &O,
-    ) -> Result<R, ThoError> {
-        if trace_ctx.is_none() {
-            do_run(data)
-        } else {
-            do_run(&TracingWrapper::new(data, trace_ctx))
-        }
-    }
-
-    fn do_run_trace_owned<T, R>(
-        trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&T) -> Result<R, ThoError>,
-        data: T,
-    ) -> Result<R, ThoError>
-    where
-        T: Data + Send + Sync,
-    {
-        if trace_ctx.is_none() {
-            do_run(&data)
-        } else {
-            do_run(&TracingWrapper::new(&data, trace_ctx))
-        }
-    }
-
-
     async fn ensure_copied(
         &self,
         dst_idx: usize,
@@ -1014,7 +911,7 @@ where
 
             // Install into dst (short critical section)
             {
-                debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.device());
+                debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.tho_device_idx());
 
                 let lock = &self.cached_data[dst_idx];
                 let mut w = track_await(lock.write()).await;
@@ -1201,7 +1098,7 @@ mod tests {
             )
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             self.device
         }
     }
@@ -1216,13 +1113,13 @@ mod tests {
 
     impl thoosa_shared::traits::Data for ControlledCopyData {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+
 
         fn size(&self) -> Self::Metrics {
             [0]
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             self.device
         }
 
@@ -1286,7 +1183,7 @@ mod tests {
             let tested = tested.clone();
             async move {
                 let data = tested.load_from_any_device_(1).await?;
-                Ok::<usize, ThoError>(data.device())
+                Ok::<usize, ThoError>(data.tho_device_idx())
             }
         });
         state.entered.acquire().await.expect("entered semaphore closed").forget();
@@ -1295,7 +1192,7 @@ mod tests {
             let tested = tested.clone();
             async move {
                 let data = tested.load_from_any_device_(1).await?;
-                Ok::<usize, ThoError>(data.device())
+                Ok::<usize, ThoError>(data.tho_device_idx())
             }
         });
         wait_for_inflight_participants(&tested, 1, 3).await;
@@ -1318,7 +1215,7 @@ mod tests {
             let tested = tested.clone();
             async move {
                 let data = tested.load_from_any_device_(1).await?;
-                Ok::<usize, ThoError>(data.device())
+                Ok::<usize, ThoError>(data.tho_device_idx())
             }
         });
         state.entered.acquire().await.expect("entered semaphore closed").forget();
@@ -1327,7 +1224,7 @@ mod tests {
             let tested = tested.clone();
             async move {
                 let data = tested.load_from_any_device_(1).await?;
-                Ok::<usize, ThoError>(data.device())
+                Ok::<usize, ThoError>(data.tho_device_idx())
             }
         });
         wait_for_inflight_participants(&tested, 1, 3).await;

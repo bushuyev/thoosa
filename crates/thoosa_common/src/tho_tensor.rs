@@ -368,7 +368,6 @@ where
     Id: Named + Debug + Clone + Send + Sync,
 {
     type Metrics = D::Metrics;
-    type M = CpuOrGpu<ThoTensor<D, Id>>;
 
     fn size(&self) -> Self::Metrics {
         match &self.inner {
@@ -377,7 +376,7 @@ where
         }
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
 
         match &self.inner {
             ThoTensorInner::Val { t } => ThoDevice::from(t.device()).tho_device_idx(),
@@ -394,25 +393,6 @@ where
         }
     }
 
-    async fn adrop(self)//remove
-    where
-        Self:Sized
-    {
-        // todo!()
-        let tensor = self.to_default();
-        let tho_device_idx_key = if let ThoTensorInner::Ref{ key, size, kind, selector } = &tensor.inner {
-            Some((key.device_idx, key.key))
-
-        } else {
-            None
-        };
-
-        if let Some((tho_device_idx, key)) = tho_device_idx_key {
-            if let Err(e) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_tho_tensor(key).await {
-                error!("Got error while dropping key={key:?} e={e:?} ");
-            }
-        }
-    }
 }
 
 impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
@@ -641,7 +621,7 @@ where
 
 
         let dst_device = ThoDevice::from(dst_device);
-        let src_device = self.device().into();
+        let src_device = self.tho_device_idx().into();
         //should not copy device to itself
         assert!(!dst_device.eq(&src_device));
 
