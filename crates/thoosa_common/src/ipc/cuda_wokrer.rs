@@ -6,7 +6,7 @@ use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{IpcTensorKind, recv_fd};
-use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
+use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::proxy_tests::TestOutputA;
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};

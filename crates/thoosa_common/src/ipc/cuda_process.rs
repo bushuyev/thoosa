@@ -1,7 +1,7 @@
 use crate::copy_ctx::{CudaActorHandle, HandleCtx};
 use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::{IpcTensorKind, send_fd};
-use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
+use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
