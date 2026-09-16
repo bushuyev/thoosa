@@ -567,8 +567,6 @@ where
 
 }
 
-
-
 impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
 where
     D: WorkerStageOutput + Data + CopyToDevice + WithId + Sync,

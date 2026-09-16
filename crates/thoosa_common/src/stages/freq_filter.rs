@@ -73,7 +73,6 @@ pub struct SyncFreqFilterIpcInit {
 impl SyncFreqFilterIpcInit {
 
     pub fn new(filter_configs: Vec<InputFilter>, num_channels: i64, sample_rate: f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Self {
-        //id: mono_key!(0, "").into(),
         Self {  filter_configs, num_channels, sample_rate,find_motifs_run_config_id, tho_device_idx }
     }
 }

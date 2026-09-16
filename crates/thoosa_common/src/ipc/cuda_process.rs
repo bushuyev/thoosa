@@ -1035,8 +1035,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     }
 
-
-
     async fn drop_tho_tensor(&self, key:u64) -> Result<(), ThoError> {
         debug!("CudaIPCActorHandle::drop_tho_tensor: key={key}");
         let (respond_to, recv) = oneshot::channel();
