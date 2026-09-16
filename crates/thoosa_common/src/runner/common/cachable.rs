@@ -540,7 +540,8 @@ where
         Self::wrap_inner(o, Some(Arc::new(CopyToDeviceCopier)))
     }
 
-    pub fn wrap_plain(o: O) -> Self
+    #[cfg(test)]
+    pub fn wrap_cpu(o: O) -> Self
     where
         O: WithId,
     {
