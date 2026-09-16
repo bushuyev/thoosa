@@ -13,10 +13,10 @@ use tch::Tensor;
 use tch::kind::Kind;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
-use thoosa_common::runs::SavableResult;
+use thoosa_common::resources::SavableResult;
 use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
-use thoosa_common::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::ws::Workspace;
@@ -570,7 +570,7 @@ where
 mod tests {
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::seq_scan::{SeqScanOutput, SeqScanStage, assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx};
+    use crate::stages::seq_scan::{SeqScanStage, assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx};
     use crate::stages::tensor_loader::mock_tensor_loader;
     use parking_lot::RwLock;
     use std::sync::Arc;
@@ -578,10 +578,9 @@ mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runs::Simple;
+    use thoosa_common::resources::Simple;
     use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
     use thoosa_common::transforms::filters::InputFilter;
-    use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::ResourceType;
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;

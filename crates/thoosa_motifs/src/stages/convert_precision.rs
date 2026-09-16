@@ -91,19 +91,19 @@ pub type ConvertPrecisionStage<C> = CommonConvertPrecisionStage<C, dyn MotifsWor
 #[cfg(test)]
 mod tests {
     use super::{ConvertPrecisionArgs, ConvertPrecisionBy, ConvertPrecisionInput, ConvertPrecisionNetType, ConvertPrecisionStage, ConvertPrecisionTarget};
+    use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, final_net, lin_label_node};
     use parking_lot::RwLock;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tch::nn::VarStore;
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::common_nets::LinLenNetParams;
     use thoosa_common::dims::AnyDims;
-    use thoosa_common::my_tch::ThoModule;
+    use thoosa_common::nets::common_nets::LinLenNetParams;
+    use thoosa_common::nets::nodes::ThoModule;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::ws::WsConfigs;
-    use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, final_net, lin_label_node};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
 

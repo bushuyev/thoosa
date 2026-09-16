@@ -60,7 +60,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, De
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::stages::freq_filter::FreqFilter;
-use thoosa_common::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;

@@ -1,8 +1,10 @@
+use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 use core::f32;
-use std::fmt::format;
 use log::Level::Trace;
 use log::{debug, error, log_enabled, trace, warn};
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
+use std::fmt::format;
 use std::ops::{Add, ControlFlow};
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
@@ -11,13 +13,11 @@ use tch::Kind;
 use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
-use serde::{Deserialize, Serialize};
 use thoosa_common::debug_plot;
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_norm_dims};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::{panic_to_err, ThoError};
-use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
+use thoosa_shared::{ThoError, panic_to_err};
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
@@ -907,14 +907,16 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
 
 #[cfg(test)]
 mod distance_tests {
+    use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
     use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeAccumulatedQuantile, LeQuantile, LocalMin, Tril};
     use crate::distance::{
+        MaskMaker,
         accumulating_mean_mask, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask,
-        local_min_mask_suppressed, slice_t, z_normalized_euclidean, MaskMaker,
+        local_min_mask_suppressed, slice_t, z_normalized_euclidean,
     };
     use chrono::Utc;
-    use log::__private_api::enabled;
     use log::LevelFilter::{Debug, Trace};
+    use log::__private_api::enabled;
     use log::{debug, max_level, set_max_level, trace};
     use parking_lot::Mutex;
     use plotters::prelude::{BLACK, GREEN, RED};
@@ -929,9 +931,7 @@ mod distance_tests {
     use tch::Tensor;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::{Device, IndexOp, Kind};
-    use thoosa_common::builder::Node::Par;
-    use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
-    use thoosa_shared::panic_to_err;
+    use thoosa_common::nets::builder::Node::Par;
     use thoosa_common::utils::{
         from, hist_1_dim, lin_iter,
         lin_t, plot_series, plot_series_with_points, reset_print_options,
@@ -939,9 +939,10 @@ mod distance_tests {
     };
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::colors_iter::DistinctColorIter;
+    use thoosa_shared::panic_to_err;
     use thoosa_shared::{
-        comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v,
         ThoError,
+        comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v,
     };
 
     #[ctor::ctor]

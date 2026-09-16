@@ -1,4 +1,3 @@
-use crate::common_nets::ThoModuleWithStore;
 use crate::dims::{Batch, Dims};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
@@ -7,6 +6,7 @@ use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWr
 use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::WorkerWrapperWithState;
+use crate::nets::common_nets::ThoModuleWithStore;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;

@@ -27,7 +27,7 @@ use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, Sp
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_common::runs::Simple;
+use thoosa_common::resources::Simple;
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};

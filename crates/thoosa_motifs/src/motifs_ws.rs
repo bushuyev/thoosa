@@ -1,3 +1,4 @@
+use crate::dims::{ChannelsMotifsData, LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams, final_net};
 use log::{debug, info};
 use mockall::mock;
@@ -7,9 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tch::nn;
 use tch::{Device, Tensor};
-use thoosa_common::common_nets::ThoModuleWithStore;
 use thoosa_common::dims::{Batch, Slice};
-use crate::dims::{ChannelsMotifsData, LabelProbability, LabelsProbabilities, MotifProbability};
+use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, VarStoreOrPath, Workspace, WsConfigs};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
@@ -372,9 +372,9 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
-    use thoosa_common::common_nets::LinLenNetParams;
     use thoosa_common::dims::AnyDims;
-    use thoosa_common::my_tch::{InitDummy, InitMode, ThoModule};
+    use thoosa_common::nets::common_nets::LinLenNetParams;
+    use thoosa_common::nets::nodes::{InitDummy, InitMode, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::cdt_for_dir;
 

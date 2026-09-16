@@ -1,4 +1,10 @@
+use crate::dims::MotifProbability;
 use crate::motifs_store::MotifsStore;
+use crate::stages::apply_motif_nets::{StackAppliedMotifNets, StackAppliedMotifNetsInput};
+use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
+use crate::stages::stage_ids::APPLY_MOTIF_NETS;
+use crate::stages::stft::{SyncStft, SyncStftSelector};
 use crate::train_nets::MotifNetTypeArgs::Cosine2DNet;
 use crate::train_nets::{MotifCosine2DNetArgs, TrainMotifNetRunConfig};
 use async_trait::async_trait;
@@ -12,12 +18,11 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Device::Cuda;
 use tch::{IndexOp, Kind, Tensor};
-use thoosa_common::common_nets::{StftRunConfig, ThoModuleWithStore};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, Slice};
-use crate::dims::MotifProbability;
-use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
-use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d, cosine_conv2d_bank_logits};
+use thoosa_common::nets::common_nets::{StftRunConfig, ThoModuleWithStore};
+use thoosa_common::nets::cosine_2d::{CosineConv2dBankConfig, ThoCosineConv2d, cosine_conv2d_bank_logits};
+use thoosa_common::nets::nodes::{ThoSequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
@@ -27,11 +32,6 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
-use crate::stages::apply_motif_nets::{StackAppliedMotifNets, StackAppliedMotifNetsInput};
-use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
-use crate::stages::stage_ids::APPLY_MOTIF_NETS;
-use crate::stages::stft::{SyncStft, SyncStftSelector};
 use thoosa_named_derive::Named;
 use thoosa_properties_map::FromHashmap;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -55,7 +55,7 @@ where
 {
     id: SynKey,
     pd:PhantomData<C>,
-    conv2d_tensors:Vec<MyCosineConv2dTensors>,
+    conv2d_tensors:Vec<ThoCosineConv2dTensors>,
     stft_run_configs: HashMap<u64, StftRunConfig>,
     slice_step: u32,
     pub trained_net_ids: Vec<u32>,
@@ -547,7 +547,7 @@ pub fn apply_cosine_kernel_bank_to_batched_spectrogram(
 }
 
 #[derive(Debug)]
-struct MyCosineConv2dTensors {
+struct ThoCosineConv2dTensors {
     channel:u32,
     motif_width:u32,
     stft_hash_value: u64,
@@ -560,7 +560,7 @@ struct MyCosineConv2dTensors {
 type CosineConv2dTensor = ThoTensor<AnyDims, SynKey>;
 
 #[derive(Debug)]
-struct RawMyCosineConv2dTensors {
+struct RawCosineConv2dTensors {
     channel:u32,
     motif_width:u32,
     stft_hash_value: u64,
@@ -570,7 +570,7 @@ struct RawMyCosineConv2dTensors {
     num_nets: usize,
 }
 
-impl RawMyCosineConv2dTensors {
+impl RawCosineConv2dTensors {
     fn mem_size(&self) -> u64 {
         self.kernels.mem_size() + self.a.mem_size() + self.b.mem_size()
     }
@@ -752,7 +752,7 @@ impl ConsumeData for BatchCosineConv2dTensorsInputWrapper {
 struct BatchedCosineConv2dTensors {
     id: SynKey,
     device_idx: usize,
-    conv2d_tensors: Vec<RawMyCosineConv2dTensors>,
+    conv2d_tensors: Vec<RawCosineConv2dTensors>,
 }
 
 impl WithId for BatchedCosineConv2dTensors {
@@ -887,7 +887,7 @@ where
                 }
             };
 
-            conv2d_tensors.push(RawMyCosineConv2dTensors { channel, motif_width, stft_hash_value, kernels, a, b, num_nets: group.kernels.len() });
+            conv2d_tensors.push(RawCosineConv2dTensors { channel, motif_width, stft_hash_value, kernels, a, b, num_nets: group.kernels.len() });
         }
 
         ConsumeResult::Ok(BatchedCosineConv2dTensors { id: self.out_id(&input_id), device_idx: input.device_idx, conv2d_tensors })
@@ -899,10 +899,10 @@ fn cat_cosine_conv2d_parts(parts: &[CosineConv2dTensorPart], indexes: &[usize], 
     ThoTensor::new(id, Tensor::f_cat(tensor_refs.as_slice(), 0)?)
 }
 
-async fn move_cosine_conv2d_tensors_to_cpu(raw_tensors: Vec<RawMyCosineConv2dTensors>) -> Result<Vec<MyCosineConv2dTensors>, ThoError> {
+async fn move_cosine_conv2d_tensors_to_cpu(raw_tensors: Vec<RawCosineConv2dTensors>) -> Result<Vec<ThoCosineConv2dTensors>, ThoError> {
     let mut tensors = Vec::with_capacity(raw_tensors.len());
     for raw in raw_tensors {
-        tensors.push(MyCosineConv2dTensors {
+        tensors.push(ThoCosineConv2dTensors {
             channel: raw.channel,
             motif_width: raw.motif_width,
             stft_hash_value: raw.stft_hash_value,
@@ -930,7 +930,8 @@ async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<Dev
     Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, mask)?)))
 }
 
-fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifProbability>>>) -> Result<RawMyCosineConv2dTensors, ThoError> {
+#[cfg(test)]
+fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifProbability>>>) -> Result<RawCosineConv2dTensors, ThoError> {
 
     let mut kernels = Vec::with_capacity(nets.len());
     let mut alphas = Vec::with_capacity(nets.len());
@@ -939,9 +940,7 @@ fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifPro
         extract_cosine_conv_2d_once(&mut kernels, &mut alphas, &mut betas, net);
     }
 
-
-
-    Ok(RawMyCosineConv2dTensors {
+    Ok(RawCosineConv2dTensors {
         channel: 0,
         motif_width: 0,
         stft_hash_value: 0,
@@ -968,16 +967,16 @@ fn extract_cosine_conv_2d_parts(channel: u32, motif_width: u32, stft_hash_value:
     ])
 }
 
-fn cosine_conv_2d_layer(net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) -> &MyCosineConv2d {
+fn cosine_conv_2d_layer(net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) -> &ThoCosineConv2d {
     let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
     debug!("cosine_conv_2d_layer: net_1_ref={net_1_ref:?}");
 
-    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
+    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<ThoSequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
 
     let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
     debug!("cosine_conv_2d_layer: layer={layer:?}");
 
-    layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d")
+    layer.as_ref().as_any().downcast_ref::<ThoCosineConv2d>().expect("net_1_cosine_2_d")
 }
 
 fn cosine_conv2d_tensor_group_id(channel: u32, motif_width: u32, stft_hash_value: u64) -> SynKey {
@@ -1000,7 +999,11 @@ fn cosine_conv2d_tensor_part_id(channel: u32, motif_width: u32, stft_hash_value:
 
 #[cfg(test)]
 mod tests {
+    use crate::dims::{MotifProbability, Spectorgram};
     use crate::motifs_store::MotifsStore;
+    use crate::stages::apply_cosine2d_motif_nets::{ApplyCosine2DMotifNets, apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d};
+    use crate::stages::apply_motif_nets::dummy_motif_net;
+    use crate::stages::apply_motif_nets::tests::apply_motif_nets_3_channels_2_motifs;
     use crate::train_nets::{MotifCosine2dNetParams, MotifNetParams, MotifNetTypeParams, TrainMotifNetRunConfig, cosine_2d_motif_node};
     use log::LevelFilter::Trace;
     use log::{set_max_level, trace};
@@ -1011,17 +1014,13 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
     use tch::{Device, IndexOp, Tensor};
-    use thoosa_common::common_nets::{StftRunConfig, ThoModuleWithStore};
     use thoosa_common::dims::{AnyDims, Batch, Slice};
-    use crate::dims::{MotifProbability, Spectorgram};
-    use thoosa_common::my_tch::{InitDummy, InitMode, MySequential, ThoModule};
-    use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d};
+    use thoosa_common::nets::common_nets::{StftRunConfig, ThoModuleWithStore};
+    use thoosa_common::nets::cosine_2d::{CosineConv2dBankConfig, ThoCosineConv2d};
+    use thoosa_common::nets::nodes::{InitDummy, InitMode, ThoSequential, ThoModule};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::Workspace;
-    use crate::stages::apply_cosine2d_motif_nets::{ApplyCosine2DMotifNets, apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d};
-    use crate::stages::apply_motif_nets::dummy_motif_net;
-    use crate::stages::apply_motif_nets::tests::apply_motif_nets_3_channels_2_motifs;
     use thoosa_properties_map::FromHashmap;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
