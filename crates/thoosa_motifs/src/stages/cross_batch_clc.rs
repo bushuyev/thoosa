@@ -1,4 +1,7 @@
 use crate::distance::clc_dist_d2;
+use crate::stages::dists_tracker::DistsMask;
+use crate::stages::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
+use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -16,11 +19,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tch::kind::FLOAT_CPU;
 use tch::{TchError, Tensor};
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
@@ -30,9 +33,6 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_common::ws::Workspace;
-use crate::stages::dists_tracker::DistsMask;
-use crate::stages::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
-use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -854,6 +854,9 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params:
 
 #[cfg(test)]
 mod tests {
+    use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams, unfold_and_cat};
+    use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
+    use crate::stages::find_motifs::{MasksCtx, MeanDistsCtx};
     use log::debug;
     use parking_lot::RwLock;
     use std::marker::PhantomData;
@@ -868,9 +871,6 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::lin_t;
-    use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams, unfold_and_cat};
-    use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
-    use crate::stages::find_motifs::{MasksCtx, MeanDistsCtx};
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;

@@ -1,6 +1,7 @@
-use std::collections::HashMap;
 use crate as thoosa_common;
 use crate::dims::LocalSelect;
+use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
+use crate::ipc::worker_msg::WorkerInput;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
@@ -8,34 +9,28 @@ use crate::torch_runner::tests::composite_input::B_STAGE_ID;
 use crate::torch_runner::tests::composite_input::dims::BStageOutputDims;
 use async_trait::async_trait;
 use cached_derive::Cached;
-use std::sync::Arc;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
-use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
-use crate::ipc::codec::IpcCodec;
-use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
-use crate::ipc::worker_msg::WorkerInput;
-use crate::torch_runner::tests::composite_input::loader_a::AStageOutput;
 
 #[derive(Debug, Clone, CpuData, Hash, Eq, PartialEq, Named)]
 #[dummy_data(clone)]
 pub(super) struct BStageInput {
     id: MonoKey,
     db_id: u32,
-    token:String,
+    token: String,
 }
 
 impl BStageInput {
-    pub(super) fn new<S:Into<String>>(db_id: u32, token:S) -> Self {
+    pub(super) fn new<S: Into<String>>(db_id: u32, token:S) -> Self {
         let token = token.into();
         Self {
             id: mono_key!(db_id, &token),
