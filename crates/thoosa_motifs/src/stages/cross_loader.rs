@@ -39,7 +39,7 @@ use crate::stages::slices_iter::SlicesIter;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
@@ -389,7 +389,7 @@ where
 }
 
 //TODO move to lib
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clone> {
     resources_config: RC,
@@ -1302,7 +1302,7 @@ mod tests {
         tensor_lens: Vec<i64>,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
+    #[derive(Debug, Clone, PartialEq, Eq, CpuData)]
     struct TestBatchOutput {
         call_index: usize,
     }

@@ -5,7 +5,7 @@ use syn::spanned::Spanned;
 use syn::{parse_quote, Attribute, DeriveInput, Meta, Path, Token};
 use syn::punctuated::Punctuated;
 
-#[proc_macro_derive(DummyData, attributes(dummy_data))]
+#[proc_macro_derive(CpuData, attributes(dummy_data))]
 pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(input as DeriveInput);
 
@@ -17,7 +17,7 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
     let ident = &input.ident;
 
     let mut generics = input.generics.clone();
-    if matches!(mode, DummyDataMode::Clone) {
+    if matches!(mode, CpuDataMode::Clone) {
         generics
             .make_where_clause()
             .predicates
@@ -27,8 +27,8 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let _copy_body = match mode {
-        DummyDataMode::Clone => quote! { Ok(self.clone()) },
-        DummyDataMode::NoClone => quote! { unimplemented!() },
+        CpuDataMode::Clone => quote! { Ok(self.clone()) },
+        CpuDataMode::NoClone => quote! { unimplemented!() },
     };
 
     let expanded = quote! {
@@ -55,13 +55,13 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DummyDataMode {
+enum CpuDataMode {
     Clone,
     NoClone,
 }
 
-fn extract_mode(input: &mut DeriveInput) -> syn::Result<DummyDataMode> {
-    let mut mode = DummyDataMode::Clone;
+fn extract_mode(input: &mut DeriveInput) -> syn::Result<CpuDataMode> {
+    let mut mode = CpuDataMode::Clone;
     let mut other_attrs = Vec::with_capacity(input.attrs.len());
 
     for attr in input.attrs.drain(..) {
@@ -76,17 +76,17 @@ fn extract_mode(input: &mut DeriveInput) -> syn::Result<DummyDataMode> {
     Ok(mode)
 }
 
-fn parse_dummy_data_attr(attr: Attribute) -> syn::Result<DummyDataMode> {
+fn parse_dummy_data_attr(attr: Attribute) -> syn::Result<CpuDataMode> {
     match attr.meta {
-        Meta::Path(_) => Ok(DummyDataMode::Clone),
+        Meta::Path(_) => Ok(CpuDataMode::Clone),
         Meta::List(list) => {
-            let mut mode = DummyDataMode::Clone;
+            let mut mode = CpuDataMode::Clone;
             let paths = list.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?;
             for path in paths {
                 if path.is_ident("clone") {
-                    mode = DummyDataMode::Clone;
+                    mode = CpuDataMode::Clone;
                 } else if path.is_ident("no_clone") {
-                    mode = DummyDataMode::NoClone;
+                    mode = CpuDataMode::NoClone;
                 } else {
                     return Err(syn::Error::new(path.span(), "expected `clone` or `no_clone`"));
                 }
@@ -110,7 +110,7 @@ mod tests {
         };
 
         let mode = extract_mode(&mut input).unwrap();
-        assert_eq!(mode, DummyDataMode::Clone);
+        assert_eq!(mode, CpuDataMode::Clone);
     }
 
     #[test]
@@ -121,7 +121,7 @@ mod tests {
         };
 
         let mode = extract_mode(&mut input).unwrap();
-        assert_eq!(mode, DummyDataMode::Clone);
+        assert_eq!(mode, CpuDataMode::Clone);
     }
 
     #[test]
@@ -132,6 +132,6 @@ mod tests {
         };
 
         let mode = extract_mode(&mut input).unwrap();
-        assert_eq!(mode, DummyDataMode::NoClone);
+        assert_eq!(mode, CpuDataMode::NoClone);
     }
 }

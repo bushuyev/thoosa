@@ -54,7 +54,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
@@ -151,7 +151,7 @@ where
     }
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct TrainFinalNetOutput {
     result: TrainFinalNetsRunConfigResult,

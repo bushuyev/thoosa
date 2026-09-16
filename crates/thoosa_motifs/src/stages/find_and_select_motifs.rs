@@ -17,7 +17,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::cli::run_plot;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::find_motifs::FindMotifsStage;
@@ -54,7 +54,7 @@ pub struct FindAndSelectMotifsRunConfig {
     pub select_motifs_run_config: SelectMotifsRunConfig,
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct FindAndSelectMotifsInput {
     pub find_resources: String,
@@ -72,7 +72,7 @@ impl FindAndSelectMotifsInput {
 
 impl Input for FindAndSelectMotifsInput {}
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct FindAndSelectMotifsResult {
     best_configs: Vec<FindAndSelectMotifsRunConfig>,

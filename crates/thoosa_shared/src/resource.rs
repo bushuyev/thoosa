@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 
 #[automock]
@@ -57,7 +57,7 @@ pub trait ResourceStore {
 
 }
 
-#[derive(Debug, Clone, DummyData, Named)]
+#[derive(Debug, Clone, CpuData, Named)]
 #[name = "n/a"]
 #[dummy_data(clone)]
 pub struct Resource {

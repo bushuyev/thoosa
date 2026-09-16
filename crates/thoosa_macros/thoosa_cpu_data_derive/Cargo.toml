@@ -1,5 +1,5 @@
 [package]
-name = "thoosa_dummy_data_derive"
+name = "thoosa_cpu_data_derive"
 version.workspace = true
 edition.workspace = true
 

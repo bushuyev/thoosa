@@ -16,7 +16,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, N
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
@@ -85,7 +85,7 @@ impl LocalSelect<SynKey, WelchChannelsSelector> for ThoTensor<WelchInputChannels
 
 impl Adjustable for WelchChannelsSelector {}
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct FrequenciesStatsInput<RC>
 where

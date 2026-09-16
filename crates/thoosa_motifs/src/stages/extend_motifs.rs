@@ -36,7 +36,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -50,7 +50,7 @@ use thoosa_store::Store;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct ExtendMotifsInput {
     resources_input: ResourcesConfigInput<Simple>,
@@ -73,7 +73,7 @@ impl ExtendMotifsInput {
 
 impl Input for ExtendMotifsInput {}
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 #[dummy_data(clone)]
 pub struct ExtendMotifsSavableResult {
 }

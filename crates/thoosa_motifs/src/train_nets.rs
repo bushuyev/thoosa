@@ -31,7 +31,7 @@ use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tch::Kind::Float;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_store::Store;
 use torch_sys::at_grad_set_enabled;
 
@@ -95,7 +95,7 @@ pub struct TrainMotifsNetsArgs {
     pub epoch_size: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, DummyData)]
+#[derive(Debug, Clone, PartialEq, Eq, CpuData)]
 pub enum MotifsBy {
     SelectMotifsRunIds { select_motifs_run_config_ids: Vec<RunConfigId> },
     MotifId { motif_id: u32, select_motifs_run_config_ids: Option<Vec<RunConfigId>> },
