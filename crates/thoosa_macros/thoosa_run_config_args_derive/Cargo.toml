@@ -10,16 +10,11 @@ proc-macro = true
 syn.workspace = true
 quote.workspace = true
 
-#paste = "1.0.6"
-convert_case = "0.7.1"
-thoosa_run_config_args = {path = "../thoosa_run_config_args" }
 thoosa_macros_utils = {path = "../thoosa_macros_utils" }
 thoosa_shared = {path = "../../thoosa_shared" }
 proc-macro2.workspace = true
-clap.workspace = true
-log.workspace = true
 
 [dev-dependencies]
-ctor.workspace = true
+
 [lints]
 workspace = true

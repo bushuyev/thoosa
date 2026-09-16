@@ -1195,9 +1195,9 @@ where
                 match in_t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {
                     Ok(t) => Ok(t.into()),
                     Err(e) => {
-                        error!("{:?}", e);
+                        error!("ThoLinear::tho_forward: {:?}", e);
                         #[cfg(any(debug_assertions, tho_debug))]
-                        error!("failed layer descr: {} ", self.descr);
+                        error!("ThoLinear::tho_forward: failed layer descr: {} ", self.descr);
 
                         Err(e.into())
                     }
@@ -1208,9 +1208,9 @@ where
                 match quantized.try_forward(&in_t.as_ref().to_kind(in_t.as_ref().kind())) {
                     Ok(t) => Ok(t.into()),
                     Err(e) => {
-                        error!("{:?}", e);
+                        error!("ThoLinear::tho_forward, quantized: {:?}", e);
                         #[cfg(any(debug_assertions, tho_debug))]
-                        error!("failed layer descr: {} ", self.descr);
+                        error!("ThoLinear::tho_forward: failed layer descr: {} ", self.descr);
 
                         Err(e.into())
                     }

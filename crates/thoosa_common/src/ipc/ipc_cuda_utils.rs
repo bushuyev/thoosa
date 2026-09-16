@@ -117,28 +117,6 @@ impl From<IpcTensorKind> for Kind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum IpcTransferDirection {
-    HostToDevice,
-    DeviceToHost,
-    GpuToGpuThroughHost,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum IpcProcessRole {
-    Parent,
-    Worker { worker_id: u64 },
-}
-
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum IpcBufferState {
-    Free,
-    Producing,
-    Ready,
-    Consuming,
-}
-
 
 /// Sends one duplicated reference to `fd` over a connected Unix domain socket.
 pub async fn send_fd(stream: &UnixStream, fd: BorrowedFd<'_>) -> io::Result<()> {

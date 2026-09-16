@@ -106,11 +106,8 @@ where
             })
         }
     }
-
-    pub fn new_i(base: Arc<S>, pd: PhantomData<Co>, inpf:InpF<I>) -> Self {
-        Self { base, pd, inpf }
-    }
 }
+
 impl <Co, S, I, O>SyncStageIpcWrapper for WorkerWrapper<Co, S, I, O>
 where
     Co: IpcCodec,

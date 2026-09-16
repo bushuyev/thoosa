@@ -1,4 +1,4 @@
-use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_d2h_from_ptr, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d};
+use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_d2h_from_ptr, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device};
 use crate::dims::Dims;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::runner::global_ctx::GlobalCtx;
@@ -579,14 +579,6 @@ impl CopyCtx {
         buf_size
     }
 
-    pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
-        if dst_device == 0 {
-            track_await(move_d2h(kind, src_t, self.buf_size, &self.bufs_pool_h2d)).await
-        } else {
-            track_await(move_h2d(kind, src_t, self.buf_size, &self.bufs_pool_h2d, dst_device)).await
-        }
-    }
-
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_tho_device == 0 {
             track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool_h2d)).await
@@ -629,10 +621,5 @@ impl CopyCtx {
     pub async fn copy_to_cpu_ptr(&self, src_ptr: usize, src_size: &[i64], kind: Kind, dst_ptr: usize) -> Result<(), ThoError> {
         track_await(copy_d2h_to_ptr(kind, self.buf_size, &self.bufs_pool_d2h, src_ptr, src_size, dst_ptr)).await
     }
-
-    pub fn buf_size(&self) -> usize {
-        self.buf_size
-    }
-
 
 }

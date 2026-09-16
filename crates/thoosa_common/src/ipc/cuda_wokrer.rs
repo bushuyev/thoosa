@@ -535,12 +535,12 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
     //for cloning on the main-process-side ThoTensor/ThoModule  containing references to the data kept on  worker side
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {//on main side
         error!("clone_refs: self={self:?}");
-        todo!()
+        unimplemented!()
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {//on worker side
         error!("WorkerStageInput::ref_to_tensor: self={self:?}");
-        todo!()
+        unimplemented!()
     }
 
 }
@@ -551,14 +551,9 @@ pub trait WorkerStageOutput: Debug + Sized + Serialize {
 
 impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
 where
-    // Self:WorkerInput,
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
-    // fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-    //     Ok(Box::new(self.clone_ref()?) as Box<dyn WorkerInput>)
-    // }
-
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         // Typed worker wrappers receive the tensor reference as a trait object and materialize it only inside the worker.
@@ -584,11 +579,8 @@ where
     D: Dims,
     Id: Clone + Debug + Named,
 {
-    pub fn ref_to_tensor(all_cuda_tensors: &AllTensors, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
-        Self::ref_to_tensor_(all_cuda_tensors, &input_ref, false)
-    }
 
-    pub fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
+    fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
         debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} selector={:?} remove={remove}", input_ref.selector());

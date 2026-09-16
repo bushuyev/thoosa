@@ -94,7 +94,7 @@ impl WorkerStageInput for AStageOutput {
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
       Ok(AStageOutput{
           id: self.id.clone(),
-          value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
+          value: self.value.ref_to_tensor(all_cuda_tensors, remove)?,
       })
     }
 

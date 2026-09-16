@@ -136,7 +136,7 @@ impl WorkerInput for crate::stages::train_step::TrainStepInput<Slice, MotifProba
 fn train_motif_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init = *(init as Box<dyn std::any::Any>).downcast::<TrainMotifStepIpcInit>().map_err(|_| ThoError::new("TrainMotifStep endpoint received invalid initializer"))?;
-        let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, init.motif)?;
+        let motif = init.motif.ref_to_tensor(all_cuda_tensors, false)?;
         let cosine_motif = match &init.params.net_type {
             MotifNetTypeParams::CosineNetParams(_) => Some(Arc::new(copy_motif(&motif)?)),
             MotifNetTypeParams::CosineNet2DParams(_) => {

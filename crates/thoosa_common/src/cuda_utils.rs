@@ -214,30 +214,6 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     track_await(copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).await
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_d2h"))]
-pub async fn move_d2h(
-    init_type: Kind,
-    src_t: Tensor,
-    buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-) -> Result<Tensor, ThoError> {
-
-    assert!(src_t.as_ref().device().ne(&Device::Cpu));
-
-    let tensor_mem_size = tensor_mem_size(init_type, &src_t.as_ref().size());
-    if tensor_mem_size < buf_size {
-        return Ok(src_t.to(Cpu))
-    }
-
-
-    let src_ptr: usize = src_t.data_ptr() as usize;
-    let src_size = src_t.size();
-
-    let res = track_await(copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).await;
-    drop(src_t); // keep source alive until the copy finishes
-    res
-}
-
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_from_ptr"))]
 pub async fn copy_d2h_from_ptr(
     init_type: Kind,
@@ -340,36 +316,6 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     )).await
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_h2d"))]
-pub async fn move_h2d(
-    init_type: Kind,
-    src_t: Tensor,
-    buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-    dst_tho_device_idx: usize,
-) -> Result<Tensor, ThoError> {
-    assert!(src_t.as_ref().device().eq(&Cpu));
-    assert!(dst_tho_device_idx > 0);
-
-    let tensor_mem_size = tensor_mem_size(init_type, &src_t.as_ref().size());
-    if tensor_mem_size < buf_size {
-        return Ok(src_t.to(ThoDevice::from(dst_tho_device_idx).into()))
-    }
-
-    let src_ptr = src_t.data_ptr() as usize; // CPU mem
-    let src_size = src_t.size();
-
-    let res = track_await(copy_h2d_from_ptr(
-        init_type,
-        buf_size,
-        bufs_pool,
-        dst_tho_device_idx,
-        src_ptr,
-        &src_size,
-    )).await;
-    drop(src_t); // keep source alive until the copy finishes
-    res
-}
 
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d_from_ptr"))]
