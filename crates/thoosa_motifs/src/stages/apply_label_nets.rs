@@ -50,11 +50,11 @@ use crate::stages::instance_cache::InstanceCache;
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::worker_msg::WorkerInput;
+use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_shared::tracked_await::track_await;
 

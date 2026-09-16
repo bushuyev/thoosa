@@ -39,32 +39,6 @@ impl IpcCodec for JsonIpcCodec {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct IpcSyncStageRunInput {
-    input: Vec<u8>,
-    max_other_parallel: Option<u8>,
-}
-
-impl IpcSyncStageRunInput {
-    pub fn new(input: Vec<u8>) -> Self {
-        Self {
-            input,
-            max_other_parallel: None,
-        }
-    }
-
-    pub fn with_max_other_parallel(input: Vec<u8>, max_other_parallel: u8) -> Self {
-        Self { input, max_other_parallel: Some(max_other_parallel) }
-    }
-
-    pub fn input(self) -> Vec<u8> {
-        self.input
-    }
-
-    pub fn into_parts(self) -> (Vec<u8>, Option<u8>) {
-        (self.input, self.max_other_parallel)
-    }
-}
 
 
 pub async fn purge_ipc_sync_stage<C>(

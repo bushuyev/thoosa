@@ -1,14 +1,15 @@
-use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::copy_ctx::CopyCtx;
+use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
-use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV, WorkerTensorInfoPayload};
 use crate::ipc::ipc_cuda_utils::{IpcTensorKind, recv_fd};
-use crate::ipc::json_ser::{ErasedWithState, PostcardToFromBytes, SyncStageIpcResponse, SyncStageIpcWrapper, ToFromBytes};
 use crate::ipc::proxy_tests::TestOutputA;
+use crate::ipc::serialization::json::IpcCodec;
+use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
+use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -17,8 +18,10 @@ use crate::ws::{FsWorkspace, Workspace, WsConfigs};
 use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
-use log::{debug, error, info, trace, LevelFilter};
+use log::{LevelFilter, debug, error, info, trace};
+use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Mutex, RwLock};
+use rand::{Rng, rng};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Serializer;
@@ -28,8 +31,8 @@ use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, OnceLock};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
 use thoosa_shared::perf_logging::init_tracing;
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
@@ -41,8 +44,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::field::debug;
 use tub::Pool;
-use memmap2::{MmapMut, MmapOptions};
-use rand::{rng, Rng};
 
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
@@ -565,8 +566,6 @@ where
     }
 
 }
-
-
 
 impl <D,E>WorkerStageOutput for DataWithExtra<D, E>
 where

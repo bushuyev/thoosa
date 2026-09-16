@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tch::Kind;
 use thoosa_shared::ThoError;
 
-use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
