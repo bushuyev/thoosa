@@ -93,15 +93,6 @@ where
         }
     }
 
-    pub fn to_default(self) -> ThoTensor {//same as strip_types
-        ThoTensor {
-            id: (),
-            inner: self.inner,
-            tracking: Default::default(),
-            pd: Default::default(),
-        }
-    }
-
     pub fn clone_ref(&self) -> Result<Self, ThoError> {
         match &self.inner {
             ThoTensorInner::Val { .. } => {
@@ -518,30 +509,12 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         ThoTensor { id, inner, tracking, pd }
     }
 
-    // #[cfg(test)]
     pub fn t_ref(&self) -> &Tensor {
-        //TODO remove
         self.inner_tensor_ref()
-    }
-
-    pub fn t_mut(&mut self) -> &mut Tensor {
-        self.inner_tensor_mut()
     }
 
     pub fn t(self) -> Tensor {
         self.into_inner_tensor()
-    }
-
-    // TODO remove
-    pub fn run_inner<R, F>(&self, func: F) -> Result<R, ThoError>
-    where
-        F: Fn(&Tensor) -> Result<R, ThoError>,
-    {
-        func(self.t_ref())
-    }
-
-    pub fn _track_used_in(&self, token: &'static str) {
-        self.tracking.write().push(token);
     }
 
     pub fn to_mut<'a>(&'a mut self) -> ThoTensorMut<'a, D, Id> {

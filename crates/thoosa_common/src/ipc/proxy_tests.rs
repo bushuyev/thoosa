@@ -113,7 +113,7 @@ impl <'a> WorkerStageInput for TestInputA<'a> {
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         Ok(TestInputA {
-            value: ThoTensor::ref_to_tensor_(all_cuda_tensors, &self.value, remove)?,
+            value: self.value.ref_to_tensor(all_cuda_tensors, remove)?,
             fail_with_oom: self.fail_with_oom,
             name: self.name.clone(),
         })

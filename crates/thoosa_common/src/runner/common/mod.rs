@@ -5,7 +5,6 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::Stage;
 use thoosa_shared::traits::{Named, WithId};
 pub mod cachable;
-pub mod runnable;
 
 
 #[derive(Debug)]
