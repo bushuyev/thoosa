@@ -1,11 +1,11 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
-use crate::batches::BatchLengths;
-// use crate::{data, utils};
-use crate::builder::SeqBuilder;
-use crate::builder::{Node, clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out};
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::InitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
+use crate::nets::batches::BatchLengths;
+// use crate::{data, utils};
+use crate::nets::builder::SeqBuilder;
+use crate::nets::builder::{Node, clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out};
+use crate::nets::nodes::InitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use crate::utils::*;
 use core::fmt;
@@ -33,14 +33,14 @@ use thoosa_shims::quantized_linear::FastQuantizedLinear;
 use torch_sys::C_tensor;
 
 #[derive(Debug)]
-pub struct MySequential<DI: Dims, DO: Dims> {
+pub struct ThoSequential<DI: Dims, DO: Dims> {
     pub layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
     split_input: Option<(i64, i64)>, //dim features
     _pd_do: PhantomData<DO>,
     _pd_di: PhantomData<DI>,
 }
 
-impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
+impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
     pub fn new(
         layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
         split_input: Option<(i64, i64)>,
@@ -72,7 +72,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
     }
 }
 
-impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModule<DI, DO> for MySequential<DI, DO> {
+impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModule<DI, DO> for ThoSequential<DI, DO> {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
@@ -141,19 +141,19 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
     }
 }
 
-pub struct MyParallel<DI: Dims, DO: Dims> {
+pub struct ThoParallel<DI: Dims, DO: Dims> {
     layers: Vec<Box<dyn ThoModule<DI, DO>>>,
     split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
     join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
 }
 
-impl<DI: Dims, DO: Dims> Debug for MyParallel<DI, DO> {
+impl<DI: Dims, DO: Dims> Debug for ThoParallel<DI, DO> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("").field("layers", &self.layers).finish()
     }
 }
 
-impl<DI: Dims, DO: Dims> MyParallel<DI, DO> {
+impl<DI: Dims, DO: Dims> ThoParallel<DI, DO> {
     pub fn new(
         layers: Vec<Box<dyn ThoModule<DI, DO>>>,
         split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
@@ -169,7 +169,7 @@ impl<DI: Dims, DO: Dims> MyParallel<DI, DO> {
     }
 }
 
-impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for MyParallel<DI, DO> {
+impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<DI, DO> {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
@@ -278,7 +278,7 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for Conv2D {
 }*/
 
 #[derive(Debug)]
-pub struct MyMaxPool1d {
+pub struct ThoMaxPool1d {
     kernel_size: i64,
     stride: i64,
     padding: i64,
@@ -286,7 +286,7 @@ pub struct MyMaxPool1d {
     ceil_mode: bool,
 }
 
-impl MyMaxPool1d {
+impl ThoMaxPool1d {
     pub fn new(kernel_size: i64, stride: i64, padding: i64) -> Self {
         Self {
             kernel_size,
@@ -298,7 +298,7 @@ impl MyMaxPool1d {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyMaxPool1d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoMaxPool1d {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
@@ -369,7 +369,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveAvgPool1d {
 }
 
 #[derive(Debug)]
-pub struct MyBatchNorm1d {
+pub struct ThoBatchNorm1d {
     batch_norm: BatchNorm,
 }
 
@@ -464,7 +464,7 @@ fn batch_norm1d_from_path(vs: &Path, num_features: i64, config: BatchNormConfig)
     Ok(batch_norm)
 }
 
-impl MyBatchNorm1d {
+impl ThoBatchNorm1d {
     pub fn new<'a, P: Borrow<Path<'a>>>(
         path: P,
         num_features: u32,
@@ -478,30 +478,30 @@ impl MyBatchNorm1d {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyBatchNorm1d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoBatchNorm1d {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyBatchNorm1d::tho_forward: t.size={:?}", t.size());
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
 }
 
-unsafe impl Send for MyBatchNorm1d {}
-unsafe impl Sync for MyBatchNorm1d {}
+unsafe impl Send for ThoBatchNorm1d {}
+unsafe impl Sync for ThoBatchNorm1d {}
 
 #[derive(Debug)]
-pub struct MyConv<ND> {
+pub struct ThoConv<ND> {
     conv: Conv<ND>,
     kernel: u32,
     config: ConvConfig,
 }
 
-impl<ND> MyConv<ND> {
+impl<ND> ThoConv<ND> {
     pub fn new(conv: Conv<ND>, kernel: u32, conv_config: ConvConfig) -> Self {
         Self { conv, kernel, config: conv_config }
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 1]> {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyConv::tho_forward: lengths={lengths:?}");
         if let Some(lengths) = lengths.as_deref_mut() {
@@ -517,7 +517,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 1]> {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 2]> {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
@@ -565,7 +565,7 @@ impl Default for InitMode {
 }
 
 #[derive(Debug)]
-pub struct MyCosineConv1d {
+pub struct ThoCosineConv1d {
     /// Learnable kernel, shape [1, 1, L]
     pub kernel: Tensor,
 
@@ -578,7 +578,7 @@ pub struct MyCosineConv1d {
     l: i64,
 }
 
-impl MyCosineConv1d {
+impl ThoCosineConv1d {
     pub fn new(
         vs: &Path,
         l: i64,
@@ -837,7 +837,7 @@ impl MyCosineConv1d {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
        Ok(self.forward(x_in.as_ref())?.into())
     }
@@ -897,7 +897,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for BinaryHead {
 }
 
 #[derive(Debug)]
-pub struct MySharpeningHead1d {
+pub struct ThoSharpeningHead1d {
     cls: nn::Conv1D,
     k_mu: i64,
     k_hat: i64,
@@ -905,7 +905,7 @@ pub struct MySharpeningHead1d {
     temperature: f64,
 }
 
-impl MySharpeningHead1d {
+impl ThoSharpeningHead1d {
     pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, k_mu: i64, k_hat: i64, p: f64, temperature: f64) -> Result<Self, ThoError> {
         if in_channels <= 0 {
             return Err(ThoError::new(format!("MySharpeningHead1d::new in_channels must be > 0, got {in_channels}")));
@@ -979,14 +979,14 @@ impl MySharpeningHead1d {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MySharpeningHead1d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoSharpeningHead1d {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         self.forward_with_thp(t.as_ref()).map(|(logits, _thp)| logits.into())
     }
 }
 
 #[derive(Debug)]
-pub struct MyAvgPool1d {
+pub struct ThoAvgPool1d {
     kernel_size: i64,
     stride: i64,
     padding: i64,
@@ -994,7 +994,7 @@ pub struct MyAvgPool1d {
     count_include_pad: bool,
 }
 
-impl MyAvgPool1d {
+impl ThoAvgPool1d {
     pub fn new(kernel_size: i64, stride: i64, padding: i64) -> Self {
         Self {
             kernel_size,
@@ -1006,7 +1006,7 @@ impl MyAvgPool1d {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAvgPool1d {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
@@ -1029,17 +1029,17 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAvgPool1d {
 }
 
 #[derive(Debug)]
-pub struct MyDropout {
+pub struct ThoDropout {
     p: f64,
 }
 
-impl MyDropout {
+impl ThoDropout {
     pub fn new(p: f64) -> Self {
         Self { p }
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyDropout {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoDropout {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         Ok(t.as_ref().f_dropout(self.p, train)?.into())
     }
@@ -1083,49 +1083,49 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send + ThoModuleDown
 pub type Fp = fn(&Tensor) -> Result<Tensor, ThoError>;
 pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoError>;//TODO add RC as param and make loss function net-specific
 
-pub struct MyFuncModule {
+pub struct ThoFuncModule {
     func: Fp,
 }
 
-impl Debug for MyFuncModule {
+impl Debug for ThoFuncModule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MyFuncModule").finish()
     }
 }
 
-impl MyFuncModule {
+impl ThoFuncModule {
     pub fn new(func: Fp) -> Self {
         Self { func }
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyFuncModule {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoFuncModule {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
 
-pub struct MyClosureModule {
+pub struct ThoClosureModule {
     //TODO Tensor->ThoTensor
     func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>,
 }
 
-unsafe impl Send for MyClosureModule {}
-unsafe impl Sync for MyClosureModule {}
+unsafe impl Send for ThoClosureModule {}
+unsafe impl Sync for ThoClosureModule {}
 
-impl MyClosureModule {
+impl ThoClosureModule {
     pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>) -> Self {
         Self { func }
     }
 }
 
-impl Debug for MyClosureModule {
+impl Debug for ThoClosureModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("MyClosureModule").finish()
     }
 }
 
-impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClosureModule {
+impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for ThoClosureModule {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         (self.func)(
             t.as_ref(),
@@ -1135,7 +1135,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyClo
 }
 
 #[derive(Debug)]
-pub struct MyLinear<DI: Dims, DO: Dims> {
+pub struct ThoLinear<DI: Dims, DO: Dims> {
     pub ws: Tensor,
     pub bs: Option<Tensor>,
     _pd_di: PhantomData<DI>,
@@ -1147,11 +1147,11 @@ pub struct MyLinear<DI: Dims, DO: Dims> {
     descr: String,
 }
 
-unsafe impl<DI: Dims, DO: Dims> Send for MyLinear<DI, DO> {}
-unsafe impl<DI: Dims, DO: Dims> Sync for MyLinear<DI, DO> {}
+unsafe impl<DI: Dims, DO: Dims> Send for ThoLinear<DI, DO> {}
+unsafe impl<DI: Dims, DO: Dims> Sync for ThoLinear<DI, DO> {}
 
 
-impl<DI, DO> MyLinear<DI, DO>
+impl<DI, DO> ThoLinear<DI, DO>
 where
     DI: Dims + Send + Sync + 'static,
     DO: Dims + Send + Sync + 'static
@@ -1173,7 +1173,7 @@ where
 }
 
 
-impl<DI, DO> ThoModule<DI, DO> for MyLinear<DI, DO>
+impl<DI, DO> ThoModule<DI, DO> for ThoLinear<DI, DO>
 where
     DI: Dims + Send + Sync + 'static,
     DO: Dims + Send + Sync + 'static
@@ -1241,13 +1241,13 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static
     c: LinearConfig,
     #[cfg(any(debug_assertions, tho_debug))]
     descr: String,
-) -> Result<MyLinear<DI, DO>, ThoError> {
+) -> Result<ThoLinear<DI, DO>, ThoError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
     let linear = linear_from_path(path.borrow(), in_dim, out_dim, c)?;
 
-    Ok(MyLinear::new(
+    Ok(ThoLinear::new(
         linear.ws,
         linear.bs,
         Default::default(),
@@ -1310,12 +1310,12 @@ pub fn configure_dense(
 }
 
 #[derive(Debug)]
-pub struct MyAttnPool1d {
+pub struct ThoAttnPool1d {
     proj: nn::Conv1D,
     v: nn::Conv1D,
 }
 
-impl MyAttnPool1d {
+impl ThoAttnPool1d {
     pub fn new(vs: &nn::Path, c: i64, attn_hidden: i64) -> Result<Self, ThoError> {
         let mut cfg = nn::ConvConfig { ..Default::default() };
         cfg.bias = true;
@@ -1330,7 +1330,7 @@ impl MyAttnPool1d {
 
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyAttnPool1d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
     /// h: [B, C, T]
     /// mask: Option<[B, T] bool> where true=valid
     /// returns: (pooled [B,C], attn [B,T])
@@ -1648,12 +1648,12 @@ mod tch_tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use crate::batches::BatchLengths;
-    use crate::builder::SeqBuilder;
-    use crate::builder::{Node, clc_conv1d_out};
-    use crate::common_nets::ThoModuleWithStore;
     use crate::dims::{AnyDims, Batch, Dims};
-    use crate::my_tch::{InitDummy, InitMode, MyLinear, ThoModule, valid_time_mask};
+    use crate::nets::batches::BatchLengths;
+    use crate::nets::builder::SeqBuilder;
+    use crate::nets::builder::{Node, clc_conv1d_out};
+    use crate::nets::common_nets::ThoModuleWithStore;
+    use crate::nets::nodes::{InitDummy, InitMode, ThoLinear, ThoModule, valid_time_mask};
     use tch::Device::Cpu;
     use tch::Kind::{Bool, Float};
     use tch::kind::FLOAT_CPU;
@@ -1702,7 +1702,7 @@ mod tch_tests {
         // Rebuilding over the same path must point at the existing tensor and
         // must not add a suffixed duplicate to the VarStore.
         let rebuilt: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs.root())?;
-        let rebuilt_linear = rebuilt.as_any().downcast_ref::<MyLinear<AnyDims, AnyDims>>().ok_or_else(|| ThoError::new("rebuilt module is not MyLinear"))?;
+        let rebuilt_linear = rebuilt.as_any().downcast_ref::<ThoLinear<AnyDims, AnyDims>>().ok_or_else(|| ThoError::new("rebuilt module is not MyLinear"))?;
 
         assert!(rebuilt_linear.ws.is_set_to(&existing_weight));
         assert_eq!(variable_count, vs.variables().len());
@@ -1782,7 +1782,7 @@ mod tch_tests {
     #[test]
     pub fn test_sharpening_head_1d_shapes() -> Result<(), ThoError> {
         let vs = nn::VarStore::new(Cpu);
-        let head = super::MySharpeningHead1d::new(&vs.root(), 4, 2, 5, 5, 1.7, 0.5)?;
+        let head = super::ThoSharpeningHead1d::new(&vs.root(), 4, 2, 5, 5, 1.7, 0.5)?;
         let sims = Tensor::randn([3, 4, 16], (Kind::Float, Device::Cpu));
 
         let (logits, thp) = head.forward_with_thp(&sims)?;

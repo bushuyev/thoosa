@@ -1,17 +1,17 @@
-use std::sync::Arc;
-use log::{debug, trace};
-use tch::{nn, IndexOp, Kind, Tensor};
-use tch::nn::Path;
-use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::ThoError;
-use thoosa_shared::traits::SimpleId;
-use crate::batches::BatchLengths;
 use crate::debug_plot;
 use crate::dims::Dims;
-use crate::my_tch::{InitMode, MyCosineConv1d, ThoModule, path_var};
+use crate::nets::batches::BatchLengths;
+use crate::nets::nodes::{InitMode, ThoCosineConv1d, ThoModule, path_var};
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
-use crate::utils::z_norm_dims;
 use crate::utils::plot_spectrogram;
+use crate::utils::z_norm_dims;
+use log::{debug, trace};
+use std::sync::Arc;
+use tch::nn::Path;
+use tch::{IndexOp, Kind, Tensor, nn};
+use thoosa_shared::ThoError;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::traits::SimpleId;
 
 
 #[derive(Debug, Clone, Copy)]
@@ -207,7 +207,7 @@ pub fn cosine_conv2d_bank_logits(
 }
 
 #[derive(Debug)]
-pub struct MyCosineConv2d {
+pub struct ThoCosineConv2d {
     pub kernel: Tensor,
 
     /// Learnable logit scale
@@ -222,7 +222,7 @@ pub struct MyCosineConv2d {
     cfg: CosineConv2dBankConfig,
 }
 
-impl MyCosineConv2d {
+impl ThoCosineConv2d {
     pub fn new(
         vs: &Path,
         kh: i64,
@@ -416,7 +416,7 @@ impl MyCosineConv2d {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv2d {
+impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
 
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
@@ -432,17 +432,17 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv2d {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::dims::AnyDims;
+    use crate::nets::cosine_2d::ThoCosineConv2d;
+    use crate::nets::nodes::{InitDummy, InitMode};
+    use crate::tho_tensor::ThoTensor;
     use log::debug;
+    use std::sync::Arc;
     use tch::Device::Cpu;
+    use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
-    use tch::Tensor;
-    use thoosa_shared::{simple_id, ThoError};
-    use crate::my_tch::{InitDummy, InitMode};
-    use crate::nodes::cosine_2d::MyCosineConv2d;
-    use crate::dims::AnyDims;
-    use crate::tho_tensor::ThoTensor;
+    use thoosa_shared::{ThoError, simple_id};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_check_dims() -> Result<(), ThoError> {
@@ -452,7 +452,7 @@ mod tests {
         let batch =  7;
 
         let vs = VarStore::new(Cpu);
-        let cosine_2d = MyCosineConv2d::new(
+        let cosine_2d = ThoCosineConv2d::new(
             &vs.root(),
             8000, 4,
             Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::SimpleId>::new(simple_id!(""), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),

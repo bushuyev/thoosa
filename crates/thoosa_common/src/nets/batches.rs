@@ -177,9 +177,9 @@ mod tests {
 }
 
 pub mod mock_async_data_batch {
-    use crate::batches::AsyncDataBatch;
-    use crate::batches::BatchLengths;
     use crate::dims::{Dims, ThoBatch};
+    use crate::nets::batches::AsyncDataBatch;
+    use crate::nets::batches::BatchLengths;
     use futures::stream::BoxStream;
     use mockall::mock;
     use std::sync::Arc;

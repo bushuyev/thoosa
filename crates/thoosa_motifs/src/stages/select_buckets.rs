@@ -557,7 +557,7 @@ mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runs::Simple;
+    use thoosa_common::resources::Simple;
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};

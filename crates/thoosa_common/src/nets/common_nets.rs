@@ -1,10 +1,10 @@
-use crate::batches::BatchLengths;
 use crate::dims::Dims;
-use crate::my_tch::{BinaryHeadPool, ThoModule};
+use crate::nets::batches::BatchLengths;
+use crate::nets::nodes::{BinaryHeadPool, ThoModule};
+use crate::nets::tho_varstore::clone_var_store_to;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::tho_varstore::clone_var_store_to;
 use crate::utils::{ListenerResponse, TrainListener, mask_from_lengths, plot_series, tensor_mem_size};
 use async_trait::async_trait;
 use clap::Args;
@@ -409,7 +409,7 @@ impl CommonTrainingRunConfig {
         self.tho_optimizer().build_for(vs, self.lr)
     }
 
-    pub fn tho_optimizer(&self) -> crate::tho_varstore::ThoOptimizers {
+    pub fn tho_optimizer(&self) -> crate::nets::tho_varstore::ThoOptimizers {
         let optimizer = self.optimizer.clone().unwrap_or_else(Self::default_optimizer);
 
         debug!("CommonTrainingRunConfig::tho_optimizer: optimizer={optimizer:?}");

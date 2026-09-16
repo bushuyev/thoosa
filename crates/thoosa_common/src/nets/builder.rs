@@ -1,17 +1,17 @@
+use log::debug;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
-use log::debug;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
-use crate::batches::BatchLengths;
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, conv1d_from_path, conv2d_from_path, my_linear, InitMode};
+use crate::nets::batches::BatchLengths;
+use crate::nets::cosine_2d::ThoCosineConv2d;
+use crate::nets::nodes::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, InitMode, SelfAttention, Split1, ThoAttnPool1d, ThoAvgPool1d, ThoBatchNorm1d, ThoClosureModule, ThoConv, ThoCosineConv1d, ThoDropout, ThoFuncModule, ThoMaxPool1d, ThoModule, ThoParallel, ThoSequential, ThoSharpeningHead1d, conv1d_from_path, conv2d_from_path, my_linear};
+use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
-use crate::nodes::cosine_2d::MyCosineConv2d;
-use crate::tho_tensor::{TensorInitRef, ThoTensor};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> Result<u32, ThoError> {
@@ -221,7 +221,7 @@ impl Node {
                         },
                     )?;
 
-                Box::new(MySequential::new(layers, split_input))
+                Box::new(ThoSequential::new(layers, split_input))
             }
 
             Node::Par { elts, split, join } => {
@@ -234,7 +234,7 @@ impl Node {
                         },
                     )?;
 
-                Box::new(MyParallel::new(layers, split, join))
+                Box::new(ThoParallel::new(layers, split, join))
             }
 
             Node::Split1 { node, split, join } => {
@@ -271,7 +271,7 @@ impl Node {
                     })?;
 
                 }
-                Box::new(MyConv::new(conv, kernel, config))
+                Box::new(ThoConv::new(conv, kernel, config))
             },
 
             Node::Conv2d {
@@ -279,15 +279,15 @@ impl Node {
                 in_channels,
                 out_channels,
                 config,
-            } => Box::new(MyConv::new(conv2d_from_path(
+            } => Box::new(ThoConv::new(conv2d_from_path(
                 &(vs / "cnn_2d"),
                 in_channels as i64,
                 out_channels as i64,
                 kernel as i64,
                 config,
             )?,
-          0,
-            ConvConfig::default())),
+                                       0,
+                                       ConvConfig::default())),
 
             Node::CosineConv1d {
                 path,
@@ -295,7 +295,7 @@ impl Node {
                 a, b,
                 init,
                 init_mode
-            } => Box::new(MyCosineConv1d::new(
+            } => Box::new(ThoCosineConv1d::new(
                 &(vs / path),
                 kernel as i64,
                 init,
@@ -308,7 +308,7 @@ impl Node {
                 a, b,
                 init,
                 init_mode
-            } => Box::new(MyCosineConv2d::new(
+            } => Box::new(ThoCosineConv2d::new(
                 &(vs / path),
                 kh_freq,
                 kw_time,
@@ -326,7 +326,7 @@ impl Node {
                 k_hat,
                 p,
                 temperature,
-            } => Box::new(MySharpeningHead1d::new(
+            } => Box::new(ThoSharpeningHead1d::new(
                 &(vs / path),
                 in_channels as i64,
                 out_channels as i64,
@@ -341,7 +341,7 @@ impl Node {
             Node::BatchNorm {
                 num_features,
                 config,
-            } => Box::new(MyBatchNorm1d::new(vs / "batch_norm", num_features, config)?),
+            } => Box::new(ThoBatchNorm1d::new(vs / "batch_norm", num_features, config)?),
 
             Node::Linear {
                 path,
@@ -373,7 +373,7 @@ impl Node {
                 kernel_size,
                 stride,
                 padding,
-            } => Box::new(MyMaxPool1d::new(
+            } => Box::new(ThoMaxPool1d::new(
                 kernel_size as i64,
                 stride as i64,
                 padding as i64,
@@ -391,7 +391,7 @@ impl Node {
                 kernel_size,
                 stride,
                 padding,
-            } => Box::new(MyAvgPool1d::new(
+            } => Box::new(ThoAvgPool1d::new(
                 kernel_size as i64,
                 stride as i64,
                 padding as i64,
@@ -407,16 +407,16 @@ impl Node {
                 )?)
             }
 
-            Node::Dropout { p } => Box::new(MyDropout::new(p)),
+            Node::Dropout { p } => Box::new(ThoDropout::new(p)),
 
-            Node::Func { func } => Box::new(MyFuncModule::new(func)),
+            Node::Func { func } => Box::new(ThoFuncModule::new(func)),
 
             Node::Closure { cl: closure } => {
-                Box::new(MyClosureModule::new(closure))
+                Box::new(ThoClosureModule::new(closure))
             },
 
             Node::AttnPool1d { path, channels, attn_hidden } => {
-                Box::new(MyAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64)?)
+                Box::new(ThoAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64)?)
             }
         })
     }

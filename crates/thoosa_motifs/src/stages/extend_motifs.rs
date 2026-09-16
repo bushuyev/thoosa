@@ -30,7 +30,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAd
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
-use thoosa_common::runs::{SavableResult, Simple};
+use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;

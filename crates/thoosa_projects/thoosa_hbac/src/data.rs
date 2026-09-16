@@ -807,8 +807,8 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::common_nets::{CommonTrainingRunConfigFields, OptConfig};
     use thoosa_common::dims::ChannelsData;
+    use thoosa_common::nets::common_nets::{CommonTrainingRunConfigFields, OptConfig};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::common::cachable::DevicesWrap;
