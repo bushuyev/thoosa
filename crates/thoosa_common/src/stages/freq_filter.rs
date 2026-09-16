@@ -1,3 +1,4 @@
+use crate::debug_plot;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::FutureExt;
@@ -12,8 +13,7 @@ use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
-use tch::{Device, Kind, Tensor};
-use thoosa_common::debug_plot;
+use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterContext, SplitsAdjusterContextImpl};
@@ -27,7 +27,6 @@ use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
-use crate::stages::transforms::smoothing::{median, moving_average};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
@@ -38,6 +37,7 @@ use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
+use thoosa_common::transforms::smoothing::{median, moving_average};
 use thoosa_common::utils::z_norm;
 use thoosa_common::ws::{Workspace, WsConfigs};
 use thoosa_digest_id::DigestHash;
@@ -48,8 +48,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::MutexGuard;
-
-use crate::stages::motif_loader::SyncMotifLoader;
+use crate::dims::LocalSelect;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
@@ -99,22 +98,6 @@ where
 
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-pub fn sync_freq_filter_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    async move {
-        let init: Box<dyn Any> = init;
-        let init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"))?;
-        let stage = SyncFreqFilter::<WokerRunCtx>::new_local(SyncFreqFilterIpcInit::new(
-            init.filter_configs.clone(),
-            init.num_channels,
-            init.sample_rate,
-            init.find_motifs_run_config_id,
-            1
-        ))?;
-
-        // The common stateful wrapper prepares filter tensors on the worker device before each synchronous invocation.
-        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
 
 
 impl<C> SyncFreqFilter<C>
@@ -867,40 +850,43 @@ where
     }
 }
 
+impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKey> {
+    type Output = ThoTensor<ChannelsData, SynKey>;
+
+    fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
+        let size: MonoMetrics<1, 2> = t.size().try_into()?;
+
+        let mut ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
+        debug!("ChannelsData2Selector::subview 1. ranges={ranges:?}, size={:?}", t.size());
+
+
+        let sub_tensor = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
+
+        Ok(ThoTensor::new(id.clone(), sub_tensor)?)
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {
-    use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
-    use crate::stages::transforms::smoothing::{median, moving_average};
-    use blake3::OUT_LEN;
-    use log::debug;
-    use parking_lot::RwLock;
-    use polars::polars_utils::parma::raw::Key;
-    use serde::{Deserialize, Serialize};
-    use std::hash::Hash;
     use std::sync::Arc;
     use tch::Tensor;
-    use tch::kind::FLOAT_CPU;
-    use thoosa_common::dims::ChannelsData;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::stages::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
+    use thoosa_common::transforms::filters::{AverageFilterParams, InputFilter, MedianFilterParams};
+    use thoosa_common::transforms::smoothing::{median, moving_average};
     use thoosa_common::utils::from;
-    use thoosa_common::ws::{mock_ws_simp, WsConfigs};
     use thoosa_digest_id::DigestHash;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::traits::{AsyncStage, RunCtx, StageHash, SyncStage};
-
+    use thoosa_shared::traits::{StageHash, SyncStage};
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
-
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
@@ -970,7 +956,7 @@ mod tests {
 
 
         let d : StageHash = init.blake3_hash().into();
-        assert_eq!(d.size(), 32);
+        assert_eq!(size_of::<StageHash>(), 32);
 
     }
 }

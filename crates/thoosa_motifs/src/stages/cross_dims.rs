@@ -1,10 +1,10 @@
-use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use log::{debug, trace};
 use std::cmp::min;
 use std::ops::Range;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyMetrics, Batch, ChannelsData, Dims, LocalSelect};
+use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::MonoMetrics;
@@ -45,27 +45,5 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
     }
 }
 
-impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKey> {
-    type Output = ThoTensor<ChannelsData, SynKey>;
-
-    fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
-        let size: MonoMetrics<1, 2> = t.size().try_into()?;
-
-        let mut ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
-        debug!("ChannelsData2Selector::subview 1. ranges={ranges:?}, size={:?}", t.size());
-
-        // if ranges[1].start > 48 {
-        //     ranges[1].start -=48;
-        // }
-        // if ranges[1].end < self.size()[1]-100 {
-        //     ranges[1].end +=100;
-        // }
-        // debug!("ChannelsData2Selector::subview 2. ranges={ranges:?}");
-
-        let sub_tensor = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
-
-        Ok(ThoTensor::new(id.clone(), sub_tensor)?)
-    }
-}
 
 
