@@ -430,13 +430,13 @@ impl<DI: Dims, DO: Dims> Debug for TrainStepInput<DI, DO> {
 
 impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
     type Metrics = <ThoBatch<DI> as Data>::Metrics;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         <ThoBatch<DI> as Data>::size(&self.x)
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.x.tho_device_idx()
     }
 
@@ -470,7 +470,7 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
         Self: 'a,
     {
         async move {
-            if self.device() == to_tho_device_idx {
+            if self.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(track_await(self.copy_to_device(to_tho_device_idx)).await?))
@@ -526,7 +526,7 @@ impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWra
                 return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
             };
             let selected = self.input.select_batch(selector)?;
-            if selected.device() == to_tho_device_idx {
+            if selected.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Owned(selected))
             } else {
                 Ok(ThoDataRef::Owned(track_await(selected.copy_to_device(to_tho_device_idx)).await?))

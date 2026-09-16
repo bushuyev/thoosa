@@ -176,13 +176,13 @@ impl PurgeModelsOutput {
 
 impl Data for PurgeModelsOutput {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 

@@ -1504,13 +1504,12 @@ pub mod test_types {
     #[async_trait]
     impl Data for TestInput {
         type Metrics = [usize; 1];
-        type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             0
         }
 
@@ -1572,13 +1571,13 @@ pub mod test_types {
     #[async_trait]
     impl Data for TestOutput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+
 
         fn size(&self) -> Self::Metrics {
             [1]
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             0
         }
 

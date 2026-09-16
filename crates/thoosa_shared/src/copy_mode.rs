@@ -12,7 +12,7 @@ pub struct CpuOnly<O>//TODO rename to MonoDevice - it's used also for structs ha
 
 impl<O> CopyMode for CpuOnly<O>
 where
-    O:Data<M=Self>
+    O:Data
 {}
 
 impl<O> CpuOnly<O>
@@ -32,5 +32,5 @@ pub struct CpuOrGpu<O>//TODO remove
 
 impl<O> CopyMode for CpuOrGpu<O>
 where
-    O:Data<M=Self> + CopyToDevice
+    O:Data + CopyToDevice
 {}

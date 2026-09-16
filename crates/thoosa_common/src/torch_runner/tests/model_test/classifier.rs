@@ -123,7 +123,7 @@ impl SyncStage for Classifier {
         Self: Sized,
     {//TODO remove block_in_place +  remove Classifier ?
         if GlobalCtx::global().is_ipc() && input.ref_key().is_none() {
-            if input.device() == ctx.tho_device_idx() {
+            if input.tho_device_idx() == ctx.tho_device_idx() {
                 return Err(ThoError::new(format!("Classifier IPC sync path expected a worker tensor ref, got local tensor already on device {}: {input:?}", ctx.tho_device_idx())));
             }
 

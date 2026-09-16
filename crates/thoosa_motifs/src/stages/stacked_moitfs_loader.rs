@@ -100,14 +100,14 @@ impl CopyToDevice for StackedMotifsOutput {
 
 impl Data for StackedMotifsOutput {
     type Metrics = MonoMetrics<1,3>;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.motifs.size()
     }
 
-    fn device(&self) -> usize {
-        self.motifs.device()
+    fn tho_device_idx(&self) -> usize {
+        self.motifs.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

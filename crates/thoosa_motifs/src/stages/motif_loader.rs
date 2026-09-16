@@ -208,14 +208,14 @@ impl WithId for LoadedMotifResource {
 
 impl Data for LoadedMotifResource {
     type Metrics = <ThoTensor<MotifSlices, SynKey> as Data>::Metrics;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         <ThoTensor<MotifSlices, SynKey> as Data>::size(&self.raw_tensor)
     }
 
-    fn device(&self) -> usize {
-        self.raw_tensor.device()
+    fn tho_device_idx(&self) -> usize {
+        self.raw_tensor.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -280,14 +280,14 @@ impl WithId for SyncMotifLoaderInput {
 
 impl Data for SyncMotifLoaderInput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.loaded_resources.len().into()
     }
 
-    fn device(&self) -> usize {
-        self.loaded_resources.first().map(|resource| resource.raw_tensor.device()).unwrap_or(0)
+    fn tho_device_idx(&self) -> usize {
+        self.loaded_resources.first().map(|resource| resource.raw_tensor.tho_device_idx()).unwrap_or(0)
     }
 
     fn mem_size(&self) -> u64 {

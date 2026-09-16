@@ -139,14 +139,14 @@ impl WithId for AStageOutput {
 
 impl Data for AStageOutput {
     type Metrics = <ThoTensor<AStageOutputDims, ()> as Data>::Metrics;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         <ThoTensor<AStageOutputDims, ()> as Data>::size(&self.value)
     }
 
-    fn device(&self) -> usize {
-        self.value.device()
+    fn tho_device_idx(&self) -> usize {
+        self.value.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

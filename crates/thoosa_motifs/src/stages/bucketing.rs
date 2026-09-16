@@ -73,13 +73,13 @@ where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
 {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 
@@ -107,13 +107,13 @@ impl BucketingOutput {
 
 impl Data for BucketingOutput {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         0
     }
 
@@ -333,14 +333,14 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
     type Metrics = D::Metrics;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         Data::size(&*self.tensor)
     }
 
-    fn device(&self) -> usize {
-        Data::device(&*self.tensor)
+    fn tho_device_idx(&self) -> usize {
+        Data::tho_device_idx(&*self.tensor)
     }
 
     fn mem_size(&self) -> u64 {

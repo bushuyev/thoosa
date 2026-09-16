@@ -462,13 +462,13 @@ impl Input for DistsMask {}
 
 impl Data for DistsMask {
     type Metrics = ();
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         ()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.mask.tho_device_idx()
     }
 

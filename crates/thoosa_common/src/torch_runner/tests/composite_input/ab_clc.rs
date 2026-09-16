@@ -442,15 +442,15 @@ impl<'a> WorkerStageInput for ABClcSyncStageInput<'a> {
 
 impl Data for ABClcSyncStageInput<'_> {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         &self.from_a.as_ref().size() + &self.from_b.as_ref().size()
     }
 
-    fn device(&self) -> usize {
-        assert_eq!(self.from_a.as_ref().device(), self.from_b.as_ref().device());
-        self.from_a.as_ref().device()
+    fn tho_device_idx(&self) -> usize {
+        assert_eq!(self.from_a.as_ref().tho_device_idx(), self.from_b.as_ref().tho_device_idx());
+        self.from_a.as_ref().tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

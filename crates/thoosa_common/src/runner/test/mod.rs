@@ -465,13 +465,13 @@ pub mod fixtures {
     #[async_trait]
     impl Data for DLoadedTensor {
         type Metrics = i64;
-        type M = CpuOrGpu<Self>;
+
 
         fn size(&self) -> Self::Metrics {
             self.data.0.len() as i64
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             0
         }
 
@@ -531,13 +531,13 @@ pub mod fixtures {
     #[async_trait]
     impl Data for DLoaderInput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+
 
         fn size(&self) -> Self::Metrics {
             ()
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             0
         }
 
@@ -837,14 +837,14 @@ mod tests {
     #[async_trait]
     impl Data for DMulStageOutput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+
 
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]
         }
 
-        fn device(&self) -> usize {
+        fn tho_device_idx(&self) -> usize {
             0
         }
 

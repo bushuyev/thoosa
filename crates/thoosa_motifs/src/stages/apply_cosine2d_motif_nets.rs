@@ -435,13 +435,13 @@ impl WithId for ApplyCosine2DMotifNetsSyncInput<'_> {
 
 impl Data for ApplyCosine2DMotifNetsSyncInput<'_> {
     type Metrics = MonoMetrics<1, 2>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         MonoMetrics::<1, 2>::try_from(self.input.size()).unwrap_or_default()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.input.tho_device_idx()
     }
 
@@ -629,14 +629,14 @@ impl WithId for CosineConv2dTensorPart {
 
 impl Data for CosineConv2dTensorPart {
     type Metrics = AnyMetrics;
-    type M = CpuOrGpu<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.tensor.size().into()
     }
 
-    fn device(&self) -> usize {
-        self.tensor.device()
+    fn tho_device_idx(&self) -> usize {
+        self.tensor.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -684,13 +684,13 @@ impl WithId for BatchCosineConv2dTensorsInput {
 
 impl Data for BatchCosineConv2dTensorsInput {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.parts.len().into()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.device_idx
     }
 
@@ -765,13 +765,13 @@ impl WithId for BatchedCosineConv2dTensors {
 
 impl Data for BatchedCosineConv2dTensors {
     type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOnly<Self>;
+
 
     fn size(&self) -> Self::Metrics {
         self.conv2d_tensors.len().into()
     }
 
-    fn device(&self) -> usize {
+    fn tho_device_idx(&self) -> usize {
         self.device_idx
     }
 

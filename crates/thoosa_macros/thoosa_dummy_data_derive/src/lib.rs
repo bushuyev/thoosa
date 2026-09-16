@@ -36,13 +36,12 @@ pub fn derive_dummy_data(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl #impl_generics ::thoosa_shared::traits::Data for #ident #ty_generics #where_clause {
             type Metrics = ();
-            type M = thoosa_shared::copy_mode::CpuOnly<Self>;
 
             fn size(&self) -> Self::Metrics {
                 ()
             }
 
-            fn device(&self) -> usize {
+            fn tho_device_idx(&self) -> usize {
                 0
             }
 
