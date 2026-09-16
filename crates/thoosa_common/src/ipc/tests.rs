@@ -306,7 +306,7 @@ mod tests {
         use futures_util::FutureExt;
         async move {
             // This stage has no initializer fields, but still uses the typed install message.
-            Ok(Box::new(crate::ipc::wraps::WorkerWrapper::<crate::ipc::codec::JsonIpcCodec, _, _, _>::new(Arc::new(SyncConsumeTestStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+            Ok(Box::new(crate::ipc::wraps::WorkerWrapper::<crate::ipc::serialization::json::JsonIpcCodec, _, _, _>::new(Arc::new(SyncConsumeTestStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
         }.boxed()
     }
 

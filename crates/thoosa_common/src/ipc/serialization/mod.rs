@@ -1,8 +1,9 @@
 pub mod tho_tensor;
+pub mod json;
 
-use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use json::IpcCodec;
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;

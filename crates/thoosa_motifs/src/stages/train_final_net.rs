@@ -31,8 +31,8 @@ use tch::Device::{Cpu, Cuda};
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{Kind, Reduction, Tensor};
 use thoosa_common::dims::{Batch, ThoBatch};
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;

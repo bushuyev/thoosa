@@ -1,7 +1,7 @@
-use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
@@ -274,8 +274,8 @@ pub fn test_simp_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Wor
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
     use crate::ipc::proxy_tests::{TEST_ENDPOINT, TestOutputA, TestStageInitA, test_simp_init};
+    use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

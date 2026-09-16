@@ -1,6 +1,6 @@
-use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 use crate::runner::common::cachable::ThoDataRef;
 use crate::runner::global_ctx::GlobalCtx;

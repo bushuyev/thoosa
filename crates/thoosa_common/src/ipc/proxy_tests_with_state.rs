@@ -1,8 +1,8 @@
 use crate::dims::{Batch, Dims};
-use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapperWithState};
 use crate::nets::common_nets::ThoModuleWithStore;
@@ -319,10 +319,10 @@ pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Wo
 }
 
 mod tests {
-    use crate::ipc::codec::JsonIpcCodec;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
+    use crate::ipc::serialization::json::JsonIpcCodec;
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

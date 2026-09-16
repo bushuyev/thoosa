@@ -21,8 +21,8 @@ use tch::nn::{Optimizer, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};

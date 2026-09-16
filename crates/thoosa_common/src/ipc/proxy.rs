@@ -1,26 +1,26 @@
+use crate::copy_ctx::CudaActorHandle;
+use crate::ipc::cuda_process::CudaIPCActorHandle;
+use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
+use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::tho_tensor::ThoTensor;
+use async_trait::async_trait;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
+use log::{debug, error};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use async_trait::async_trait;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
-use log::{debug, error};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use tokio::sync::MutexGuard;
-use with_id::WithId;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage};
-use crate::copy_ctx::CudaActorHandle;
-use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{CudaIPCActorHandle};
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
-use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::purge::FuturesRunnerMapPurger;
-use crate::tho_tensor::ThoTensor;
+use tokio::sync::MutexGuard;
+use with_id::WithId;
 
 pub struct ProxyStage<St>
 where
@@ -408,7 +408,7 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageEnum::Proxy { stage,  .. } => {
-                thoosa_common::ipc::codec::purge_ipc_sync_stage::<JsonIpcCodec>(
+                crate::ipc::serialization::json::purge_ipc_sync_stage::<JsonIpcCodec>(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
                     stage.stage_id,
@@ -558,7 +558,7 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
-                thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
+                crate::ipc::serialization::json::purge_ipc_sync_stage::<crate::ipc::serialization::json::JsonIpcCodec>(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
                     stage.stage_id,

@@ -83,8 +83,8 @@ use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
 use thoosa_properties_map::ToHashmap;
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
-use thoosa_common::ipc::codec::JsonIpcCodec;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx};
+use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;

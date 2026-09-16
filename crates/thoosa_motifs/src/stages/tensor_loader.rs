@@ -1,6 +1,6 @@
 use std::any::Any;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 
 use mockall_double::double;

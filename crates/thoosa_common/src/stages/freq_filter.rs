@@ -28,8 +28,8 @@ use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
 use crate::dims::LocalSelect;
+use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::wraps::SyncStageIpcWrapper;
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
