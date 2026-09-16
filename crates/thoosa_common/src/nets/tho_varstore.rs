@@ -1,6 +1,6 @@
-use crate::builder::{Node, SeqBuilder};
 use crate::dims::{AnyDims, Batch, Dims};
-use crate::my_tch::ThoModule;
+use crate::nets::builder::{Node, SeqBuilder};
+use crate::nets::nodes::ThoModule;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
@@ -941,15 +941,15 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{Node, SeqBuilder};
     use crate::dims::{AnyDims, Batch};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
+    use crate::nets::builder::{Node, SeqBuilder};
+    use crate::nets::tho_varstore::{ModConfig, OptSnapshot, ThoTrainModule, clone_adam_snapshot_to, clone_var_store_to, do_test_reset_optimizer, replace_data};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, do_test_reset_optimizer, replace_data, ModConfig, OptSnapshot, ThoTrainModule};
     use log::debug;
     use std::collections::HashMap;
     use std::io::Cursor;

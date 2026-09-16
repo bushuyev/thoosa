@@ -19,7 +19,7 @@ use std::f64;
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
-use thoosa_common::runs::SavableResult;
+use thoosa_common::resources::SavableResult;
 use thoosa_common::transforms::filters::*;
 use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;

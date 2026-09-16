@@ -1,3 +1,4 @@
+use crate::dims::{MotifSlices, Spectorgram};
 use cached_derive::Cached;
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -6,9 +7,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::common_nets::StftRunConfig;
 use thoosa_common::dims::{Batch, Dims, LocalSelect};
-use crate::dims::{MotifSlices, Spectorgram};
+use thoosa_common::nets::common_nets::StftRunConfig;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -250,7 +250,7 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 #[cfg(test)]
 mod tests {
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::common_nets::StftRunConfig;
+    use thoosa_common::nets::common_nets::StftRunConfig;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_shared::ThoError;
 

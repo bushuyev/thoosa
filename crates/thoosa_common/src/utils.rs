@@ -29,9 +29,9 @@ use thoosa_shared::{ThoError, cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand,
 use thoosa_store::Store;
 use torch_sys::cuda::atc_cuda_device_count;
 
-use crate::batches::BatchLengths;
-use crate::builder::SeqBuilder;
 use crate::dims::Dims;
+use crate::nets::batches::BatchLengths;
+use crate::nets::builder::SeqBuilder;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
@@ -1256,7 +1256,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-use crate::common_nets::ThoModuleWithStore;
+use crate::nets::common_nets::ThoModuleWithStore;
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -1533,7 +1533,7 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 ) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     let vs = VarStore::new(device);
 
-    let builder = Arc::new(move |path: &nn::Path| -> Result<Box<dyn crate::my_tch::ThoModule<DI, DO>>, ThoError> {
+    let builder = Arc::new(move |path: &nn::Path| -> Result<Box<dyn crate::nets::nodes::ThoModule<DI, DO>>, ThoError> {
         SeqBuilder::new(num_features, None)?
             .linear_s_with_conf(
                 "todo",
@@ -1952,8 +1952,8 @@ pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
-    use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
+    use crate::nets::batches::BatchLengths;
     use std::cmp::max;
 
     use crate::utils::{TrainListener, assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, tensor_digest, to_vec_f32, to_vec_i64};
@@ -1978,9 +1978,9 @@ pub mod tests {
 
     use thoosa_shared::hyperparameter::Hyperparameter;
 
-    use crate::common_nets::SelfAttentionNetParams;
     use crate::dims::AnyDims;
-    use crate::my_tch::ThoModule;
+    use crate::nets::common_nets::SelfAttentionNetParams;
+    use crate::nets::nodes::ThoModule;
 
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val::{Int, UInt};

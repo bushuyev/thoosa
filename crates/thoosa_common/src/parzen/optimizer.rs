@@ -1,4 +1,4 @@
-use crate::common_nets::OptConfig;
+use crate::nets::common_nets::OptConfig;
 // use rand_distr::{Uniform, Distribution};
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
@@ -838,7 +838,7 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tpe_optimizer_tests {
-    use crate::common_nets::OptConfig;
+    use crate::nets::common_nets::OptConfig;
     use crate::parzen::optimizer::Val::Int;
     use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection, Val, stack_params};
     use crate::tho_tensor::ThoTensor;

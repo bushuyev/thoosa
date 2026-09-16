@@ -1,4 +1,8 @@
+use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::motifs_store::MotifsStore;
+use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
+use crate::stages::cross_loader::ResourcesConfigInput;
+use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures_util::StreamExt;
@@ -18,41 +22,38 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, Ordering};
 use thoosa_common::dims::ChannelsData;
-use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
-use thoosa_common::stages_seq::ABStage;
-use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
-use crate::stages::cross_loader::ResourcesConfigInput;
-use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
+use thoosa_common::stages::stages_seq::ABStage;
 
-use tch::Device::{Cpu, Cuda};
-use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
-use tch::{Kind, Reduction, Tensor};
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
-use thoosa_common::dims::{Batch, ThoBatch};
-use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::stages::instance_cache::InstanceCache;
 use crate::stages::stft::SyncStftSelector;
 use crate::stages::train_step::{TrainStep, TrainStepXFn};
+use tch::Device::{Cpu, Cuda};
+use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
+use tch::{Kind, Reduction, Tensor};
+use thoosa_common::dims::{Batch, ThoBatch};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
+use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::train_nets::final_net;
 use crate::train_nets::{FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
-use thoosa_common::common_nets::{CommonTrainingRunConfig, OptConfig};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
+use thoosa_common::nets::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_common::runs::{Logits, NetResources, SavableResult};
+use thoosa_common::resources::{Logits, NetResources, SavableResult};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
 use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
@@ -70,7 +71,6 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
 use thoosa_store::Store;
 use tracing::field::debug;
-use crate::stages::apply_motif_nets::ApplyMotifNets;
 
 pub const TRAIN_FINAL_STEP_ENDPOINT: &str = "TrainFinalStep";
 
@@ -737,7 +737,14 @@ pub fn train_final_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 
 #[cfg(test)]
 mod tests {
+    use crate::dims::{ChannelsMotifsData, LabelProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
+    use crate::stages::apply_motif_nets::{motif_sum_net_, motif_test_net_};
+    use crate::stages::cross_loader::ResourcesConfigInput;
+    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::stages::tensor_loader::mock_tensor_loader;
+    use crate::stages::train_final_net::{TrainFinalNetOutput, TrainFinalNetsRunConfigResult, new_train_final_net};
+    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use crate::train_nets::{FinalNetArgs, FinalNetArgsFields, FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
     use crate::train_nets::{LabelNetParams, LabelNetTypeParams};
     use log::LevelFilter::{Debug, Trace};
@@ -749,26 +756,19 @@ mod tests {
     use tch::Device::Cpu;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::batches::BatchLengths;
-    use thoosa_common::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, ConvNetParams, LinLenNetParams, OptConfig, ThoModuleWithStore};
     use thoosa_common::dims::{Batch, Slice};
-    use crate::dims::{ChannelsMotifsData, LabelProbability};
-    use thoosa_common::my_tch::{MyClosureModule, ThoModule};
+    use thoosa_common::nets::batches::BatchLengths;
+    use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, ConvNetParams, LinLenNetParams, OptConfig, ThoModuleWithStore};
+    use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runs::{Logits, NetResources, SavableResult};
+    use thoosa_common::resources::{Logits, NetResources, SavableResult};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
-    use crate::stages::apply_motif_nets::{motif_sum_net_, motif_test_net_};
-    use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::tensor_loader::mock_tensor_loader;
-    use crate::stages::train_final_net::{TrainFinalNetOutput, TrainFinalNetsRunConfigResult, new_train_final_net};
-    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -788,7 +788,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let mut sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
                         // let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;

@@ -56,7 +56,7 @@ use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::dims::Dims;
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
-use thoosa_common::runs::{Labeled, SavableResult, Simple};
+use thoosa_common::resources::{Labeled, SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::clc_frequencies;
@@ -294,7 +294,7 @@ mod motif_find_tests {
     };
     use crate::motif_tracker_store::{IdSlice, SlicesMatch};
     use crate::motifs_store::MotifsStore;
-    use thoosa_common::runs::Simple;
+    use thoosa_common::resources::Simple;
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::applicables_runner::Input;

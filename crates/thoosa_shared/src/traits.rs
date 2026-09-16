@@ -287,13 +287,13 @@ impl From<&'static str> for DummyCachableId {
 }
 
 
-pub trait Metrics:Default {//TODO remove Default
+pub trait Metrics:Default {
     fn default_end(&self) -> Self {
         Default::default()
     }
 
     fn cap(&self, _other:&mut  Self)  {
-        todo!()
+        
     }
 
     fn num_elts(&self)->usize{

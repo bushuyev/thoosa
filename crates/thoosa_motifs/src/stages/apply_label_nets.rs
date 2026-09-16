@@ -19,11 +19,11 @@ use std::sync::atomic::Ordering::Relaxed;
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
-use thoosa_common::batches::BatchLengths;
-use thoosa_common::common_nets::ThoModuleWithStore;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{Batch, Slice};
-use thoosa_common::my_tch::ThoModule;
+use thoosa_common::nets::batches::BatchLengths;
+use thoosa_common::nets::common_nets::ThoModuleWithStore;
+use thoosa_common::nets::nodes::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::DropIf;
@@ -969,12 +969,12 @@ mod tests {
     use tch::Kind::Float;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::batches::BatchLengths;
-    use thoosa_common::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
+    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::{Batch, Slice};
-    use thoosa_common::my_tch::{MyClosureModule, ThoModule};
-    use thoosa_common::data_with_extra::DataWithExtra;
+    use thoosa_common::nets::batches::BatchLengths;
+    use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
+    use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef, ThoDataRef};
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1002,7 +1002,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let batch = t.size()[0];
                         // let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
                         let out = t.f_mean_dim(1,  true, Float )?.f_mul_scalar_(k)?;;
@@ -1043,7 +1043,7 @@ mod tests {
             Box::new(move || {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         let out = sum_label_t(k, t)?;
                         Ok(out)
                     })));
@@ -1089,7 +1089,7 @@ mod tests {
                 let key_weights = weights.clone();
                 let builder = Arc::new(move |_path: &nn::Path| {
                     let weights = weights.clone();
-                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         weighted_label_t(&weights, t)
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
