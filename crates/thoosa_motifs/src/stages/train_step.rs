@@ -2,7 +2,7 @@ use crate::stages::train_net::maybe_cuda_mem;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -71,10 +71,12 @@ where
     }
 
     async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
-        debug!("TrainStep::purge_gpu");
+        info!("TrainStep::purge_gpu");
         // Moving the complete state together preserves optimizer snapshots when
         // the OOM handler evicts this stage from a GPU.
-        self.train_module.lock().await.move_to_device(0).await
+        let mut guard = self.train_module.lock().await;
+        guard.opt().zero_grad();
+        guard.move_to_device(0).await
     }
 
     async fn drop_gpu(&self, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
