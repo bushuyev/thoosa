@@ -302,6 +302,7 @@ pub fn mock_motifs_ws_base(path: Option<&PathBuf>, channels: u32, sample_rate: u
     ws.expect_sample_rate().return_const(sample_rate);
     ws.expect_channels().return_const(channels);
     ws.expect_max_input().return_const(max_input);
+    ws.expect_ws_configs().return_const(WsConfigs::new(channels, max_input, sample_rate));
     ws.expect_import_tensor().return_const(Ok(ResourceStats::new(vec![20, 100])));
     ws
 }
