@@ -1246,7 +1246,8 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
-    pub async fn new(
+    // RandomSlicesStage is private to this module, so this constructor is private too.
+    async fn new(
         motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
         random_slices_loader: Arc<RandomSlicesStage<L, C>>,
         batch_size: i64,

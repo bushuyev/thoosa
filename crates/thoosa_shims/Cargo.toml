@@ -11,15 +11,16 @@ path = "src/lib.rs"
 thoosa_shared = {path = "../thoosa_shared" }
 torch-sys.workspace = true
 
-cmake = "0.1"
 log.workspace = true
-ctor.workspace = true
 tch.workspace = true
 tracing.workspace = true
 talc.workspace = true
 parking_lot.workspace = true
 [build-dependencies]
 cmake = "0.1"
+
+[dev-dependencies]
+ctor.workspace = true
 
 [lints]
 workspace = true

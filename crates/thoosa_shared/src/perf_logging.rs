@@ -724,7 +724,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
-    use log::{debug, info};
+    use log::info;
     use tracing::Instrument;
     use crate::{cdt_for_dir, ThoError};
     use crate::perf_logging::{format_perf_map, init_perf_writer, PERF};

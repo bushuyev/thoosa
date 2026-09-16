@@ -4,7 +4,6 @@
 #![allow(incomplete_features)]
 #![allow(confusable_idents)]
 #![allow(deprecated)]
-#![feature(associated_type_defaults)]
 
 extern crate self as thoosa_shared;
 
@@ -551,18 +550,6 @@ impl ThoError {
             Cause::SubmitErrorCancelled => "submit error: cancelled".into(),
             Cause::JobError { job_id, inner } => format!("job {job_id}: {inner}"),
             Cause::ContextReset => "context reset".into(),
-        }
-    }
-
-    fn backtrace_last_line(&self) -> Option<String> {
-        last_trace_line(&self.backtrace)
-    }
-
-
-    fn oom_backtrace_last_line(&self) -> Option<String> {
-        match &self.what {
-            Cause::JobError { inner, .. } if inner.is_oom() => inner.oom_backtrace_last_line().or_else(|| self.backtrace_last_line()),
-            _ => self.backtrace_last_line(),
         }
     }
 

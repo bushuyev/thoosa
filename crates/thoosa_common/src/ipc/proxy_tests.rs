@@ -201,7 +201,8 @@ where
     C:RunCtx
 {
 
-    pub async fn new<'a>(tho_device_idx: usize, init: TestStageInitA) -> Result<DynSyncStageEnum<TestStageA<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
+    // The initializer is private to this test module, so the constructor is too.
+    async fn new<'a>(tho_device_idx: usize, init: TestStageInitA) -> Result<DynSyncStageEnum<TestStageA<u32, TestRunCtx>>, ThoError>//DynSyncStageBox2 is needed to implement SyncStage required by bounds in OOMHandler::run and CudaActorHandle::run_stage
 
     {
         if GlobalCtx::global().is_ipc() {
@@ -216,7 +217,7 @@ where
 
     }
 
-    pub fn new_local(init: TestStageInitA) -> Self {
+    fn new_local(init: TestStageInitA) -> Self {
         Self { k: init.k, pd: PhantomData }
     }
 }

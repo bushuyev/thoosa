@@ -448,7 +448,8 @@ mod tests {
 
                 assert_eq!(cpu_out.id(), &clc_task.out_id(loaded.id()));
                 if use_matmul {
-                    check_sum_result(MUL_K, size, resource, &cpu_out);
+                    // This test branch validates the returned tensor; surface validation failures.
+                    check_sum_result(MUL_K, size, resource, &cpu_out)?;
                 } else {
                     mul_check(MUL_K, size.into(), resource, &cpu_out, 0.1, 0.1);
                 }
@@ -1039,7 +1040,7 @@ mod tests {
             let test_f = Arc::clone(&test_f);
 
             let mut set = JoinSet::new();
-            let mut iter = (0..num_tensors);
+            let mut iter = 0..num_tensors;
             let mut out = Vec::new();
 
             // Fill initial batch.

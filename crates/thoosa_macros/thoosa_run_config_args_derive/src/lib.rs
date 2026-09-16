@@ -984,6 +984,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
         #vec_index_alias
 
+        // Selected-variant markers keep their existing public path names.
+        #[allow(non_camel_case_types)]
         #[derive(Debug, PartialEq, Clone)]
         pub enum #fields_enum_ident {
             #enum_fields
@@ -991,6 +993,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
         //used for hyperparam keys in TPEOptimizer
         impl std::fmt::Display for #fields_enum_ident {
+            // Generated display patterns preserve field enum names as local bindings.
+            #[allow(non_snake_case)]
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
                     #enum_fields_for_display
