@@ -141,7 +141,7 @@ impl dyn CudaActorHandle + '_ {
 
         debug!("CudaActorHandle::run_stage: stage={stage:?} with_state={}", state.is_some());
 
-        let borrowed = BorrowRef::borrow_to(&input, to_device_idx).await?;
+        let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;
 
         let mut handle_ctx = self.init_handle_ctx().await?;
 
@@ -186,7 +186,7 @@ impl dyn CudaActorHandle + '_ {
             None
         };
         let has_selector = selector.is_some();
-        let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
+        let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;
 
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
 

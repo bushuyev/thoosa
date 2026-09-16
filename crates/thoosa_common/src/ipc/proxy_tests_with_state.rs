@@ -81,7 +81,7 @@ impl WithId for TestInputB {
 impl BorrowRef for TestInputB {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o
     {

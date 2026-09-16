@@ -435,7 +435,7 @@ mod tests {
 
                 let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_clc");
                 let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
-                let output_ref = BorrowRef::borrow_to(&output_ref, ctx.tho_device_idx()).await?;
+                let output_ref = BorrowRef::borrow_ref(&output_ref, ctx.tho_device_idx()).await?;
                 let out_key = output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))?;
 
 

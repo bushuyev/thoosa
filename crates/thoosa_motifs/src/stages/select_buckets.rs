@@ -369,7 +369,7 @@ impl SelectBucketsSyncInputWrapper {
 impl BorrowRef for SelectBucketsSyncInputWrapper {
     type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {

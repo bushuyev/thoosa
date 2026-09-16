@@ -271,7 +271,7 @@ async fn do_test_loaded(
 
     debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
-    let tensor_data_0_0=BorrowRef::borrow_to(&loaded_tensor_0_0, load_to_device).await?;
+    let tensor_data_0_0=BorrowRef::borrow_ref(&loaded_tensor_0_0, load_to_device).await?;
 
     debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
@@ -295,7 +295,7 @@ async fn do_test_loaded(
         )
         .await?;
 
-    let tensor_data_0_1 = BorrowRef::borrow_to(&loaded_tensor_0_0, load_to_device).await?;
+    let tensor_data_0_1 = BorrowRef::borrow_ref(&loaded_tensor_0_0, load_to_device).await?;
 
     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
@@ -855,7 +855,7 @@ pub async fn do_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     debug!("test_real_oom_dump_and_split: multed={multed:?}");
 
-    let ThoDataRef::ReadLocked(r) = BorrowRef::borrow_to(&multed, 1).await? else {
+    let ThoDataRef::ReadLocked(r) = BorrowRef::borrow_ref(&multed, 1).await? else {
         panic!("test_real_oom_dump_and_split: unexpected result multed={multed:?}");
     };
 

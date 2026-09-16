@@ -983,12 +983,12 @@ impl SyncLoadMotifResourcesInputWrapper {
 impl BorrowRef for SyncLoadMotifResourcesInputWrapper {
     type Out<'a> = SyncLoadMotifResourcesInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let raw_tensor = track_await(BorrowRef::borrow_to(&self.raw_tensor, to_device_idx)).await?;
+            let raw_tensor = track_await(BorrowRef::borrow_ref(&self.raw_tensor, to_device_idx)).await?;
             Ok(SyncLoadMotifResourcesInput {
                 id: self.id.clone(),
                 raw_tensor,
@@ -1260,12 +1260,12 @@ impl SyncLoadRandomSlicesInputWrapper {
 impl BorrowRef for SyncLoadRandomSlicesInputWrapper {
     type Out<'a> = SyncLoadRandomSlicesInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let raw_tensor = track_await(BorrowRef::borrow_to(&self.raw_tensor, to_device_idx)).await?;
+            let raw_tensor = track_await(BorrowRef::borrow_ref(&self.raw_tensor, to_device_idx)).await?;
             Ok(SyncLoadRandomSlicesInput {
                 id: self.id.clone(),
                 raw_tensor,
@@ -1848,7 +1848,7 @@ mod tests {
 
         let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false);
 
-        let t = motif.borrow_to(0, Some(SyncStftSelector)).await?;
+        let t = motif.select_ref(0, Some(SyncStftSelector)).await?;
 
         let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
@@ -1926,7 +1926,7 @@ mod tests {
 
         let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
         .branch(false);
-        let t = slices.borrow_to(0, Some(SyncStftSelector)).await?;
+        let t = slices.select_ref(0, Some(SyncStftSelector)).await?;
 
         let dist = average_euclidean_distance(t.t_ref())?;
 

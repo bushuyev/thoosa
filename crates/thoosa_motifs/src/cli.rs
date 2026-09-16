@@ -1472,7 +1472,7 @@ where
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    let tensor = BorrowRef::borrow_to(&raw, 0).await?;
+    let tensor = BorrowRef::borrow_ref(&raw, 0).await?;
 
 
     plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor.as_ref(), raw_channels.as_ref(), resolution, print_to_stdout)?;
@@ -1488,7 +1488,7 @@ where
             )).await?;
 
         let filtered_channels = channels.clone();
-        let tensor = BorrowRef::borrow_to(&filtered, 0).await?;
+        let tensor = BorrowRef::borrow_ref(&filtered, 0).await?;
 
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor.as_ref(), filtered_channels.as_ref(), resolution, print_to_stdout)?;
 
@@ -1528,7 +1528,7 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    let tensor = BorrowRef::borrow_to(&raw, 0).await?;
+    let tensor = BorrowRef::borrow_ref(&raw, 0).await?;
 
     plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor.as_ref(), Some(&channel_only), resolution, print_to_stdout)?;
 
@@ -1544,7 +1544,7 @@ where
         let channel_only_filtered = vec![channel];
 
         {
-            let tensor = BorrowRef::borrow_to(&filtered, 0).await?;
+            let tensor = BorrowRef::borrow_ref(&filtered, 0).await?;
 
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor.as_ref(), Some(&channel_only_filtered), resolution, print_to_stdout)?;
         }
@@ -1561,7 +1561,7 @@ where
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
     let motif_net = Arc::new(DataWithExtra::new(motif_net.expect("motif_net"), MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
-    let tensor = BorrowRef::borrow_to(&filtered_or_raw, 0).await?;
+    let tensor = BorrowRef::borrow_ref(&filtered_or_raw, 0).await?;
 
 
         let motif_net = Arc::clone(&motif_net);
@@ -1625,7 +1625,7 @@ where
 
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
-    let data_ref = BorrowRef::borrow_to(&motif, ctx.tho_device_idx()).await?;
+    let data_ref = BorrowRef::borrow_ref(&motif, ctx.tho_device_idx()).await?;
     let motif= data_ref.as_ref();
     let run_config_id = motif.extra().find_motifs_run_config_id;
     let channel = motif.extra().channel;
@@ -2358,8 +2358,8 @@ mod cli_tests {
             let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(false)).await?;
 
             {
-                let pulse_triangle_t = SelectRef::borrow_to(&pulse_triangle_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                let pulse_sin_t = SelectRef::borrow_to(&pulse_sin_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let pulse_triangle_t = SelectRef::select_ref(&pulse_triangle_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let pulse_sin_t = SelectRef::select_ref(&pulse_sin_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
 
                 debug_plot!(pulse_triangle_t.as_ref().as_ref(), "pulse_triangle_{freq}_filtered_t")?;
                 debug_plot!(pulse_sin_t.as_ref().as_ref(), "pulse_sin_{freq}_filtered_t")?;

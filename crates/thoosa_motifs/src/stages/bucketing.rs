@@ -436,7 +436,7 @@ where
 {
     type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
@@ -452,7 +452,7 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         SelectBucketsInputSelector: 'o,
         Self: 'o
@@ -460,7 +460,7 @@ where
         async move {
             let (tensor, sample_offset) = match selector {
                 None => {
-                    return BorrowRef::borrow_to(self, to_tho_device_idx).await;
+                    return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
                 }
                 Some(selector) => {
                     let tensor = track_await(self.tensor.load_from_any_device_(0)).await?;
@@ -1878,7 +1878,7 @@ mod tests {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             {
-                let motif_ref = SelectRef::borrow_to(&motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif_ref = SelectRef::select_ref(&motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().as_ref().unsqueeze(0);

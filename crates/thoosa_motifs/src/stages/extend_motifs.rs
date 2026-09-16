@@ -239,7 +239,7 @@ where
     ) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
         // TODO: move this into a dedicated stage and cache the resulting motifs stats separately from stacked motifs.
         let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = {
-                let motif_data = SelectRef::borrow_to(&motif_data, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif_data = SelectRef::select_ref(&motif_data, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let motif_data = motif_data.as_ref();
                 let channels_motif_ids = motif_data.motifs.extra().0.clone();
                 let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
@@ -737,7 +737,7 @@ impl Data for SelectMotifsInputSelectorWrap {
 impl BorrowRef for SelectMotifsInputSelectorWrap {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
@@ -755,14 +755,14 @@ impl BorrowRef for SelectMotifsInputSelectorWrap {
 }
 
 impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<SelectMotifsInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_device_idx: usize, selector: Option<SelectMotifsInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         SelectMotifsInputSelector: 'a,
         Self: 'a,
     {
         async move {
             let Some(selector) = selector else {
-                return BorrowRef::borrow_to(self, to_device_idx).await;
+                return BorrowRef::borrow_ref(self, to_device_idx).await;
             };
             let selector = selector.batch_selector;
             let (batch_wrappers, resource_ids, resource_offsets) = match &selector {
@@ -779,7 +779,7 @@ impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
                 RangeOrSlice::Slice((_, range)) => {
                     let channels = batch_wrappers[0].size().dim_0();
                     let tensor_selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
-                    batch.push(track_await(SelectRef::borrow_to(&batch_wrappers[0], to_device_idx, Some(tensor_selector))).await?);
+                    batch.push(track_await(SelectRef::select_ref(&batch_wrappers[0], to_device_idx, Some(tensor_selector))).await?);
                     let range_offset = u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch slice start: {}", range.start)))?;
                     let resource_offsets = vec![resource_offsets[0] + range_offset];
                     let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
@@ -1295,7 +1295,7 @@ mod tests {
             .await?;
 
         let mut ctx_for_data = ctx.branch(false);
-        let motifs_stats = SelectRef::borrow_to(&motifs_stats, 0, Some(SyncStftSelector)).await?;
+        let motifs_stats = SelectRef::select_ref(&motifs_stats, 0, Some(SyncStftSelector)).await?;
         let motifs_stats_t =  motifs_stats.t_ref().shallow_clone();
 
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);

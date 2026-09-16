@@ -163,7 +163,7 @@ where
                     match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
 
-                            let module_with_store = BorrowRef::borrow_to(&net, 0).await?;
+                            let module_with_store = BorrowRef::borrow_ref(&net, 0).await?;
                             let module_with_store = module_with_store.as_ref();
 
                                 let (hash_value, config) = (|| {
@@ -467,15 +467,15 @@ impl ApplyCosine2DMotifNetsSyncInputWrapper {
 impl BorrowRef for ApplyCosine2DMotifNetsSyncInputWrapper {
     type Out<'a> = ApplyCosine2DMotifNetsSyncInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let input = track_await(BorrowRef::borrow_to(&self.input, to_device_idx)).await?;
-            let kernels = track_await(try_join_all(self.kernels.iter().map(|kernel| SelectRef::borrow_to(kernel, to_device_idx, None::<SyncStftSelector>)))).await?;
-            let alphas = track_await(try_join_all(self.alphas.iter().map(|alpha| SelectRef::borrow_to(alpha, to_device_idx, None::<SyncStftSelector>)))).await?;
-            let betas = track_await(try_join_all(self.betas.iter().map(|beta| SelectRef::borrow_to(beta, to_device_idx, None::<SyncStftSelector>)))).await?;
+            let input = track_await(BorrowRef::borrow_ref(&self.input, to_device_idx)).await?;
+            let kernels = track_await(try_join_all(self.kernels.iter().map(|kernel| SelectRef::select_ref(kernel, to_device_idx, None::<SyncStftSelector>)))).await?;
+            let alphas = track_await(try_join_all(self.alphas.iter().map(|alpha| SelectRef::select_ref(alpha, to_device_idx, None::<SyncStftSelector>)))).await?;
+            let betas = track_await(try_join_all(self.betas.iter().map(|beta| SelectRef::select_ref(beta, to_device_idx, None::<SyncStftSelector>)))).await?;
 
             Ok(ApplyCosine2DMotifNetsSyncInput { input, kernels, alphas, betas })
         }

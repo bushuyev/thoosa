@@ -465,7 +465,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
@@ -506,24 +506,24 @@ impl<DI: Dims, DO: Dims> WithId for TrainStepInputWrapper<DI, DO> {
 impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
     type Out<'a> = ThoDataRef<'a, TrainStepInput<DI, DO>> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
-        self.input.borrow_to(to_tho_device_idx)
+        self.input.borrow_ref(to_tho_device_idx)
     }
 
 }
 
 impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWrapper<DI, DO> {
-    fn borrow_to<'a>(&'a self, to_tho_device_idx: usize, selector: Option<TrainStepInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    fn select_ref<'a>(&'a self, to_tho_device_idx: usize, selector: Option<TrainStepInputSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         TrainStepInputSelector: 'a,
         Self: 'a,
     {
         async move {
             let Some(selector) = selector else {
-                return BorrowRef::borrow_to(self, to_tho_device_idx).await;
+                return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
             };
             let selected = self.input.select_batch(selector)?;
             if selected.device() == to_tho_device_idx {

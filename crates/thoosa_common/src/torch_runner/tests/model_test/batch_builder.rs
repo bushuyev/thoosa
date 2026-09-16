@@ -103,7 +103,7 @@ impl AsyncStage for BatchBuilder {
         let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
         for (idx, feat) in feats.iter().enumerate() {
             let label = label_vec[idx];
-            let b_t= feat.borrow_to(0, None).await?;
+            let b_t= feat.select_ref(0, None).await?;
 
             let t: &Tensor = b_t.as_ref().as_ref();
             let y = Tensor::full([t.size()[0], 1], label, (t.kind(), t.device()));

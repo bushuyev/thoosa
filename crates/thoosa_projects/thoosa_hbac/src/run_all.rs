@@ -721,7 +721,7 @@ mod tests {
     impl BorrowRef for PrepareRunAllDataInput {
         type Out<'a> = Self where Self: 'a;
 
-        fn borrow_to<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send where Self: 'a {
+        fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send where Self: 'a {
             std::future::ready(Ok(self.clone()))
         }
 
