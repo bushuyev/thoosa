@@ -12,7 +12,7 @@ use crate::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunCo
 use crate::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use crate::train_nets::{LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, TrainMotifNetRunConfig};
 use futures_util::{StreamExt, future::BoxFuture};
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use rand::random;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -341,7 +341,7 @@ where
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
-                    let out = oom_handler.run(
+                    let out_result = oom_handler.run(
                         &train_step,
                         Arc::clone(&input),
                         ctx.branch(false),
@@ -355,9 +355,13 @@ where
                         ),
                     )
                         .instrument(tracing::debug_span!("run_inner/oom_handler.run", file = file!(),line = line!()))
-                        .await?;
+                        .await;
 
-                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?} out={out:?}", input.id(), tokio::task::try_id());
+                    if let Err(e) = &out_result {
+                        error!("TrainNet::run_inner, train: descr={descr} e={e:?}");
+                    }
+
+                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?} out={out_result:?}", input.id(), tokio::task::try_id());
 
                     collect_eta_record_completion(batch_eta_guard.id());
 

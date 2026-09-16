@@ -498,10 +498,6 @@ dependencies = [
 name = "cached_derive"
 version = "0.1.0"
 dependencies = [
- "log",
- "mockall",
- "mockall_double",
- "proc-macro2",
  "quote",
  "syn 2.0.106",
 ]
@@ -766,15 +762,6 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
-
-[[package]]
-name = "convert_case"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
-dependencies = [
- "unicode-segmentation",
-]
 
 [[package]]
 name = "convert_case"
@@ -1167,7 +1154,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case 0.10.0",
+ "convert_case",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -5319,7 +5306,6 @@ name = "thoosa_properties_map_derive"
 version = "0.1.0"
 dependencies = [
  "clap",
- "convert_case 0.7.1",
  "ctor 0.5.0",
  "log",
  "proc-macro2",
@@ -5342,15 +5328,10 @@ dependencies = [
 name = "thoosa_run_config_args_derive"
 version = "0.1.0"
 dependencies = [
- "clap",
- "convert_case 0.7.1",
- "ctor 0.5.0",
- "log",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
  "thoosa_macros_utils",
- "thoosa_run_config_args",
  "thoosa_shared",
 ]
 

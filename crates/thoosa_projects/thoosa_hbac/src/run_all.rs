@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use tch::Device::Cpu;
-use thoosa_common::nets::common_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue};
+use thoosa_common::nets::common_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue};
 use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -411,12 +411,14 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     // num_head_features: RangeOrValue::Value(256),
         //     kernel: RangeOrValue::Value(100),
         //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-        //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
+        //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
         // }),
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
             head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+            // head_size: RangeOrValue::Value(32),
             n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+            // n_heads: RangeOrValue::Value(4),
             // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),

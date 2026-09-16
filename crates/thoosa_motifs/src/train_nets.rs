@@ -1043,7 +1043,7 @@ net
         params.out_features,
         "final_net_last_layer",
     )?
-    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+    // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
     .end_seq()
 }
 
