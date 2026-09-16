@@ -22,7 +22,7 @@ use std::sync::Arc;
 use thoosa_common::runs::SavableResult;
 use thoosa_common::transforms::filters::*;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -1248,7 +1248,7 @@ impl Default for PeriodicityAcfRunConfig {
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct EucDistMetric {
     #[in_map]
     #[run_config]
@@ -1265,7 +1265,7 @@ impl Default for EucDistMetric {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct PearsonCorrMetric {
     #[in_map]
     #[run_config]
@@ -1282,7 +1282,7 @@ impl Default for PearsonCorrMetric {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct DotProductMetric {
     #[in_map]
     #[run_config]
@@ -1295,10 +1295,10 @@ impl Default for DotProductMetric {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData, Default)]
 pub struct EnergyMetric {}
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct CommonStatsMetric {
     #[in_map]
     #[run_config]
@@ -1323,7 +1323,7 @@ impl Default for CommonStatsMetric {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub enum Metrics {
     EucDist(EucDistMetric),
     PearsonCorr(PearsonCorrMetric),
@@ -1452,7 +1452,7 @@ impl Metrics {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct MotifCriterionConstraint {
     #[in_map]
     #[run_config]
@@ -1514,7 +1514,7 @@ impl SelectMotifsRunConfig {
 
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 #[dummy_data(clone)]
 pub struct SelectMotifsRunResult {
     pub run_config: SelectMotifsRunConfig,
@@ -1538,7 +1538,7 @@ impl SelectMotifsRunResult {
 
 impl Output for SelectMotifsRunResult {}
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 #[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
     run_results: Vec<SelectMotifsRunResult>,

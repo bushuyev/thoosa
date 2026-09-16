@@ -64,14 +64,14 @@ use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Adjustable;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, CpuData)]
 pub struct MotifLoaderInput {
     pub id:SynKey,
     select_motifs_run_config_id: Option<Vec<RunConfigId>>,
@@ -795,7 +795,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct SlicesLoaderInput {
     motif_id:DataId,
     limit:u32

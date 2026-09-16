@@ -11,7 +11,7 @@ use std::sync::Arc;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::stages::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -34,7 +34,7 @@ pub struct MergeSelectedMotifsArgs {
     pub select_motifs_run_config_ids: Vec<RunConfigId>,
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct MergeSelectedMotifsInput {
     run_config_ids: Vec<RunConfigId>,
@@ -54,7 +54,7 @@ impl MergeSelectedMotifsInput {
 
 impl Input for MergeSelectedMotifsInput {}
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 #[dummy_data(no_clone)]
 pub struct MergeSelectedMotifsOutput {
     id: RunConfigId,

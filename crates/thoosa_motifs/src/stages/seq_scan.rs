@@ -20,7 +20,7 @@ use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
@@ -32,7 +32,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCt
 use thoosa_store::Store;
 use tokio::task::JoinSet;
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 #[dummy_data(clone)]
 pub struct SeqScanOutput {}
 

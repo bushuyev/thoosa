@@ -61,7 +61,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::clc_frequencies;
 use thoosa_common::ws::{FsWorkspace, Workspace};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::run_configs::RunConfig;
 
@@ -121,7 +121,7 @@ impl FixedFindMotifsConfig {
 }
 
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 #[dummy_data(clone)]
 pub struct FindMotifsSavableResult {
 }

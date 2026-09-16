@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::tracked_await::track_await;
@@ -130,7 +130,7 @@ impl PurgeModelsArgs {
     }
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct PurgeModelsInput {
 }
 

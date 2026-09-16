@@ -5267,9 +5267,9 @@ dependencies = [
  "statrs",
  "tch",
  "tempfile",
+ "thoosa_cpu_data_derive",
  "thoosa_digest_id",
  "thoosa_digest_id_derive",
- "thoosa_dummy_data_derive",
  "thoosa_named_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
@@ -5290,6 +5290,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thoosa_cpu_data_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "thoosa_digest_id"
 version = "0.1.0"
 dependencies = [
@@ -5305,15 +5314,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
-]
-
-[[package]]
-name = "thoosa_dummy_data_derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
 ]
 
 [[package]]
@@ -5402,9 +5402,9 @@ dependencies = [
  "serde_json5",
  "tch",
  "thoosa_common",
+ "thoosa_cpu_data_derive",
  "thoosa_digest_id",
  "thoosa_digest_id_derive",
- "thoosa_dummy_data_derive",
  "thoosa_named_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
@@ -5519,7 +5519,7 @@ dependencies = [
  "serde_json",
  "serde_json5",
  "tch",
- "thoosa_dummy_data_derive",
+ "thoosa_cpu_data_derive",
  "thoosa_named_derive",
  "time",
  "time_series_generator",

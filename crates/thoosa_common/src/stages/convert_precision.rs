@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
@@ -130,7 +130,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct ConvertPrecisionInput {}
 
 impl ConvertPrecisionInput {
@@ -149,7 +149,7 @@ pub struct ConvertedNet<N> {
     pub total_vars: usize,
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct ConvertPrecisionOutput<N>
 where
     N: Debug,

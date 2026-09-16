@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -47,7 +47,7 @@ pub struct ExportArgs {
     pub target_precision: Option<ConvertPrecisionTarget>,
 }
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct ExportInput {}
 
 impl ExportInput {
