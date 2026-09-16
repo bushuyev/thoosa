@@ -943,7 +943,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
 mod tests {
     use crate::dims::{AnyDims, Batch};
     use crate::ipc::cuda_wokrer::CudaWorker;
-    use crate::ipc::json_ser::SyncStageIpcWrapper;
+    use crate::ipc::wraps::SyncStageIpcWrapper;
     use crate::nets::builder::{Node, SeqBuilder};
     use crate::nets::tho_varstore::{ModConfig, OptSnapshot, ThoTrainModule, clone_adam_snapshot_to, clone_var_store_to, do_test_reset_optimizer, replace_data};
     use crate::runner::global_ctx::GlobalCtx;

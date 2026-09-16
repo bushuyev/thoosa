@@ -22,7 +22,7 @@ use thoosa_common::args::{CommonArgs, StageCommand};
 use thoosa_common::commands::common_cli::run_common_cli;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::stages::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};

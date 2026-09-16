@@ -26,8 +26,8 @@ use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -1416,10 +1416,10 @@ mod tests {
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
     use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
-    use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+    use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
     use thoosa_common::ipc::wraps::WorkerWrapperWithState;
     use thoosa_common::nets::batches::BatchLengths;
     use thoosa_common::nets::builder::{Node, SeqBuilder};

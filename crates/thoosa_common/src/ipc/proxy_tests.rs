@@ -1,36 +1,36 @@
-use std::any::Any;
-use std::borrow::Cow;
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{ CudaIPCActorHandle};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use crate::ws::Workspace;
 use futures_util::future::{BoxFuture, FutureExt, ready};
 use futures_util::{StreamExt, ready};
 use log::debug;
+use mockall::PredicateBoxExt;
 use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
-use mockall::PredicateBoxExt;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
-use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
-use crate::ws::Workspace;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TestStageInitA {
@@ -274,8 +274,8 @@ pub fn test_simp_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Wor
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests::{test_simp_init, TestOutputA, TestStageInitA, TEST_ENDPOINT};
     use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
+    use crate::ipc::proxy_tests::{TEST_ENDPOINT, TestOutputA, TestStageInitA, test_simp_init};
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

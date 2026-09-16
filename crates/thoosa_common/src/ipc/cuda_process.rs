@@ -1,6 +1,8 @@
 use crate::copy_ctx::{CudaActorHandle, HandleCtx};
 use crate::cuda_utils::tensor_mem_size;
-use crate::ipc::ipc_cuda_utils::{send_fd, IpcTensorKind};
+use crate::ipc::ipc_cuda_utils::{IpcTensorKind, send_fd};
+use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -20,6 +22,8 @@ use std::time::Duration;
 use tch::Device::{Cpu, Cuda};
 use tch::{Device, Tensor};
 use thoosa_shared::{Cause, ThoError};
+use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
+use thoosa_shims::context::ThoCudaContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -30,10 +34,6 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
-use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
-use thoosa_shims::context::ThoCudaContext;
-use crate::ipc::json_ser::{PostcardToFromBytes, ToFromBytes};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
@@ -1207,13 +1207,12 @@ pub(crate) struct DeviceInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-    use crate::ipc::cuda_process::{encode_endpoint_payload, CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV};
+    use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload};
     use crate::ipc::cuda_wokrer::CudaWorker;
-    use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::run_ipc_test;
+    use crate::ipc::wraps::SyncStageIpcWrapper;
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
     use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::global_ctx::GlobalCtx;
@@ -1226,10 +1225,14 @@ mod tests {
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
-    use crate::ws::{mock_ws_simp, Workspace};
+    use crate::ws::{Workspace, mock_ws_simp};
+    use futures_util::FutureExt;
+    use futures_util::future::BoxFuture;
     use log::{debug, info};
+    use mockall::PredicateBoxExt;
     use parking_lot::RwLock;
     use rand::random_range;
+    use std::any::Any;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::process::Stdio;
@@ -1237,8 +1240,6 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::Instant;
-    use futures_util::future::BoxFuture;
-    use mockall::PredicateBoxExt;
     use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -1253,7 +1254,6 @@ mod tests {
     use tokio::process::{Child, Command};
     use tokio::sync::Mutex;
     use tokio::task::JoinSet;
-    use futures_util::FutureExt;
 
     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();

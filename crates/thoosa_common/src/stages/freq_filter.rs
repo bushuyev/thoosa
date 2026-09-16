@@ -27,9 +27,10 @@ use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
+use crate::dims::LocalSelect;
+use crate::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
@@ -48,7 +49,6 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::MutexGuard;
-use crate::dims::LocalSelect;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 

@@ -1,29 +1,29 @@
-use std::any::Any;
-use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::Arc;
-use async_trait::async_trait;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
-use log::{debug, error};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use tokio::sync::MutexGuard;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_process::{ CudaIPCActorHandle};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use crate::ipc::json_ser::{ErasedWithState, SyncStageIpcConsumeResponse, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
 use crate::runner::common::cachable::ThoDataRef;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use async_trait::async_trait;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
+use log::{debug, error};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use std::any::Any;
+use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::sync::Arc;
+use thoosa_shared::ThoError;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
+use tokio::sync::MutexGuard;
 
 
 ///
@@ -253,5 +253,60 @@ where
         debug!("SyncStageIpcWrapper::do_run_with_state: out={out:?}");
 
         Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
+    }
+}
+
+///object-safe trait for running stages in CudaWorker
+pub trait SyncStageIpcWrapper: Send + Sync + Debug {
+    fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
+        None
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
+    fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+        unimplemented!()
+    }
+    fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
+        unimplemented!()
+    }
+
+
+    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+    {
+        async move {
+            Ok(())
+        }.boxed()
+    }
+}
+
+pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
+    type S: Debug + Send + Sync;
+
+    fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>>;
+
+
+    fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
+}
+
+pub trait ErasedWithState: Sync + Debug {
+
+    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
+}
+
+impl<T> ErasedWithState for T
+where
+    T: SyncStageIpcWrapperWithState + 'static,
+{
+
+    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
+        async move {
+            let state = SyncStageIpcWrapperWithState::pre_run(self, tho_device).await?;
+            // Create the thread-affine stream guard after pre_run so it is never held across an await.
+            let _guard = ThoStreamGuard::new(stream)?;
+            let output = SyncStageIpcWrapperWithState::do_run_with_state(self, input, all_cuda_tensors, state, tho_device, run_ctx)?;
+            // Match stateless worker execution by completing queued CUDA work before another stream can consume the returned tensor reference.
+            stream.synchronize()?;
+            Ok(output)
+        }.boxed()
     }
 }

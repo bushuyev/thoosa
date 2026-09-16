@@ -41,8 +41,8 @@ use tch::nn::VarStore;
 use tch::{Device, IndexOp, Tensor};
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, ThoBatch};
 use thoosa_common::progress_socket::CollectEtaProgressSocketServer;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::traits::Stage;
 
@@ -85,8 +85,8 @@ use thoosa_properties_map::ToHashmap;
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use thoosa_common::ipc::codec::JsonIpcCodec;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::ipc::worker_msg::WorkerInput;
+use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
 use thoosa_common::nets::common_nets::{BinaryHeadLse, BinaryHeadPoolArgs, CommonTrainingRunConfig, OptConfig, PlotVecf32, SelfAttentionNetArgs, ThoModuleWithStore, opt_train};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
@@ -1945,6 +1945,7 @@ mod cli_tests {
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
     use thoosa_common::nets::nodes::ThoModule;
+    use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, Simple};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
@@ -1952,7 +1953,6 @@ mod cli_tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, Simple};
     use thoosa_common::stages::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;

@@ -1,6 +1,6 @@
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
-use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
@@ -15,6 +15,12 @@ use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
+// use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+// use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+// use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
+// use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
+// use crate::torch_runner::tests::model_test::common::ModelTestId;
+use crate::utils::lin_for_size;
 use log::{LevelFilter, debug, info, warn};
 use serde::de::Unexpected::Option;
 use std::collections::HashMap;
@@ -26,25 +32,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{Device, Tensor};
-use tokio::sync::Notify;
-use tokio::task;
+use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::perf_logging::{PERF, format_perf_map};
 use thoosa_shared::test_utils::init_test_logging;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
-use thoosa_shared::{mono_key, panic_to_err_async, ThoError};
-use tokio::task::{coop, JoinSet};
-use tracing::field::debug;
-// use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
-// use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
-// use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
-// use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
-// use crate::torch_runner::tests::model_test::common::ModelTestId;
-use crate::utils::lin_for_size;
-use thoosa_named_derive::Named;
-use thoosa_shared::perf_logging::{PERF, format_perf_map};
+use thoosa_shared::{ThoError, mono_key, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
+use tokio::sync::Notify;
+use tokio::task;
+use tokio::task::{JoinSet, coop};
+use tracing::field::debug;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -163,11 +163,10 @@ fn get_test_name() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use super::run_ipc_test;
     use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
-    use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::worker_msg::{DebugOutput, OpResult, WorkerInput};
+    use crate::ipc::wraps::SyncStageIpcWrapper;
     use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
     use crate::runner::global_ctx::GlobalCtx;
@@ -182,17 +181,23 @@ mod tests {
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::{ThoTensor, ThoTensorInner};
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use futures_util::future::{join_all, BoxFuture};
+    use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
+    use crate::torch_runner::tests::load_and_clc::loader::{LoadedTensor, SyncTestTensorLoader};
+    use crate::torch_runner::tests::load_and_clc::{LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT, do_real_oom_dump_and_split, mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init};
+    use crate::torch_runner::tests::model_test::common::ModelTestId;
+    use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
+    use futures_util::FutureExt;
+    use futures_util::future::{BoxFuture, join_all};
     use log::{LevelFilter, debug, info};
     use parking_lot::RwLock;
     use serde::de::Unexpected::Option;
+    use std::any::Any;
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::sync::Arc;
     use std::sync::atomic::Ordering::Acquire;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
-    use futures_util::FutureExt;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
@@ -205,20 +210,15 @@ mod tests {
     use thoosa_shared::{ThoError, mono_key, os_thread_id};
     use tokio::task::JoinSet;
     use tracing::field::debug;
-    use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
-    use crate::torch_runner::tests::load_and_clc::loader::{LoadedTensor, SyncTestTensorLoader};
-    use crate::torch_runner::tests::load_and_clc::{do_real_oom_dump_and_split, mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
-    use crate::torch_runner::tests::model_test::common::ModelTestId;
-    use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
-   
+
+    use crate::cuda_utils::cuda_mem;
+    use crate::dims::AnyDims;
     use crate::utils::lin_for_size;
-    use crate::ws::{mock_ws_simp, Workspace};
+    use crate::ws::{Workspace, mock_ws_simp};
     use thoosa_named_derive::Named;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shims::context::ThoCudaContext;
-    use crate::cuda_utils::cuda_mem;
-    use crate::dims::AnyDims;
 
     fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) ->Result<(), ThoError>{
         let self_k = parse_numeric_part(resource).unwrap_or(1.0);

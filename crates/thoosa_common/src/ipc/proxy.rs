@@ -408,16 +408,11 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageEnum::Proxy { stage,  .. } => {
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async move {
-                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
-                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
-                            stage.endpoint_name,
-                            stage.stage_id,
-                        ).await
-                    })
-                })?;
-                Ok(())
+                thoosa_common::ipc::codec::purge_ipc_sync_stage::<JsonIpcCodec>(
+                    GlobalCtx::global().cuda_actor(device_idx).as_ref(),
+                    stage.endpoint_name,
+                    stage.stage_id,
+                ).await
             }
         }
     }
@@ -563,16 +558,11 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async move {
-                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
-                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
-                            stage.endpoint_name,
-                            stage.stage_id,
-                        ).await
-                    })
-                })?;
-                Ok(())
+                thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
+                    GlobalCtx::global().cuda_actor(device_idx).as_ref(),
+                    stage.endpoint_name,
+                    stage.stage_id,
+                ).await
             }
         }
     }

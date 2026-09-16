@@ -1,7 +1,7 @@
 use std::any::Any;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 
 use mockall_double::double;
 #[double]
@@ -15,13 +15,13 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tch::{Device, Tensor};
 use tch::Device::Cpu;
+use tch::{Device, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;

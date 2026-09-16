@@ -1,29 +1,29 @@
-use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use log::debug;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tch::{Kind, Tensor, nn, nn::OptimizerConfig};
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 
+use super::common::{ABData, ClsOut, ModelTestId};
 use crate as thoosa_common;
-use thoosa_shared::traits::MaxParallelCtx;
+use crate::ipc::codec::JsonIpcCodec;
+use crate::ipc::cuda_wokrer::AllTensors;
+use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::wraps::SyncStageIpcWrapper;
+use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::ipc::codec::JsonIpcCodec;
-use crate::ipc::cuda_wokrer::AllTensors;
-use crate::ipc::json_ser::SyncStageIpcWrapper;
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
-use crate::ipc::wraps::WorkerWrapper;
-use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ws::Workspace;
-use super::common::{ABData, ClsOut, ModelTestId};
+use thoosa_shared::traits::MaxParallelCtx;
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
 
@@ -121,7 +121,7 @@ impl SyncStage for Classifier {
     ) -> Result<Self::Out, ThoError>
     where
         Self: Sized,
-    {//TODO remove block_in_place +  remove Classifier ?
+    {
         if GlobalCtx::global().is_ipc() && input.ref_key().is_none() {
             if input.tho_device_idx() == ctx.tho_device_idx() {
                 return Err(ThoError::new(format!("Classifier IPC sync path expected a worker tensor ref, got local tensor already on device {}: {input:?}", ctx.tho_device_idx())));
