@@ -40,7 +40,6 @@ use crate::stages::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResour
 use crate::stages::slices_stats::Aggr;
 use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::stages::tensor_loader::RawTensorLoader;
-use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::data_with_extra::DataWithExtra;
@@ -49,6 +48,7 @@ use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Con
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::runs::{Labeled, SavableResult, Simple};
+use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};

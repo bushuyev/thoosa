@@ -10,8 +10,8 @@ use crate::stages::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModels
 use crate::stages::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand};
-use futures_util::future::{join_all, try_join_all};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::future::{BoxFuture, join_all, try_join_all};
+use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use log::{Level, LevelFilter, debug, error, info, trace, warn};
 use mockall_double::double;
 use parking_lot::{RawRwLock, RwLock};
@@ -19,6 +19,7 @@ use plotters::prelude::BLACK;
 use plotters::style::ShapeStyle;
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use serde::Serialize;
+use std::any::Any;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -66,7 +67,6 @@ use crate::stages::slices_stats::{Aggr, Metrics};
 use crate::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, TrainFinalNetsRunConfigResult, new_train_final_net, sync_logits_batch_init, train_final_step_endpoint_inits};
 use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsArgs, new_train_label_nets, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
 use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNetResult, TrainMotifNets, TrainMotifNetsResult, train_motif_step_endpoint_inits};
-use crate::stages::transforms::freq_filter::{FreqFilter, SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit, sync_freq_filter_endpoint_init};
 use crate::train_nets;
 use crate::train_nets::{FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
 use thoosa_common::args::{CommonArgs, StageCommand};
@@ -77,6 +77,7 @@ use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef};
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
+use thoosa_common::stages::freq_filter::{FreqFilter, SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
@@ -84,7 +85,11 @@ use thoosa_properties_map::ToHashmap;
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use thoosa_common::common_nets::{BinaryHeadLse, BinaryHeadPoolArgs, CommonTrainingRunConfig, OptConfig, PlotVecf32, SelfAttentionNetArgs, ThoModuleWithStore, opt_train};
-use thoosa_common::ipc::cuda_wokrer::InitFn;
+use thoosa_common::ipc::codec::JsonIpcCodec;
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::worker_msg::WorkerInput;
+use thoosa_common::ipc::wraps::WorkerWrapperWithState;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
@@ -682,6 +687,24 @@ fn set_oom_score_adj(score: i32) {
         eprintln!("Failed to open {}", path);
     }
 }
+
+pub fn sync_freq_filter_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    async move {
+        let init: Box<dyn Any> = init;
+        let init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"))?;
+        let stage = SyncFreqFilter::<WokerRunCtx>::new_local(SyncFreqFilterIpcInit::new(
+            init.filter_configs.clone(),
+            init.num_channels,
+            init.sample_rate,
+            init.find_motifs_run_config_id,
+            1
+        ))?;
+
+        // The common stateful wrapper prepares filter tensors on the worker device before each synchronous invocation.
+        Ok(Box::new(WorkerWrapperWithState::new(Arc::new(stage), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
+}
+
 
 pub fn cuda_worker_endpoint_inits() -> HashMap<String, MotifsInitFn> {
     let mut endpoints = train_motif_step_endpoint_inits();
@@ -1889,7 +1912,6 @@ mod cli_tests {
     use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::RawTensorLoader;
     use crate::stages::train_label_nets::TrainLabelNetRunConfig;
-    use crate::stages::transforms::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use crate::tch_test_utils;
     use crate::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use crate::train_nets::{InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue, lin_motif_node};
@@ -1933,6 +1955,7 @@ mod cli_tests {
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
+    use thoosa_common::stages::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
