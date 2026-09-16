@@ -400,7 +400,8 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         &format!("find_and_select_{}", grid_idx),
                     );
 
-                    track_await(opt.optimize()).await;
+                    // The shared best result below remains authoritative if optimization fails.
+                    let _ = track_await(opt.optimize()).await;
 
                     let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
 

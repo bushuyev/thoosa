@@ -389,6 +389,8 @@ fn main() -> Result<(), ThoError>{
 }
 
 
+// Keep the dormant inference entry point available while the CLI path is disabled.
+#[allow(dead_code)]
 async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store:&Arc<dyn MotifsStore>) -> Result<(), ThoError>{
     let mut ctx = RunCtxImpl::new(0, "root");
 
@@ -507,6 +509,8 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn thoosa_motifs::mot
     Ok(())
 }
 
+// This loader is retained for the dormant inference entry point.
+#[allow(dead_code)]
 async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, store: Arc<dyn MotifsStore>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_config_ids = track_await(store.list_label_nets_run_config_ids(label)).await?;

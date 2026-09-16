@@ -32,7 +32,6 @@ serde.workspace = true
 lazy_static.workspace = true
 
 libloading.workspace = true
-rand_distr.workspace = true
 thoosa_shared = {path = "../thoosa_shared", features = ["tch-error", "serde-json-error", "serde-json5-error"] }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shims = {path = "../thoosa_shims" }
@@ -53,17 +52,13 @@ thoosa_digest_id_derive = {path = "../thoosa_macros/thoosa_digest_id_derive" }
 plotters.workspace = true
 
 chrono = { version = "0.4.32" }
-ctor.workspace = true
 
 
-statrs.workspace = true
 regex.workspace = true
 serde_json5.workspace = true
 serde_json.workspace = true
 
 #linfa = "0.7.0"
-argmin = "0.10.0"
-argmin-math = { version = "0.4.0", features = ["vec"] }
 num-traits.workspace = true
 once_cell = "1.20.2"
 
@@ -74,7 +69,6 @@ tokio.workspace = true
 tokio-util.workspace = true
 tokio-utils.workspace = true
 
-anyhow = "1.0.99"
 tracing.workspace = true
 console-subscriber.workspace = true
 tracing-subscriber.workspace = true
@@ -87,6 +81,10 @@ typetag.workspace = true
 postcard.workspace = true
 memmap2.workspace = true
 interprocess.workspace = true
+
+[dev-dependencies]
+ctor.workspace = true
+
 [build-dependencies]
 chrono.workspace = true
 

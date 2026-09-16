@@ -161,7 +161,8 @@ pub struct ABClcSyncStageInputWrapper {
 }
 
 impl ABClcSyncStageInputWrapper {
-    pub fn new(a_out: Arc<DevicesWrap<AStageOutput>>, b_out: Arc<DevicesWrap<BStageOutput>>) -> Self {
+    // Both output types are visible only to the composite-input test module.
+    pub(super) fn new(a_out: Arc<DevicesWrap<AStageOutput>>, b_out: Arc<DevicesWrap<BStageOutput>>) -> Self {
         Self {
             id: a_out.id() + b_out.id(),
             a_out,
