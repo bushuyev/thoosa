@@ -169,7 +169,7 @@ pub trait RunConfig: Debug {
     fn type_name() -> &'static str;//TODO rename
 }
 
-
+///to group several related run configuration under single id. When invoking a command its run configuration can either be saved under new RUN_ID or with one from previous run. See run_configs and runs tables in the thoosa_store::create_tables.
 pub static RUN_ID: OnceLock<RunId> = OnceLock::new();
 
 

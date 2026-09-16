@@ -33,6 +33,8 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::utils::list_devices;
 use crate::ws::{Workspace, WsConfigs};
 use crate::version::VERSION;
+
+///main process function: sets up logging, spawns IPC Worker if needed, strats CPU purger
 pub async fn run_common_cli<C, CS, R, W>(
     args: CommonArgs<C>,
     store:Arc<CS>,
@@ -96,10 +98,7 @@ where
 
     RUN_ID.set(match args.run_id{
         None => {
-            // TODO
-            // if let Some(Infer(_) | Export(_)) = &old_commands {
-            //     panic!("No run_id")
-            // }
+            // TODO throw error if command doesn't support new run_id - inference, export etc
             track_await(store.save_run(format!("{args:?}"))).await?
         }
         Some(run_id) => run_id
@@ -109,7 +108,6 @@ where
 
     let cpu_num = std::thread::available_parallelism()?;
 
-    //TODO torch.backends.cuda.matmul.allow_tf32 = True
     info!(
         "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={} run_id={}",
         args.ws_path,
@@ -129,16 +127,15 @@ where
             std::process::exit(0);
         }
 
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![
+        GlobalCtx::init_devices_ipc(2, vec![
             format!("--ws-path={}", args.ws_path),
             format!("--term-logger-level={}", args.term_logger_level),
             format!("--write-logger-level={}", args.write_logger_level)
         ]).await?;
     } else {
         // kick_register_cuda_hooks();
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
+        GlobalCtx::init_devices(2)?;
     }
-
 
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
@@ -222,7 +219,6 @@ where
 
     info!("\n{}", format_perf_map(&PERF));
 
-    // std::process::exit(0);
     track_await(GlobalCtx::global().shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);

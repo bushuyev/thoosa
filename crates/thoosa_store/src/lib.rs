@@ -642,7 +642,6 @@ impl Store for SqlStore {
         .await
     }
 
-    //TODO resources - save serialized resources config - run_resources is getting too big
     async fn save_run_config<'a, 'b, 'c>(
         &self,
         input_run_config_id: Option<&'a [RunConfigId]>,
