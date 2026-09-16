@@ -25,6 +25,7 @@ use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::stages::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
@@ -40,7 +41,6 @@ use thoosa_motifs::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STA
 use thoosa_motifs::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, sync_logits_batch_init, train_final_step_endpoint_inits};
 use thoosa_motifs::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
 use thoosa_motifs::stages::train_motif_nets::train_motif_step_endpoint_inits;
-use thoosa_motifs::stages::transforms::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit, sync_freq_filter_endpoint_init};
 use thoosa_motifs::train_nets::InferArgs;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::RunCtx;

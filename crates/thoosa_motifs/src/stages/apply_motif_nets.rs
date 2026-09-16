@@ -74,10 +74,10 @@ use crate::stages::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::stages::stft::SyncStft;
 use crate::stages::train_motif_nets::TrainMotifNetsResult;
-use crate::stages::transforms::freq_filter::ChannelsDataSelector;
-use crate::stages::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
+use thoosa_common::stages::freq_filter::ChannelsDataSelector;
+use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::tracked_await::track_await;
 
@@ -1223,9 +1223,9 @@ pub fn apply_motif_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwL
         let init = *(init as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>().map_err(|_| ThoError::new("ApplyMotifNet endpoint received invalid initializer"))?;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
-        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+        let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(
            &init.motif_net_path,
-           &Cuda(0),//TODO
+           &tho_device,
            init.quantize,
             true
         )?;

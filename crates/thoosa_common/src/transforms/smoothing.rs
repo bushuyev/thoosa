@@ -375,7 +375,7 @@ pub fn moving_average(x: &Tensor, window: u32, step: i64) -> Result<Tensor, ThoE
 #[cfg(test)]
 mod tests {
     use tch::Tensor;
-    use crate::stages::transforms::smoothing::{median, moving_average, smoothing_spline_1d_channels, spline_lambda_from_window_and_extrema};
+    use thoosa_common::transforms::smoothing::moving_average;
     use thoosa_shared::ThoError;
 
 

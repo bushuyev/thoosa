@@ -12,7 +12,6 @@ use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::stages::stage_ids::EXTEND_MOTIFS;
 use crate::stages::stft::SyncStftSelector;
-use crate::stages::transforms::freq_filter::ChannelsDataSelector;
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use parking_lot::RwLock;
@@ -32,6 +31,7 @@ use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, Sp
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runs::{SavableResult, Simple};
+use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};

@@ -28,7 +28,6 @@ use crate::stages::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunCon
 use crate::stages::motif_loader::{MotifLoader, MotifMeta};
 use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::stages::slices_stats::{Aggr as StatsAggr, Metrics};
-use crate::stages::transforms::freq_filter::FreqFilter;
 use tch::Device::Cpu;
 use tch::Kind::{Bool, Float};
 use tch::kind::FLOAT_CPU;
@@ -41,6 +40,7 @@ use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runs::Simple;
+use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -648,6 +648,7 @@ mod tests {
     use tch::kind::INT64_CPU;
     use tch::{Device, IndexOp, Tensor};
     use thoosa_common::data_with_extra::DataWithExtra;
+    use thoosa_common::debug_plot;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::Cached;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -660,7 +661,6 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{debug_plot_impl, lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};
     use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
-    use thoosa_common::debug_plot;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
     use thoosa_shared::applicables_runner::Input;

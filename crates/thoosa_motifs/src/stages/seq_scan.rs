@@ -1,4 +1,7 @@
 use crate::motifs_store::MotifsStore;
+use crate::stages::cross_loader::ResourcesConfigInput;
+use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
+use crate::stages::stft::SyncStftSelector;
 use async_trait::async_trait;
 use log::{debug, info};
 use parking_lot::RwLock;
@@ -12,15 +15,12 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::runs::SavableResult;
 use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
+use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use crate::stages::cross_loader::ResourcesConfigInput;
-use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
-use crate::stages::stft::SyncStftSelector;
-use crate::stages::transforms::freq_filter::FreqFilter;
 use thoosa_named_derive::Named;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
@@ -569,6 +569,9 @@ where
 #[cfg(test)]
 mod tests {
     use crate::motifs_store::MockMotifsStoreBuilder;
+    use crate::stages::cross_loader::ResourcesConfigInput;
+    use crate::stages::seq_scan::{SeqScanOutput, SeqScanStage, assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx};
+    use crate::stages::tensor_loader::mock_tensor_loader;
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::Tensor;
@@ -579,9 +582,6 @@ mod tests {
     use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
     use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::ws::mock_ws_simp;
-    use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::seq_scan::{SeqScanOutput, SeqScanStage, assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx};
-    use crate::stages::tensor_loader::mock_tensor_loader;
     use thoosa_shared::ResourceType;
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
