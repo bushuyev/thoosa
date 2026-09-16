@@ -19,7 +19,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::DropIf;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::stages::cross_batch_clc::{UnfoldParams, unfold_and_cat};
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};

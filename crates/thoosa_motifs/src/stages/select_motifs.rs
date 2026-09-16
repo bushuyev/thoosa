@@ -53,7 +53,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
@@ -97,7 +97,7 @@ pub enum SelectMotifsOutputMode {
     WithConstraintMetrics,
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct SelectMotifsInput {
     resources_input: ResourcesConfigInput<Simple>,

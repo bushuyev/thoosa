@@ -261,7 +261,7 @@ mod tests {
     use std::pin::Pin;
     use async_trait::async_trait;
     use log::debug;
-    use thoosa_dummy_data_derive::DummyData;
+    use thoosa_cpu_data_derive::CpuData;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
@@ -276,7 +276,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
     #[tokio::test]
     async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoError> {
-        #[derive(Debug, Clone, DummyData)]
+        #[derive(Debug, Clone, CpuData)]
         #[dummy_data(clone)]
         struct Foo(SimpleId);
 

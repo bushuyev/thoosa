@@ -27,7 +27,7 @@ use std::sync::atomic::Ordering::Acquire;
 use futures_util::future::BoxFuture;
 use parking_lot::{Mutex, RwLock};
 use tch::{Kind, Tensor};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
@@ -71,7 +71,7 @@ impl WithId for ABClcStageInput {
 
 impl Input for ABClcStageInput {}
 
-#[derive(Debug, Named, Clone, DummyData, Serialize, Deserialize)]
+#[derive(Debug, Named, Clone, CpuData, Serialize, Deserialize)]
 pub struct ABClcStageOutput {
     id:SynKey,
     pub(super) value:f32

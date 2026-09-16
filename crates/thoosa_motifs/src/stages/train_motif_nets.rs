@@ -65,7 +65,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -367,7 +367,7 @@ where
 }
 
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
     motifs_by: MotifsBy,
@@ -1783,7 +1783,7 @@ mod tests {
 
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetsResult {
     select_motifs_run_config_ids: Vec<RunConfigId>,

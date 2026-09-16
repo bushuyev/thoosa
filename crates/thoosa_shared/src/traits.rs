@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use tokio::sync::MutexGuard;
 use uuid::Uuid;
@@ -221,7 +221,7 @@ impl Display for TmpId {
     }
 }
 ///--------------------
-#[derive(Debug, Eq, PartialEq, Hash, Clone, DummyData, Named)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, CpuData, Named)]
 #[dummy_data(clone)]
 pub struct DataId(pub u32);//for sql-store based stuff
 

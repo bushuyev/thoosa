@@ -37,7 +37,7 @@ use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{TrainListener, optimizer_mem_size};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigResult};
 use crate::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use thoosa_properties_map::ToHashmap;
@@ -124,7 +124,7 @@ where
     }
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct TrainNetInput{
 }
@@ -140,7 +140,7 @@ impl Input for TrainNetInput {
 
 
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct TrainNetOutput<N, R>
 where

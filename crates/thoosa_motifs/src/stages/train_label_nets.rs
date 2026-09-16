@@ -64,7 +64,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::utils::{ListenerResponse, TrainListener, mix_x_binary_with_labels, pad_stack_with_mask};
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -529,7 +529,7 @@ where
 
 }
 
-#[derive(Debug, DummyData)]
+#[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
 pub struct TrainLabelNetsOutput {
     train_motif_nets_run_config_ids: Vec<RunConfigId>,

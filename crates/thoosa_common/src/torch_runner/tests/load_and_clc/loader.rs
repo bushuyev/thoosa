@@ -24,7 +24,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use parking_lot::RwLock;
 use tch::{IndexOp, Kind, Tensor};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for LoaderInputId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, DummyData)]
+#[derive(Debug, Clone, Serialize, Deserialize, CpuData)]
 pub struct LoaderInput {
     id: LoaderInputId,
 }

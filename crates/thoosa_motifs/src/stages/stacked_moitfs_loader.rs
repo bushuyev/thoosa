@@ -17,7 +17,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::stages::stft::SyncStftSelector;
@@ -31,7 +31,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, 
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, sample_n_owned};
 use thoosa_store::Store;
 
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct StackedMotifsInput {
 
     id: SynKey,

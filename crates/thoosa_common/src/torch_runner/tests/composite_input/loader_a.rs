@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::LocalSelect;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
@@ -25,7 +25,7 @@ use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
 use crate::ipc::worker_msg::WorkerInput;
 
-#[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
+#[derive(Debug, Clone, CpuData, Hash, Eq, PartialEq, Named)]
 #[dummy_data(clone)]
 pub(super) struct AStageInput {
     id: MonoKey,

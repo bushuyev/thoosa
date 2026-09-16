@@ -18,7 +18,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, N
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::stages::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
@@ -37,7 +37,7 @@ use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mo
 use thoosa_store::Store;
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 #[allow(non_camel_case_types)]
 pub enum SelectionMode {
     Filter(FilterSelectionMode),
@@ -57,21 +57,21 @@ impl SelectionMode {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct FilterSelectionMode {
     #[in_map]
     #[run_config]
     pub threshold: f32,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 pub struct BestSelectionMode {
     #[in_map]
     #[run_config]
     pub limit: usize,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
 #[run_config_grid]
 pub struct SelectBucketsRunConfig {
     #[in_map]

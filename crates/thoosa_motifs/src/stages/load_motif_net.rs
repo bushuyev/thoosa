@@ -13,7 +13,7 @@ use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::{FsWorkspace, Workspace};
-use thoosa_dummy_data_derive::DummyData;
+use thoosa_cpu_data_derive::CpuData;
 use crate::train_nets::MotifNetParams;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
@@ -23,7 +23,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key, perf_log, simple_id, sync_read_lock};
-#[derive(Debug, Clone, DummyData)]
+#[derive(Debug, Clone, CpuData)]
 pub struct LoadMotifNetInput {
     id: SynKey,
     net_id: PathBuf,
