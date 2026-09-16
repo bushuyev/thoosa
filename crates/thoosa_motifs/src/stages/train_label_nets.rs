@@ -140,13 +140,13 @@ impl SyncLabelBatchInputWrapper {
 impl BorrowRef for SyncLabelBatchInputWrapper {
     type Out<'a> = SyncLabelBatchInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let x_1 = try_join_all(self.x_1.iter().map(|value| BorrowRef::borrow_to(value, to_device_idx))).await?;
-            let x_0 = try_join_all(self.x_0.iter().map(|value| BorrowRef::borrow_to(value, to_device_idx))).await?;
+            let x_1 = try_join_all(self.x_1.iter().map(|value| BorrowRef::borrow_ref(value, to_device_idx))).await?;
+            let x_0 = try_join_all(self.x_0.iter().map(|value| BorrowRef::borrow_ref(value, to_device_idx))).await?;
             Ok(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
         }
     }
@@ -1451,8 +1451,8 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
-                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
-                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
                     {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
@@ -1524,8 +1524,8 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
-                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
-                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
                     {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);

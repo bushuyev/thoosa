@@ -307,7 +307,7 @@ where
 
                     #[cfg(test)]{
                         {
-                            let input = SelectRef::borrow_to(&input, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            let input = SelectRef::select_ref(&input, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                             trace!("ApplyLabelNets::run: input=\n{}", input.as_ref().as_ref());
                             Ok::<(), ThoError>(())
                         }?;
@@ -322,7 +322,7 @@ where
 
                     #[cfg(test)]{
                         {
-                            let probs = SelectRef::borrow_to(&motif_probs, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            let probs = SelectRef::select_ref(&motif_probs, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                             trace!("ApplyLabelNets::run: probs=\n{}", probs.as_ref().data().as_ref());
                             Ok::<(), ThoError>(())
                         }?;
@@ -717,12 +717,12 @@ impl ApplyLabelNetInputWrapper {
 impl BorrowRef for ApplyLabelNetInputWrapper {
     type Out<'a> = ApplyLabelNetInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let input = track_await(BorrowRef::borrow_to(&self.input, to_device_idx)).await?;
+            let input = track_await(BorrowRef::borrow_ref(&self.input, to_device_idx)).await?;
             Ok(ApplyLabelNetInput { id: self.id.clone(), input })
         }
     }
@@ -1353,7 +1353,7 @@ mod tests {
 
 
         {
-            let out = SelectRef::borrow_to(&out, run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let out = SelectRef::select_ref(&out, run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             trace!("run_apply_label_case: out=\n{}", out.t_ref());
             let out = out.as_ref().as_ref().f_squeeze_dim(-1)?;
             Ok::<_, ThoError>((out.size(), to_vec_f32(&out.totype(Float))))

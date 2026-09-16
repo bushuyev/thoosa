@@ -883,7 +883,7 @@ mod tests {
         let adjuster = find_motifs_run_config.input_len_adjuster();
 
 
-        let ThoDataRef::ReadLocked(rr) = BorrowRef::borrow_to(&r,0).await? else {
+        let ThoDataRef::ReadLocked(rr) = BorrowRef::borrow_ref(&r, 0).await? else {
             panic!("no result");
         };
 

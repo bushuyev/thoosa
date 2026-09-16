@@ -753,7 +753,7 @@ where
         } else {
             None
         };
-        let borrowed = track_await(BorrowRef::borrow_to(&input, 0)).await?;
+        let borrowed = track_await(BorrowRef::borrow_ref(&input, 0)).await?;
         return match state {
             Some(state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
             None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
@@ -825,7 +825,7 @@ where
         } else {
             None
         };
-        let borrowed = track_await(SelectRef::borrow_to(&input, 0, selector)).await?;
+        let borrowed = track_await(SelectRef::select_ref(&input, 0, selector)).await?;
         return match state {
             Some(state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
             None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
@@ -1902,7 +1902,7 @@ mod tests {
     impl BorrowRef for BorrowOnlyInput {
         type Out<'a> = &'a TestInput where Self: 'a;
 
-        fn borrow_to<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+        fn borrow_ref<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
         where
             Self: 'o,
         {

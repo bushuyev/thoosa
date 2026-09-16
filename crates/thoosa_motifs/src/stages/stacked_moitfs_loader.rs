@@ -254,7 +254,7 @@ where
         .flatten()
         .collect::<Vec<_>>();
 
-        let data_refs = try_join_all(loaded_motifs.iter().map(|motif| motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+        let data_refs = try_join_all(loaded_motifs.iter().map(|motif| motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
         let data = data_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
         {
 

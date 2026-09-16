@@ -81,7 +81,7 @@ impl<'a> BorrowRef for TestInputA<'a> {
     // Rebind the input's borrowed field to the output borrow so it matches Stage::In<'o> for every caller lifetime.
     type Out<'o> = ThoDataRef<'o, TestInputA<'o>> where Self: 'o;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o
     {

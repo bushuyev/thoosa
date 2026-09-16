@@ -310,12 +310,12 @@ impl MotifStatsCalcInputWrapper {
 
         match &self.data {
             MotifStatsCalcInputDataWrapper::Managed(motif) => {
-                let motif = SelectRef::borrow_to(motif, to_device_idx, None::<SyncStftSelector>).await?;
+                let motif = SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>).await?;
                 let input = MotifStatsCalcInput::from_managed(id, motif.as_ref(), metrics, quantiles);
                 track_await(do_run(&input, &permits_ctx)).await
             }
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
-                let motif_refs = try_join_all(motifs.iter().map(|motif| SelectRef::borrow_to(motif, to_device_idx, None::<SyncStftSelector>))).await?;
+                let motif_refs = try_join_all(motifs.iter().map(|motif| SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>))).await?;
                 let motifs = motif_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
                 let input = MotifStatsCalcInput::from_motifs(id, motifs, metrics, quantiles);
                 track_await(do_run(&input, &permits_ctx)).await
@@ -328,7 +328,7 @@ impl MotifStatsCalcInputWrapper {
 impl BorrowRef for MotifStatsCalcInputWrapper {
     type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {

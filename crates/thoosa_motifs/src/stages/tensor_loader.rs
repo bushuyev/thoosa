@@ -64,7 +64,7 @@ impl RawTensorLoaderInputWrapper {
 impl BorrowRef for RawTensorLoaderInputWrapper {
     type Out<'a> = Resource where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
