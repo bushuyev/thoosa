@@ -28,8 +28,6 @@ plotters = { version = "0.3.5"}
 
 log.workspace = true
 #serde = "1"
-anyhow = "1.0.79"
-ctor.workspace = true
 regex = "1.10.3"
 
 lewton = "0.10"
@@ -39,13 +37,11 @@ tracing.workspace = true
 async-trait.workspace = true
 
 [dev-dependencies]
+ctor.workspace = true
 rand_chacha = "0.3.1"
 approx = "0.5.1"
 hound = "3.5"
 tempfile = "3.10"
-
-[build-dependencies]
-chrono.workspace = true
 
 [lints]
 workspace = true

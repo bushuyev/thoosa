@@ -26,7 +26,6 @@ plotters.workspace = true
 
 
 #serde = "1"
-anyhow = "1.0.79"
 
 lazy_static = "1.5.0"
 rand.workspace = true
@@ -45,13 +44,10 @@ crossbeam-channel.workspace = true
 libloading.workspace = true
 serde.workspace = true
 serde_json5.workspace = true
-ctor.workspace = true
-chrono.workspace = true
 rayon.workspace = true
 #rand_distr.workspace = true
 mockall.workspace = true
 rusqlite.workspace = true
-sci-rs = "0"
 zstd = "0.13"
 rand_distr.workspace = true
 dashmap.workspace = true
@@ -80,13 +76,13 @@ mockall_double.workspace = true
 blake3.workspace = true
 
 [dev-dependencies]
+ctor.workspace = true
+sci-rs = "0"
+chrono.workspace = true
 rand_chacha = "0.3.1"
 approx = "0.5.1"
 tokio.workspace = true
 mockall_double.workspace = true
-
-[build-dependencies]
-chrono = { version = "0.4.32" }
 
 [lints]
 workspace = true

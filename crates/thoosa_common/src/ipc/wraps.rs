@@ -209,7 +209,7 @@ where
         Some(self as &dyn ErasedWithState)
     }
 
-    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>
     where
         Self: Sync
     {
@@ -271,7 +271,7 @@ pub trait SyncStageIpcWrapper: Send + Sync + Debug {
     }
 
 
-    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>
     {
         async move {
             Ok(())

@@ -14,15 +14,15 @@ thoosa_run_config_args = {path = "../thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_run_config_args_derive" }
 
 
-thoosa_properties_map = {path = "../thoosa_properties_map" }
-thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
 # macrotest also copies these dependencies into its standalone manifest, so
 # keep their workspace versions explicit here for the expansion fixture.
 serde = { version = "1", features = ["derive"] }
 log = "0"
-ctor = "0"
 futures-util = "0.3"
 [dev-dependencies]
+thoosa_properties_map = {path = "../thoosa_properties_map" }
+thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
+ctor = "0"
 macrotest = "1"
 serde_json5 = "0.2"
 [lints]

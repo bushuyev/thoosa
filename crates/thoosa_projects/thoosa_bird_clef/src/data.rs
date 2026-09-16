@@ -11,6 +11,8 @@ use tch::Kind::{BFloat16, Half};
 use tch::{Kind, Tensor};
 use thoosa_shared::ThoError;
 
+// Retain the audio conversion helper for the disabled inference path.
+#[allow(dead_code)]
 pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
     file: P, kind: Kind,
 ) -> Result<Tensor, ThoError> {
@@ -167,6 +169,8 @@ fn parse_secondary_labels(s: &str) -> Vec<String> {
         .collect()
 }
 
+// Retain the resource loader used by the disabled inference path.
+#[allow(dead_code)]
 pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Tensor, ThoError> {
     //gpt The key is intentionally reversible: labeled_resourses stores "class_file.ogg", and this restores "class/file.ogg".
     Ok(ogg_to_tensor(

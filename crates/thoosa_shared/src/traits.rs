@@ -1,24 +1,22 @@
 use crate::ThoError;
 use crate::applicables_runner::{Input, Output};
-use crate::copy_mode::CpuOnly;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::debug;
 use mockall::automock;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::any::{Any, TypeId};
+use std::any::Any;
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use tokio::sync::MutexGuard;

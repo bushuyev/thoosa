@@ -47,6 +47,8 @@ pub enum FindAndSelect {
         extend_motifs_run_config: Option<ExtendMotifsRunConfigRangeOrValue<SelectMotifsRunConfigFields>>,
         select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
     },
+    // The optional search configuration is kept for future run-all profiles.
+    #[allow(dead_code)]
     WithOpt{
         find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
         fixed_find_motifs_config:FixedFindMotifsConfig,
@@ -456,6 +458,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 }
 
 
+// Retained for the currently commented-out optimization profile.
+#[allow(dead_code)]
 fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F, F1>(median_window: F, _dyn_step:F1) -> FindMotifsRunConfigRangeOrValue<P>
 where
     F: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
@@ -595,6 +599,8 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
     }
 }
 
+// Retained for the currently commented-out optimization profile.
+#[allow(dead_code)]
 fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
     SelectMotifsRunConfigRangeOrValue {
         id: None,
@@ -846,6 +852,8 @@ mod tests {
         )
     }
 
+    // Some settings belong to the retained but currently disabled test profile.
+    #[allow(dead_code)]
     struct RunAllSettings {
         resources_per_label:usize,
         pure_sets_len: [(usize, bool); 2],
@@ -1078,6 +1086,8 @@ mod tests {
 
 
 
+    // This alternative test profile is currently not selected.
+    #[allow(dead_code)]
     fn run_all_config_test_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
         let find_motifs_run_config_range_or_value = run_all_find_motifs_config_test_1::<FindMotifsRunConfigFields>();
@@ -1205,6 +1215,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn run_all_find_motifs_config_test_1<P: FieldName + 'static>() -> FindMotifsRunConfigRangeOrValue<P> {
         FindMotifsRunConfigRangeOrValue {
             id: None,
@@ -1228,6 +1239,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
         SelectMotifsRunConfigRangeOrValue {
             id: None,

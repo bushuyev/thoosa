@@ -677,7 +677,8 @@ where
                 bad_evals += 1;
             }
 
-            self.tpe_samplers
+            // Keep observation-update failures best-effort as before.
+            let _ = self.tpe_samplers
                 .get_mut(Self::LOSS_METRIC)
                 .expect("loss sampler missing")
                 .update_observations(loss, &eval_config, is_satisfied_opt);
@@ -686,7 +687,7 @@ where
                 let constraint_loss = results
                     .constraint_loss(constraint_name)
                     .unwrap_or(f32::INFINITY);
-                self.tpe_samplers
+                let _ = self.tpe_samplers
                     .get_mut(constraint_name)
                     .expect("constraint sampler missing")
                     .update_observations(constraint_loss, &eval_config, None);

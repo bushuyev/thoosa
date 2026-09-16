@@ -90,7 +90,8 @@ impl SyncClcStageInit {
 }
 
 impl SyncClcStage {
-    pub async fn new<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: ThoDevice, use_matmul: bool) -> ClcDynSyncStage
+    // The return type is crate-visible, so keep this test constructor at the same visibility.
+    pub(crate) async fn new<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: ThoDevice, use_matmul: bool) -> ClcDynSyncStage
     where
         K: Into<Scalar> + ToPrimitive + Copy,
     {
