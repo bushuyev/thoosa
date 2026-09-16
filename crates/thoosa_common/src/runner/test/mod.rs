@@ -310,7 +310,7 @@ where
                     )
                     .await?;
 
-                let guard = BorrowRef::borrow_to(&multed, check_device_idx).await?;
+                let guard = BorrowRef::borrow_ref(&multed, check_device_idx).await?;
 
 
                check_arc(res, &guard);
@@ -1046,7 +1046,7 @@ mod tests {
             .await?;
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
-        let data = BorrowRef::borrow_to(&loaded_tensor_1_0, 1).await?;
+        let data = BorrowRef::borrow_ref(&loaded_tensor_1_0, 1).await?;
 
        assert_eq!(data.as_ref().data.0, [0.0, 1.0, 2.0]);
 
@@ -1146,7 +1146,7 @@ mod tests {
             )
             .await?;
 
-        let data = BorrowRef::borrow_to(&multed, 1).await?;
+        let data = BorrowRef::borrow_ref(&multed, 1).await?;
            assert_eq!(
                data.as_ref().data.0,
                (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()

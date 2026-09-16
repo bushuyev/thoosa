@@ -67,7 +67,7 @@ where
     ).await?;
 
 
-    let val = BorrowRef::borrow_to(&out, 0).await?;
+    let val = BorrowRef::borrow_ref(&out, 0).await?;
 
     let value = val.as_ref().value;
 
@@ -87,7 +87,7 @@ where
         ctx.branch(false)
     ).await?;
 
-    let val = BorrowRef::borrow_to(&out, 0).await?;
+    let val = BorrowRef::borrow_ref(&out, 0).await?;
 
     let value = val.as_ref().value;
 

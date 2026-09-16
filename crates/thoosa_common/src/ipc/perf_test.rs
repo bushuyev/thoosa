@@ -42,7 +42,7 @@ impl Input for SimpInput {}
 impl BorrowRef for SimpInput {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {

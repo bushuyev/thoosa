@@ -322,13 +322,13 @@ impl SyncLogitsBatchInputWrapper {
 impl BorrowRef for SyncLogitsBatchInputWrapper {
     type Out<'a> = SyncLogitsBatchInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
 
-            let outputs = try_join_all(self.outputs.iter().map(|output| BorrowRef::borrow_to(output, to_device_idx))).await?;
+            let outputs = try_join_all(self.outputs.iter().map(|output| BorrowRef::borrow_ref(output, to_device_idx))).await?;
             Ok(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
         }
     }
@@ -539,7 +539,7 @@ where
                         let out = track_await(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
 
                         if log_enabled!(DebugLevel) {
-                            let val = BorrowRef::borrow_to(&out, 1).await?;
+                            let val = BorrowRef::borrow_ref(&out, 1).await?;
                             debug!("LogitsResourcesBatch::build_batch_stream: out={val:?} \nlabels={labels:?}");
                             if log::log_enabled!(Trace) && !GlobalCtx::global().is_ipc() {
                                 trace!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.t_ref());

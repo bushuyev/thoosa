@@ -258,7 +258,7 @@ where
 {
     type Out<'o> = CrossInput<'o, R> where Self: 'o;
 
-    fn borrow_to<'o>(&'o self, _to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, _to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o,
     {
@@ -274,14 +274,14 @@ impl<'a, R> SelectRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Clone + Debug + Send + Sync + 'static,
 {
-    fn borrow_to<'o>(&'o self, to_device_idx: usize, selector: Option<CrossInputBatch1Selector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_device_idx: usize, selector: Option<CrossInputBatch1Selector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputBatch1Selector: 'o,
         Self: 'o,
     {
         async move {
             let Some(selector) = selector else {
-                return BorrowRef::borrow_to(self, to_device_idx).await;
+                return BorrowRef::borrow_ref(self, to_device_idx).await;
             };
             let batch_0_len = self.resources_0.len();
             let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;

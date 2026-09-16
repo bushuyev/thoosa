@@ -338,7 +338,7 @@ where
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o
     {
@@ -357,7 +357,7 @@ where
     S:ThoSelector + Clone + Debug + Send,
     O: Select<S, Output = O> + Data + CopyToDevice + Send + Sync,
 {
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
     where
         O:'o,
         S:'o,
@@ -368,7 +368,7 @@ where
                 None => {
                     debug!("DevicesWrap::borrow_to: no selector self.id={:?}", self.id);
 
-                    BorrowRef::borrow_to(self, to_tho_device_idx).await
+                    BorrowRef::borrow_ref(self, to_tho_device_idx).await
                 }
                 Some(selector) => {
                     debug!("DevicesWrap::borrow_to: selector={selector:?} self.id={:?}", self.id);
@@ -1039,7 +1039,7 @@ pub trait BorrowRef
 {
     type Out<'a> where Self: 'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
         Self:'o;
 
@@ -1052,12 +1052,12 @@ where
 {
     type Out<'a> = BR::Out<'a> where Self: 'a,  BR:'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
         Self: 'o
     {
         async move {
-            self.as_ref().borrow_to(to_tho_device_idx).await
+            self.as_ref().borrow_ref(to_tho_device_idx).await
         }
 
     }
@@ -1067,7 +1067,7 @@ pub trait SelectRef<S>: BorrowRef
 where
     S: ThoSelector + Clone + Debug + Send
 {
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>/*TODO remove Option*/) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>/*TODO remove Option*/) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S:'o, Self:'o;
 
@@ -1078,13 +1078,13 @@ where
     BR: SelectRef<S> + Sync + Send,
     S:ThoSelector + Clone + Debug + Send
 {
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
+    fn select_ref<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S: 'o,
         Self: 'o
     {
         async move {
-            <BR as SelectRef<S>>::borrow_to(self.as_ref(), to_tho_device_idx, selector).await
+            <BR as SelectRef<S>>::select_ref(self.as_ref(), to_tho_device_idx, selector).await
         }
     }
 }
@@ -1367,7 +1367,7 @@ mod tests {
 
         let ctx_for_data = mock_run_ctx::default(1);
 
-        let data_on_1 = tested.borrow_to(1, None).await?;
+        let data_on_1 = tested.select_ref(1, None).await?;
 
         assert_eq!(data_on_1.as_ref().device(), &1);
         drop(data_on_1);//dump_to_cpu: can't drop self.id=DummyCachableId("id"), locked
@@ -1410,10 +1410,10 @@ mod tests {
 
         //TODO check asserts were actually invoked
         let ctx_for_data = mock_run_ctx::default(1);
-        let a = wrap_a.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
-        let first = futures_util::future::try_join_all(wrap_vec.iter().map(|item| item.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
-        let b = wrap_b.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
-        let second = futures_util::future::try_join_all(wrap_vec_second.iter().map(|item| item.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
+        let a = wrap_a.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        let first = futures_util::future::try_join_all(wrap_vec.iter().map(|item| item.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
+        let b = wrap_b.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        let second = futures_util::future::try_join_all(wrap_vec_second.iter().map(|item| item.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
         {
                 assert_eq!(a.as_ref().device(), &1);
                 assert_eq!(b.as_ref().device(), &1);
@@ -1438,7 +1438,7 @@ mod tests {
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
 
         let ctx_for_data = mock_run_ctx::default(1);
-        let a = wrap_a.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        let a = wrap_a.select_ref(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
         {
                 assert_eq!(a.as_ref().device(), &1);
                 Ok::<(), ThoError>(())

@@ -470,7 +470,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn thoosa_motifs::mot
         match track_await(Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(false))).await{
             Ok(results) => {
                 {
-                    let results = results.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                    let results = results.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
 
                     let probs = to_vec_f32(results.as_ref().as_ref());
                     info!("{label_i} label={label:?}");// slice={slice} path={path:?}{entry_i}

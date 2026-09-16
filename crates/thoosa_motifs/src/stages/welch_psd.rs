@@ -341,7 +341,7 @@ where
                     ctx.branch(false),
                 )).await?;
 
-            let loaded = BorrowRef::borrow_to(&loaded, 0).await?;
+            let loaded = BorrowRef::borrow_ref(&loaded, 0).await?;
             let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())?;
 
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));

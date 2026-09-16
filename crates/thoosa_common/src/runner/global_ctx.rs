@@ -918,7 +918,7 @@ mod tests {
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
         let sum_0 = {
-            let t_0 = t_0.borrow_to(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
+            let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
             Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
         debug!("test_device_reset: sum_0={sum_0}");
@@ -936,7 +936,7 @@ mod tests {
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = {
-            let t_0 = t_0.borrow_to(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
+            let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
             Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
 

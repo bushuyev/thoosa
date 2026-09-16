@@ -467,7 +467,7 @@ mod tests {
         let spec = stft.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), t)?)), ctx.branch(false)).await?;
 
         {
-            let spec = spec.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let spec = spec.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             let spec = spec.as_ref().as_ref();
             debug!("spec = {spec:?}");
             plot_spectrogram(

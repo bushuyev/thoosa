@@ -194,7 +194,7 @@ where
     async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
         let (node_params, stft_config) = train_motif_step_params(&run_config, self.motif_width)?;
         if GlobalCtx::global().is_ipc() {
-            let motif = track_await(self.motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+            let motif = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
             let motif = motif.as_ref().data();
             let motif = ThoTensor::new_ref(
                 motif.id().clone(),
@@ -212,13 +212,13 @@ where
         } else {
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
-                    let motif_ref = track_await(self.motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                    let motif_ref = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
                     Some(Arc::new(copy_motif(motif_ref.as_ref().data())?))
                 }
                 MotifNetTypeArgs::Cosine2DNet(args) => {
                     let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone())?);
                     let motif_input = {
-                        let motif_ref = track_await(self.motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                        let motif_ref = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
                         copy_motif(motif_ref.as_ref().data())
                     }?;
                     let motif_specs = track_await(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
@@ -632,7 +632,7 @@ where
                                 let motif_meta = motif_meta.clone();
                                 async move {
                                     let stft_input = {
-                                        let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                                        let motif_ref = motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                                         let motif = motif_ref.as_ref();
                                         copy_motif(motif.data())
                                     }?;
@@ -764,13 +764,13 @@ impl SyncMotifBatchInputWrapper {
 impl thoosa_common::runner::common::cachable::BorrowRef for SyncMotifBatchInputWrapper {
     type Out<'a> = SyncMotifBatchInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let motifs = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_to(&self.motifs, to_device_idx)).await?;
-            let random_slices = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_to(&self.random_slices, to_device_idx)).await?;
+            let motifs = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.motifs, to_device_idx)).await?;
+            let random_slices = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.random_slices, to_device_idx)).await?;
             Ok(SyncMotifBatchInput { id: self.id.clone(), motifs, random_slices, num_slices: self.num_slices, descr: self.descr.clone() })
         }
     }
@@ -1034,12 +1034,12 @@ impl SplitMotifIntoTrainValidInputWrapper {
 impl thoosa_common::runner::common::cachable::BorrowRef for SplitMotifIntoTrainValidInputWrapper {
     type Out<'a> = SplitMotifIntoTrainValidInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            let motif = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_to(&self.motif, to_device_idx)).await?;
+            let motif = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.motif, to_device_idx)).await?;
             Ok(SplitMotifIntoTrainValidInput { id: self.id.clone(), motif: SplitMotifTensorRef::WithExtra(motif) })
         }
     }
