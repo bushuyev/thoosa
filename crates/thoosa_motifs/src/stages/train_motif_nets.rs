@@ -1650,8 +1650,20 @@ mod tests {
         struct OutDims;
         impl Dims for OutDims { type Metrics = MonoMetrics<0, 1>; }
 
+        // Register a local wire type so this stays legal when TrainStepInput moves
+        // to thoosa_common; the stage and its input need no crate-specific impls.
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(transparent)]
+        struct TrainTestStepInput(TrainStepInput<InDims, OutDims>);
+
         #[typetag::serde(name = "TrainTestStepInput")]
-        impl WorkerInput for TrainStepInput<InDims, OutDims> {}
+        impl WorkerInput for TrainTestStepInput {}
+
+        impl std::borrow::Borrow<TrainStepInput<InDims, OutDims>> for TrainTestStepInput {
+            fn borrow(&self) -> &TrainStepInput<InDims, OutDims> {
+                &self.0
+            }
+        }
 
         #[derive(Clone, Debug)]
         struct TestNetParams {
@@ -1692,31 +1704,42 @@ mod tests {
                     (),
                     init.vs_path,
                 ).await?;
-                Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(stage), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+                Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainTestStepInput>(Arc::new(stage), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
             }.boxed()
         }
 
-        // Exercise the same shared stateful wrapper used by production train steps.
+        // Exercise the shared TrainStep through a local wire input, with no stage wrapper.
         run_ipc_test(
             module_path!(),
             async {
                 let stage_id = 0;
                 let init = TrainTestStepInit { lr: 0.001, vs_path: PathBuf::from("/tmp/thoosa_train_step_ipc.safetensors") };
-                let input_cloner = Arc::new(|input: &TrainStepInput<InDims, OutDims>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+                let input_cloner = Arc::new(|input: &TrainStepInput<InDims, OutDims>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainTestStepInput(input.clone_refs_for_worker()?))) });
                 let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, stage_id, 1, Box::new(init), input_cloner).await?),
                     init: (),
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
                 let input = TrainStepInput::<InDims, OutDims>::new(
-                    cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 100], FLOAT_CPU))?, 1.into()).await?.to_types(simple_id!("2"))?,
+                    cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([3, 100], FLOAT_CPU)?)?, 1.into()).await?.to_types(simple_id!("2"))?,
                     None,
-                    cuda_actor.copy(ThoTensor::new((), Tensor::rand([3, 1], FLOAT_CPU))?, 1.into()).await?.to_types(simple_id!("3"))?,
+                    cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(simple_id!("3"))?,
                     false,
                     false,
                 );
-                let output = Arc::new(train_step).do_run(&input, &RunCtxImpl::new(1, "train_step_ipc"))?;
-                assert!(output.loss.is_finite());
+                let train_step = Arc::new(train_step);
+                let ctx = RunCtxImpl::new(1, "train_step_ipc");
+                let before = train_step.clone().do_run(&input, &ctx)?;
+                assert!(before.loss.is_finite());
+
+                // Reuse worker-owned tensor refs across training and validation to verify
+                // that adapting the wire input preserves both tensors and mutable state.
+                let training_input = TrainStepInput::new(input.x.clone_ref()?, input.lengths.clone(), input.expected_y.clone_ref()?, true, false);
+                let trained = train_step.clone().do_run(&training_input, &ctx)?;
+                assert!(trained.loss.is_finite());
+                let after = train_step.do_run(&input, &ctx)?;
+                assert!(after.loss.is_finite());
+                assert!((after.loss - before.loss).abs() > f32::EPSILON, "training must update the worker's model: before={} after={}", before.loss, after.loss);
                 Ok(())
             },
             async |sock_path| {
