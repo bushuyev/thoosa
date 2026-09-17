@@ -1037,15 +1037,20 @@ where
             // Match do_run behavior: CPU construction does not enter CUDA OOM retry handling.
             return panic_to_err_async!(sync_init.init(run_context, Arc::clone(ws)));
         }
+        #[cfg(tho_debug)]
+        let input_id_dbg = format!("sync_init={:?}", sync_init);
 
         let task = Arc::new(SyncStageInitImpl {
             init: sync_init,
             ws: Arc::clone(ws),
             pd: PhantomData,
         });
+
         let output = track_await(run_with_runner_impl(
             &self.adjusters,
             task,
+            #[cfg(tho_debug)]
+            input_id_dbg,
             run_context,
             contexts,
             SyncStageInitRetryAdapter,
