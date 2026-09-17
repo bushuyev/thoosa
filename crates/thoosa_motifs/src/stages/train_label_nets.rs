@@ -58,7 +58,7 @@ use thoosa_common::resources::{Labeled, NetResources, SavableResult};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_common::stages::stages_seq::ABStage;
+use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
@@ -447,7 +447,7 @@ pub async fn new_train_label_nets<L, AMN, C>(
     store: &Arc<dyn MotifsStore>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
-    ) -> Result<TrainLabelNets<L, ABStage<L, AMN, C>, C>, ThoError>
+    ) -> Result<TrainLabelNets<L, PairStage<L, AMN, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     AMN: AppliedMotifNetsStage<C>,
@@ -462,9 +462,7 @@ where
     let motif_nets_ids = apply_motif_nets.motif_nets_ids();
 
 
-    let applied_motif_loader = Arc::new(ABStage::new(
-        //train_motif_nets_run_config_ids are only for logging. can't get RawTensorLoader id, but it's a singleton and ABStage isn't used - A instances are cached under A::out_id key.
-        id,
+    let applied_motif_loader = Arc::new(PairStage::new(
         loader,
         apply_motif_nets
     ));

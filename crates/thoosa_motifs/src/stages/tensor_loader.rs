@@ -201,7 +201,7 @@ pub(crate) mod mock_tensor_loader {
             fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockTensorLoader as Stage>::Out as WithId>::ID;
         }
 
-        // #[async_trait]
+
         impl AsyncStage for TensorLoader {
         }
 

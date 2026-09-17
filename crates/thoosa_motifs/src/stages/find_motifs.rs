@@ -41,7 +41,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::resources::Simple;
 use thoosa_common::stages::freq_filter::FreqFilter;
-use thoosa_common::stages::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
@@ -57,8 +57,8 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Handle;
 use tokio::task::{JoinError, JoinSet};
 
-pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
-pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
+pub type FilteredLoaderStage<L, C> = PairStage<L, FreqFilter<C>, C>;
+pub type LoaderStageChoice<L, C> = SingleOrPair<L, FilteredLoaderStage<L, C>>;
 pub type CrossUnfoldMaskFn<C> = Box<dyn CrossBatchFn<DistsMask, MasksCtx, C> + 'static>;
 type CrossUnfoldMaskStage<C> = CrossUnfoldClcDynSyncStage<DistsMask, C>;
 type DistsTrackerStage<C> = DistsTracker<C>;
@@ -546,7 +546,7 @@ where
 }
 
 
-// #[async_trait]
+
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
@@ -567,8 +567,7 @@ where
         let run_config_stages_len = self.run_config_stages.len();
         debug!("FindMotifsStage::run: run_config_stages.len={run_config_stages_len}");
 
-        //gpt Run each per-config CrossLoader; failures are logged but do not abort the stage.
-        // TODO(perf): order or group run configs by shared resource/filter pipeline so repeated RawTensorLoader/config_to_stage work can be reused across FindMotifsStage children.
+        //Run each per-config CrossLoader; failures are logged but do not abort the stage.
         let futures = self
             .run_config_stages
             .iter()
@@ -589,8 +588,7 @@ where
             "FindMotifsStage::run",
         )).await;
 
-
-        //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
+        //FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
         Ok(Arc::new(FindMotifsSavableResult::new()))
     }
 }
@@ -604,14 +602,13 @@ where
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_deref() {
         None | Some([]) => {
             debug!("MotifLoader::run: find_motifs_run_config_id={:?} no filter", find_motifs_run_config.id);
-            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader)))
+            Arc::new(SingleOrPair::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader)))
         },
         Some(freq_filter_config) => {
             debug!("MotifLoader::run: find_motifs_run_config_id={:?} freq_filter={freq_filter_config:?}", find_motifs_run_config.id);
 
             let configs = ws.read().ws_configs();
-            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
-                SynKey::new([mono_key!(find_motifs_run_config.id.expect("find_motifs_run_config"), "ab_stage")]),
+            Arc::new(SingleOrPair::<L, FilteredLoaderStage<L, C>>::Pair(Arc::new(PairStage::new(
                 Arc::clone(loader),
                 FreqFilter::<C>::new(freq_filter_config, configs, find_motifs_run_config.id.expect("find_motifs_run_config"), tho_device_idx).await?,
             ))))

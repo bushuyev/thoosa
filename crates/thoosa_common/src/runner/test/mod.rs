@@ -561,7 +561,7 @@ pub mod fixtures {
         type Ctx = RunCtxImpl;
     }
 
-    // #[async_trait]
+
     impl AsyncStage for DummyLoader {
         // type RunInput = Arc<Self::In<'static>>;
         // type RunOutput = Arc<DevicesWrap<Self::Out>>;
@@ -955,7 +955,7 @@ mod tests {
         type Ctx = RunCtxImpl;
     }
 
-    // #[async_trait]
+
     impl AsyncStage for DLoadAndClcStage {
 
 

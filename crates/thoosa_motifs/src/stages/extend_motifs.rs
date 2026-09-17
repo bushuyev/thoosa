@@ -223,7 +223,6 @@ where
             FuturesOrdering::Ordered,
             "SelectMotifsStage::load_stacked_motifs",
         )).await
-            //gpt TODO!! collect_futures_with_progress drops errors and None results; missing find_motifs runs are silently skipped.
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
