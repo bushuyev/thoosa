@@ -416,7 +416,9 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
             head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+            // head_size: RangeOrValue::Value(32),
             n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+            // n_heads: RangeOrValue::Value(4),
             // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
