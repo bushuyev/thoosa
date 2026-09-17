@@ -14,6 +14,7 @@ use log::{debug, error};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -160,6 +161,13 @@ where
 
 }
 ///
+// A downstream crate can register its own wire type and lend the shared stage its
+// original input, without implementing WorkerInput for a foreign generic type.
+fn borrowed_worker_input<I: 'static, W: Borrow<I> + 'static>(input: &dyn WorkerInput) -> Result<&I, ThoError> {
+    let input: &dyn Any = input;
+    input.downcast_ref::<W>().map(Borrow::borrow).ok_or_else(|| ThoError::new(format!("worker expected input type {}", std::any::type_name::<W>())))
+}
+
 #[derive(Debug)]
 pub struct WorkerWrapperWithState<Co, St, I, O>
 where
@@ -173,7 +181,8 @@ where
     O: WorkerStageOutput + 'static,
 {
     base:Arc<St>,
-    pd:PhantomData<Co>
+    pd:PhantomData<Co>,
+    input_ref: for<'a> fn(&'a dyn WorkerInput) -> Result<&'a I, ThoError>,
 }
 
 impl <Co, St, I, O> WorkerWrapperWithState<Co, St, I, O>
@@ -188,7 +197,16 @@ where
     O: WorkerStageOutput + 'static,
 {
     pub fn new(base: Arc<St>, pd: PhantomData<Co>) -> Self {
-        Self { base, pd }
+        Self { base, pd, input_ref: borrowed_worker_input::<I, I> }
+    }
+
+    /// Accept a crate-owned WorkerInput wrapper that borrows the shared stage input.
+    /// The proxy's input cloner must send W; only I materializes tensor references.
+    pub fn new_with_input<W>(base: Arc<St>, pd: PhantomData<Co>) -> Self
+    where
+        W: WorkerInput + Borrow<I>,
+    {
+        Self { base, pd, input_ref: borrowed_worker_input::<I, W> }
     }
 }
 
@@ -241,10 +259,7 @@ where
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
         let stage_ctx = St::Ctx::from_worker_ctx(&worker_ctx);
 
-        let a: &dyn WorkerInput = input.as_ref();
-        let a: &dyn Any = a;
-
-        let a = a.downcast_ref::<I>().expect(&format!("downcast_ref failed for input={input:?}"));
+        let a = (self.input_ref)(input.as_ref())?;
         let out = Arc::clone(&self.base).do_run_with_state(&a.ref_to_tensor(all_cuda_tensors, false)?, state, &stage_ctx)?;
 
         debug!("SyncStageIpcWrapper::do_run_with_state: out={out:?}");
