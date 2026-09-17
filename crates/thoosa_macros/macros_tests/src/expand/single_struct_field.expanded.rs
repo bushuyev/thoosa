@@ -285,10 +285,12 @@ impl thoosa_shared::run_configs::RunConfig for SingleField {
         "SingleField"
     }
 }
+#[allow(non_camel_case_types)]
 pub enum SingleFieldFields {
     Val,
 }
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::fmt::Debug for SingleFieldFields {
     #[inline]
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -296,8 +298,10 @@ impl ::core::fmt::Debug for SingleFieldFields {
     }
 }
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::marker::StructuralPartialEq for SingleFieldFields {}
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::cmp::PartialEq for SingleFieldFields {
     #[inline]
     fn eq(&self, other: &SingleFieldFields) -> bool {
@@ -305,6 +309,7 @@ impl ::core::cmp::PartialEq for SingleFieldFields {
     }
 }
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::clone::Clone for SingleFieldFields {
     #[inline]
     fn clone(&self) -> SingleFieldFields {
@@ -312,6 +317,7 @@ impl ::core::clone::Clone for SingleFieldFields {
     }
 }
 impl std::fmt::Display for SingleFieldFields {
+    #[allow(non_snake_case)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Val => f.write_fmt(format_args!("val")),
@@ -748,10 +754,12 @@ impl thoosa_shared::run_configs::RunConfig for Outer {
         "Outer"
     }
 }
+#[allow(non_camel_case_types)]
 pub enum OuterFields {
     Inner(SingleFieldFields),
 }
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::fmt::Debug for OuterFields {
     #[inline]
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -763,8 +771,10 @@ impl ::core::fmt::Debug for OuterFields {
     }
 }
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::marker::StructuralPartialEq for OuterFields {}
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::cmp::PartialEq for OuterFields {
     #[inline]
     fn eq(&self, other: &OuterFields) -> bool {
@@ -776,6 +786,7 @@ impl ::core::cmp::PartialEq for OuterFields {
     }
 }
 #[automatically_derived]
+#[allow(non_camel_case_types)]
 impl ::core::clone::Clone for OuterFields {
     #[inline]
     fn clone(&self) -> OuterFields {
@@ -787,6 +798,7 @@ impl ::core::clone::Clone for OuterFields {
     }
 }
 impl std::fmt::Display for OuterFields {
+    #[allow(non_snake_case)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Inner(SingleFieldFields) => f.write_fmt(format_args!("inner")),
