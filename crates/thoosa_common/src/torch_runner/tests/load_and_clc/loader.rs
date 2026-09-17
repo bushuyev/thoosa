@@ -218,7 +218,7 @@ impl Stage for TestTensorLoader {
     type Ctx = RunCtxImpl;
 }
 
-// #[async_trait]
+
 impl AsyncStage for TestTensorLoader {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;

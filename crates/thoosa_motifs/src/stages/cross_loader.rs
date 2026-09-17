@@ -444,7 +444,7 @@ where
     type Out = Arc<()>;
 }
 
-// #[async_trait]
+
 impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,

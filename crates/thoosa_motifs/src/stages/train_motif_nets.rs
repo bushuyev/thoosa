@@ -58,7 +58,7 @@ use thoosa_common::nets::nodes::InitMode;
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::resources::{Empty, SavableResult};
-use thoosa_common::stages::stages_seq::ABStage;
+use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
@@ -300,7 +300,7 @@ pub fn train_motif_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 }
 
 type RandomSlicesStft<C> = Stft<C, MotifSlices, MotifSlices>;
-type RandomSlicesLoaderWithStft<L, C> = ABStage<RandomSlicesLoader<L, C>, RandomSlicesStft<C>, C>;
+type RandomSlicesLoaderWithStft<L, C> = PairStage<RandomSlicesLoader<L, C>, RandomSlicesStft<C>, C>;
 
 #[derive(Debug)]
 enum RandomSlicesStage<L, C>
@@ -635,8 +635,7 @@ where
                                 let motif = Arc::clone(&motif_batch);
                                 let raw_random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
                                 let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone()).unwrap());//TODO unwrap
-                                let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::WithStft(Arc::new(ABStage::new(
-                                    SynKey::new([mono_key!("RandomSlicesLoaderWithStft", "stage")]),
+                                let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::WithStft(Arc::new(PairStage::new(
                                     raw_random_slices_loader,
                                     Arc::clone(&stft),
                                 ))));
