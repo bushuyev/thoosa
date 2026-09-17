@@ -2,7 +2,6 @@ use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::motifs_store::MotifsStore;
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
 use crate::stages::cross_loader::ResourcesConfigInput;
-use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use async_trait::async_trait;
 use futures::FutureExt;
 use futures_util::StreamExt;
@@ -21,12 +20,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, Ordering};
-use thoosa_common::dims::ChannelsData;
+use thoosa_common::dims::{ChannelsData, Slice};
 use thoosa_common::stages::stages_seq::ABStage;
+use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 
 use crate::stages::instance_cache::InstanceCache;
 use crate::stages::stft::SyncStftSelector;
-use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{Kind, Reduction, Tensor};
@@ -34,6 +33,7 @@ use thoosa_common::dims::{Batch, ThoBatch};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
+use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use crate::stages::apply_motif_nets::ApplyMotifNets;
@@ -648,8 +648,19 @@ impl WorkerStageInput for TrainFinalStepIpcInit {
 #[typetag::serde(name = "TrainFinalStepIpcInit")]
 impl WorkerInput for TrainFinalStepIpcInit {}
 
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct TrainFinalStepInput(TrainStepInput<LabelProbability, LabelsProbabilities>);
+
 #[typetag::serde(name = "TrainFinalStepInput")]
-impl WorkerInput for crate::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities> {}
+impl WorkerInput for TrainFinalStepInput {}
+
+impl std::borrow::Borrow<TrainStepInput<LabelProbability, LabelsProbabilities>> for TrainFinalStepInput {
+    fn borrow(&self) -> &TrainStepInput<LabelProbability, LabelsProbabilities> {
+        &self.0
+    }
+}
 
 fn train_final_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
@@ -673,7 +684,7 @@ fn train_final_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock
             init.vs_path,
         ).await?;
         // Shared stateful dispatch keeps final-net weights inside the CUDA worker.
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainFinalStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -700,7 +711,7 @@ where
             static TRAIN_FINAL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_FINAL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
-            let input_cloner = Arc::new(|input: &crate::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();

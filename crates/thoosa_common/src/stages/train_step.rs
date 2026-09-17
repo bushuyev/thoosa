@@ -1,4 +1,3 @@
-use crate::stages::train_net::maybe_cuda_mem;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -12,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tch::Tensor;
+use thoosa_common::cuda_utils::maybe_cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::IpcCodec;

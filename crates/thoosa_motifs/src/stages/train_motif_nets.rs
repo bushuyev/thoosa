@@ -46,8 +46,6 @@ use crate::stages::stage_ids::TRAIN_MOTIF_NETS;
 use crate::stages::stft::{Stft, SyncStft, SyncStftSelector};
 use crate::stages::tensor_loader::RawTensorLoader;
 use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, sync_label_batch_endpoint_init};
-use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
-use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use crate::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, lin_motif_node};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
@@ -61,6 +59,8 @@ use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::resources::{Empty, SavableResult};
 use thoosa_common::stages::stages_seq::ABStage;
+use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
+use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
@@ -130,8 +130,19 @@ impl WorkerStageInput for TrainMotifStepIpcInit {
 #[typetag::serde(name = "TrainMotifStepIpcInit")]
 impl WorkerInput for TrainMotifStepIpcInit {}
 
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct TrainMotifStepInput(TrainStepInput<Slice, MotifProbability>);
+
 #[typetag::serde(name = "TrainMotifStepInput")]
-impl WorkerInput for crate::stages::train_step::TrainStepInput<Slice, MotifProbability> {}
+impl WorkerInput for TrainMotifStepInput {}
+
+impl std::borrow::Borrow<TrainStepInput<Slice, MotifProbability>> for TrainMotifStepInput {
+    fn borrow(&self) -> &TrainStepInput<Slice, MotifProbability> {
+        &self.0
+    }
+}
 
 fn train_motif_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
@@ -169,7 +180,7 @@ fn train_motif_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock
             init.vs_path,
         ).await?;
         // Shared stateful dispatch leaves trainable motif-net state in the worker.
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainMotifStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -207,7 +218,7 @@ where
             static TRAIN_MOTIF_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
-            let input_cloner = Arc::new(|input: &crate::stages::train_step::TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let cosine_motif = match &run_config.net {
@@ -1390,7 +1401,6 @@ mod tests {
     use crate::stages::motif_loader::{MotifMeta, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, SYNC_MOTIF_LOADER_ENDPOINT, sync_load_motif_resources_endpoint_init, sync_motif_loader_endpoint_init};
     use crate::stages::tensor_loader::mock_tensor_loader;
     use crate::stages::train_motif_nets::{SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT, TrainMotifNetInput, TrainMotifNets, TrainMotifNetsResult, split_motif_into_train_valid_endpoint_init, sync_motif_batch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits};
-    use crate::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
     use crate::tch_test_utils;
     use crate::tch_test_utils::resource_tensor;
     use crate::train_nets::{FinalNetParams, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, final_net};
@@ -1435,6 +1445,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::purge::FuturesRunnerMapPurger;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
     use thoosa_common::utils::{reset_print_options, test_net};
@@ -1603,8 +1614,8 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    fn test_train_motif_nets_ipc() -> Result<(), ThoError> {
+    #[test]
+    fn heavy_test_train_motif_nets_ipc() -> Result<(), ThoError> {
         // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
         run_ipc_test(
             module_path!(),
