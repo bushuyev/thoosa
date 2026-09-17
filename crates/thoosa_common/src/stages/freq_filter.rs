@@ -806,7 +806,7 @@ where
     type Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
 }
 
-// #[async_trait]
+
 impl<C> AsyncStage for FreqFilter<C>
 where
     C: MaxParallelCtx + RunCtx + Adjustable + 'static,

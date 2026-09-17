@@ -11,7 +11,7 @@ use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue, Tr
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::resources::Simple;
-use thoosa_common::stages::stages_seq::ABStage;
+use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;

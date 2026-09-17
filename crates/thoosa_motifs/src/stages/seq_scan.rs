@@ -16,7 +16,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::resources::SavableResult;
 use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
-use thoosa_common::stages::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::ws::Workspace;
@@ -550,13 +550,12 @@ where
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C>,
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match run_config.freq_filter.as_deref() {
-        None | Some([]) => Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader))),
+        None | Some([]) => Arc::new(SingleOrPair::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader))),
         Some(freq_filter) => {
             let run_config_id = run_config.id.ok_or_else(|| ThoError::new("seq_scan::config_to_stage: freq_filter requires SeqScanRunConfig.id"))?;
 
             let configs = ws.read().ws_configs();
-            Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
-                SynKey::new([mono_key!(run_config_id, "seq_scan_ab_stage")]),
+            Arc::new(SingleOrPair::<L, FilteredLoaderStage<L, C>>::Pair(Arc::new(PairStage::new(
                 Arc::clone(loader),
                 FreqFilter::<C>::new(freq_filter, configs, run_config_id, 0).await?,
             ))))

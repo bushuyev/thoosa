@@ -16,7 +16,7 @@ use thoosa_shared::traits::{AsyncStage, Data, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{ThoError, ThoosaError};
 
 #[derive(Debug, Named)]
-pub struct ABStage<A, B, C> //TODO rename to Pair/Chained
+pub struct PairStage<A, B, C> //TODO rename to Pair/Chained
 where
     C: RunCtx + 'static,
 
@@ -27,7 +27,6 @@ where
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-    id: SynKey,//TOOD remove
     stage_a: Arc<A>,
     stage_b: Arc<B>,
 
@@ -35,7 +34,7 @@ where
 }
 
 
-impl <A, B, C> Stage for ABStage<A, B, C>
+impl <A, B, C> Stage for PairStage<A, B, C>
 where
     C:RunCtx + 'static,
 
@@ -53,7 +52,7 @@ where
 }
 
 
-impl<A, B, C> OutId for ABStage<A, B, C>
+impl<A, B, C> OutId for PairStage<A, B, C>
 where
     C:RunCtx + 'static,
 
@@ -66,12 +65,12 @@ where
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID
     {
-        &self.id + &self.stage_b.out_id(&self.stage_a.out_id(input_id))
+        self.stage_b.out_id(&self.stage_a.out_id(input_id))
     }
 }
 
 
-impl<A, B, C> ABStage<A, B, C>
+impl<A, B, C> PairStage<A, B, C>
 where
     C:RunCtx + 'static,
 
@@ -82,9 +81,8 @@ where
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-    pub fn new<I:Into<SynKey>>(id:I, stage_a: Arc<A>, stage_b: Arc<B>) -> ABStage<A, B, C> {
-        ABStage {
-            id: id.into(),
+    pub fn new(stage_a: Arc<A>, stage_b: Arc<B>) -> PairStage<A, B, C> {
+        PairStage {
             stage_a,
             stage_b,
             pd: PhantomData
@@ -92,8 +90,8 @@ where
     }
 }
 
-// #[async_trait]
-impl<A, B, C> AsyncStage for ABStage<A, B, C>
+
+impl<A, B, C> AsyncStage for PairStage<A, B, C>
 where
     C:RunCtx + 'static,
 
@@ -104,8 +102,7 @@ where
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-//    // type RunInput = A::RunInput;
-    //  // type RunOutput = B::RunOutput;
+
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
@@ -124,7 +121,7 @@ where
 }
 
 #[async_trait]
-impl<A, B, C> Cached for ABStage<A, B, C>
+impl<A, B, C> Cached for PairStage<A, B, C>
 where
     C:RunCtx + 'static,
 
@@ -166,7 +163,7 @@ where
 }
 
 #[derive(Named)]//TODO delegate to B's cache
-pub enum StageChainOption<A, B>//TODO it's not Chained, rename to Or/AB?
+pub enum SingleOrPair<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
@@ -175,10 +172,10 @@ where
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
     Single(Arc<A>),
-    Chained(Arc<B>),
+    Pair(Arc<B>),
 }
 
-impl<A, B> Debug for StageChainOption<A, B>
+impl<A, B> Debug for SingleOrPair<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
@@ -188,11 +185,11 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StageChainOption::Single(stage) => f
+            SingleOrPair::Single(stage) => f
                 .debug_tuple("StageChainOption::Single")
                 .field(stage)
                 .finish(),
-            StageChainOption::Chained(stage) => f
+            SingleOrPair::Pair(stage) => f
                 .debug_tuple("StageChainOption::Chained")
                 .field(stage)
                 .finish(),
@@ -200,7 +197,7 @@ where
     }
 }
 
-impl<A, B> Stage for StageChainOption<A, B>
+impl<A, B> Stage for SingleOrPair<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
@@ -215,8 +212,8 @@ where
     type Out = <A as Stage>::Out;
 }
 
-// #[async_trait]
-impl<A, B> AsyncStage for StageChainOption<A, B>
+
+impl<A, B> AsyncStage for SingleOrPair<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
@@ -232,13 +229,13 @@ where
         ctx: <A as Stage>::Ctx,
     ) -> Result<Self::Out, ThoError> {
         match &*self {
-            StageChainOption::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
-            StageChainOption::Chained(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
+            SingleOrPair::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
+            SingleOrPair::Pair(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
         }
     }
 }
 
-impl<A, B> OutId for StageChainOption<A, B>
+impl<A, B> OutId for SingleOrPair<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
@@ -250,14 +247,14 @@ where
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         match &*self {
-            StageChainOption::Single(stage) =>  stage.out_id(input_id),
-            StageChainOption::Chained(stage) => stage.out_id(input_id),
+            SingleOrPair::Single(stage) =>  stage.out_id(input_id),
+            SingleOrPair::Pair(stage) => stage.out_id(input_id),
         }
     }
 }
 
 #[async_trait]
-impl<A, B> Cached for StageChainOption<A, B>
+impl<A, B> Cached for SingleOrPair<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
     for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
@@ -291,8 +288,8 @@ where
         let ctx_a: <A as Stage>::Ctx = ctx;
 
         Ok(match &*self {
-            StageChainOption::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
-            StageChainOption::Chained(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
+            SingleOrPair::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
+            SingleOrPair::Pair(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
         })
     }
 }

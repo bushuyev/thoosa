@@ -60,7 +60,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, De
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::stages::freq_filter::FreqFilter;
-use thoosa_common::stages::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
@@ -578,14 +578,14 @@ where
 }
 
 // Reuse the same local stage or IPC endpoint whenever this singleton loader is requested again.
-static INSTANCES: InstanceCache = InstanceCache::new();
+static SYNC_MOTIF_LOADER_INSTANCES: InstanceCache = InstanceCache::new();
 
 impl<C> SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
-        INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        SYNC_MOTIF_LOADER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
 
             if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
@@ -1685,7 +1685,7 @@ pub mod mock_motif_loader {
             fn out_id<'a>(&self,input_id: &<<Self as Stage>::In<'a> as WithId>::ID,) -> <<MockMotifLoader as Stage>::Out as WithId>::ID;
         }
 
-        // #[async_trait]
+
         impl AsyncStage for MotifLoader {
         }
 

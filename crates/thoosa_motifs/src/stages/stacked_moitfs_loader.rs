@@ -191,7 +191,7 @@ where
     type Out = Arc<DevicesWrap<StackedMotifsOutput>>;
 }
 
-// #[async_trait]
+
 impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
