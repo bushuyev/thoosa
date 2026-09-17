@@ -1006,3 +1006,10 @@ mod tests {
     }
 
 }
+
+pub fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
+    match device {
+        Device::Cuda(_) if  Device::cuda_if_available().is_cuda() => Some(cuda_mem()),
+        _ => None,
+    }
+}
