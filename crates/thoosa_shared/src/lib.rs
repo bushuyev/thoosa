@@ -818,6 +818,13 @@ pub fn cuda_cause_from_error_code(code: i32) -> Cause {
             "CUDA error 4: CUDA runtime/driver is deinitializing; usually process shutdown or teardown ordering",
         ),
 
+        // Runtime: cudaErrorInvalidDevice = 100
+        // Driver:  CUDA_ERROR_INVALID_DEVICE = 100
+        100 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error code=100: No CUDA GPUs are available",
+        ),
+
         // Runtime: cudaErrorInvalidDevice = 101
         // Driver:  CUDA_ERROR_INVALID_DEVICE = 101
         101 => cuda_cause(

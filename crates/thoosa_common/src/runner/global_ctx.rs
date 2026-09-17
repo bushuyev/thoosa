@@ -353,10 +353,12 @@ impl GlobalCtx {
             }
         }
 
-        info!(
-            "GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
-            thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
-        );
+        if !self.is_ipc {
+            info!(
+                "GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
+                thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
+            );
+        }
     }
 
     // #[cfg(tho_debug)]
