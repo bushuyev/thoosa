@@ -8,9 +8,6 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, Th
 use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
 use thoosa_shared::traits::MaxParallelCtx;
 
-use crate::stages::train_label_nets::{TrainLabelNetRunConfig, TrainLabelNetRunConfigResult};
-use crate::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
-use crate::train_nets::{LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, TrainMotifNetRunConfig};
 use futures_util::{StreamExt, future::BoxFuture};
 use log::{debug, error, info, trace, warn};
 use rand::random;
@@ -28,7 +25,7 @@ use std::time::{Instant, SystemTime};
 use tch::Device;
 use tch::Kind::Float;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::cuda_utils::cuda_mem;
+use thoosa_common::cuda_utils::{cuda_mem, maybe_cuda_mem};
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
@@ -36,6 +33,7 @@ use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRu
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{TrainListener, optimizer_mem_size};
@@ -57,13 +55,6 @@ use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
 use tokio::task::coop::cooperative;
 use tracing::Instrument;
-
-pub fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
-    match device {
-        Device::Cuda(_) if  Device::cuda_if_available().is_cuda() => Some(cuda_mem()),
-        _ => None,
-    }
-}
 
 /// Tracks batch chunks and combines their mean losses without biasing the final short chunk.
 #[derive(Debug)]
@@ -539,14 +530,14 @@ pub mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::{AsyncStage, RunCtx};
     #[allow(unused_imports)]
-    use crate::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
-    use crate::stages::train_step::{TrainStep, TrainStepXFn};
+    use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
     use async_trait::async_trait;
     use futures::FutureExt;
     use futures_util::future::BoxFuture;
     use log::debug;
     use mockall::PredicateBoxExt;
     use parking_lot::Mutex;
+    use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
     #[allow(unused_imports)]
     use thoosa_common::nets::common_nets::CommonTrainingRunConfig;
     #[allow(unused_imports)]

@@ -20,7 +20,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::nn::{Optimizer, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::dims::ChannelsData;
+use thoosa_common::dims::{ChannelsData, Slice};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 
@@ -45,8 +45,6 @@ use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::stage_ids::RAW_TENSOR_LOADER;
 use crate::stages::stft::SyncStftSelector;
-use crate::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
-use crate::stages::train_step::{TrainStep, TrainStepXFn};
 use crate::train_nets::{LabelNetParams, LabelNetTypeArgs, LabelNetTypeArgsBuilder, LabelNetTypeArgsFields, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, TrainLabelNetRunConfigResultParams, conv_label_node, lin_label_node, self_attention_label_node};
 use clap::Args;
 use rand::rng;
@@ -61,6 +59,8 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::stages::stages_seq::ABStage;
+use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
+use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::{ListenerResponse, TrainListener, mix_x_binary_with_labels, pad_stack_with_mask};
 use thoosa_common::ws::Workspace;
@@ -1009,8 +1009,20 @@ impl WorkerStageInput for TrainLabelStepIpcInit {
 #[typetag::serde(name = "TrainLabelStepIpcInit")]
 impl WorkerInput for TrainLabelStepIpcInit {}
 
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct TrainLabelStepInput(TrainStepInput<MotifProbability, LabelProbability>);
+
 #[typetag::serde(name = "TrainLabelStepInput")]
-impl WorkerInput for crate::stages::train_step::TrainStepInput<MotifProbability, LabelProbability> {}
+impl WorkerInput for TrainLabelStepInput {}
+
+impl std::borrow::Borrow<TrainStepInput<MotifProbability, LabelProbability>> for TrainLabelStepInput {
+    fn borrow(&self) -> &TrainStepInput<MotifProbability, LabelProbability> {
+        &self.0
+    }
+}
+
 
 fn train_label_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
@@ -1034,7 +1046,7 @@ fn train_label_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock
             init.vs_path,
         ).await?;
         // Shared stateful dispatch keeps the module, optimizer, and VarStore in the worker.
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainLabelStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1060,7 +1072,7 @@ where
             static TRAIN_LABEL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_LABEL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
-            let input_cloner = Arc::new(|input: &crate::stages::train_step::TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(input.clone_refs_for_worker()?)) });
+            let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
