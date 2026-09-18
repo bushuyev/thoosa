@@ -7,7 +7,7 @@ use thoosa_shared::traits::{AsyncStage, OutId, Stage, WithId};
 
 use crate as thoosa_common;
 use crate::runner::common::cachable::DevicesWrap;
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_tensor::ThoTensor;
 

@@ -205,13 +205,7 @@ where
                     debug!("FreqFilter::new: band_pass_config={band_pass_config:?} kernel.size={:?}", kernel.size());
 
                     filters.push(PreparedFilter::BandPass {
-                        kernel: ThoTensor::new(
-                            SynKey::new([
-                                mono_key!(format!("{}", band_pass_config.low_hz), format!("{} low_hz", band_pass_config.low_hz)),
-                                mono_key!(format!("{}", high_hz), format!("{} high_hz", high_hz) ),
-                            ]),
-                            kernel
-                        )?,
+                        kernel: ThoTensor::new((), kernel)?,
                         stride: band_pass_config.stride,
                         padding: band_pass_config.padding,
                     });
@@ -239,14 +233,7 @@ where
                         .f_repeat([num_channels, 1, 1])?;
 
                     filters.push(PreparedFilter::SavGol {
-                        weights: ThoTensor::new(
-                            SynKey::new([
-                                mono_key!(format!("{}", sav_gol_config.window_len), "window_len"),
-                                mono_key!(format!("{}", sav_gol_config.poly_order), "poly_order"),
-                                mono_key!(format!("{:?}", sav_gol_config.padding), "padding"),
-                            ]),
-                            weights
-                        )?,
+                        weights: ThoTensor::new((), weights)?,
                         window_len: window_len as i64,
                         stride: sav_gol_config.stride,
                         padding: sav_gol_config.padding,
@@ -389,12 +376,12 @@ impl SyncFreqFilter<WokerRunCtx> {}
 pub enum PreparedFilter {
     NotchBand { low_hz: f64, high_hz: f64 },
     BandPass {
-        kernel: ThoTensor<BandPassDims, SynKey>,
+        kernel: ThoTensor<BandPassDims, ()>,
         stride: u32,
         padding: Padding,
     },
     SavGol {
-        weights: ThoTensor<BandPassDims, SynKey>,
+        weights: ThoTensor<BandPassDims, ()>,
         window_len: i64,
         stride: u32,
         padding: Padding,
@@ -871,7 +858,7 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
 mod tests {
     use std::sync::Arc;
     use tch::Tensor;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::{AverageFilterParams, InputFilter, MedianFilterParams};

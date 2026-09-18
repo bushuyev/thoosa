@@ -39,7 +39,7 @@ impl WorkerWrapperCtx for WokerRunCtx {
     }
 }
 
-impl WorkerWrapperCtx for crate::runner::run_ctx_2::RunCtxImpl {
+impl WorkerWrapperCtx for crate::runner::run_ctx::RunCtxImpl {
     fn from_worker_ctx(ctx: &WokerRunCtx) -> Self {
         let mut stage_ctx = Self::new(ctx.tho_device_idx(), "WorkerWrapper");
 

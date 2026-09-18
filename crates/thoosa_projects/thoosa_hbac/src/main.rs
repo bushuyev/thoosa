@@ -24,7 +24,7 @@ use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::stages::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::kick_register_cuda_hooks;

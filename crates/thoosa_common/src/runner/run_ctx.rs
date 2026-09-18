@@ -25,7 +25,6 @@ type PurgeGpuClosure = Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + 
 type SharedPurgeGpuClosures = Arc<Mutex<Vec<PurgeGpuClosure>>>;
 
 
-///was supposed to be execution-long context, now used mostly to keep max_parallel so to avoid parallel async calls 'sharing' same permit, which may lead to deadlock, should never be passed as &mut to an async function - use RunCtx::branch instead.
 #[derive(Named)]
 pub struct RunCtxImpl {
     id: SynKey,

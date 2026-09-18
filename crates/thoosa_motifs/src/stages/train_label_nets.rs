@@ -57,7 +57,7 @@ use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::resources::{Labeled, NetResources, SavableResult};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStepFactory};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};

@@ -251,7 +251,7 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 mod tests {
     use tch::{Device, Kind, Tensor};
     use thoosa_common::nets::common_nets::StftRunConfig;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_shared::ThoError;
 
     use crate::stages::stft::{SyncStft, stft_stage_id};

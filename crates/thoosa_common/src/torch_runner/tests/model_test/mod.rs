@@ -8,7 +8,7 @@ use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
