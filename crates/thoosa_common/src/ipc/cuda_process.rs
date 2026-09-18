@@ -153,7 +153,7 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
 
 
 pub enum CudaIPCActorMessage {
-    Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
+    Copy{ src:ThoTensor, dst_device:ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
     DropThoTensor {
         key:u64,
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -378,16 +378,16 @@ impl CudaIPCActor {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_message"))]
     async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
         match msg {
-            CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
+            CudaIPCActorMessage::Copy { src, dst_device, activity, respond_to } => {
 
                 return if let Some(tensor_key) = src.ref_key() {
                     assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
-                     self.handle_ref_d2h_copy(tensor_key, dst_device, respond_to).await
+                     self.handle_ref_d2h_copy(tensor_key, dst_device, activity, respond_to).await
                 } else {
                     debug!("handle_message: src={src:?} dst_device={dst_device:?}");
                     assert_ne!(*dst_device, Cpu, "If source is concrete tensor it should be on CPU and can be copied only to GPU");
 
-                    self.handle_h2d_copy(src, dst_device, respond_to)
+                    self.handle_h2d_copy(src, dst_device, activity, respond_to)
                 }
 
             }
@@ -536,6 +536,7 @@ impl CudaIPCActor {
         &mut self,
         tensor_key: u64,
         dst_device: ThoDevice,
+        activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>,
     ) -> Result<(), ThoError> {
         if dst_device.tho_device_idx() != 0 {
@@ -590,6 +591,9 @@ impl CudaIPCActor {
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         tokio::spawn(async move {
+            // The caller may have been cancelled. Keep reset blocked until the
+            // worker acknowledges that it finished accessing shared storage.
+            let _activity = activity;
             let result = async {
                 let response = send_request_and_wait_msg(
                     self_tx,
@@ -619,7 +623,7 @@ impl CudaIPCActor {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_h2d_copy"))]
-    fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
+    fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
@@ -632,6 +636,8 @@ impl CudaIPCActor {
         debug!("CudaIPCActor::handle_h2d_copy: src_shape={src_shape:?} tensor_byte_len={tensor_byte_len}");
 
         tokio::spawn(async move {
+            // Transfer ownership follows the request, not the awaiting caller.
+            let _activity = activity;
             let result = async {
                 // Older CPU tensors may predate allocator installation; copy only those tensors once into arena-owned storage before sharing their offset.
                 let (shared_source, arena_offset) = spawn_blocking(move || ensure_parent_shared_arena_tensor(src_tensor, tensor_byte_len))
@@ -968,6 +974,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+        let activity = thoosa_shared::CudaActivityScope::for_operation()?;
         debug!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?}");
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
         match &dst_device.into() {
@@ -992,6 +999,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
             CudaIPCActorMessage::Copy {
                 src,
                 dst_device,
+                activity,
                 respond_to,
             }
         ).await.map_err(|e|{
@@ -1252,6 +1260,27 @@ mod tests {
     use tokio::process::{Child, Command};
     use tokio::sync::Mutex;
     use tokio::task::JoinSet;
+
+    #[tokio::test]
+    async fn test_cancelled_copy_caller_keeps_activity_with_request() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let handle = CudaIPCActorHandle { sender };
+        // A CPU tensor exercises real copy admission and message ownership
+        // without starting a CUDA worker or allocating GPU storage.
+        let src = ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
+        let mut copy = Box::pin(handle.copy(src, Device::Cuda(0).into()));
+        assert!(futures::poll!(copy.as_mut()).is_pending());
+        let request = receiver.recv().await.unwrap();
+        drop(copy);
+        let pause = thoosa_shared::cuda_activity_gate().request_pause();
+        let mut idle = Box::pin(thoosa_shared::cuda_activity_gate().wait_until_idle());
+        assert!(futures::poll!(idle.as_mut()).is_pending());
+        // The request retains the scope even though its caller has gone away.
+        // Discarding it before dispatch is equivalent to completing that activity.
+        drop(request);
+        tokio::time::timeout(std::time::Duration::from_secs(2), idle).await.unwrap();
+        thoosa_shared::cuda_activity_gate().finish_pause(pause);
+    }
 
     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();

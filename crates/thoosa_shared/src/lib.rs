@@ -46,6 +46,8 @@ use std::{fmt, fs};
 
 
 pub mod resource;
+mod cuda_activity;
+pub use cuda_activity::CudaActivityScope;
 pub mod val;
 
 pub mod applicables_runner;
@@ -205,6 +207,7 @@ impl CudaActivityPauseTicket {
 struct CudaActivityGateState {
     paused: bool,
     generation: u64,
+    active: usize,
 }
 
 #[derive(Debug, Default)]
@@ -258,6 +261,20 @@ impl CudaActivityGate {
             let notified = {
                 let state = self.state.lock();
                 if !state.paused {
+                    return;
+                }
+                self.notify.notified()
+            };
+            notified.await;
+        }
+    }
+
+    /// Called with admission paused; outstanding stage/copy scopes can only drain.
+    pub async fn wait_until_idle(&self) {
+        loop {
+            let notified = {
+                let state = self.state.lock();
+                if state.active == 0 {
                     return;
                 }
                 self.notify.notified()

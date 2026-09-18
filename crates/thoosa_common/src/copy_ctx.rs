@@ -423,7 +423,9 @@ impl CudaActorHandle for CudaLocalActorHandle {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
         trace!("CudaLocalActorHandle::copy: src={src:?} dst_device={dst_device:?} backtrace={}", Backtrace::capture().to_string());
 
-        Ok(self.copy_tensor(src, dst_device).await?.into())
+        // Register before acquiring copy resources; children share this scope so
+        // a pause drains the whole copy instead of blocking its remaining chunks.
+        Ok(thoosa_shared::CudaActivityScope::for_operation()?.run(self.copy_tensor(src, dst_device)).await?.into())
     }
 
     async fn reset(&self) -> Result<(), ThoError> {
