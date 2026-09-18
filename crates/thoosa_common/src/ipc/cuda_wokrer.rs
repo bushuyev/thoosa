@@ -48,7 +48,7 @@ use tub::Pool;
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
 
-#[cfg(test)]
+
 pub static DEBUG_DATA:LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(vec![])));
 
 //1 cuda device per worker
@@ -500,11 +500,9 @@ impl CudaWorker {
                         info!("run_worker: key={key:?} tensor={tensor:?}");
                     }
 
+                    let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));
+                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(out)) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
 
-                    #[cfg(test)]{
-                        let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));
-                        context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(out)) }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-                    }
 
                     Ok(())
                 }

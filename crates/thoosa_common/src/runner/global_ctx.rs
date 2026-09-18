@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use std::future::ready;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
@@ -23,7 +23,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock};
 use thoosa_shims::context::ThoCudaContext;
-use tokio::sync::RwLock as AsyncRwLock;
+use tokio::sync::{RwLock as AsyncRwLock, Semaphore};
 use tracing::Instrument;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
 
@@ -45,7 +45,6 @@ pub struct GlobalCtx {
 
     cuda_actors:Vec<Box<dyn CudaActorHandle>>,//TODO change to enum, return Enum from cuda_actor() and use instead of is_ipc
 
-    reset_mutex:Vec<parking_lot::Mutex<bool>>,
     is_ipc: bool,
     arena_fd:Option<OwnedFd> //TODO needed in IPC mode only
 }
@@ -115,7 +114,6 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors,
             is_ipc: false,
@@ -123,7 +121,6 @@ impl GlobalCtx {
         })
     }
 
-    //TODO this should replace GlobalCtx::new when ipc refactoring is completed
     async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> Result<Self, ThoError> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
@@ -173,7 +170,6 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors,
             is_ipc: true,
@@ -182,14 +178,10 @@ impl GlobalCtx {
     }
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
-        let mut guard  = GlobalCtx::global().reset_mutex[tho_device_idx-1].lock();
-        if *guard {
-            info!("GlobalCtx::reset_cuda_context: has been reset");
-
-            return ready(Ok(())).boxed()
-        }
-        *guard = true;
         async move {
+            static RUNNING: Semaphore = Semaphore::const_new(1);
+            let _permit = RUNNING.try_acquire().expect("reset is already running");//StageExecutor should ensure that it is executed by at most one task at a time.
+
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
             track_await(GlobalCtx::global()
@@ -204,6 +196,7 @@ impl GlobalCtx {
 
 
             info!("GlobalCtx::reset_cuda_context: all done");
+
             Ok(())
         }.boxed()
     }
