@@ -88,17 +88,17 @@ impl Job {
 
     async fn run(self) -> JobFeedback {
         let job_id = self.id;
-        debug!("DynamicTaskExecutor, Job::run: running job {self:?}");
+        debug!("StageExecutor, Job::run: running job {self:?}");
 
         let r = track_await(self.fut).await;
 
-        debug!("DynamicTaskExecutor, Job::run: done job {job_id:?}");
+        debug!("StageExecutor, Job::run: done job {job_id:?}");
 
         r
     }
 
     fn fail_pending(mut self, error: ThoError) {
-        debug!("DynamicTaskExecutor, Job::fail_pending: job_id={} error={error:?}", self.id);
+        debug!("StageExecutor, Job::fail_pending: job_id={} error={error:?}", self.id);
         if let Some(pending_failure) = self.pending_failure.take() {
             pending_failure(error);
         }
@@ -294,10 +294,9 @@ impl Drop for ParentSuspendGuard {
     }
 }
 
-///Its goal is to run synchronous stages limiting parallelism.
+/// Its goal is to run synchronous stages limiting parallelism.
 /// Maximum allowed number of parallel stages is specified in max_other_parallel parameter to submit method
-/// All per-device executor instances share BufferLimits execution permits. The aggregate number of
-/// active jobs is bounded by that adaptive limit.
+/// There is single executor instance per device. The aggregate number of  active jobs is bounded by that adaptive limit.
 /// Currently, it's used from OOMHandler only.
 pub struct StageExecutor {
     tx: mpsc::Sender<Job>,
@@ -311,7 +310,7 @@ pub struct StageExecutor {
 
 impl Debug for StageExecutor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DynamicTaskExecutor")
+        f.debug_struct("StageExecutor")
             .field("tx", &self.tx)
             .field("cmd_tx", &self.cmd_tx)
             .field("accepting_tx", &self.accepting_tx)
@@ -356,7 +355,7 @@ impl StageExecutor {
         reset_fn: ResetFn,
         buffer_limits: Arc<FuturesLimits>,
     ) -> Self {
-        debug!("DynamicTaskExecutor::new_inner: queue_capacity={queue_capacity} tho_device_idx={tho_device_idx}");
+        debug!("StageExecutor::new_inner: queue_capacity={queue_capacity} tho_device_idx={tho_device_idx}");
 
         let (tx, rx) = mpsc::channel(queue_capacity);
         let sync_capacity_rx = buffer_limits.sync_capacity();
@@ -461,12 +460,12 @@ impl StageExecutor {
         let job_id = job_id_to_rerun.unwrap_or_else(|| NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed));
 
 
-        debug!("DynamicTaskExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
+        debug!("StageExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         loop {
             track_await(self.wait_until_accepting(parent.as_ref())).await?;
 
-            debug!("DynamicTaskExecutor::submit: job_id={job_id} accepted");
+            debug!("StageExecutor::submit: job_id={job_id} accepted");
 
             // Reserve queue capacity before suspending a parent. Otherwise a nested submit
             // could remove its parent from active accounting while still waiting for space
@@ -481,14 +480,14 @@ impl StageExecutor {
             let send_permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
-                    error!("DynamicTaskExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
+                    error!("StageExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
                     if let Some(job_id) = job_id_to_rerun {
                         self.clear_exclusive_job_id(job_id);
                     }
                     return Err(Self::closed_error(format!("Can't submit job: executor is_closed={}", self.tx.is_closed())));
                 }
                 Err(e) => {
-                    error!("DynamicTaskExecutor::submit: reserve job_id={job_id} timed out: e={e:?}");
+                    error!("StageExecutor::submit: reserve job_id={job_id} timed out: e={e:?}");
                     if let Some(job_id) = job_id_to_rerun {
                         self.clear_exclusive_job_id(job_id);
                     }
@@ -506,7 +505,7 @@ impl StageExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
-                debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 1");
+                debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 1");
 
                 continue;
             }
@@ -533,7 +532,7 @@ impl StageExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
-                debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 2");
+                debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 2");
 
                 continue;
             }
@@ -551,7 +550,7 @@ impl StageExecutor {
                     if parent.is_some() {
                         return Err(Self::resetting_submit_error());
                     }
-                    debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 3");
+                    debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 3");
 
                     continue;
                 }
@@ -567,7 +566,7 @@ impl StageExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
-                debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 4");
+                debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 4");
 
                 continue;
             }
@@ -582,18 +581,18 @@ impl StageExecutor {
 
             let result_sender_for_job = Arc::clone(&result_sender);
             let wrapped = async move {
-                debug!("DynamicTaskExecutor::submit: job_id={job_id} waiting on wrapped fut");
+                debug!("StageExecutor::submit: job_id={job_id} waiting on wrapped fut");
                 let result = track_await(fut).await;
-                debug!("DynamicTaskExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
+                debug!("StageExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
                 if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
                     if tho_device_idx > 0 {
-                        warn!("DynamicTaskExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
+                        warn!("StageExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
 
                         if rerun_job_id == Some(job_id) {
                             let mut exclusive = exclusive_job_id.write();
                             if exclusive.as_ref() == Some(&job_id) {
-                                warn!("DynamicTaskExecutor::submit: clearing exclusive_job_id={job_id} because rerun requested CUDA reset");
+                                warn!("StageExecutor::submit: clearing exclusive_job_id={job_id} because rerun requested CUDA reset");
                                 exclusive.take();
                             }
                         }
@@ -608,7 +607,7 @@ impl StageExecutor {
                         if pause_ticket.is_owner() {
                             let _ = accepting_tx.send(false);
                             if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
-                                error!("DynamicTaskExecutor::submit: manager is closed while requesting CUDA reset");
+                                error!("StageExecutor::submit: manager is closed while requesting CUDA reset");
                                 let _ = accepting_tx.send(true);
                                 cuda_activity_gate().finish_pause(pause_ticket);
                             }
@@ -617,14 +616,14 @@ impl StageExecutor {
                         result_sender.send(Err(Self::context_reset_error()));
                         return JobFeedback::Neutral;
                     } else {
-                        warn!("DynamicTaskExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
+                        warn!("StageExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
                     }
                 };
 
                 let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
                 let is_ok = result.is_ok();
 
-                debug!("DynamicTaskExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
+                debug!("StageExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
 
                 let result = if is_oom && max_other_parallel == 0 {
                     let mut exclusive_job_id = exclusive_job_id.write();
@@ -649,7 +648,7 @@ impl StageExecutor {
                     result
                 };
 
-                debug!("DynamicTaskExecutor::submit: job_id={job_id} wrapped result={result:?}");
+                debug!("StageExecutor::submit: job_id={job_id} wrapped result={result:?}");
 
                 result_sender.send(result);
 
@@ -666,7 +665,7 @@ impl StageExecutor {
             send_permit.send(Job::new(job_id, max_other_parallel, wrapped, pending_failure));
             drop(accept_guard);
 
-            debug!("DynamicTaskExecutor::submit: job_id={job_id} submitted job_id={job_id}");
+            debug!("StageExecutor::submit: job_id={job_id} submitted job_id={job_id}");
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
@@ -690,6 +689,7 @@ impl StageExecutor {
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
         pending_reset: PendingCudaReset,
     ) {
+        debug!("StageExecutor::run_cuda_reset: tho_device_idx={tho_device_idx} exclusive_job_id={exclusive_job_id:?}");
         // The manager calls this only after all jobs and their Tokio stages have completed,
         // making reset equivalent to an exclusive max_other_parallel=0 job. Keeping the
         // reopen operation in Drop also covers cancellation or reset_fn failure.
@@ -704,11 +704,12 @@ impl StageExecutor {
                 {
                     let mut exclusive = self.exclusive_job_id.write();
                     if exclusive.is_some() {
-                        warn!("DynamicTaskExecutor::run_cuda_reset: clearing stale exclusive_job_id={exclusive:?} after reset");
+                        warn!("StageExecutor::run_cuda_reset: clearing stale exclusive_job_id={exclusive:?} after reset");
                         exclusive.take();
                     }
                 }
-                let _ = self.accepting_tx.send(true);
+                debug!("StageExecutor::run_cuda_reset: exclusive_job_id={:?}", self.exclusive_job_id);
+                let _ = self.accepting_tx.send_replace(true);//
                 cuda_activity_gate().finish_pause(self.pause_ticket);
             }
         }
@@ -723,14 +724,14 @@ impl StageExecutor {
         let _accept_guard = accept_guard;
 
         if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
-            error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
+            error!("StageExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
         } else {
-            info!("DynamicTaskExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
+            info!("StageExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
         }
     }
 
     pub fn clear_exclusive_job_id(&self, job_id: u64) {
-        debug!("DynamicTaskExecutor::clear_exclusive_job_id: job_id={job_id}");
+        debug!("StageExecutor::clear_exclusive_job_id: job_id={job_id}");
 
         let mut exclusive_job_id = self.exclusive_job_id.write();
 
@@ -746,10 +747,11 @@ impl StageExecutor {
         // accepting flag without also owning the operation that reopens it.
         let pause_ticket = cuda_activity_gate().request_pause();
         if pause_ticket.is_owner() {
-            let _ = self.accepting_tx.send(false);
+            debug!("StageExecutor::request_cuda_reset: got pause_ticket");
+            let _ = self.accepting_tx.send_replace(false);
             if self.cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "request_cuda_reset" }).is_err() {
-                error!("DynamicTaskExecutor::request_cuda_reset: manager is closed");
-                let _ = self.accepting_tx.send(true);
+                error!("StageExecutor::request_cuda_reset: manager is closed");
+                let _ = self.accepting_tx.send_replace(true);// calls send_modify which updates value when no receivers
                 cuda_activity_gate().finish_pause(pause_ticket);
             }
         }
@@ -790,7 +792,7 @@ impl StageExecutor {
 
         loop {
             let max_parallel_jobs = *sync_capacity_rx.borrow_and_update();
-            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} max_parallel_jobs={max_parallel_jobs} jobs.len={}",running.len(),pending.len(),jobs.len());
+            debug!("StageExecutor::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} max_parallel_jobs={max_parallel_jobs} jobs.len={}",running.len(),pending.len(),jobs.len());
 
             Self::drain_finished(
                 &mut running,
@@ -827,7 +829,7 @@ impl StageExecutor {
             // continue to completion, and suspended parents are allowed to resume so they
             // can observe a child's ContextReset and unwind before reset_fn runs.
             let cuda_activity_gate_is_paused = cuda_activity_gate().is_paused();
-            debug!("DynamicTaskExecutor::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}" );
+            debug!("StageExecutor::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}" );
 
             if !cuda_activity_gate_is_paused {
                 let current_exclusive_job_id = *exclusive_job_id.read();
@@ -887,7 +889,7 @@ impl StageExecutor {
             if !cuda_activity_gate().is_paused() && !pending.is_empty() && jobs.is_empty() {
                 let exclusive = *exclusive_job_id.read();
 
-                warn!("DynamicTaskExecutor::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",pending.len(),pending.front().map(|j| (j.id, j.total_parallel_cap())),active_count,);
+                warn!("StageExecutor::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",pending.len(),pending.front().map(|j| (j.id, j.total_parallel_cap())),active_count,);
             }
 
             tokio::select! {
@@ -963,7 +965,7 @@ impl StageExecutor {
         buffer_limits: &FuturesLimits,
         pending_reset: &mut Option<PendingCudaReset>,
     ) {
-        debug!("DynamicTaskExecutor::run_manager: manager cmd={cmd:?}");
+        debug!("StageExecutor::run_manager: manager cmd={cmd:?}");
 
         match cmd {
             ManagerCmd::Suspend { job_id, reply } => {
@@ -1062,7 +1064,7 @@ impl StageExecutor {
         }
 
         if purged > 0 {
-            debug!("DynamicTaskExecutor::purge_pending_jobs: purged={purged}");
+            debug!("StageExecutor::purge_pending_jobs: purged={purged}");
         }
     }
 
@@ -1078,7 +1080,7 @@ impl StageExecutor {
         exclusive_job_id: Option<JobId>,
         buffer_limits: &Arc<FuturesLimits>,
     ) {
-        debug!("DynamicTaskExecutor::try_spawn_ready_jobs: pending={pending:?}");
+        debug!("StageExecutor::try_spawn_ready_jobs: pending={pending:?}");
 
         loop {
             let mut spawned_any = false;
@@ -1119,10 +1121,10 @@ impl StageExecutor {
                     let cmd_tx_for_tasks = cmd_tx_for_tasks.clone();
                     let buffer_limits = Arc::clone(buffer_limits);
 
-                    debug!("DynamicTaskExecutor::try_spawn_ready_jobs: spawning job_id={job_id}");
+                    debug!("StageExecutor::try_spawn_ready_jobs: spawning job_id={job_id}");
 
                     running.spawn(async move {
-                        debug!("DynamicTaskExecutor::try_spawn_ready_jobs: spawned job_id={job_id}");
+                        debug!("StageExecutor::try_spawn_ready_jobs: spawned job_id={job_id}");
 
                         struct DoneGuard {
                             job_id: JobId,
@@ -1144,7 +1146,7 @@ impl StageExecutor {
                                     cmd_tx: cmd_tx_for_tasks,
                                 },
                                 async move {
-                                    debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job job_id={job_id}");
+                                    debug!("StageExecutor::try_spawn_ready_jobs: running job job_id={job_id}");
 
                                     track_await(job.run())
                                         .await
@@ -1154,15 +1156,15 @@ impl StageExecutor {
 
                         match feedback {
                             JobFeedback::Oom => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: OOM job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                                debug!("StageExecutor::try_spawn_ready_jobs: OOM job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
                                 buffer_limits.on_oom();
                             }
                             JobFeedback::Success => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                                debug!("StageExecutor::try_spawn_ready_jobs: success job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
                                 buffer_limits.on_ok();
                             }
                             JobFeedback::Neutral => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                                debug!("StageExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
                             }
                         }
                     }.instrument(tracing::info_span!(
@@ -1211,7 +1213,7 @@ impl StageExecutor {
         exclusive_job_id: Option<JobId>,
     ) -> bool {
         if exclusive_job_id.is_some_and(|exclusive_job_id| exclusive_job_id != job_id) {
-            debug!("DynamicTaskExecutor::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
+            debug!("StageExecutor::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
             return false;
         }
 
@@ -1221,7 +1223,7 @@ impl StageExecutor {
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!("DynamicTaskExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} max_parallel_jobs={max_parallel_jobs} min={min} r={r}");
+        debug!("StageExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} max_parallel_jobs={max_parallel_jobs} min={min} r={r}");
         r
     }
 
@@ -1420,7 +1422,7 @@ impl StageExecutor {
                 })
                 .collect();
 
-            debug!("DynamicTaskExecutor::try_resume_waiters: waiting_ids={waiting_ids:?}");
+            debug!("StageExecutor::try_resume_waiters: waiting_ids={waiting_ids:?}");
 
             let mut progressed = false;
 
@@ -1467,13 +1469,13 @@ impl StageExecutor {
         job_id: JobId,
     ) {
         if let Some(job) = jobs.remove(&job_id) {
-            debug!("DynamicTaskExecutor::note_job_finished: job={job:?}");
+            debug!("StageExecutor::note_job_finished: job={job:?}");
 
             if job.active {
                 Self::remove_active(active_caps, active_count, job.cap);
             }
         } else {
-            warn!("DynamicTaskExecutor::note_job_finished: no {job_id}");
+            warn!("StageExecutor::note_job_finished: no {job_id}");
         }
     }
 
@@ -1490,20 +1492,10 @@ impl StageExecutor {
 
         while let Some(res) = running.try_join_next() {
             if let Err(err) = res {
-                error!("DynamicTaskExecutor::drain_finished: err={err:?}");
+                error!("StageExecutor::drain_finished: err={err:?}");
             }
         }
     }
-
-
-
-
-
-
-
-
-
-
 
 }
 
@@ -1518,6 +1510,10 @@ mod tests {
         },
         time::Duration,
     };
+    use std::io::Write;
+    use std::ops::Deref;
+    use std::sync::atomic::Ordering::Relaxed;
+    use torch_sys::IntListOption;
     use thoosa_shared::{CudaAction, ThoosaError};
 
     fn needs_reset_error() -> ThoError {
@@ -2021,6 +2017,45 @@ mod tests {
 
         let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
         exec.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_reset_without_subscribers() -> Result<(), ThoError> {
+        let mut accepting_tx:Arc<Mutex<std::option::Option<watch::Sender<bool>>>> = Arc::new(Mutex::new(None));
+        let mut reset_invoked:Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+        let accepting_tx_arc =  Arc::clone(&accepting_tx);
+        let reset_invoked_arc = Arc::clone(&reset_invoked);
+
+
+        let reset_fn: ResetFn = Arc::new(move |device| {
+            let accepting_tx_arc = Arc::clone(&accepting_tx_arc);
+            let reset_invoked_arc = Arc::clone(&reset_invoked_arc);
+
+            Box::pin(async move {
+                let is_accepting = *accepting_tx_arc.lock().as_ref().map(|v|v.borrow()).expect("no accepting_tx_arc").deref();
+
+                assert!(!is_accepting, "executor is accepting jobs while resetting");
+
+                reset_invoked_arc.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+        });
+
+        let exec = Arc::new(StageExecutor::new_with_reset_hook(64, 0, reset_fn));
+        accepting_tx.lock().replace(exec.accepting_tx.clone());
+
+
+        exec.request_cuda_reset();
+
+        exec.wait_until_accepting(None).await?;
+
+        let is_accepting = *exec.accepting_tx.borrow().deref();
+        assert!(reset_invoked.load(Relaxed));
+        assert!(is_accepting, "executor is not accepting jobs after reset");
+
+
         Ok(())
     }
 }

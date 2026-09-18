@@ -958,11 +958,11 @@ where
 
                 /*
                 SyncStage::do_run – executes operations on tensors synchronously, receives tensors or composite tensor types as references
-                OOMHandler::run //runs syn_stage.do_run until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-specific adjusters as configured at call site
-                DynamicTaskExecutor::submit – ensures that no more than requested max_other_parallel sync stages are being executed at a given moment.
-                selector – when OOMHandler tries to process input in chunks used to select current chunk.
+                OOMHandler::run - runs syn_stage.do_run/consume until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-specific adjusters as configured at call site
+                StageExecutor::submit – ensures that no more than requested max_other_parallel sync stages are being executed at a given moment.
+                selector – when OOMHandler tries to process input in chunks the selector is used to select current chunk.
                 Then – input.with_data_ref/with_selected_data_ref calls
-                             load_from_any_device_→ensure_copied→
+                            load_from_any_device_→ensure_copied→
                             if tensor is absent in current (from RunContext)  memory it’s copied with
                             ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
 
@@ -1071,19 +1071,19 @@ fn oom_job_id(error: &ThoError) -> Option<u64> {
     }
 }
 
-struct ExclusiveJobGuard {
+struct LastFailedJobGuard {
     device_idx: usize,
     job_id: Option<u64>,
 }
 
-impl ExclusiveJobGuard {
+impl LastFailedJobGuard {
     fn new(device_idx: usize) -> Self {
         Self { device_idx, job_id: None }
     }
 
     fn update_from_error(&mut self, error: &ThoError) {
         if let Some(job_id) = oom_job_id(error) {
-            debug!("ExclusiveJobGuard::update_from_error: job_id={job_id}");
+            debug!("LastFailedJobGuard::update_from_error: job_id={job_id}");
 
             self.job_id.replace(job_id);
         }
@@ -1094,7 +1094,7 @@ impl ExclusiveJobGuard {
     }
 }
 
-impl Drop for ExclusiveJobGuard {
+impl Drop for LastFailedJobGuard {
     fn drop(&mut self) {
         if let Some(job_id) = self.job_id {
             oom_executor(self.device_idx).clear_exclusive_job_id(job_id);
@@ -1243,7 +1243,7 @@ where
     A: RunnerRetryAdapter<'z, R, S>,
 {
     let (device_idx, ctx_id) = (run_context.tho_device_idx(), run_context.id().clone());
-    let mut exclusive_job = ExclusiveJobGuard::new(device_idx);
+    let mut last_failed_job = LastFailedJobGuard::new(device_idx);
     let mut task = Some(task);
     let mut run_context = Some(run_context);
 
@@ -1266,7 +1266,7 @@ where
             None,
         )).await {
         Err(te) => {
-            exclusive_job.update_from_error(&te);
+            last_failed_job.update_from_error(&te);
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
             if te.is_retryable_oom() {
@@ -1294,7 +1294,7 @@ where
                         debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={}",os_thread_id());
 
                         if let Err(te) = adjust_result {
-                            exclusive_job.update_from_error(&te);
+                            last_failed_job.update_from_error(&te);
                             debug!("OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                             if te.is_retryable_oom() {
@@ -1319,11 +1319,13 @@ where
                                 Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
                                 input_select_adjusted.clone(),
                                 device_idx,
+
                                 run_context
                                     .as_mut()
                                     .expect("run_with_runner_impl: missing run context")
                                     .branch(false),
-                                run_context.as_ref().and_then(|ctx| if ctx.max_other_parallel() == 0 {exclusive_job.job_id()} else {None}),
+
+                                run_context.as_ref().and_then(|ctx| if ctx.max_other_parallel() == 0 { last_failed_job.job_id()} else {None}),
                             )).await;
 
                         match run_result {
@@ -1343,7 +1345,7 @@ where
                                 }
                             }
                             Err(te) => {
-                                exclusive_job.update_from_error(&te);
+                                last_failed_job.update_from_error(&te);
                                 debug!("OOMHandler::run, error: err is_retryable_oom={} te={te:?}", te.is_retryable_oom());
 
                                 if te.is_retryable_oom() {
