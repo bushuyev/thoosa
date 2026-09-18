@@ -873,7 +873,7 @@ mod tests {
     use crate::runner::global_ctx::CopyCtx;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::tmp_cache::TmpCached;
     use crate::tho_tensor::ThoTensor;
     use futures_util::{StreamExt, TryStreamExt};

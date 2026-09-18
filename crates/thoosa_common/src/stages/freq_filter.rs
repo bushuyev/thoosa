@@ -871,7 +871,7 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
 mod tests {
     use std::sync::Arc;
     use tch::Tensor;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::freq_filter::{SyncFreqFilter, SyncFreqFilterIpcInit};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::{AverageFilterParams, InputFilter, MedianFilterParams};

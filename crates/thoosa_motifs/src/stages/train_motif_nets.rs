@@ -32,7 +32,7 @@ use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_shared::traits::MaxParallelCtx;
 
 use mockall_double::double;
@@ -1443,7 +1443,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::purge::FuturesRunnerMapPurger;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};

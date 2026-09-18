@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, ThoBatch};
 use thoosa_common::progress_socket::CollectEtaProgressSocketServer;
 use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::traits::Stage;
 
@@ -1952,7 +1952,7 @@ mod cli_tests {
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;

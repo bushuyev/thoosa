@@ -8,7 +8,7 @@ use thoosa_shared::ThoError;
 use crate::copy_ctx::CudaActorHandle;
 use crate::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_shared::traits::MaxParallelCtx;
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 
 pub trait IpcCodec: Debug + Send + Sync + 'static {
     fn encode<T>(value: &T) -> Result<Vec<u8>, ThoError>

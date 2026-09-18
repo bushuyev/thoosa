@@ -6,7 +6,7 @@ use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
 use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
 // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
@@ -172,7 +172,7 @@ mod tests {
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
     use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
-    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::test::FailUntil::NaxParallel;
     use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};

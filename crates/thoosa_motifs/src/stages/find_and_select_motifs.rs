@@ -20,7 +20,7 @@ use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;

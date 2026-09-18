@@ -9,7 +9,7 @@ use thoosa_shared::{Cause, ThoError};
 
 use crate as thoosa_common;
 use crate::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 
 use super::common::{ABData, FileListInput, ModelTestId};

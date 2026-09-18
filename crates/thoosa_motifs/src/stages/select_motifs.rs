@@ -45,7 +45,7 @@ use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::resources::{Labeled, SavableResult, Simple};
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
@@ -504,7 +504,7 @@ pub mod tests {
     use thoosa_common::runner::global_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::resources::{Labeled, SavableResult, Simple};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm};

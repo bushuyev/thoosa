@@ -8,7 +8,7 @@ use crate::runner::common::*;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::global_ctx::{GlobalCtx, mock_global_ctx};
 use crate::runner::oom_handler::{Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
 use crate::runner::test_utils::parse_numeric_part;
 use crate::runner::tmp_cache::TmpCached;

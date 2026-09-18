@@ -74,7 +74,7 @@ use crate::stages::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::stages::stft::SyncStft;
 use crate::stages::train_motif_nets::TrainMotifNetsResult;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_common::stages::freq_filter::FreqFilter;

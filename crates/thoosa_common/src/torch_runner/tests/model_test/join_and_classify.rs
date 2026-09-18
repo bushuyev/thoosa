@@ -12,7 +12,7 @@ use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl
 use crate::runner::common::cachable::{Cached, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjusters, NoStageAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
