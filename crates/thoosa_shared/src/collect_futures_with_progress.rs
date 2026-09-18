@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::watch;
 use tokio::task::{JoinError, JoinSet};
 use tracing::{debug, error};
-use crate::{cuda_activity_gate, FuturesOrdering, ThoError};
+use crate::{cuda_activity_gate, CudaActivityScope, FuturesOrdering, ThoError};
 use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard};
 
 pub async fn collect_futures_with_progress<T, F>(
@@ -119,9 +119,18 @@ where
         return false;
     };
 
+    // Tokio task locals are not inherited by spawned tasks. Carry admitted work
+    // into every child (and nested collector), otherwise reset waits for a stage
+    // whose copy chunks are themselves waiting for reset to finish.
+    let activity = CudaActivityScope::current();
     set.spawn(async move {
-        cuda_activity_gate().wait_if_paused().await;
-        (idx, fut.await)
+        match activity {
+            Some(activity) => activity.run(async move { (idx, fut.await) }).await,
+            None => {
+                cuda_activity_gate().wait_if_paused().await;
+                (idx, fut.await)
+            }
+        }
     });
 
     true
