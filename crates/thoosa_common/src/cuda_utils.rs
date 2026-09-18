@@ -14,7 +14,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
 use thoosa_shared::os_thread_id;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::{Cause, FuturesOrdering, ThoError, collect_futures_with_progress};
+use thoosa_shared::{Cause, CudaActivityScope, FuturesOrdering, ThoError, collect_futures_with_progress};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{CUDA_SUCCESS, ThoCudaStream, ThoStreamGuard};
@@ -238,6 +238,19 @@ pub async fn copy_d2h_to_ptr(
     src_size: &[i64],
     dst_ptr: usize,
 ) -> Result<(), ThoError> {
+    // Admit before touching CUDA; descendants inherit this registration and drain
+    // across reset instead of waiting for the reset that needs them to finish.
+    CudaActivityScope::for_operation()?.run(copy_d2h_to_ptr_admitted(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size, dst_ptr)).await
+}
+
+async fn copy_d2h_to_ptr_admitted(
+    init_type: Kind,
+    buf_size_bytes: usize,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+    src_ptr: usize,
+    src_size: &[i64],
+    dst_ptr: usize,
+) -> Result<(), ThoError> {
     let tensor_mem_size = tensor_mem_size(init_type, src_size);
     let chunks = make_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_to_ptr")?;
     let chunk_len = chunks.len();
@@ -248,7 +261,9 @@ pub async fn copy_d2h_to_ptr(
             let pool = Arc::clone(bufs_pool);
             async move {
                 let buf_stream = track_await(pool.acquire()).await;
+                let activity = CudaActivityScope::current();
                 let result = track_await(spawn_blocking(move || {
+                    let _activity = activity;
                     let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
                     let stream = Arc::clone(&buf_stream.1);
                     let _guard = ThoStreamGuard::new(stream.as_ref())?;
@@ -327,6 +342,19 @@ pub async fn copy_h2d_from_ptr(
     src_ptr: usize,
     size: &[i64],
 ) -> Result<Tensor, ThoError> {
+    // Admit before touching CUDA; descendants inherit this registration and drain
+    // across reset instead of waiting for the reset that needs them to finish.
+    CudaActivityScope::for_operation()?.run(copy_h2d_from_ptr_admitted(init_type, buf_size, bufs_pool, dst_tho_device_idx, src_ptr, size)).await
+}
+
+async fn copy_h2d_from_ptr_admitted(
+    init_type: Kind,
+    buf_size: usize,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+    dst_tho_device_idx: usize,
+    src_ptr: usize,
+    size: &[i64],
+) -> Result<Tensor, ThoError> {
     let tensor_mem_size = tensor_mem_size(init_type, &size);
     debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
@@ -351,7 +379,9 @@ pub async fn copy_h2d_from_ptr(
                 async move {
                     let buf_stream = track_await(pool.acquire()).await;
 
+                    let activity = CudaActivityScope::current();
                     let result = track_await(spawn_blocking(move || {
+                        let _activity = activity;
 
                             let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
                             let stream = Arc::clone(&buf_stream.1);

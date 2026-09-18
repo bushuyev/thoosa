@@ -15,13 +15,12 @@ use futures_util::future::BoxFuture;
 use log::{error, info};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
-    runtime::Handle,
     sync::{mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
 use tracing::{debug, warn, Instrument};
 
-use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
+use thoosa_shared::{Cause, CudaActivityPauseTicket, CudaActivityScope, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, futures_limits};
 use thoosa_shared::tracked_await::track_await;
 
@@ -41,6 +40,58 @@ type JobId = u64;
 type ResetFn = Arc<dyn Fn(usize /* tho_device */) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send + 'static>;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Owns one sequential retry chain, including the waits between attempts. Tokens
+/// held by detached jobs do not extend this owner's lifetime.
+pub struct RetryScope {
+    token: RetryToken,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetryToken {
+    inner: Arc<RetryState>,
+}
+
+#[derive(Debug)]
+struct RetryState {
+    job_id: JobId,
+    alive: Mutex<bool>,
+    exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+    cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
+}
+
+impl RetryScope {
+    pub fn token(&self) -> RetryToken {
+        self.token.clone()
+    }
+}
+
+impl Drop for RetryScope {
+    fn drop(&mut self) {
+        // The same lock serializes abandonment with a late OOM reservation. An
+        // already-running job may finish, but can never resurrect its reservation.
+        let mut alive = self.token.inner.alive.lock();
+        *alive = false;
+        self.token.clear_exclusive();
+    }
+}
+
+impl RetryToken {
+    fn reserve_exclusive(&self) {
+        let alive = self.inner.alive.lock();
+        if *alive {
+            self.inner.exclusive_job_id.write().replace(self.inner.job_id);
+        }
+    }
+
+    fn clear_exclusive(&self) {
+        let mut exclusive = self.inner.exclusive_job_id.write();
+        if *exclusive == Some(self.inner.job_id) {
+            exclusive.take();
+            let _ = self.inner.cmd_tx.send(ManagerCmd::Recheck);
+        }
+    }
+}
 
 tokio::task_local! {
     static CURRENT_JOB: CurrentJob;
@@ -193,8 +244,8 @@ impl std::error::Error for SubmitError {}
 /// parent would then wait for the child while the child waits for the parent's slot.
 ///
 /// `resume` waits for the manager to count the parent as active again before the
-/// nested `submit` returns. `Drop` provides a best-effort asynchronous resume when
-/// the nested submission unwinds or is cancelled after suspension was acknowledged.
+/// nested `submit` returns. Once Suspend is queued, Drop owes exactly one Resume,
+/// including cancellation before either acknowledgement has been received.
 struct ParentSuspendGuard {
     parent: Option<CurrentJob>,
     suspended: bool,
@@ -222,12 +273,11 @@ impl ParentSuspendGuard {
             })
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
-        // The flag is set only after the manager has applied the suspension. Cancellation
-        // between sending Suspend and receiving this acknowledgement is not covered by Drop.
+        // Sending is synchronous: arm compensation before the first cancellation point.
+        self.suspended = true;
         track_await(ack_rx).await
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
-        self.suspended = true;
         Ok(())
     }
 
@@ -250,10 +300,12 @@ impl ParentSuspendGuard {
             })
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
+        // The manager now owns the resume. Drop must not enqueue a second one while
+        // we await capacity, since that could release another nested submission's slot.
+        self.suspended = false;
         track_await(ack_rx).await
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
-        self.suspended = false;
         Ok(())
     }
 }
@@ -268,29 +320,10 @@ impl Drop for ParentSuspendGuard {
             return;
         };
 
-        // Drop cannot await the manager acknowledgement, so cancellation/panic recovery
-        // has to spawn a best-effort resume task on the current Tokio runtime.
-        if let Ok(handle) = Handle::try_current() {
-            handle.spawn(async move {
-                let (ack_tx, ack_rx) = oneshot::channel();
-                if parent
-                    .cmd_tx
-                    .send(ManagerCmd::Resume {
-                        job_id: parent.job_id,
-                        reply: ack_tx,
-                    })
-                    .is_ok()
-                {
-                    let _ = track_await(ack_rx).await;
-                }
-            }.instrument(tracing::info_span!(
-                "dyn_mpsc::parent_suspend_guard",
-                kind = "spawn",
-                file = file!(),
-                line = line!(),
-                task = "resume parent job",
-            )));
-        }
+        // Unbounded sends do not await or need a runtime. FIFO ordering pairs this
+        // command with our queued Suspend even when its acknowledgement was dropped.
+        let (reply, _) = oneshot::channel();
+        let _ = parent.cmd_tx.send(ManagerCmd::Resume { job_id: parent.job_id, reply });
     }
 }
 
@@ -323,6 +356,19 @@ impl Debug for StageExecutor {
 }
 
 impl StageExecutor {
+
+    pub fn retry_scope(&self) -> RetryScope {
+        RetryScope {
+            token: RetryToken {
+                inner: Arc::new(RetryState {
+                    job_id: NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed),
+                    alive: Mutex::new(true),
+                    exclusive_job_id: Arc::clone(&self.exclusive_job_id),
+                    cmd_tx: self.cmd_tx.clone(),
+                }),
+            },
+        }
+    }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn new(queue_capacity: usize) -> Self {
@@ -422,7 +468,7 @@ impl StageExecutor {
 
         loop {
             if cuda_activity_gate().is_paused() {
-                if parent.is_some() {
+                if parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(Self::resetting_submit_error());
                 }
                 track_await(cuda_activity_gate().wait_if_paused()).await;
@@ -435,7 +481,7 @@ impl StageExecutor {
 
             // Nested submit while reset is requested would otherwise suspend a parent
             // which may be needed to complete reset-draining. Fail fast instead.
-            if parent.is_some() {
+            if parent.is_some() || CudaActivityScope::current().is_some() {
                 return Err(Self::resetting_submit_error());
             }
 
@@ -449,7 +495,7 @@ impl StageExecutor {
         &self,
         max_other_parallel: usize,
         fut: F,
-        job_id_to_rerun: Option<JobId>,//Some when invoked from OOMHandler on oom error and  max_other_parallel==0
+        retry: Option<RetryToken>,
     ) -> Result<T, ThoError>
     where
         F: Future<Output = Result<T, ThoError>> + Send + 'static,//TODO change to closure taking ticket to let function a way to ensure they're running in Executor
@@ -457,7 +503,17 @@ impl StageExecutor {
     {
         //currently jobs can only be submitted from OOMHandler::run and ::consume and are never nested (i.e. parent is always None)
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
-        let job_id = job_id_to_rerun.unwrap_or_else(|| NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed));
+        // Direct submissions own their scope until return; OOMHandler supplies a
+        // scope that also spans error processing and adjustments between retries.
+        let owned_scope = retry.is_none().then(|| self.retry_scope());
+        let retry = retry.unwrap_or_else(|| owned_scope.as_ref().expect("local retry scope").token());
+        if !Arc::ptr_eq(&retry.inner.exclusive_job_id, &self.exclusive_job_id) {
+            return Err(ThoError::new("retry scope belongs to another executor"));
+        }
+        let job_id = retry.inner.job_id;
+        if max_other_parallel != 0 {
+            retry.clear_exclusive();
+        }
 
 
         debug!("StageExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
@@ -481,16 +537,12 @@ impl StageExecutor {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
                     error!("StageExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
-                    if let Some(job_id) = job_id_to_rerun {
-                        self.clear_exclusive_job_id(job_id);
-                    }
+                    retry.clear_exclusive();
                     return Err(Self::closed_error(format!("Can't submit job: executor is_closed={}", self.tx.is_closed())));
                 }
                 Err(e) => {
                     error!("StageExecutor::submit: reserve job_id={job_id} timed out: e={e:?}");
-                    if let Some(job_id) = job_id_to_rerun {
-                        self.clear_exclusive_job_id(job_id);
-                    }
+                    retry.clear_exclusive();
                     return Err(ThoError::new("Can't submit job: timed out"));
                 }
             };
@@ -499,10 +551,8 @@ impl StageExecutor {
             // permit alone does not authorize enqueueing, so recheck before suspension.
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(send_permit);
-                if let Some(job_id) = job_id_to_rerun {
-                    self.clear_exclusive_job_id(job_id);
-                }
-                if parent.is_some() {
+                retry.clear_exclusive();
+                if parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(Self::resetting_submit_error());
                 }
                 debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 1");
@@ -515,9 +565,7 @@ impl StageExecutor {
             let mut suspend_guard = ParentSuspendGuard::new(parent.clone());
             if let Err(e) = track_await(suspend_guard.maybe_suspend()).await {
                 drop(send_permit);
-                if let Some(job_id) = job_id_to_rerun {
-                    self.clear_exclusive_job_id(job_id);
-                }
+                retry.clear_exclusive();
                 return Err(e);
             }
 
@@ -526,10 +574,8 @@ impl StageExecutor {
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(send_permit);
                 let _ = track_await(suspend_guard.resume()).await;
-                if let Some(job_id) = job_id_to_rerun {
-                    self.clear_exclusive_job_id(job_id);
-                }
-                if parent.is_some() {
+                retry.clear_exclusive();
+                if parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(Self::resetting_submit_error());
                 }
                 debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 2");
@@ -544,10 +590,8 @@ impl StageExecutor {
                 Err(_) => {
                     drop(send_permit);
                     let _ = track_await(suspend_guard.resume()).await;
-                    if let Some(job_id) = job_id_to_rerun {
-                        self.clear_exclusive_job_id(job_id);
-                    }
-                    if parent.is_some() {
+                    retry.clear_exclusive();
+                    if parent.is_some() || CudaActivityScope::current().is_some() {
                         return Err(Self::resetting_submit_error());
                     }
                     debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 3");
@@ -560,10 +604,8 @@ impl StageExecutor {
                 drop(accept_guard);
                 drop(send_permit);
                 let _ = track_await(suspend_guard.resume()).await;
-                if let Some(job_id) = job_id_to_rerun {
-                    self.clear_exclusive_job_id(job_id);
-                }
-                if parent.is_some() {
+                retry.clear_exclusive();
+                if parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(Self::resetting_submit_error());
                 }
                 debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 4");
@@ -573,8 +615,7 @@ impl StageExecutor {
 
             let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
             let result_sender = Arc::new(JobResultSender::new(result_tx));
-            let exclusive_job_id = Arc::clone(&self.exclusive_job_id);
-            let rerun_job_id = job_id_to_rerun;
+            let retry = retry.clone();
             let accepting_tx = self.accepting_tx.clone();
             let cmd_tx = self.cmd_tx.clone();
             let tho_device_idx = self.tho_device_idx;
@@ -582,6 +623,10 @@ impl StageExecutor {
             let result_sender_for_job = Arc::clone(&result_sender);
             let wrapped = async move {
                 debug!("StageExecutor::submit: job_id={job_id} waiting on wrapped fut");
+                if !*retry.inner.alive.lock() {
+                    result_sender.send(Err(ThoError::new_with_cause("retry owner was cancelled", Cause::SubmitErrorCancelled)));
+                    return JobFeedback::Neutral;
+                }
                 let result = track_await(fut).await;
                 debug!("StageExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
@@ -589,13 +634,7 @@ impl StageExecutor {
                     if tho_device_idx > 0 {
                         warn!("StageExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
 
-                        if rerun_job_id == Some(job_id) {
-                            let mut exclusive = exclusive_job_id.write();
-                            if exclusive.as_ref() == Some(&job_id) {
-                                warn!("StageExecutor::submit: clearing exclusive_job_id={job_id} because rerun requested CUDA reset");
-                                exclusive.take();
-                            }
-                        }
+                        retry.clear_exclusive();
 
                         // The first failing job closes the shared gate and asks the manager
                         // to run one reset after every currently running job has unwound.
@@ -626,8 +665,7 @@ impl StageExecutor {
                 debug!("StageExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
 
                 let result = if is_oom && max_other_parallel == 0 {
-                    let mut exclusive_job_id = exclusive_job_id.write();
-                    exclusive_job_id.replace(job_id);
+                    retry.reserve_exclusive();
 
                     result.map_err(|e| {
                         ThoError::new_with_cause(
@@ -639,12 +677,7 @@ impl StageExecutor {
                         )
                     })
                 } else {
-                    if rerun_job_id == Some(job_id) {
-                        let mut exclusive_job_id = exclusive_job_id.write();
-                        if exclusive_job_id.as_ref() == Some(&job_id) {
-                            exclusive_job_id.take();
-                        }
-                    }
+                    retry.clear_exclusive();
                     result
                 };
 
@@ -723,7 +756,10 @@ impl StageExecutor {
         // Declared after ResetPauseGuard so it is released before the gate is reopened.
         let _accept_guard = accept_guard;
 
-        if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
+        // Copies outside this executor and spawned descendants also own activity.
+        // They must finish before the reset hook invalidates their CUDA storage.
+        cuda_activity_gate().wait_until_idle().await;
+        if let Err(e) = track_await(CudaActivityScope::run_reset(pause_ticket, reset_fn(tho_device_idx))).await {
             error!("StageExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
         } else {
             info!("StageExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
@@ -1087,6 +1123,10 @@ impl StageExecutor {
             let mut idx = 0usize;
 
             while idx < pending.len() {
+                if jobs.contains_key(&pending[idx].id) {
+                    idx += 1;
+                    continue;
+                }
                 let sync_execution_permit = {
                     let job = &pending[idx];
                     Self::try_activate_now(
@@ -1101,6 +1141,10 @@ impl StageExecutor {
                 };
 
                 if let Some(sync_execution_permit) = sync_execution_permit {
+                    let Some(activity) = CudaActivityScope::try_enter() else {
+                        // Pause raced the manager's earlier check. Leave the job queued.
+                        return;
+                    };
                     let job = pending.remove(idx).expect("pending index must be valid");
                     let job_id = job.id;
                     let cap = job.total_parallel_cap();
@@ -1139,7 +1183,7 @@ impl StageExecutor {
 
                         let _guard = DoneGuard { job_id, done_tx };
 
-                        let feedback = track_await(CURRENT_JOB
+                        let feedback = track_await(activity.run(CURRENT_JOB
                             .scope(
                                 CurrentJob {
                                     job_id,
@@ -1151,7 +1195,7 @@ impl StageExecutor {
                                     track_await(job.run())
                                         .await
                                 },
-                            ))
+                            )))
                             .await;
 
                         match feedback {
@@ -1540,6 +1584,212 @@ mod tests {
             Box::new(move |error| result_sender_for_failure.send(Err(error))),
         );
         (job, result_rx)
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_oom_owner_cannot_reserve_after_completion() {
+        // Exercise both the first attempt and a retry whose reservation already exists.
+        for retrying in [false, true] {
+            let exec = Arc::new(StageExecutor::new(8));
+            let scope = exec.retry_scope();
+            if retrying {
+                assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
+            }
+            let (started_tx, started_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+            let caller = tokio::spawn({
+                let exec = Arc::clone(&exec);
+                async move {
+                    let scope = scope;
+                    exec.submit(0, async move {
+                        started_tx.send(()).unwrap();
+                        release_rx.await.unwrap();
+                        Err::<(), _>(ThoError::oom())
+                    }, Some(scope.token())).await
+                }
+            });
+            started_rx.await.unwrap();
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+            release_tx.send(()).unwrap();
+            // The exclusive running job must finish before this job can start.
+            tokio::time::timeout(Duration::from_secs(2), exec.submit(0, async { Ok(()) }, None)).await.unwrap().unwrap();
+            assert_eq!(*exec.exclusive_job_id.read(), None);
+            Arc::try_unwrap(exec).unwrap().shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_submit_with_unread_oom_releases_reservation() {
+        let exec = StageExecutor::new(8);
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let mut caller = Box::pin(async {
+            let scope = exec.retry_scope();
+            exec.submit(0, async move {
+                finished_tx.send(()).unwrap();
+                Err::<(), _>(ThoError::oom())
+            }, Some(scope.token())).await
+        });
+        assert!(futures::poll!(caller.as_mut()).is_pending());
+        // On the current-thread runtime the job sends its OOM result before this
+        // receiver is polled again; the submission itself remains unpolled.
+        finished_rx.await.unwrap();
+        assert!(exec.exclusive_job_id.read().is_some());
+        drop(caller);
+        assert_eq!(*exec.exclusive_job_id.read(), None);
+        tokio::time::timeout(Duration::from_secs(2), exec.submit(0, async { Ok(()) }, None)).await.unwrap().unwrap();
+        exec.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_retry_reservation_survives_adjustment_and_releases_on_exit() {
+        for succeed in [false, true] {
+            let exec = StageExecutor::new(8);
+            let scope = exec.retry_scope();
+            let job_id = scope.token.inner.job_id;
+            assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
+            assert_eq!(*exec.exclusive_job_id.read(), Some(job_id));
+            let mut other = Box::pin(exec.submit(0, async { Ok(42) }, None));
+            assert!(futures::poll!(other.as_mut()).is_pending());
+            // A further OOM keeps the same reservation through the next adjustment.
+            assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
+            assert_eq!(*exec.exclusive_job_id.read(), Some(job_id));
+            assert!(futures::poll!(other.as_mut()).is_pending());
+            if succeed {
+                exec.submit(0, async { Ok(()) }, Some(scope.token())).await.unwrap();
+            }
+            drop(scope); // Cancellation/terminal error during an adjustment also releases it.
+            assert_eq!(tokio::time::timeout(Duration::from_secs(2), other).await.unwrap().unwrap(), 42);
+            exec.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancel_before_suspend_ack_allows_next_nested_submit() {
+        let exec = Arc::new(StageExecutor::new(8));
+        let parent = exec.submit(0, {
+            let exec = Arc::clone(&exec);
+            async move {
+                let mut cancelled = Box::pin(exec.submit(0, async { Ok(()) }, None));
+                assert!(futures::poll!(cancelled.as_mut()).is_pending());
+                drop(cancelled);
+                exec.submit(0, async { Ok(42) }, None).await
+            }
+        }, None);
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), parent).await.unwrap().unwrap(), 42);
+        Arc::try_unwrap(exec).unwrap().shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_before_resume_ack_does_not_resume_twice() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let parent = CurrentJob { job_id: 1, cmd_tx };
+        let mut first = ParentSuspendGuard::new(Some(parent.clone()));
+        let mut second = ParentSuspendGuard::new(Some(parent));
+        for guard in [&mut first, &mut second] {
+            let mut suspend = Box::pin(guard.maybe_suspend());
+            assert!(futures::poll!(suspend.as_mut()).is_pending());
+            let ManagerCmd::Suspend { reply, .. } = cmd_rx.try_recv().unwrap() else { panic!("expected Suspend") };
+            reply.send(()).unwrap();
+            suspend.await.unwrap();
+        }
+        let mut resume = Box::pin(first.resume());
+        assert!(futures::poll!(resume.as_mut()).is_pending());
+        let ManagerCmd::Resume { reply, .. } = cmd_rx.try_recv().unwrap() else { panic!("expected Resume") };
+        // Keep the acknowledgement pending, as when another suspension still exists.
+        drop(resume);
+        drop(first);
+        assert!(matches!(cmd_rx.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
+        drop(second);
+        assert!(matches!(cmd_rx.try_recv(), Ok(ManagerCmd::Resume { .. })));
+        assert!(cmd_rx.try_recv().is_err());
+        drop(reply);
+    }
+
+    #[tokio::test]
+    async fn test_reset_drains_nested_collectors_in_running_stage() {
+        for ordering in [thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::FuturesOrdering::Unordered] {
+            let completed = Arc::new(AtomicBool::new(false));
+            let reset_ran = Arc::new(AtomicBool::new(false));
+            let exec = Arc::new(StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+                let completed = Arc::clone(&completed);
+                let reset_ran = Arc::clone(&reset_ran);
+                move |_| {
+                    assert!(completed.load(Ordering::SeqCst), "reset must wait for all copy children");
+                    reset_ran.store(true, Ordering::SeqCst);
+                    Box::pin(async { Ok(()) })
+                }
+            })));
+            let (started_tx, started_rx) = oneshot::channel();
+            let (collect_tx, collect_rx) = oneshot::channel();
+            let caller = tokio::spawn({
+                let exec = Arc::clone(&exec);
+                let nested_exec = Arc::clone(&exec);
+                async move {
+                    exec.submit(0, async move {
+                        started_tx.send(()).unwrap();
+                        collect_rx.await.unwrap();
+                        let results = thoosa_shared::collect_futures_with_progress(
+                            std::iter::once(async move {
+                                assert!(cuda_activity_gate().is_paused());
+                                // This child has no CURRENT_JOB task local. It must still
+                                // reject a nested submission rather than wait for reset.
+                                assert!(nested_exec.submit(0, async { Ok(()) }, None).await.is_err());
+                                let values = thoosa_shared::collect_futures_with_progress(
+                                    (0..3).map(|i| async move {
+                                        let _copy = CudaActivityScope::for_operation()?;
+                                        Ok::<_, ThoError>(i)
+                                    }), 3, ordering, "nested copy chunks",
+                                ).await;
+                                assert_eq!(values.len(), 3);
+                                Ok::<_, ThoError>(values)
+                            }), 1, ordering, "copy chunks",
+                        ).await;
+                        assert_eq!(results.len(), 1);
+                        completed.store(true, Ordering::SeqCst);
+                        Ok(())
+                    }, None).await
+                }
+            });
+            started_rx.await.unwrap();
+            exec.request_cuda_reset();
+            collect_tx.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(2), caller).await.unwrap().unwrap().unwrap();
+            tokio::time::timeout(Duration::from_secs(2), cuda_activity_gate().wait_if_paused()).await.unwrap();
+            assert!(reset_ran.load(Ordering::SeqCst));
+            exec.submit(0, async { Ok(()) }, None).await.unwrap();
+            Arc::try_unwrap(exec).unwrap().shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reset_waits_for_activity_outside_executor() {
+        let reset_ran = Arc::new(AtomicBool::new(false));
+        let exec = StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+            let reset_ran = Arc::clone(&reset_ran);
+            move |_| {
+                reset_ran.store(true, Ordering::SeqCst);
+                Box::pin(async {
+                    // Reset-owned cleanup inherits authority without waiting on itself.
+                    let _cleanup = CudaActivityScope::for_operation()?;
+                    Ok(())
+                })
+            }
+        }));
+        let activity = CudaActivityScope::for_operation().unwrap();
+        let descendant = activity.clone();
+        exec.request_cuda_reset();
+        assert!(CudaActivityScope::for_operation().is_err());
+        drop(activity);
+        let mut idle = Box::pin(cuda_activity_gate().wait_until_idle());
+        assert!(futures::poll!(idle.as_mut()).is_pending());
+        assert!(!reset_ran.load(Ordering::SeqCst));
+        drop(descendant);
+        tokio::time::timeout(Duration::from_secs(2), idle).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), cuda_activity_gate().wait_if_paused()).await.unwrap();
+        assert!(reset_ran.load(Ordering::SeqCst));
+        exec.submit(0, async { Ok(()) }, None).await.unwrap();
+        exec.shutdown().await;
     }
 
     #[tokio::test]

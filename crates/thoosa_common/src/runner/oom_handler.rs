@@ -1,3 +1,4 @@
+pub use super::dyn_mpsc::RetryToken;
 use crate as thoosa_common;
 use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
@@ -736,7 +737,7 @@ async fn run_stage_borrowed<R, W>(
     input: Arc<W>,
     tho_device_idx: usize,
     run_ctx: R::Ctx,
-    job_id_to_rerun: Option<u64>,
+    retry: Option<RetryToken>,
 ) -> Result<R::Out, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
@@ -766,7 +767,7 @@ where
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             cuda_actor.run_stage(task, input, tho_device_idx, &run_ctx).await
         },
-        job_id_to_rerun
+        retry
     )).await
 }
 
@@ -775,7 +776,7 @@ async fn consume_stage_owned<'z, R, W>(
     input: W,
     tho_device_idx: usize,
     run_ctx: R::Ctx,
-    job_id_to_rerun: Option<u64>,
+    retry: Option<RetryToken>,
 ) -> Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
@@ -797,7 +798,7 @@ where
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             Ok(cuda_actor.consume_stage(task, input, tho_device_idx, run_ctx).await)
         },
-        job_id_to_rerun,
+        retry,
     )).await
 }
 
@@ -807,7 +808,7 @@ async fn run_stage_selected<R, W, S>(
     selector: Option<S>,
     tho_device_idx: usize,
     run_ctx: R::Ctx,
-    job_id_to_rerun: Option<u64>,
+    retry: Option<RetryToken>,
 ) -> Result<R::Out, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
@@ -838,7 +839,7 @@ where
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             cuda_actor.run_stage_with_select(task, input, selector, tho_device_idx, &run_ctx).await
         },
-        job_id_to_rerun
+        retry
     )).await
 }
 
@@ -854,7 +855,7 @@ where
         selector: Option<S>,
         tho_device_idx: usize,
         run_ctx: R::Ctx,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError>;
 }
 
@@ -873,10 +874,10 @@ where
         selector: Option<S>,
         tho_device_idx: usize,
         run_ctx: R::Ctx,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError> {
         let _ = selector;
-        track_await(run_stage_borrowed(task, input, tho_device_idx, run_ctx, job_id_to_rerun)).await
+        track_await(run_stage_borrowed(task, input, tho_device_idx, run_ctx, retry)).await
     }
 }
 
@@ -896,9 +897,9 @@ where
         selector: Option<S>,
         tho_device_idx: usize,
         run_ctx: R::Ctx,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError> {
-        track_await(run_stage_selected(task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun)).await
+        track_await(run_stage_selected(task, input, selector, tho_device_idx, run_ctx, retry)).await
     }
 }
 
@@ -953,7 +954,7 @@ where
             input,
             run_context,
             contexts,
-            |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
+            |task, input, selector, tho_device_idx, run_ctx, retry| async move {
                 debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
 
                 /*
@@ -967,7 +968,7 @@ where
                             ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
 
                  */
-                track_await(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun)).await
+                track_await(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, retry)).await
             },
         )).await
     }
@@ -1002,9 +1003,9 @@ where
             input,
             run_context,
             contexts,
-            |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
+            |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry| async move {
                 debug!("OOMHandler::consume: task={task:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
-                track_await(consume_stage_owned(task, input, tho_device_idx, run_ctx, job_id_to_rerun)).await
+                track_await(consume_stage_owned(task, input, tho_device_idx, run_ctx, retry)).await
             },
         )).await
     }
@@ -1064,45 +1065,6 @@ fn perf_oom_count(){
 
 }
 
-fn oom_job_id(error: &ThoError) -> Option<u64> {
-    match error.what() {
-        Cause::JobError { job_id, inner } if inner.is_oom() => Some(*job_id),
-        _ => None,
-    }
-}
-
-struct LastFailedJobGuard {
-    device_idx: usize,
-    job_id: Option<u64>,
-}
-
-impl LastFailedJobGuard {
-    fn new(device_idx: usize) -> Self {
-        Self { device_idx, job_id: None }
-    }
-
-    fn update_from_error(&mut self, error: &ThoError) {
-        if let Some(job_id) = oom_job_id(error) {
-            debug!("LastFailedJobGuard::update_from_error: job_id={job_id}");
-
-            self.job_id.replace(job_id);
-        }
-    }
-
-    fn job_id(&self) -> Option<u64> {
-        self.job_id
-    }
-}
-
-impl Drop for LastFailedJobGuard {
-    fn drop(&mut self) {
-        if let Some(job_id) = self.job_id {
-            oom_executor(self.device_idx).clear_exclusive_job_id(job_id);
-        }
-    }
-}
-
-
 #[allow(async_fn_in_trait)]
 trait RunnerRetryAdapter<'z, R, S>
 where
@@ -1114,7 +1076,7 @@ where
         selector: Option<S>,
         device_idx: usize,
         run_ctx: R::Ctx,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError>;
 
 }
@@ -1134,7 +1096,7 @@ where
         _selector: Option<()>,
         device_idx: usize,
         run_ctx: RC,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<SyncStageInitOutput<St>, ThoError> {
         let init = task.init.clone();
         let ws = Arc::clone(&task.ws);
@@ -1147,7 +1109,7 @@ where
                 let stage = panic_to_err_async!(init.init(run_ctx, ws))?;
                 Ok(SyncStageInitOutput(stage))
             },
-            job_id_to_rerun,
+            retry,
         )).await
     }
 }
@@ -1160,7 +1122,7 @@ struct SharedRunnerRetryAdapter<W, Run> {
 impl<'z, R, S, W, Run, Fut> RunnerRetryAdapter<'z, R, S> for SharedRunnerRetryAdapter<W, Run>
 where
     R: Stage,
-    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
+    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
     async fn run(
@@ -1169,12 +1131,12 @@ where
         selector: Option<S>,
         device_idx: usize,
         run_ctx: R::Ctx,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError> {
         let runner = &self.runner;
 
         panic_to_err_async!({
-            runner(task, Arc::clone(&self.input), selector, device_idx, run_ctx, job_id_to_rerun)
+            runner(task, Arc::clone(&self.input), selector, device_idx, run_ctx, retry)
         })
     }
 }
@@ -1188,7 +1150,7 @@ impl<'z, R, S, W, Run, Fut> RunnerRetryAdapter<'z, R, S> for ConsumeRunnerRetryA
 where
     R: Stage,
     W: ConsumeData<O = R::In<'z>>,
-    Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
+    Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
     async fn run(
@@ -1197,13 +1159,13 @@ where
         selector: Option<S>,
         device_idx: usize,
         run_ctx: R::Ctx,
-        job_id_to_rerun: Option<u64>,
+        retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError> {
         let input = self.input.take().expect("ConsumeRunnerRetryAdapter::run: missing input");
         let runner = &self.runner;
 
         let run_result = match track_await(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO why not panic_to_err_async?
-            runner(task, input, selector, device_idx, run_ctx, job_id_to_rerun)
+            runner(task, input, selector, device_idx, run_ctx, retry)
         }))).await
         {
             Ok(run_result) => run_result?,
@@ -1243,7 +1205,9 @@ where
     A: RunnerRetryAdapter<'z, R, S>,
 {
     let (device_idx, ctx_id) = (run_context.tho_device_idx(), run_context.id().clone());
-    let mut last_failed_job = LastFailedJobGuard::new(device_idx);
+    // Ownership starts before the first attempt and survives every adapter/adjuster
+    // await, so cancellation never leaves a detached job owning an exclusive retry.
+    let retry_scope = oom_executor(device_idx).retry_scope();
     let mut task = Some(task);
     let mut run_context = Some(run_context);
 
@@ -1263,10 +1227,10 @@ where
                 .as_mut()
                 .expect("run_with_runner_impl: missing run context")
                 .branch(false),
-            None,
+            Some(retry_scope.token()),
         )).await {
         Err(te) => {
-            last_failed_job.update_from_error(&te);
+
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
             if te.is_retryable_oom() {
@@ -1294,7 +1258,7 @@ where
                         debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={}",os_thread_id());
 
                         if let Err(te) = adjust_result {
-                            last_failed_job.update_from_error(&te);
+
                             debug!("OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                             if te.is_retryable_oom() {
@@ -1325,7 +1289,7 @@ where
                                     .expect("run_with_runner_impl: missing run context")
                                     .branch(false),
 
-                                run_context.as_ref().and_then(|ctx| if ctx.max_other_parallel() == 0 { last_failed_job.job_id()} else {None}),
+                                Some(retry_scope.token()),
                             )).await;
 
                         match run_result {
@@ -1345,7 +1309,7 @@ where
                                 }
                             }
                             Err(te) => {
-                                last_failed_job.update_from_error(&te);
+
                                 debug!("OOMHandler::run, error: err is_retryable_oom={} te={te:?}", te.is_retryable_oom());
 
                                 if te.is_retryable_oom() {
@@ -1408,7 +1372,7 @@ where
     R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
     W:Debug,
-    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
+    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
     #[cfg(tho_debug)]
@@ -1445,7 +1409,7 @@ where
     R::Out: Send + Sync + 'static,
     R::Ctx: MaxParallelCtx,
     W: ConsumeData<O = <R as Stage>::In<'z>> + Debug, // + WithId<ID = <R::In<'z> as WithId>::ID>,
-    Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
+    Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
     #[cfg(tho_debug)]
@@ -1915,6 +1879,42 @@ mod tests {
             async move { Ok(&self.inner) }
         }
 
+    }
+
+    #[tokio::test]
+    async fn test_cancelling_retry_runner_before_oom_releases_executor() {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let (task, _) = mock_runnable([]);
+        let run_ctx = crate::runner::common::mock_run_ctx::build()
+            .with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster>> = Vec::new();
+        // Exercise the actual retry runner's ownership, rather than creating a
+        // scope in the test: the first error has not reached the OOM handler yet.
+        let mut run = Box::pin(super::run_with_runner(
+            &adjusters, Arc::new(task), Arc::new(()), run_ctx, NoContexts,
+            {
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move |_, _, _: Option<()>, device_idx, _, retry| {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    async move {
+                        super::oom_executor(device_idx).submit(0, async move {
+                            started.notify_one();
+                            release.notified().await;
+                            Err::<TestOutput, _>(ThoError::oom())
+                        }, retry).await
+                    }
+                }
+            },
+        ));
+        assert!(futures::poll!(run.as_mut()).is_pending());
+        started.notified().await;
+        drop(run);
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(2), super::oom_executor(1).submit(0, async { Ok(()) }, None)).await.unwrap().unwrap();
     }
 
     #[tokio::test]
