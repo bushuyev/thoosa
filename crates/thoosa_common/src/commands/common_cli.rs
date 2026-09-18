@@ -28,7 +28,7 @@ use crate::args::{CommonArgs, StageCommand};
 use crate::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 
 use crate::utils::list_devices;
 use crate::ws::{Workspace, WsConfigs};

@@ -356,7 +356,7 @@ pub mod fixtures {
 
     use crate as thoosa_common;
     use crate::runner::common::cachable::DevicesWrap;
-    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::test_utils::{DummyTensor, parse_numeric_part};
     use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
@@ -602,7 +602,7 @@ mod tests {
     use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;
-    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::test_utils::{DummyTensor, parse_numeric_part};
     use async_trait::async_trait;
     use cached_derive::Cached;

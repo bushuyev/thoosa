@@ -166,7 +166,7 @@ mod tests {
     use super::*;
     use thoosa_shared::traits::MaxParallelCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::run_ctx::RunCtxImpl;
 
     fn ctx(_name: &'static str, want: MaxParallel) -> MaxParallelAdjustContextImpl {
         let mut c = MaxParallelAdjustContextImpl::new();

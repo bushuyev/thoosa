@@ -443,7 +443,7 @@ mod tests {
     use thoosa_common::args::CommonArgs;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, WsConfigs};
     use crate::cli::{MotifAppCommands, MotifCommands};
     use crate::stages::train_label_nets::TrainLabelNetRunConfig;

@@ -426,7 +426,7 @@ mod tests {
     use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::freq_filter::FreqFilter;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilter::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};

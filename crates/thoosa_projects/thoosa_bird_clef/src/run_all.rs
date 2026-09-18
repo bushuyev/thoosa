@@ -9,7 +9,7 @@ use tch::Device::Cpu;
 use thoosa_common::nets::common_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue, StftRunConfig, StftRunConfigRangeOrValue};
 use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue, TrimmedMeanRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::resources::Simple;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::tho_device::ThoDevice;
@@ -770,7 +770,7 @@ mod tests {
     use std::sync::Arc;
     use tch::{Device, Tensor};
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::{FsWorkspace, WsConfigs};

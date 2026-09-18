@@ -40,7 +40,6 @@ where
                         kind: kind.clone(),
                         selector:Some(Box::new(selector) as Box<dyn ThoSelector>),
                     },
-                    tracking: Default::default(),
                     pd: PhantomData,
                 }
                 )

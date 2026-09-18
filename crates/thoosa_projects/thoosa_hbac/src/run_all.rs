@@ -7,7 +7,7 @@ use tch::Device::Cpu;
 use thoosa_common::nets::common_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue};
 use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
@@ -241,13 +241,12 @@ pub(crate) async fn run_all(
 
     info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
     
-    //gpt Pre-create context and shared handles for label-net stage construction.
     let mut init_ctx_train_labels = root_ctx.branch(true);
     let store_in_train_labels = Arc::clone(&store);
     let ws_in_train_labels = Arc::clone(&ws);
     let labels_filter = run_all_args.labels_filter();
 
-    //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
+    //run a grid over label-net training configs; consumes motif nets from previous stage.
     let train_label_nets_run_config_ids = track_await(run_opt::< _, _, TrainLabelNetRunConfig, _, _>(
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
@@ -583,7 +582,7 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
                 }),
-                min: RangeOrValue::Value(0.95),
+                min: RangeOrValue::Value(0.8),
             },
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
@@ -656,7 +655,7 @@ mod tests {
     use thoosa_common::runner::common::cachable::BorrowRef;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;

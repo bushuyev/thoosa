@@ -51,7 +51,7 @@ where
     D: Dims,
     Id: Named + Debug + Clone
 {
-    //TODO remove
+
     pub fn shallow_clone<DO: Dims>(&self) -> ThoTensor<DO, Id> {
         ThoTensor {
             id: self.id.clone(),
@@ -69,7 +69,6 @@ where
                 }
             },
             pd: Default::default(),
-            tracking: Default::default(),
         }
     }
 
@@ -81,7 +80,6 @@ where
         Ok(ThoTensor {
             id: self.id.clone(),
             inner: ThoTensorInner::Val { t: self.t_ref().f_to_kind(k)? }, //TODO ref
-            tracking: Default::default(),
             pd: PhantomData,
         })
     }
@@ -108,7 +106,6 @@ where
                             kind:*kind,
                             selector:selector.as_ref().map(|v|v.clone_box()),
                         },
-                        tracking: Default::default(),
                         pd: PhantomData,
                     }
                 )
@@ -125,7 +122,6 @@ where
                 kind:kind.clone(),
                 selector:selector.as_ref().map(|v|v.clone_box()),
             },
-            tracking: Default::default(),
             pd: PhantomData,
         })
     }
@@ -134,7 +130,6 @@ where
         ThoTensor {
             id: (),
             inner: self.inner,
-            tracking: Default::default(),
             pd: Default::default(),
         }
     }
@@ -168,7 +163,6 @@ impl ThoTensor {
                         kind,
                         selector:selector.as_ref().map(|v|v.clone_box()),
                     },
-                    tracking: Default::default(),
                     pd: PhantomData,
                 })
             }
@@ -180,10 +174,11 @@ impl ThoTensor {
 
 impl<D: Dims> Display for ThoTensor<D, SimpleId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self.t_ref(), f)
+        Display::fmt(self.t_ref(), f)
     }
 }
 
+//drop can't be implemented directly on ThoTensor or ThoTensorInner to keep them movable
 #[derive(Debug)]
 pub struct KeyHolder {
     pub key:u64,
@@ -247,23 +242,6 @@ impl Debug for ThoTensorInner {
 }
 
 
-// impl Drop for ThoTensorInner {
-//     fn drop(&mut self) {
-//         if let ThoTensorInner::Ref { key, tho_device_idx, .. } = self {
-//             let device_idx = *tho_device_idx;
-//             let key = *key;
-//             tokio::spawn(async move {
-//
-//                 if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
-//                     error!("Can't drop tensor key={key:?}");
-//                 }
-//             });
-//         }
-//     }
-// }
-
-
-
 //D:Dims - is just a reminder of what dimensions a tensor has.
 pub struct ThoTensor<D = AnyDims, Id = ()>
 where
@@ -272,9 +250,6 @@ where
 {
     pub id: Id,
     pub inner: ThoTensorInner, //TODO pub
-
-    #[allow(dead_code)]
-    pub tracking: parking_lot::RwLock<Vec<&'static str>>,
 
     pub pd: PhantomData<D>,//TODO pub
 }
@@ -323,7 +298,6 @@ impl<D: Dims> From<Tensor> for ThoTensor<D, SimpleId> {
             id: simple_id!("1"),
             inner: ThoTensorInner::Val { t: tensor },
             pd: PhantomData,
-            tracking: Default::default(),
         }
     }
 }
@@ -334,7 +308,6 @@ impl From<Tensor> for ThoTensor {
             id: (),
             inner: ThoTensorInner::Val { t: tensor },
             pd: PhantomData,
-            tracking: Default::default(),
         }
     }
 }
@@ -345,7 +318,6 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
             id: simple_id!("2"),
             inner: ThoTensorInner::Val { t: tensor.shallow_clone() },
             pd: PhantomData,
-            tracking: Default::default(),
         }
     }
 }
@@ -437,7 +409,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         Ok(Self {
             id,
             inner: ThoTensorInner::Val { t },
-            tracking: Default::default(),
             pd: PhantomData,
         })
     }
@@ -467,7 +438,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
                 kind,
                 selector,
             },
-            tracking: Default::default(),
             pd: PhantomData,
         }
 
@@ -484,7 +454,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         Ok(Self {
             id,
             inner: ThoTensorInner::Val { t: Tensor::f_zeros(size, options)? },
-            tracking: Default::default(),
             pd: PhantomData,
         })
     }
@@ -514,8 +483,8 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     where
         NewId: Named + Debug + Clone,
     {
-        let Self { inner, tracking, pd, .. } = self;
-        ThoTensor { id, inner, tracking, pd }
+        let Self { inner, pd, .. } = self;
+        ThoTensor { id, inner, pd }
     }
 
     pub fn t_ref(&self) -> &Tensor {
@@ -638,17 +607,6 @@ where
             }
         };
 
-        // match copy.inner {//restores id
-        //     ThoTensorInner::Ref { key, size, kind, selector } => {
-        //         // Keep the actor-provided metadata so selectors and later D2H copies describe the actual worker tensor.
-        //         debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copied to out-of-process ref key={key}", self.id);
-        //         Ok(ThoTensor::new_ref(id, key, size, kind, selector, tho_device_idx))
-        //     }
-        //     ThoTensorInner::Val { t } => {
-        //         debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copy.device={:?}", self.id, t.device());
-        //         ThoTensor::new(id, t)
-        //     }
-        // }
         copy.to_types(id)
     }
 }
@@ -666,25 +624,16 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
         Self { id, t, pd: Default::default() }
     }
 
-    pub fn zero_(&mut self) {
-        let _ = self.t.zero_();
-    }
     pub fn add_(&mut self, rhs: &ThoTensor<D, Id>) -> Result<(), ThoError> {
         let _ = self.t.f_add_(rhs.t_ref())?;
 
         Ok(())
-    }
-    pub fn copy_from_(&mut self, rhs: &ThoTensor<D, Id>) {
-        self.t.copy_(rhs.t_ref());
     }
 
     pub fn copy_partial_from_(&mut self, dim: i64, start: i64, length: i64, rhs: &ThoTensor<D, Id>) {
         self.t.narrow(dim, start, length).copy_(rhs.t_ref());
     }
 
-    pub fn resize_(&mut self, new_shape: &[i64]) {
-        let _ = self.t.resize_(new_shape);
-    }
 }
 
 

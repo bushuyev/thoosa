@@ -28,7 +28,7 @@ use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
@@ -868,7 +868,7 @@ mod tests {
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoError;

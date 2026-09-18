@@ -11,7 +11,7 @@ use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::ws::{FsWorkspace, Workspace, WsConfigs};

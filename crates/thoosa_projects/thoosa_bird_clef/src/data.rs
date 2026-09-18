@@ -204,7 +204,7 @@ mod tests {
     use thoosa_common::nets::common_nets::StftRunConfig;
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::resources::Simple;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, plot_spectrogram, skewness_kurtosis_1_dim, to_vec_f32, z_norm};
