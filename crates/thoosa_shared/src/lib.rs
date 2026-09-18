@@ -225,6 +225,20 @@ impl CudaActivityGate {
         self.state.lock().paused
     }
 
+    /// Publish with already-reserved channel capacity under the same lock that
+    /// closes admission. Once request_pause returns, reset can purge the queue
+    /// without a submitter slipping a job in afterward. No await occurs here.
+    pub fn try_enqueue<T>(&self, permit: tokio::sync::mpsc::Permit<'_, T>, job: T) -> Result<(), T> {
+        let state = self.state.lock();
+        if state.paused {
+            // Return the job unchanged so an external submitter can retry after
+            // reset without reconstructing or dropping its computation.
+            return Err(job);
+        }
+        permit.send(job);
+        Ok(())
+    }
+
     pub fn request_pause(&self) -> CudaActivityPauseTicket {
         debug!("CudaActivityGate::request_pause: self={self:?}");
         let mut state = self.state.lock();

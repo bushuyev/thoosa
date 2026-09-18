@@ -334,8 +334,6 @@ impl Drop for ParentSuspendGuard {
 pub struct StageExecutor {
     tx: mpsc::Sender<Job>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
-    accepting_tx: watch::Sender<bool>,//blocks new jobs during reset
-    accept_gate: Arc<tokio::sync::RwLock<()>>,
     worker: JoinHandle<()>,
     exclusive_job_id: Arc<RwLock<Option<JobId>>>,
     tho_device_idx: usize,
@@ -346,8 +344,6 @@ impl Debug for StageExecutor {
         f.debug_struct("StageExecutor")
             .field("tx", &self.tx)
             .field("cmd_tx", &self.cmd_tx)
-            .field("accepting_tx", &self.accepting_tx)
-            .field("accept_gate", &self.accept_gate)
             .field("worker", &self.worker)
             .field("exclusive_job_id", &self.exclusive_job_id)
             .field("tho_device_idx", &self.tho_device_idx)
@@ -406,14 +402,10 @@ impl StageExecutor {
         let (tx, rx) = mpsc::channel(queue_capacity);
         let sync_capacity_rx = buffer_limits.sync_capacity();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (accepting_tx, _) = watch::channel(true);//TODO no rx?
-        let accept_gate = Arc::new(tokio::sync::RwLock::new(()));
 
         let cmd_tx_for_tasks = cmd_tx.clone();
         let exclusive_job_id = Arc::new(RwLock::new(None));
         let exclusive_job_id_for_manager = Arc::clone(&exclusive_job_id);
-        let accepting_tx_for_manager = accepting_tx.clone();
-        let accept_gate_for_manager = Arc::clone(&accept_gate);
         let reset_fn_for_manager = reset_fn;
 
         let worker = tokio::spawn(async move {
@@ -423,8 +415,6 @@ impl StageExecutor {
                 cmd_rx,
                 cmd_tx_for_tasks,
                 exclusive_job_id_for_manager,
-                accepting_tx_for_manager,
-                accept_gate_for_manager,
                 tho_device_idx,
                 reset_fn_for_manager,
                 buffer_limits,
@@ -440,8 +430,6 @@ impl StageExecutor {
         Self {
             tx,
             cmd_tx,
-            accepting_tx,
-            accept_gate,
             worker,
             exclusive_job_id,
             tho_device_idx,
@@ -464,31 +452,16 @@ impl StageExecutor {
     }
 
     async fn wait_until_accepting(&self, parent: Option<&CurrentJob>) -> Result<(), ThoError> {
-        let mut accepting_rx = self.accepting_tx.subscribe();
-
-        loop {
+        if parent.is_some() || CudaActivityScope::current().is_some() {
+            // Reset may be waiting for this admitted parent/child to unwind.
+            // Its nested submissions must fail instead of waiting for reset.
             if cuda_activity_gate().is_paused() {
-                if parent.is_some() || CudaActivityScope::current().is_some() {
-                    return Err(Self::resetting_submit_error());
-                }
-                track_await(cuda_activity_gate().wait_if_paused()).await;
-                continue;
-            }
-
-            if *accepting_rx.borrow_and_update() {
-                return Ok(());
-            }
-
-            // Nested submit while reset is requested would otherwise suspend a parent
-            // which may be needed to complete reset-draining. Fail fast instead.
-            if parent.is_some() || CudaActivityScope::current().is_some() {
                 return Err(Self::resetting_submit_error());
             }
-
-            track_await(accepting_rx
-                .changed()).await
-                .map_err(|_| Self::closed_error("Can't submit job: executor is closed"))?;
+        } else {
+            track_await(cuda_activity_gate().wait_if_paused()).await;
         }
+        Ok(())
     }
 
     pub async fn submit<F, T>(
@@ -517,6 +490,91 @@ impl StageExecutor {
 
 
         debug!("StageExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
+
+        // Admission can close while reserve/suspend awaits. Keep ownership of the
+        // unqueued job until the gate atomically accepts it, including across resets.
+        let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
+        let result_sender = Arc::new(JobResultSender::new(result_tx));
+        let retry_for_job = retry.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let tho_device_idx = self.tho_device_idx;
+
+        let result_sender_for_job = Arc::clone(&result_sender);
+        let wrapped = async move {
+            let retry = retry_for_job;
+            debug!("StageExecutor::submit: job_id={job_id} waiting on wrapped fut");
+            if !*retry.inner.alive.lock() {
+                result_sender.send(Err(ThoError::new_with_cause("retry owner was cancelled", Cause::SubmitErrorCancelled)));
+                return JobFeedback::Neutral;
+            }
+            let result = track_await(fut).await;
+            debug!("StageExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
+
+            if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
+                if tho_device_idx > 0 {
+                    warn!("StageExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
+
+                    retry.clear_exclusive();
+
+                    // The first failing job closes the shared gate and asks the manager
+                    // to run one reset after every currently running job has unwound.
+                    // Later failures in the same paused generation are coalesced into
+                    // that request. The failing job must return ContextReset immediately:
+                    // it may be a child of a suspended parent that also has to unwind
+                    // before reset_fn can run exclusively.
+                    let pause_ticket = cuda_activity_gate().request_pause();
+                    if pause_ticket.is_owner() {
+                        if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
+                            error!("StageExecutor::submit: manager is closed while requesting CUDA reset");
+                            cuda_activity_gate().finish_pause(pause_ticket);
+                        }
+                    }
+
+                    result_sender.send(Err(Self::context_reset_error()));
+                    return JobFeedback::Neutral;
+                } else {
+                    warn!("StageExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
+                }
+            };
+
+            let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
+            let is_ok = result.is_ok();
+
+            debug!("StageExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
+
+            let result = if is_oom && max_other_parallel == 0 {
+                retry.reserve_exclusive();
+
+                result.map_err(|e| {
+                    ThoError::new_with_cause(
+                        e.msg.clone(),
+                        Cause::JobError {
+                            job_id,
+                            inner: Box::new(e.clone()),
+                        },
+                    )
+                })
+            } else {
+                retry.clear_exclusive();
+                result
+            };
+
+            debug!("StageExecutor::submit: job_id={job_id} wrapped result={result:?}");
+
+            result_sender.send(result);
+
+            if is_oom {
+                JobFeedback::Oom
+            } else if is_ok {
+                JobFeedback::Success
+            } else {
+                JobFeedback::Neutral
+            }
+        };
+
+        let pending_failure = Box::new(move |error| result_sender_for_job.send(Err(error)));
+        let mut job = Job::new(job_id, max_other_parallel, wrapped, pending_failure);
+
 
         loop {
             track_await(self.wait_until_accepting(parent.as_ref())).await?;
@@ -549,7 +607,7 @@ impl StageExecutor {
 
             // Reset may have started while reserve() was awaiting channel capacity. The
             // permit alone does not authorize enqueueing, so recheck before suspension.
-            if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
+            if cuda_activity_gate().is_paused() {
                 drop(send_permit);
                 retry.clear_exclusive();
                 if parent.is_some() || CudaActivityScope::current().is_some() {
@@ -569,134 +627,17 @@ impl StageExecutor {
                 return Err(e);
             }
 
-            // Suspension waits for a manager acknowledgement, during which reset may begin.
-            // Back out and resume the parent rather than enqueueing a child into a paused executor.
-            if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
-                drop(send_permit);
+            // This check and publication share the pause mutex. Any job accepted
+            // before reset closes admission is visible to the manager's purge.
+            if let Err(rejected) = cuda_activity_gate().try_enqueue(send_permit, job) {
+                job = rejected;
                 let _ = track_await(suspend_guard.resume()).await;
                 retry.clear_exclusive();
                 if parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(Self::resetting_submit_error());
                 }
-                debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 2");
-
                 continue;
             }
-
-            // Race-closing gate. During reset execution the manager owns the write lock.
-            // Do not await here: if reset is starting, just back out and retry/fail.
-            let accept_guard = match self.accept_gate.try_read() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    drop(send_permit);
-                    let _ = track_await(suspend_guard.resume()).await;
-                    retry.clear_exclusive();
-                    if parent.is_some() || CudaActivityScope::current().is_some() {
-                        return Err(Self::resetting_submit_error());
-                    }
-                    debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 3");
-
-                    continue;
-                }
-            };
-
-            if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
-                drop(accept_guard);
-                drop(send_permit);
-                let _ = track_await(suspend_guard.resume()).await;
-                retry.clear_exclusive();
-                if parent.is_some() || CudaActivityScope::current().is_some() {
-                    return Err(Self::resetting_submit_error());
-                }
-                debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 4");
-
-                continue;
-            }
-
-            let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
-            let result_sender = Arc::new(JobResultSender::new(result_tx));
-            let retry = retry.clone();
-            let accepting_tx = self.accepting_tx.clone();
-            let cmd_tx = self.cmd_tx.clone();
-            let tho_device_idx = self.tho_device_idx;
-
-            let result_sender_for_job = Arc::clone(&result_sender);
-            let wrapped = async move {
-                debug!("StageExecutor::submit: job_id={job_id} waiting on wrapped fut");
-                if !*retry.inner.alive.lock() {
-                    result_sender.send(Err(ThoError::new_with_cause("retry owner was cancelled", Cause::SubmitErrorCancelled)));
-                    return JobFeedback::Neutral;
-                }
-                let result = track_await(fut).await;
-                debug!("StageExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
-
-                if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
-                    if tho_device_idx > 0 {
-                        warn!("StageExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
-
-                        retry.clear_exclusive();
-
-                        // The first failing job closes the shared gate and asks the manager
-                        // to run one reset after every currently running job has unwound.
-                        // Later failures in the same paused generation are coalesced into
-                        // that request. The failing job must return ContextReset immediately:
-                        // it may be a child of a suspended parent that also has to unwind
-                        // before reset_fn can run exclusively.
-                        let pause_ticket = cuda_activity_gate().request_pause();
-                        if pause_ticket.is_owner() {
-                            let _ = accepting_tx.send(false);
-                            if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
-                                error!("StageExecutor::submit: manager is closed while requesting CUDA reset");
-                                let _ = accepting_tx.send(true);
-                                cuda_activity_gate().finish_pause(pause_ticket);
-                            }
-                        }
-
-                        result_sender.send(Err(Self::context_reset_error()));
-                        return JobFeedback::Neutral;
-                    } else {
-                        warn!("StageExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
-                    }
-                };
-
-                let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
-                let is_ok = result.is_ok();
-
-                debug!("StageExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
-
-                let result = if is_oom && max_other_parallel == 0 {
-                    retry.reserve_exclusive();
-
-                    result.map_err(|e| {
-                        ThoError::new_with_cause(
-                            e.msg.clone(),
-                            Cause::JobError {
-                                job_id,
-                                inner: Box::new(e.clone()),
-                            },
-                        )
-                    })
-                } else {
-                    retry.clear_exclusive();
-                    result
-                };
-
-                debug!("StageExecutor::submit: job_id={job_id} wrapped result={result:?}");
-
-                result_sender.send(result);
-
-                if is_oom {
-                    JobFeedback::Oom
-                } else if is_ok {
-                    JobFeedback::Success
-                } else {
-                    JobFeedback::Neutral
-                }
-            };
-
-            let pending_failure = Box::new(move |error| result_sender_for_job.send(Err(error)));
-            send_permit.send(Job::new(job_id, max_other_parallel, wrapped, pending_failure));
-            drop(accept_guard);
 
             debug!("StageExecutor::submit: job_id={job_id} submitted job_id={job_id}");
 
@@ -717,8 +658,6 @@ impl StageExecutor {
     async fn run_cuda_reset(
         tho_device_idx: usize,
         reset_fn: &ResetFn,
-        accepting_tx: watch::Sender<bool>,
-        accept_guard: tokio::sync::OwnedRwLockWriteGuard<()>,
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
         pending_reset: PendingCudaReset,
     ) {
@@ -727,7 +666,6 @@ impl StageExecutor {
         // making reset equivalent to an exclusive max_other_parallel=0 job. Keeping the
         // reopen operation in Drop also covers cancellation or reset_fn failure.
         struct ResetPauseGuard {
-            accepting_tx: watch::Sender<bool>,
             exclusive_job_id: Arc<RwLock<Option<JobId>>>,
             pause_ticket: CudaActivityPauseTicket,
         }
@@ -742,19 +680,15 @@ impl StageExecutor {
                     }
                 }
                 debug!("StageExecutor::run_cuda_reset: exclusive_job_id={:?}", self.exclusive_job_id);
-                let _ = self.accepting_tx.send_replace(true);//
                 cuda_activity_gate().finish_pause(self.pause_ticket);
             }
         }
 
         let PendingCudaReset { pause_ticket, source } = pending_reset;
         let _reset_guard = ResetPauseGuard {
-            accepting_tx,
             exclusive_job_id,
             pause_ticket,
         };
-        // Declared after ResetPauseGuard so it is released before the gate is reopened.
-        let _accept_guard = accept_guard;
 
         // Copies outside this executor and spawned descendants also own activity.
         // They must finish before the reset hook invalidates their CUDA storage.
@@ -778,16 +712,13 @@ impl StageExecutor {
     }
 
     pub fn request_cuda_reset(&self) {
-        // Only the owner of this pause generation queues a reset. Concurrent requests
-        // are already covered by that reset and must not close another executor's local
-        // accepting flag without also owning the operation that reopens it.
+        // Only the owner of this pause generation queues a reset. Other executors
+        // already observe the same closed gate and must not reopen it independently.
         let pause_ticket = cuda_activity_gate().request_pause();
         if pause_ticket.is_owner() {
             debug!("StageExecutor::request_cuda_reset: got pause_ticket");
-            let _ = self.accepting_tx.send_replace(false);
             if self.cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "request_cuda_reset" }).is_err() {
                 error!("StageExecutor::request_cuda_reset: manager is closed");
-                let _ = self.accepting_tx.send_replace(true);// calls send_modify which updates value when no receivers
                 cuda_activity_gate().finish_pause(pause_ticket);
             }
         }
@@ -805,8 +736,6 @@ impl StageExecutor {
         mut cmd_rx: mpsc::UnboundedReceiver<ManagerCmd>,
         cmd_tx_for_tasks: mpsc::UnboundedSender<ManagerCmd>,
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
-        accepting_tx: watch::Sender<bool>,
-        accept_gate: Arc<tokio::sync::RwLock<()>>,
         tho_device_idx: usize,
         reset_fn: ResetFn,
         buffer_limits: Arc<FuturesLimits>,
@@ -824,7 +753,6 @@ impl StageExecutor {
         let mut cmd_closed = false;
         let mut sync_capacity_closed = false;
         let mut pending_reset = None::<PendingCudaReset>;
-        let mut reset_accept_guard = None::<tokio::sync::OwnedRwLockWriteGuard<()>>;
 
         loop {
             let max_parallel_jobs = *sync_capacity_rx.borrow_and_update();
@@ -853,11 +781,8 @@ impl StageExecutor {
             );
 
             if pending_reset.is_some() {
-                if reset_accept_guard.is_none() {
-                    // Block submissions before draining the channel, otherwise a sender that
-                    // already passed the acceptance checks could enqueue after the purge.
-                    reset_accept_guard = Some(track_await(Arc::clone(&accept_gate).write_owned()).await);
-                }
+                // The shared gate has closed admission atomically with enqueueing,
+                // so no submitter can publish another job after this purge.
                 Self::purge_pending_jobs(&mut pending, &mut rx, &mut input_closed);
             }
 
@@ -905,8 +830,6 @@ impl StageExecutor {
                 track_await(Self::run_cuda_reset(
                     tho_device_idx,
                     &reset_fn,
-                    accepting_tx.clone(),
-                    reset_accept_guard.take().expect("reset submission gate must be held"),
                     Arc::clone(&exclusive_job_id),
                     pending_reset,
                 )).instrument(tracing::info_span!(
@@ -1555,7 +1478,6 @@ mod tests {
         time::Duration,
     };
     use std::io::Write;
-    use std::ops::Deref;
     use std::sync::atomic::Ordering::Relaxed;
     use torch_sys::IntListOption;
     use thoosa_shared::{CudaAction, ThoosaError};
@@ -2270,42 +2192,103 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_reset_without_subscribers() -> Result<(), ThoError> {
-        let mut accepting_tx:Arc<Mutex<std::option::Option<watch::Sender<bool>>>> = Arc::new(Mutex::new(None));
-        let mut reset_invoked:Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-
-        let accepting_tx_arc =  Arc::clone(&accepting_tx);
-        let reset_invoked_arc = Arc::clone(&reset_invoked);
-
-
-        let reset_fn: ResetFn = Arc::new(move |device| {
-            let accepting_tx_arc = Arc::clone(&accepting_tx_arc);
-            let reset_invoked_arc = Arc::clone(&reset_invoked_arc);
-
-            Box::pin(async move {
-                let is_accepting = *accepting_tx_arc.lock().as_ref().map(|v|v.borrow()).expect("no accepting_tx_arc").deref();
-
-                assert!(!is_accepting, "executor is accepting jobs while resetting");
-
-                reset_invoked_arc.store(true, Ordering::Relaxed);
-                Ok(())
-            })
-        });
-
-        let exec = Arc::new(StageExecutor::new_with_reset_hook(64, 0, reset_fn));
-        accepting_tx.lock().replace(exec.accepting_tx.clone());
-
-
+    #[tokio::test]
+    async fn test_reset_without_waiters_reopens_admission() {
+        let reset_invoked = Arc::new(AtomicBool::new(false));
+        let exec = StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+            let reset_invoked = Arc::clone(&reset_invoked);
+            move |_| {
+                let reset_invoked = Arc::clone(&reset_invoked);
+                Box::pin(async move {
+                    assert!(cuda_activity_gate().is_paused(), "admission must remain closed throughout reset");
+                    reset_invoked.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+            }
+        }));
         exec.request_cuda_reset();
+        // No subscriber owns admission state; completion persists in the shared gate.
+        tokio::time::timeout(Duration::from_secs(2), exec.wait_until_accepting(None)).await.unwrap().unwrap();
+        assert!(reset_invoked.load(Ordering::SeqCst));
+        assert!(!cuda_activity_gate().is_paused());
+        assert_eq!(exec.submit(0, async { Ok(42) }, None).await.unwrap(), 42);
+        exec.shutdown().await;
+    }
 
-        exec.wait_until_accepting(None).await?;
+    #[tokio::test]
+    async fn test_other_executor_waits_for_shared_reset_then_submits_once() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let reset_calls = Arc::new(AtomicUsize::new(0));
+        let owner = StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            let reset_calls = Arc::clone(&reset_calls);
+            move |_| {
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                let reset_calls = Arc::clone(&reset_calls);
+                Box::pin(async move {
+                    reset_calls.fetch_add(1, Ordering::SeqCst);
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(())
+                })
+            }
+        }));
+        let other = StageExecutor::new(8);
+        owner.request_cuda_reset();
+        started.notified().await;
+        // A coalesced reset from another executor must not introduce local state
+        // that survives the owner's reopening of the shared gate.
+        other.request_cuda_reset();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let mut submit = Box::pin(other.submit(0, {
+            let ran = Arc::clone(&ran);
+            async move { Ok(ran.fetch_add(1, Ordering::SeqCst)) }
+        }, None));
+        assert!(futures::poll!(submit.as_mut()).is_pending());
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        release.notify_one();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), submit).await.unwrap().unwrap(), 0);
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+        assert_eq!(reset_calls.load(Ordering::SeqCst), 1);
+        owner.shutdown().await;
+        other.shutdown().await;
+    }
 
-        let is_accepting = *exec.accepting_tx.borrow().deref();
-        assert!(reset_invoked.load(Relaxed));
-        assert!(is_accepting, "executor is not accepting jobs after reset");
-
-
-        Ok(())
+    #[tokio::test]
+    async fn test_reset_between_suspend_and_enqueue_rejects_child_and_unwinds_parent() {
+        let parent_finished = Arc::new(AtomicBool::new(false));
+        let exec = Arc::new(StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+            let parent_finished = Arc::clone(&parent_finished);
+            move |_| {
+                assert!(parent_finished.load(Ordering::SeqCst), "parent must unwind before reset");
+                Box::pin(async { Ok(()) })
+            }
+        })));
+        let child_ran = Arc::new(AtomicBool::new(false));
+        let parent = exec.submit(0, {
+            let exec = Arc::clone(&exec);
+            let child_ran = Arc::clone(&child_ran);
+            async move {
+                let mut child = Box::pin(exec.submit(0, async move {
+                    child_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                }, None));
+                // Poll through capacity reservation and Suspend, but stop before
+                // its acknowledgement. Pause must then win the final enqueue check.
+                assert!(futures::poll!(child.as_mut()).is_pending());
+                exec.request_cuda_reset();
+                assert!(child.await.is_err());
+                parent_finished.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }, None);
+        tokio::time::timeout(Duration::from_secs(2), parent).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(2), cuda_activity_gate().wait_if_paused()).await.unwrap();
+        assert!(!child_ran.load(Ordering::SeqCst));
+        exec.submit(0, async { Ok(()) }, None).await.unwrap();
+        Arc::try_unwrap(exec).unwrap().shutdown().await;
     }
 }
