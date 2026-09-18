@@ -334,7 +334,7 @@ impl Drop for ParentSuspendGuard {
 pub struct StageExecutor {
     tx: mpsc::Sender<Job>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
-    accepting_tx: watch::Sender<bool>,
+    accepting_tx: watch::Sender<bool>,//blocks new jobs during reset
     accept_gate: Arc<tokio::sync::RwLock<()>>,
     worker: JoinHandle<()>,
     exclusive_job_id: Arc<RwLock<Option<JobId>>>,
@@ -507,9 +507,9 @@ impl StageExecutor {
         // scope that also spans error processing and adjustments between retries.
         let owned_scope = retry.is_none().then(|| self.retry_scope());
         let retry = retry.unwrap_or_else(|| owned_scope.as_ref().expect("local retry scope").token());
-        if !Arc::ptr_eq(&retry.inner.exclusive_job_id, &self.exclusive_job_id) {
-            return Err(ThoError::new("retry scope belongs to another executor"));
-        }
+
+        debug_assert!(Arc::ptr_eq(&retry.inner.exclusive_job_id, &self.exclusive_job_id), "retry scope belongs to another executor");//it compares locks' addresses, not job ids - if it fails it's a bug in the app and we can't handle it
+
         let job_id = retry.inner.job_id;
         if max_other_parallel != 0 {
             retry.clear_exclusive();

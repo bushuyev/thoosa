@@ -399,21 +399,30 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     fn inner_tensor_ref(&self) -> &Tensor {
         match &self.inner {
             ThoTensorInner::Val { t } => t,
-            ThoTensorInner::Ref { key, .. } => todo!("out-of-process ThoTensor ref is not implemented yet, key={key:?}"),
+            ThoTensorInner::Ref { key, .. } => {
+                error!("ThoTensor::inner_tensor_ref: {:?}", Backtrace::capture());
+                todo!("out-of-process ThoTensor ref is not implemented yet, key={key:?}")
+            },
         }
     }
 
     fn inner_tensor_mut(&mut self) -> &mut Tensor {
         match &mut self.inner {
             ThoTensorInner::Val { t } => t,
-            ThoTensorInner::Ref { key, .. } => todo!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}"),
+            ThoTensorInner::Ref { key, .. } => {
+                error!("ThoTensor::inner_tensor_mut: {:?}", Backtrace::capture());
+                todo!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}")
+            },
         }
     }
 
     fn into_inner_tensor(self) -> Tensor {
         match self.inner {
             ThoTensorInner::Val { t } => t,
-            ThoTensorInner::Ref { key, .. } => todo!("out-of-process ThoTensor ref cannot be consumed as a local tensor yet, key={key:?}"),
+            ThoTensorInner::Ref { key, .. } => {
+                error!("ThoTensor::into_inner_tensor: {:?}", Backtrace::capture());
+                todo!("out-of-process ThoTensor ref cannot be consumed as a local tensor yet, key={key:?}")
+            },
         }
     }
 
@@ -521,7 +530,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         let Self { id, inner, .. } = self;
         let t = match inner {
             ThoTensorInner::Val { t } => t,
-            ThoTensorInner::Ref { key, .. } => todo!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}"),
+            ThoTensorInner::Ref { key, .. } => {
+                error!("ThoTensor::to_mut: {:?}", Backtrace::capture());
+                todo!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}")
+            },
         };
         ThoTensorMut { id, t, pd: Default::default() }
     }
@@ -567,6 +579,7 @@ impl From<ThoTensor> for Tensor {
         match value.inner {
             ThoTensorInner::Val { t } => t,
             ThoTensorInner::Ref { .. } => {
+                error!("ThoTensor::from(value: ThoTensor): {:?}", Backtrace::capture());
                 panic!("Can't obtain tensor from ref ThoTensor") //TODO
             }
         }
