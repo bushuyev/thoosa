@@ -40,7 +40,6 @@ use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::dims::{LabelProbability, MotifProbability};
-use crate::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::stage_ids::RAW_TENSOR_LOADER;
@@ -425,18 +424,6 @@ where
     }
 }
 
-impl<C> AppliedMotifNetsStage<C> for ApplyCosine2DMotifNets<C>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    fn num_nets(&self) -> usize {
-        self.num_nets()
-    }
-
-    fn motif_nets_ids(&self) -> Vec<u32> {
-        self.motif_nets_ids()
-    }
-}
 
 pub async fn new_train_label_nets<L, AMN, C>(
     train_motif_net_run_config_ids: Vec<RunConfigId>,

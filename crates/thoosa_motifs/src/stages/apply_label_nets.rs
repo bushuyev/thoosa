@@ -44,7 +44,6 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedSt
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
-use crate::stages::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
 use crate::stages::instance_cache::InstanceCache;
 use crate::stages::load_motif_net::MotifNetMeta;
@@ -89,49 +88,6 @@ where
     pd: PhantomData<C>,
 }
 
-impl<C> ApplyLabelNets<C, ApplyCosine2DMotifNets<C>>
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    pub async fn new<R>(
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        store: &Arc<dyn MotifsStore>,
-        train_label_nets_run_config_ids: Vec<RunConfigId>,
-        stage_ctx: R,
-        motif_slices_step: u32,
-        run_stft: bool,
-    ) -> Result<Self, ThoError>
-    where
-        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
-    {
-        let motif_ws = Arc::clone(ws);
-        let motif_store = Arc::clone(store);
-
-        track_await(Self::new_with_motif_nets_builder(
-            ws,
-            store,
-            train_label_nets_run_config_ids,
-            stage_ctx,
-            move |stage_ctx, motif_nets| {
-                let ws = Arc::clone(&motif_ws);
-                let store = Arc::clone(&motif_store);
-
-                async move {
-                    track_await(ApplyCosine2DMotifNets::from_trained_nets(
-                        &ws,
-                        &store,
-                        stage_ctx,
-                        motif_slices_step,
-                        None,
-                        motif_nets,
-                        false,
-                        run_stft,
-                    )).await
-                }
-            },
-        )).await
-    }
-}
 
 impl<C> ApplyLabelNets<C, ApplyMotifNets<C>>
 where
