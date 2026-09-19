@@ -186,7 +186,7 @@ where
         let mut run_config_cache = HashMap::<RunConfigId, FindMotifsRunConfig>::new();
 
         for select_run_config_id in run_config_ids {
-            let selected_motifs = track_await(self.store.list_selected_motifs(*select_run_config_id, channels)).await?;
+            let selected_motifs = track_await(self.store.list_selected_motifs(*select_run_config_id, channels, None)).await?;
             for (channel_idx, channel_motifs) in selected_motifs.into_iter().enumerate() {
                 for (motif_id, _score) in channel_motifs {
                     let (motif_channel, find_motifs_run_config_id) = track_await(self.store.get_motif_meta(motif_id)).await?;

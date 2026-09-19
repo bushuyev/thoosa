@@ -16,7 +16,7 @@ use crate::stages::stft::SyncStftSelector;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::future::{BoxFuture, try_join_all};
-use log::debug;
+use log::{debug, info};
 use parking_lot::RwLock;
 use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -566,6 +566,8 @@ fn calc_metrics(
         channels_values.push(MetricsValue::new(metric.clone(), metric_channels_values));
     }
 
+    info!("motif_stats::calc_metrics: input_id={input_id:?} channels={channels} channels_values={channels_values:?}");
+
     Ok(MotifStatsOutput::new(out_id, channels_values, num_slices as u32))
 }
 
@@ -932,17 +934,6 @@ where
     fn new_local() -> Self {
         Self { id: (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into(), _ctx: PhantomData }
     }
-
-    fn run_input(&self, input: &MotifStatsCalcInput<'_>) -> Result<MotifStatsOutput, ThoError> {
-        match input.data() {
-            MotifStatsCalcInputData::Managed(motif) => calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), motif.as_ref().data().t_ref()),
-            MotifStatsCalcInputData::Motifs(motifs) => {
-                let motifs = motifs.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
-                let channels_motifs_slices = merged_motifs_tensor(input.id(), motifs.as_slice())?;
-                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
-            }
-        }
-    }
 }
 
 
@@ -974,7 +965,16 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsSyncStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("MotifStatsSyncStage::do_run: input.id={:?}", input.id);
-        let output = self.run_input(input)?;
+        let output = (match input.data() {
+            MotifStatsCalcInputData::Managed(motif) => {
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), motif.as_ref().data().t_ref())
+            },
+            MotifStatsCalcInputData::Motifs(motifs) => {
+                let motifs = motifs.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
+                let channels_motifs_slices = merged_motifs_tensor(input.id(), motifs.as_slice())?;
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
+            }
+        })?;
         debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
         Ok(output)
     }

@@ -67,7 +67,7 @@ pub trait MotifsStore: Store {
     async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError>;
     async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> Result<RunConfigId, ThoError>;
     async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
-    async fn list_selected_motifs(&self, motif_selection_id: RunConfigId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+    async fn list_selected_motifs(&self, motif_selection_id: RunConfigId, channels: u32, limit: Option<u32>) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 }
 
 // These helpers write motif-owned tables, so they live with MotifsStore instead of the common SqlStore API.
@@ -1007,35 +1007,45 @@ impl MotifsStore for SqlStore {
     }
 
     /**k
-     * returns vec of channel X (motif id, rate)
+         * returns vec of channel X (motif id, rate)
      */
     async fn list_selected_motifs(
         &self,
         motif_selection_id: RunConfigId,
         channels: u32,
+        limit: Option<u32>,
     ) -> Result<Vec<Vec<(u32, f64)>>, ThoError> {
         self.with_reader_conn("list_selected_motifs", move |conn| {
             let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(u32, f64)>>>();
             {
                 let mut stmt = conn.prepare(
+                    &[
                     "SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id \
                     FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id \
-                    WHERE sm.run_config_id=? ORDER BY motif_id"
+                    WHERE sm.run_config_id=? ORDER BY rate ",
+                        limit.as_ref().map(|_| "DESC LIMIT ?").unwrap_or("")
+                    ].concat()
                 )?;
 
-                stmt.query_map([motif_selection_id], |row| {
-                    Ok((row.get::<usize, u32>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))
-                })?
-                .map(|v| v.unwrap())
-                .for_each(|(motif_id, corr, channel_id)| {
-                    channels_motifs[channel_id].push((motif_id, corr as f64))
-                });
+                let params = match limit {
+                    None => params![motif_selection_id],
+                    Some(v) => params![motif_selection_id, v.clone()]
+                };
+                stmt.query_map(
+                    params,
+                    |row| {
+                        Ok((row.get::<usize, u32>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))
+                    })?
+                    .map(|v| v.unwrap())
+                    .for_each(|(motif_id, corr, channel_id)| {
+                        channels_motifs[channel_id].push((motif_id, corr as f64))
+                    });
             }
 
             debug!("list_selected_motifs: channels_motifs={channels_motifs:?}");
             Ok(channels_motifs)
         })
-        .await
+            .await
     }
     async fn list_label_nets_run_config_ids(
         &self,
@@ -1189,7 +1199,7 @@ mock! {
         async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError>;
         async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> Result<RunConfigId, ThoError>;
         async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn list_selected_motifs(&self, motif_selection_id: RunConfigId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+        async fn list_selected_motifs(&self, motif_selection_id: RunConfigId, channels: u32, limit: Option<u32>) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
     }
 
     #[async_trait]
@@ -1420,7 +1430,7 @@ impl MockMotifsStoreBuilder {
 
     pub fn with_list_selected_motifs<R: Into<HashMap<RunConfigId, Result<Vec<Vec<(u32, f64)>>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
-        self.store.expect_list_selected_motifs().returning(move |run_config_id, _channels| {
+        self.store.expect_list_selected_motifs().returning(move |run_config_id, _channels, _limit| {
             map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_config_id}"))
         });
         self
@@ -2212,7 +2222,7 @@ mod store_tests {
             input_run_config_ids
         );
 
-        let motifs = store.list_selected_motifs(select_motifs_run_config_id, 20).await?;
+        let motifs = store.list_selected_motifs(select_motifs_run_config_id, 20, None).await?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -2345,11 +2355,11 @@ mod store_tests {
         assert!(input_run_config_ids.contains(&(selected_run_config_ids[0], first_find_run_config_id)));
         assert!(input_run_config_ids.contains(&(selected_run_config_ids[1], second_find_run_config_id)));
 
-        let first_selected = store.list_selected_motifs(selected_run_config_ids[0], 2).await?;
+        let first_selected = store.list_selected_motifs(selected_run_config_ids[0], 2, None).await?;
         assert_eq!(vec![(first_motif_ids[0], 1.0)], first_selected[0]);
         assert_eq!(vec![(first_motif_ids[1], 1.0)], first_selected[1]);
 
-        let second_selected = store.list_selected_motifs(selected_run_config_ids[1], 2).await?;
+        let second_selected = store.list_selected_motifs(selected_run_config_ids[1], 2, None).await?;
         assert_eq!(Vec::<(u32, f64)>::new(), second_selected[0]);
         assert_eq!(vec![(second_motif_ids[0], 1.0)], second_selected[1]);
 
