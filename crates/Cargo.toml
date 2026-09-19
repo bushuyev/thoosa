@@ -18,7 +18,6 @@ members = [
     "thoosa_macros/cached_derive",
     "thoosa_macros/thoosa_named_derive",
     "thoosa_projects/thoosa_hbac",
-    "thoosa_projects/thoosa_bird_clef",
     "thoosa_macros/macros_tests",
     "thoosa_macros/thoosa_digest_id",
     "thoosa_macros/thoosa_digest_id_derive",
