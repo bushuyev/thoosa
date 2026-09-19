@@ -5059,41 +5059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thoosa_bird_clef"
-version = "0.1.0"
-dependencies = [
- "approx",
- "async-trait",
- "clap",
- "crossbeam-channel",
- "ctor 0.5.0",
- "futures",
- "hound",
- "lewton",
- "libloading 0.9.0",
- "log",
- "ogg",
- "parking_lot",
- "plotters",
- "polars",
- "rand 0.10.0",
- "rand_chacha 0.3.1",
- "regex",
- "serde_json",
- "tch",
- "tempfile",
- "thoosa_common",
- "thoosa_motifs",
- "thoosa_properties_map",
- "thoosa_shared",
- "thoosa_shims",
- "thoosa_store",
- "tokio",
- "torch-sys",
- "tracing",
-]
-
-[[package]]
 name = "thoosa_common"
 version = "0.1.0"
 dependencies = [
