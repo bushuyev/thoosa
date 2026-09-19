@@ -413,7 +413,6 @@ where
             store: Arc::clone(&store),
             apply_motif_nets,
             slice_step,
-            // motif_width,
             stack_applied_motif_nets
         })
     }
