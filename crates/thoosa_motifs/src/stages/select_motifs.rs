@@ -327,38 +327,38 @@ where
                         ctx.branch(false),
                     )).await?;
 
-                {
-                    let criterion_scores = criteria_constraints
+                info!("SelectMotifsStage::filter_motifs_by_criteria: motif_stats_output={motif_stats_output:?}");
+
+                let criterion_scores = criteria_constraints
+                    .iter()
+                    .map(|constraint| {
+                        Ok::<_, ThoError>((
+                            constraint.key()?,
+                            motif_stats_output.channel_value(&constraint.metric, 0)? as f64,//standalone motif has single channel
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ThoError>>()?;
+
+                let satisfies_constraints = criteria_constraints.iter().all(|constraint| {
+                    criterion_scores
                         .iter()
-                        .map(|constraint| {
-                            Ok::<_, ThoError>((
-                                constraint.key()?,
-                                motif_stats_output.channel_value(&constraint.metric, 0)? as f64,
-                            ))
+                        .find(|(constraint_key, _)| *constraint_key == constraint.key().expect("select_motifs constraint key"))
+                        .map(|(key, score)| {
+                            let r = *score >= constraint.min as f64;
+                            debug!("SelectMotifsStage::run: motif_id={motif_id} key={key:?} score={score} constraint.min={} r={r}", constraint.min);
+
+                            r
                         })
-                        .collect::<Result<Vec<_>, ThoError>>()?;
-                    let satisfies_constraints = criteria_constraints.iter().all(|constraint| {
-                        criterion_scores
-                            .iter()
-                            .find(|(constraint_key, _)| *constraint_key == constraint.key().expect("select_motifs constraint key"))
-                            .map(|(key, score)| {
-                                let r = *score >= constraint.min as f64;
-                                debug!("SelectMotifsStage::run: motif_id={motif_id} key={key:?} score={score} constraint.min={} r={r}", constraint.min);
-
-                                r
-                            })
-                            .unwrap_or(false)
-                    });
-                    debug!("SelectMotifsStage::run: motif_id={motif_id} satisfies_constraints={satisfies_constraints} criterion_scores={criterion_scores:?} criteria_constraints={criteria_constraints:?}");
-                    let k = hump(motif_stats_output.num_slices as f64, 20., 0.1, 5.0);//TODO config
-                    let weighted_criterion_scores = criterion_scores.iter().map(|(key, score)| (*key, score*k)).collect::<Vec<_>>();
-                    Ok::<Option<SelectedMotifEvaluation>, ThoError>(satisfies_constraints.then_some(SelectedMotifEvaluation {
-                        motif_id,
-                        criterion_scores,
-                        weighted_criterion_scores,
-                    }))
-                }
-
+                        .unwrap_or(false)
+                });
+                debug!("SelectMotifsStage::run: motif_id={motif_id} satisfies_constraints={satisfies_constraints} criterion_scores={criterion_scores:?} criteria_constraints={criteria_constraints:?}");
+                let k = hump(motif_stats_output.num_slices as f64, 20., 0.1, 5.0); //TODO config
+                let weighted_criterion_scores = criterion_scores.iter().map(|(key, score)| (*key, score * k)).collect::<Vec<_>>();
+                Ok::<Option<SelectedMotifEvaluation>, ThoError>(satisfies_constraints.then_some(SelectedMotifEvaluation {
+                    motif_id,
+                    criterion_scores,
+                    weighted_criterion_scores,
+                }))
             }
         });
 
@@ -417,7 +417,6 @@ where
         let run_configs_len = self.run_configs.len();
 
         debug!("SelectMotifsStage::run: self.run_configs.len={}", self.run_configs.len());
-        let eta_guard = CollectEtaInvocationGuard::new("SelectMotifsStage::run", run_configs_len, 1);
 
 
         let run_configs = self.run_configs.clone();
@@ -427,7 +426,6 @@ where
 
             async move {
                 let selected_motifs = track_await(self_for_futs
-                    // TODO(perf): criteria filtering reloads metrics for each select config; keep a per-run motif metric cache when only thresholds differ.
                     .filter_motifs_by_criteria(&select_motifs_run_config, ctx_for_futs.branch(false))).await?;
 
                 let constraint_metrics = match output_mode {

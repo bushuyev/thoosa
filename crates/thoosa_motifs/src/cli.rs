@@ -293,7 +293,7 @@ impl StageCommand for MotifCommands {
                 let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
                 let motifs_by = train_motif_nets_args.motifs_by()?;
 
-                let input_wrapper = TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()));
+                let input_wrapper = TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()), train_motif_nets_args.motifs_limit);
 
                 let run_config_ids = track_await(run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
                     train_motif_nets_run_config_range_or_value,
@@ -541,6 +541,9 @@ pub struct RunAllArgs {
 
     #[arg(long, default_value_t = 10)]
     pub train_motifs_epoch_size: u32,
+
+    #[arg(long)]
+    pub motifs_limit: Option<u32>,
 
     #[arg(long, default_value = "0.3")]
     pub max_motif_net_loss: f32, //filters motif nets for label training TODO move to train labels args
@@ -1291,7 +1294,7 @@ where
     debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
 
     let motifs = track_await(store
-        .list_selected_motifs(select_motifs_run_config_id, channels)).await?;
+        .list_selected_motifs(select_motifs_run_config_id, channels, None)).await?;
 
     debug!("plot_selected_motifs: motifs={motifs:?}");
 
@@ -1567,7 +1570,7 @@ where
 
             let result = (|| {
                 let out = apply_motif_net_forward(
-                    mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
+                    mono_key!(resource_id, format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
                     tensor.as_ref(),
                     motif_net.as_ref(),
                     motif_slices_step,
