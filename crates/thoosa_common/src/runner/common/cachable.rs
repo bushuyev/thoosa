@@ -184,7 +184,7 @@ where
             Box::new( move || {
 
                 let key_for_purger = key_for_purger.clone();
-                trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
+                trace!("Cached::purge_gpu_cache_area: 1  key={key_for_purger:?}");
 
                 async move {
                     if GlobalCtx::is_shutting_down(){
@@ -192,11 +192,11 @@ where
                     }
 
                     let Some(shared_fut) = track_await(Self::cache()).await.get(&key_for_purger) else {
-                        debug!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
+                        debug!("Cached::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
                         return Ok(());
                     };
 
-                    trace!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+                    trace!("Cached::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
 
                     if let Some(data) = shared_fut
                         .peek()  //to avoid locking on itself
@@ -204,7 +204,7 @@ where
                         .cloned() {
                         track_await(data.dump_to_cpu_if_last_ref(device_idx)).await?;
 
-                        debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
+                        debug!("Cached::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                     }
 
                     Ok(())
@@ -212,9 +212,6 @@ where
             })
 
        );
-
-
-
 
         GlobalCtx::global().do_age();
 

@@ -365,7 +365,7 @@ where
 
         //this defines order in which motif nets should be applied to a resource before running label net
 
-        let stack_applied_motif_nets = Arc::new(StackAppliedMotifNets::<C>::new(id.clone(), Cuda(0).into()).await?);
+        let stack_applied_motif_nets = StackAppliedMotifNets::<C>::new(id.clone(), Cuda(0).into()).await?;
 
         let mut apply_motif_nets = vec![];
         for trained_net in trained_nets.into_iter() {
@@ -762,23 +762,26 @@ where
     pd: PhantomData<C>,
 }
 
+static STACK_APPLIED_MOTIF_NETS_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl<C> StackAppliedMotifNets<C>
 where
     C: RunCtx + 'static,
 {
-    pub async fn new(id: SynKey, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedMotifNets<C>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
-            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
-            let init = StackAppliedMotifNetsInput::new(id.clone(), Vec::new(), device.tho_device_idx());
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
-                init: (),
-            })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?)))
-        }
+    //StackAppliedMotifNets is a singleton, id parameter is only for output tensor to match cache ApplyMotifNet's cache entry key
+    pub async fn new(id: SynKey, device: ThoDevice) -> Result<Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>, ThoError> {
+        STACK_APPLIED_MOTIF_NETS_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+            if GlobalCtx::global().is_ipc() {
+                // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
+                let init = StackAppliedMotifNetsInput::new(id.clone(), Vec::new(), device.tho_device_idx());
+                Ok(Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, 0, device.tho_device_idx(), Box::new(init)).await?),
+                    init: (),
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local(id).await?))))
+            }
+        }).await
     }
 
     pub async fn new_local(id: SynKey) -> Result<Self, ThoError>{
@@ -804,14 +807,6 @@ where
 {
 }
 
-impl<C> OutId for StackAppliedMotifNets<C>
-where
-    C: RunCtx + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.id + input_id
-    }
-}
 
 impl<C> Stage for StackAppliedMotifNets<C>
 where
@@ -891,7 +886,7 @@ where
 
         debug!("StackAppliedMotifNets::consume: res_t.size={:?}", res_t.size());
 
-        let motif_nets_applied = match ThoTensor::new(self.out_id(&input_id), res_t) {
+        let motif_nets_applied = match ThoTensor::new(&self.id + input_id, res_t) {
             Ok(motif_nets_applied) => motif_nets_applied,
             Err(error) => {
                 input.motif_nets_applied = motif_nets_applied;
