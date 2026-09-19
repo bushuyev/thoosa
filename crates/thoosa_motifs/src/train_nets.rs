@@ -93,6 +93,9 @@ pub struct TrainMotifsNetsArgs {
 
     #[arg(long, default_value_t = 10)]
     pub epoch_size: u32,
+
+    #[arg(long)]
+    pub motifs_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, CpuData)]
@@ -128,6 +131,7 @@ mod train_motifs_nets_args_tests {
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
             epoch_size: 10,
+            motifs_limit: None,
         };
 
         assert_eq!(
@@ -146,6 +150,7 @@ mod train_motifs_nets_args_tests {
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
             epoch_size: 10,
+            motifs_limit: None,
         };
 
         assert_eq!(
@@ -165,6 +170,7 @@ mod train_motifs_nets_args_tests {
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
             epoch_size: 10,
+            motifs_limit: None,
         };
 
         assert!(args.motifs_by().is_err());

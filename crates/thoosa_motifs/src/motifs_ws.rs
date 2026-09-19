@@ -128,7 +128,12 @@ impl MotifsWorkspace for FsWorkspace {
         let (model_path, params_path) = net_files_from_base(&base_path);
         let params = MotifNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
-        let module = load_net.then(|| ThoModuleWithStore::load(mono_key!(model_path.to_string_lossy().to_string(), "motif_model").into(), move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path), model_path, *device, quantize)).transpose()?;
+        let module = load_net
+            .then(|| ThoModuleWithStore::load(
+                mono_key!(model_path.to_string_lossy().to_string(), "motif_model").into(),
+                move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path), model_path, *device, quantize
+            ))
+            .transpose()?;
         Ok((params, module))
     }
 

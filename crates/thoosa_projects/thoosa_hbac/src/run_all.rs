@@ -218,7 +218,7 @@ pub(crate) async fn run_all(
     info!("find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
 
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
-    let input_wrapper = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config));
+    let input_wrapper = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config), run_all_args.motifs_limit);
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
     let train_motif_nets_run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
@@ -868,10 +868,11 @@ mod tests {
         train_final_opt_config: Arc<OptConfig>,
         max_batch_size: u32,
     }
-
+    const CHANNELS:u32 = 3;
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
+
         // let settings = RunAllSettings {
         //     resources_per_label: 30,
         //     pure_sets_len: [(10, true), (20, true)],
@@ -929,7 +930,7 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::new_motifs_workspace(
             test_dir.clone(),
-            WsConfigs::new(1,
+            WsConfigs::new(CHANNELS,
                            0,
                            100)
         )?));
@@ -1003,6 +1004,7 @@ mod tests {
             train_resource_group: settings.train_resource_group.to_string(),
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
+            motifs_limit: Some(100),
             max_motif_net_loss: 0.01,
             selected_motif_nets_limit: Some(10),
             motif_slices_step: 10,
@@ -1035,7 +1037,7 @@ mod tests {
 
         let r = resource_tensor_two_easy_motifs(
             rng().random_range(1000..2000),
-            1,
+            CHANNELS as usize,
             100,
             2,
             TestSignalKind::Pulse,
@@ -1053,7 +1055,7 @@ mod tests {
 
         let r = resource_tensor_two_easy_motifs(
             rng().random_range(1000..2000),
-            1,
+            CHANNELS as usize,
             100,
             2,
             TestSignalKind::Sin,
@@ -1071,7 +1073,7 @@ mod tests {
 
         let r = resource_tensor_two_easy_motifs(
             2000, //rng().random_range(1000..2000),
-            1,
+            CHANNELS as usize,
             100,
             2,
             TestSignalKind::ChirpDown,

@@ -62,28 +62,21 @@ impl<'a, R: AsRef<Resource> + Clone> CrossInput<'a, R> {
     ) -> Self {
 
 
-        let batch_id = {
-            let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-            let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-            mono_key!(//TODO
-                format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"),
-                "CrossInput"
-            )
-        };
 
         Self {
-            id: &id + batch_id,
+            id: &id + Self::resources_id(b_0, b_1),
             tensors: tensors.iter().map(|tensor| ThoDataRef::Borrowed(*tensor)).collect(),
             resources_0: b_0.to_vec(),
             resources_1: b_1.to_vec(),
         }
     }
 
+    fn resources_id(b_0: &[R], b_1: &[R]) -> SynKey {
+        SynKey::new(b_0.iter().chain(b_1.iter()).map(|resource| mono_key!(resource.as_ref().id(), format!("resource_id{}", resource.as_ref().id()))).collect::<Vec<_>>())
+    }
+
     pub fn from_data_refs(tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, b_0: &'a [R], b_1: &'a [R], id: SynKey) -> Self {
-        let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-        let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
-        let batch_id = mono_key!(format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"), "CrossInput");
-        Self { id: &id + batch_id, tensors, resources_0: b_0.to_vec(), resources_1: b_1.to_vec() }
+        Self { id: &id + Self::resources_id(&b_0, &b_1), tensors, resources_0: b_0.to_vec(), resources_1: b_1.to_vec() }
     }
 
     pub fn from_decoded_parts(tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, b_0: Vec<R>, b_1: Vec<R>, id: SynKey) -> Self {

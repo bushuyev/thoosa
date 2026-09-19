@@ -1193,7 +1193,7 @@ where
         debug!("ApplyMotifNet::new: motif_net.id={:?}", motif_net.id());
 
         Ok(Self {
-            id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + motif_net.id(),
+            id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + motif_net.id(),//TODO replace with trained_net_id?
             motif_net: tokio::sync::Mutex::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, params.clone()))),
             params,
             slice_step,

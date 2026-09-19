@@ -382,13 +382,14 @@ where
 #[dummy_data(no_clone)]
 pub struct TrainMotifNetInput{
     motifs_by: MotifsBy,
-    opt_config:Arc<OptConfig>
+    opt_config:Arc<OptConfig>,
+    motifs_limit:Option<u32>
 }
 
 impl Input for TrainMotifNetInput {}
 impl TrainMotifNetInput {
-    pub fn new(motifs_by: MotifsBy, opt_config:Arc<OptConfig>) -> Self {
-        Self { motifs_by, opt_config }
+    pub fn new(motifs_by: MotifsBy, opt_config:Arc<OptConfig>, motifs_limit:Option<u32>) -> Self {
+        Self { motifs_by, opt_config,motifs_limit }
     }
 }
 
@@ -550,7 +551,7 @@ where
 
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
                 for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                    let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels)).await?;
+                    let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels, input.motifs_limit)).await?;
                     debug!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs={selected_motifs:?}");
                     motifs_rates_selected_motifs_run_config_ids.extend(
                         selected_motifs
@@ -570,7 +571,7 @@ where
 
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
                 for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                    let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels)).await?;
+                    let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels, input.motifs_limit)).await?;
                     let motif_is_selected = selected_motifs
                         .get(channel)
                         .map(|channel_motifs| channel_motifs.iter().any(|(selected_motif_id, _)| *selected_motif_id == motif_id))
@@ -1565,7 +1566,7 @@ mod tests {
             None
         ).await?);
 
-        let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)));
+        let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)), None);
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(false);
