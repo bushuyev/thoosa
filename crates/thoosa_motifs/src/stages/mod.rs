@@ -32,5 +32,4 @@ mod stage_ids;
 pub mod bucketing;
 pub mod find_motifs_run_config;
 pub mod extend_motifs;
-pub mod apply_cosine2d_motif_nets;
 mod instance_cache;
