@@ -101,7 +101,10 @@ pub struct TrainMotifsNetsArgs {
 #[derive(Debug, Clone, PartialEq, Eq, CpuData)]
 pub enum MotifsBy {
     SelectMotifsRunIds { select_motifs_run_config_ids: Vec<RunConfigId> },
-    MotifId { motif_id: u32, select_motifs_run_config_ids: Option<Vec<RunConfigId>> },
+    MotifId {
+        motif_id: u32,
+        select_motifs_run_config_ids: Option<Vec<RunConfigId>>//if motif_id is in select_motifs_run_config_ids
+    },
 }
 
 impl TrainMotifsNetsArgs {
