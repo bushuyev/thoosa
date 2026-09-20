@@ -1,4 +1,4 @@
-pub use super::dyn_mpsc::RetryToken;
+pub use super::syn_stage_runner::RetryToken;
 use crate as thoosa_common;
 use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
@@ -728,7 +728,7 @@ where
     }
 }
 
-fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::StageExecutor {
+fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::syn_stage_runner::SyncStageRunner {
     GlobalCtx::global().get_executor(tho_device_idx)
 }
 

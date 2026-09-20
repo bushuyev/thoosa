@@ -331,7 +331,7 @@ impl Drop for ParentSuspendGuard {
 /// Maximum allowed number of parallel stages is specified in max_other_parallel parameter to submit method
 /// There is single executor instance per device. The aggregate number of  active jobs is bounded by that adaptive limit.
 /// Currently, it's used from OOMHandler only.
-pub struct StageExecutor {
+pub struct SyncStageRunner {
     tx: mpsc::Sender<Job>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
     worker: JoinHandle<()>,
@@ -339,7 +339,7 @@ pub struct StageExecutor {
     tho_device_idx: usize,
 }
 
-impl Debug for StageExecutor {
+impl Debug for SyncStageRunner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StageExecutor")
             .field("tx", &self.tx)
@@ -351,7 +351,7 @@ impl Debug for StageExecutor {
     }
 }
 
-impl StageExecutor {
+impl SyncStageRunner {
 
     pub fn retry_scope(&self) -> RetryScope {
         RetryScope {
@@ -466,7 +466,7 @@ impl StageExecutor {
 
     pub async fn submit<F, T>(
         &self,
-        max_other_parallel: usize,
+        max_other_parallel: usize,//how many other jobs SyncStageRunner can run in parallel with the job being submitted. 0 means job wants exclusive access to GPU.
         fut: F,
         retry: Option<RetryToken>,
     ) -> Result<T, ThoError>
@@ -511,12 +511,12 @@ impl StageExecutor {
             debug!("StageExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
             if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
-                if tho_device_idx > 0 {
+                if tho_device_idx > 0 {//if on GPU
                     warn!("StageExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
 
                     retry.clear_exclusive();
 
-                    // The first failing job closes the shared gate and asks the manager
+                    // The first job failing with error which requires reset closes the shared gate and asks the manager
                     // to run one reset after every currently running job has unwound.
                     // Later failures in the same paused generation are coalesced into
                     // that request. The failing job must return ContextReset immediately:
@@ -586,9 +586,9 @@ impl StageExecutor {
             // in the input channel, with no child yet queued to make progress.
             //
             //   1. submit() calls suspend_guard.maybe_suspend().
-            //   2. It sends ManagerCmd::Suspend at thoosa_common/src/runner/dyn_mpsc.rs:199.
+            //   2. It sends ManagerCmd::Suspend at thoosa_common/src/runner/syn_stage_runner:199.
             //   3. The manager handles it through handle_suspend().
-            //   4. handle_suspend() sets job.active = false and calls remove_active() at thoosa_common/src/runner/dyn_mpsc.rs:1218.
+            //   4. handle_suspend() sets job.active = false and calls remove_active() at thoosa_common/src/runner/syn_stage_runner:1218.
             //
 
             let send_permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
@@ -1512,7 +1512,7 @@ mod tests {
     async fn test_cancelled_oom_owner_cannot_reserve_after_completion() {
         // Exercise both the first attempt and a retry whose reservation already exists.
         for retrying in [false, true] {
-            let exec = Arc::new(StageExecutor::new(8));
+            let exec = Arc::new(SyncStageRunner::new(8));
             let scope = exec.retry_scope();
             if retrying {
                 assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
@@ -1543,7 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancelled_submit_with_unread_oom_releases_reservation() {
-        let exec = StageExecutor::new(8);
+        let exec = SyncStageRunner::new(8);
         let (finished_tx, finished_rx) = oneshot::channel();
         let mut caller = Box::pin(async {
             let scope = exec.retry_scope();
@@ -1566,7 +1566,7 @@ mod tests {
     #[tokio::test]
     async fn test_retry_reservation_survives_adjustment_and_releases_on_exit() {
         for succeed in [false, true] {
-            let exec = StageExecutor::new(8);
+            let exec = SyncStageRunner::new(8);
             let scope = exec.retry_scope();
             let job_id = scope.token.inner.job_id;
             assert!(exec.submit(0, async { Err::<(), _>(ThoError::oom()) }, Some(scope.token())).await.unwrap_err().is_oom());
@@ -1588,7 +1588,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancel_before_suspend_ack_allows_next_nested_submit() {
-        let exec = Arc::new(StageExecutor::new(8));
+        let exec = Arc::new(SyncStageRunner::new(8));
         let parent = exec.submit(0, {
             let exec = Arc::clone(&exec);
             async move {
@@ -1633,7 +1633,7 @@ mod tests {
         for ordering in [thoosa_shared::FuturesOrdering::Ordered, thoosa_shared::FuturesOrdering::Unordered] {
             let completed = Arc::new(AtomicBool::new(false));
             let reset_ran = Arc::new(AtomicBool::new(false));
-            let exec = Arc::new(StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+            let exec = Arc::new(SyncStageRunner::new_with_reset_hook(8, 0, Arc::new({
                 let completed = Arc::clone(&completed);
                 let reset_ran = Arc::clone(&reset_ran);
                 move |_| {
@@ -1687,7 +1687,7 @@ mod tests {
     #[tokio::test]
     async fn test_reset_waits_for_activity_outside_executor() {
         let reset_ran = Arc::new(AtomicBool::new(false));
-        let exec = StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+        let exec = SyncStageRunner::new_with_reset_hook(8, 0, Arc::new({
             let reset_ran = Arc::clone(&reset_ran);
             move |_| {
                 reset_ran.store(true, Ordering::SeqCst);
@@ -1724,7 +1724,7 @@ mod tests {
         drop(queued_tx);
         let mut input_closed = false;
 
-        StageExecutor::purge_pending_jobs(&mut pending, &mut queued_rx, &mut input_closed);
+        SyncStageRunner::purge_pending_jobs(&mut pending, &mut queued_rx, &mut input_closed);
 
         assert!(pending.is_empty());
         assert!(input_closed);
@@ -1739,7 +1739,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_pending_job_is_purged_before_reset() -> Result<(), ThoError> {
         cuda_activity_gate().wait_if_paused().await;
-        let exec = Arc::new(StageExecutor::new(8));
+        let exec = Arc::new(SyncStageRunner::new(8));
         let pending_ran = Arc::new(AtomicBool::new(false));
         let (running_started_tx, running_started_rx) = oneshot::channel();
         let (release_running_tx, release_running_rx) = oneshot::channel();
@@ -1788,7 +1788,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_reset_waits_for_running_jobs() -> Result<(), ThoError> {
         let reset_calls = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(StageExecutor::new_with_reset_hook(
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
             64,
             1,
             {
@@ -1869,7 +1869,7 @@ mod tests {
     async fn test_running_reset_failures_are_coalesced() -> Result<(), ThoError> {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let finished_jobs = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(StageExecutor::new_with_reset_hook(
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
             64,
             1,
             {
@@ -1948,7 +1948,7 @@ mod tests {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let parent_exited = Arc::new(AtomicBool::new(false));
 
-        let exec = Arc::new(StageExecutor::new_with_reset_hook(
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
             64,
             1,
             {
@@ -2025,7 +2025,7 @@ mod tests {
         let reset_calls = Arc::new(AtomicUsize::new(0));
         let parent_exited = Arc::new(AtomicBool::new(false));
 
-        let exec = Arc::new(StageExecutor::new_with_reset_hook(
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(
             64,
             1,
             {
@@ -2106,7 +2106,7 @@ mod tests {
         let mut pending_reset = None;
         let limits = FuturesLimits::new();
 
-        StageExecutor::process_command(
+        SyncStageRunner::process_command(
             ManagerCmd::RequestCudaReset {
                 pause_ticket: non_owner_ticket,
                 source: "test",
@@ -2126,7 +2126,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nested_exclusive_oom_does_not_deadlock_parent_resume() -> Result<(), ThoError> {
-        let exec = Arc::new(StageExecutor::new(64));
+        let exec = Arc::new(SyncStageRunner::new(64));
 
         let result = tokio::time::timeout(Duration::from_secs(2), {
             let exec_for_parent = Arc::clone(&exec);
@@ -2161,7 +2161,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_max_other_parallel_is_observed() -> Result<(), ThoError> {
-        let exec = Arc::new(StageExecutor::new(64));
+        let exec = Arc::new(SyncStageRunner::new(64));
         let active = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));
 
@@ -2195,7 +2195,7 @@ mod tests {
     #[tokio::test]
     async fn test_reset_without_waiters_reopens_admission() {
         let reset_invoked = Arc::new(AtomicBool::new(false));
-        let exec = StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+        let exec = SyncStageRunner::new_with_reset_hook(8, 0, Arc::new({
             let reset_invoked = Arc::clone(&reset_invoked);
             move |_| {
                 let reset_invoked = Arc::clone(&reset_invoked);
@@ -2220,7 +2220,7 @@ mod tests {
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let reset_calls = Arc::new(AtomicUsize::new(0));
-        let owner = StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+        let owner = SyncStageRunner::new_with_reset_hook(8, 0, Arc::new({
             let started = Arc::clone(&started);
             let release = Arc::clone(&release);
             let reset_calls = Arc::clone(&reset_calls);
@@ -2236,7 +2236,7 @@ mod tests {
                 })
             }
         }));
-        let other = StageExecutor::new(8);
+        let other = SyncStageRunner::new(8);
         owner.request_cuda_reset();
         started.notified().await;
         // A coalesced reset from another executor must not introduce local state
@@ -2260,7 +2260,7 @@ mod tests {
     #[tokio::test]
     async fn test_reset_between_suspend_and_enqueue_rejects_child_and_unwinds_parent() {
         let parent_finished = Arc::new(AtomicBool::new(false));
-        let exec = Arc::new(StageExecutor::new_with_reset_hook(8, 0, Arc::new({
+        let exec = Arc::new(SyncStageRunner::new_with_reset_hook(8, 0, Arc::new({
             let parent_finished = Arc::clone(&parent_finished);
             move |_| {
                 assert!(parent_finished.load(Ordering::SeqCst), "parent must unwind before reset");

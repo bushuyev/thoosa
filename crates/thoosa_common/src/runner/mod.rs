@@ -10,4 +10,4 @@ pub mod adjusters;
 mod purger;
 pub mod run_ctx;
 pub mod cache_areas;
-mod dyn_mpsc;
+mod syn_stage_runner;
