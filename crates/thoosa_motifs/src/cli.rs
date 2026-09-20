@@ -1293,8 +1293,8 @@ where
     let channels = ws.read().channels();
     debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
 
-    let motifs = track_await(store
-        .list_selected_motifs(select_motifs_run_config_id, channels, None)).await?;
+    let (_run_config_id, motifs) = track_await(store
+        .list_selected_motifs(&[select_motifs_run_config_id], channels, None)).await?.into_iter().next().expect("no selected motif");;
 
     debug!("plot_selected_motifs: motifs={motifs:?}");
 

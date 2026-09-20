@@ -1218,7 +1218,14 @@ mod tests {
         let store =             MockMotifsStoreBuilder::new()
             .with_list_run_config_values([(find_motifs_run_config_id, Ok(find_motifs_props))])
             .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
-            .with_list_selected_motifs([(select_motifs_run_config_id, Ok(selected_motifs))])
+            .with_list_selected_motifs([
+                (vec![select_motifs_run_config_id], Ok(
+                    HashMap::from([(
+                        select_motifs_run_config_id,
+                        selected_motifs
+                    )])
+                ))
+            ])
             .with_list_motif_slices(
                 motif_id,
                 Some(vec![select_motifs_run_config_id]),

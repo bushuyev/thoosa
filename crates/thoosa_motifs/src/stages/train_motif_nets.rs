@@ -543,23 +543,24 @@ where
 
         let channels = perf_log!(sync_read_lock!(self.ws)).channels();
 
-        debug!("TrainMotifNets::run: input={input:?}");
+        info!("TrainMotifNets::run: input={input:?}");
 
-        let (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids) = match input.motifs_by {
+        let (select_motifs_run_config_ids, mut motifs_rates_selected_motifs_run_config_ids) = match input.motifs_by {
 
-            MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids } => {
+            MotifsBy::SelectMotifsRunIds { ref select_motifs_run_config_ids } => {
 
-                let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
-                for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                    let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels, input.motifs_limit)).await?;
-                    debug!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs={selected_motifs:?}");
+                let mut motifs_rates_selected_motifs_run_config_ids: Vec<((u32, f64), RunConfigId)> = Vec::new();
+                let run_configs_selected_motifs = track_await(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
+                for (select_motifs_run_config_id, selected_motifs) in &run_configs_selected_motifs {
+
+                    info!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs in channels={:?} selected_motifs={selected_motifs:?}", selected_motifs.iter().map(|motifs_in_channel|motifs_in_channel.len()).collect::<Vec<_>>());
                     motifs_rates_selected_motifs_run_config_ids.extend(
                         selected_motifs
                             .into_iter()
-                            .flat_map(|channels_motifs| channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, *select_motifs_run_config_id))),
+                            .flat_map(|channels_motifs| channels_motifs.into_iter().map(move |motif_id_rate| (*motif_id_rate, *select_motifs_run_config_id))),
                     );
                 }
-                (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids)
+                (select_motifs_run_config_ids.clone(), motifs_rates_selected_motifs_run_config_ids)
             }
             MotifsBy::MotifId { motif_id, select_motifs_run_config_ids } => {
 
@@ -570,8 +571,8 @@ where
                 };
 
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
-                for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                    let selected_motifs = track_await(self.store.list_selected_motifs(*select_motifs_run_config_id, channels, input.motifs_limit)).await?;
+                let run_configs_selected_motifs = track_await(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
+                for (select_motifs_run_config_id, selected_motifs) in &run_configs_selected_motifs {
                     let motif_is_selected = selected_motifs
                         .get(channel)
                         .map(|channel_motifs| channel_motifs.iter().any(|(selected_motif_id, _)| *selected_motif_id == motif_id))
@@ -584,10 +585,16 @@ where
             }
         };
         let motifs_rates_selected_motifs_run_config_ids_len = motifs_rates_selected_motifs_run_config_ids.len();
-        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len} motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
+        info!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len} motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
 
         let reusable_completed_trials = track_await(completed_train_motif_trials(&self.store, &select_motifs_run_config_ids)).await?;
         debug!("TrainMotifNets::run: reusable_completed_trials.len={}", reusable_completed_trials.len());
+
+        motifs_rates_selected_motifs_run_config_ids.sort_by(|a, b|{
+            a.1.cmp(&b.1)
+        });
+
+        debug!("TrainMotifNets::run: sorted motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
 
         let futures = motifs_rates_selected_motifs_run_config_ids.into_iter()
         .map(|(motif_id_rate, select_motifs_run_config_id)|{
@@ -1467,10 +1474,10 @@ mod tests {
     async fn test_train_motif_nets() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-        run_train_motif_nets().await
+        do_train_motif_nets().await
     }
 
-    async fn run_train_motif_nets() -> Result<(), ThoError> {
+    async fn do_train_motif_nets() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp/test_train_motif_nets").join(cdt_for_dir());
 
         debug!("test_train_motif_nets: test_dir={test_dir:?}");
@@ -1539,7 +1546,14 @@ mod tests {
                 ]).collect(), resources_id_map)))
 
                 .with_list_selected_motifs([
-                    (select_motifs_run_config_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
+                    (
+                        vec![select_motifs_run_config_id],
+                        Ok(
+                            HashMap::from([
+                                (select_motifs_run_config_id, vec![vec![(motif_id, 1.0f64)]])
+                            ])
+                        )
+                    )
                 ])
                 .with_list_output_run_config_ids([(select_motifs_run_config_id, Ok(vec![]))])
                 .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_config_id)))])
@@ -1621,7 +1635,7 @@ mod tests {
             module_path!(),
             async {
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                let result = run_train_motif_nets().await?;
+                let result = do_train_motif_nets().await?;
 
                 Ok(())
             },
