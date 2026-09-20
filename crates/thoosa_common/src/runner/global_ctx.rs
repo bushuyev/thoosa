@@ -5,7 +5,7 @@ use mockall::automock;
 use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
-use crate::runner::dyn_mpsc::StageExecutor;
+use crate::runner::syn_stage_runner::SyncStageRunner;
 use crate::runner::purger::Purger;
 use crate::tho_device::ThoDevice;
 use futures::FutureExt;
@@ -33,7 +33,7 @@ pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 #[derive(Debug)]
 pub struct GlobalCtx {
 
-    executors: Vec<StageExecutor>,
+    executors: Vec<SyncStageRunner>,
 
     num_devices: usize,//TODO replace with Vec<ThoDevice>
 
@@ -102,7 +102,7 @@ impl GlobalCtx {
             num_devices,
 
             executors: (0..num_devices).map(|tho_device_idx| {
-                StageExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+                SyncStageRunner::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             })
             .collect(),
 
@@ -159,7 +159,7 @@ impl GlobalCtx {
         Ok(Self {
             num_devices,
             executors: (0..num_devices).map(|tho_device_idx| {//TODO make dummy CPU 0 executor
-                StageExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+                SyncStageRunner::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             }).collect(),
 
             caches: parking_lot::RwLock::new(HashMap::new()),
@@ -201,7 +201,7 @@ impl GlobalCtx {
         }.boxed()
     }
 
-    pub fn get_executor(&self, tho_device:usize) -> &StageExecutor {
+    pub fn get_executor(&self, tho_device:usize) -> &SyncStageRunner {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.executors.len={}", self.executors.len());
         &self.executors[tho_device]//tho_device is 0 in tests
     }
@@ -495,7 +495,7 @@ impl GlobalCtx {
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
     use std::fmt::{Debug, Formatter};
-    use crate::runner::dyn_mpsc::StageExecutor;
+    use crate::runner::syn_stage_runner::SyncStageRunner;
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
     use log::debug;
@@ -637,7 +637,7 @@ pub mod mock_global_ctx {
         }
 
         pub fn with_get_executor(mut self) -> Self {
-            self.mock.expect_get_executor().times(0..).return_const(StageExecutor::new(16));
+            self.mock.expect_get_executor().times(0..).return_const(SyncStageRunner::new(16));
             self
         }
 

@@ -5,7 +5,7 @@
 mod data;
 mod run_all;
 
-use crate::run_all::{run_all, run_all_config_0};
+use crate::run_all::{run_all, run_all_config_0, run_all_config_1, RunAllSettings};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use log::{debug, error, info};
@@ -23,6 +23,7 @@ use thoosa_common::commands::common_cli::run_common_cli;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerCli};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
+use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::stages::freq_filter::{SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};
@@ -155,6 +156,22 @@ impl StageCommand for HbacCommands {
                 let loader = init_loader(ws);
 
                 let all_configs = run_all_config_0(&run_all_args);
+
+
+                // let all_configs = run_all_config_1(&run_all_args, &RunAllSettings {
+                //     resources_per_label: 90,
+                //     pure_sets_len: [(30, true), (60, true)],
+                //     train_resource_group: "pure group 60".to_string(),
+                //     valid_resource_group: "pure group 30".to_string(),
+                //
+                //     motifs_epochs : 30,
+                //     labels_epochs : 50,
+                //     final_epochs : 50,
+                //     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
+                //     train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
+                //     train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
+                //     max_batch_size : 20,
+                // });
 
                 track_await(run_all(
                     &ws,
