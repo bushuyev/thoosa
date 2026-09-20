@@ -180,13 +180,15 @@ where
     }
 
     async fn load_candidates_by_channel(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<Vec<SelectedMotifCandidate>>, ThoError> {
+        debug!("MergeSelectedMotifs::load_candidates_by_channel: run_config_ids={run_config_ids:?}");
         let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();
         let mut candidates_by_channel = vec![Vec::new(); channels as usize];
         let mut run_config_cache = HashMap::<RunConfigId, FindMotifsRunConfig>::new();
 
-        for select_run_config_id in run_config_ids {
-            let selected_motifs = track_await(self.store.list_selected_motifs(*select_run_config_id, channels, None)).await?;
+        for (select_run_config_id, selected_motifs) in track_await(self.store.list_selected_motifs(run_config_ids, channels, None)).await? {
+            debug!("MergeSelectedMotifs::load_candidates_by_channel: select_run_config_id={select_run_config_id:?} selected_motifs={selected_motifs:?}");
+
             for (channel_idx, channel_motifs) in selected_motifs.into_iter().enumerate() {
                 for (motif_id, _score) in channel_motifs {
                     let (motif_channel, find_motifs_run_config_id) = track_await(self.store.get_motif_meta(motif_id)).await?;
@@ -202,7 +204,7 @@ where
 
                     let find_motifs_run_config = run_config_cache.get(&find_motifs_run_config_id).expect("set above");
                     candidates_by_channel[channel_idx].push(SelectedMotifCandidate {
-                        key: SelectedMotifKey::new(*select_run_config_id, motif_id),
+                        key: SelectedMotifKey::new(select_run_config_id, motif_id),
                         channel: channel_idx,
                         comparison: MotifComparisonConfig::from_find_motifs_run_config(find_motifs_run_config)?,
                     });
@@ -413,8 +415,11 @@ mod tests {
                 Ok(merge_run_config_id),
             )
             .with_list_selected_motifs([
-                (select_run_config_id_0, Ok(vec![vec![(1u32, 1.0f64)]])),
-                (select_run_config_id_1, Ok(vec![vec![(2u32, 1.0f64)]])),
+                (vec![select_run_config_id_0, select_run_config_id_1], Ok(HashMap::from([
+                    (select_run_config_id_0, vec![vec![(1u32, 1.0f64)]]),
+                    (select_run_config_id_1, vec![vec![(2u32, 1.0f64)]])
+                ]))),
+                // (select_run_config_id_1, Ok(vec![vec![(2u32, 1.0f64)]])),
             ])
             .with_get_motif_meta([
                 (1u32, Ok((0usize, find_run_config_id))),

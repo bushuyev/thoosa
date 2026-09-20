@@ -1275,12 +1275,15 @@ mod tests {
 
         let mut store = MockMotifsStoreBuilder::new()
             .with_list_selected_motifs([
-                (select_motifs_run_config_id, Ok(
-                    vec![
-                        vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
-                        vec![(motif_1_0_id, 1.0f64)], //channel 1
-                        vec![]//channel 2
-                    ]
+                (vec![select_motifs_run_config_id], Ok(
+                    HashMap::from([(
+                        select_motifs_run_config_id,
+                        vec![
+                            vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
+                            vec![(motif_1_0_id, 1.0f64)], //channel 1
+                            vec![] //channel 2
+                        ]
+                    )])
                 ))
             ])
             .with_list_group_labeled_resources_sets([

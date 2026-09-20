@@ -1561,6 +1561,7 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Int
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::HashMap;
     use crate::dims::MotifProbability;
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
     use crate::stages::apply_motif_nets::{ApplyMotifNets, dummy_motif_net, motif_test_net_, valid_partial_output_len};
@@ -1720,12 +1721,16 @@ pub mod tests {
                     (motif_1_0_id, Ok((1usize, find_motifs_run_config_id))),
                 ])
                 .with_list_selected_motifs([
-                    (select_motifs_run_config_id, Ok(
-                        vec![
-                            vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
-                            vec![(motif_1_0_id, 1.0f64)], //channel 1
-                            vec![]//channel 2
-                        ]
+                    (vec![select_motifs_run_config_id], Ok(
+                        HashMap::from([(
+                                select_motifs_run_config_id,
+                                vec![
+                                    vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
+                                    vec![(motif_1_0_id, 1.0f64)], //channel 1
+                                    vec![]//channel 2
+                                ]
+
+                        )])
                     ))
                 ])
                 .with_list_trained_nets([
@@ -1877,7 +1882,15 @@ pub mod tests {
                     (motif_0_1_id, Ok((0usize, find_motifs_run_config_id))),
                 ])
                 .with_list_selected_motifs([
-                    (select_motifs_run_config_id, Ok(vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])),
+                    (
+                        vec![select_motifs_run_config_id],
+                        Ok(
+                            HashMap::from([(
+                                select_motifs_run_config_id,
+                                vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]]
+                            )])
+                        )
+                    ),
                 ])
                 .with_list_trained_nets([
                     (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
@@ -1973,10 +1986,13 @@ pub mod tests {
             ])
             .with_get_motif_meta( [(motif_0_0_id, Ok((0usize, find_motifs_run_config_id)))])
             .with_list_selected_motifs([
-                (select_motifs_run_config_id, Ok(
-                    vec![
-                        vec![(motif_0_0_id, 1.0f64)], //channel 0
-                    ]
+                (vec![select_motifs_run_config_id], Ok(
+                    HashMap::from([(
+                        select_motifs_run_config_id,
+                        vec![
+                            vec![(motif_0_0_id, 1.0f64)], //channel 0
+                        ]
+                    )])
                 ))
             ])
             .with_list_trained_nets([
