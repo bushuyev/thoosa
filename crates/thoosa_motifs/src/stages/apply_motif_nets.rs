@@ -63,7 +63,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, ErasedStageWithState, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, ErasedStageWithState, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, DebugId, Stage, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 use tracing::field::debug;
@@ -1346,7 +1346,7 @@ pub fn apply_motif_net_forward(
     // debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} stft_slices={stft_slices:?}");
     // let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(stft_slices); //.f_totype(Float)?
 
-    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
+    let slices_tensor = ThoTensor::<Batch<Slice>, DebugId>::from(slices);
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
@@ -1426,8 +1426,8 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
     let mut cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
 
 
-    let tho_tensor: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(t));
-    let ones: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
+    let tho_tensor: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(t));
+    let ones: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
 
     let node = SeqBuilder::new(num_features, None)?
         .closure(
@@ -1523,8 +1523,8 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Int
     let mut cfg = nn::ConvConfig { bias: false, stride, ..Default::default() };
 
 
-    let tho_tensor: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(t));
-    let ones: Arc<ThoTensor<AnyDims, SimpleId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
+    let tho_tensor: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(t));
+    let ones: Arc<ThoTensor<AnyDims, DebugId>> = Arc::new(ThoTensor::from(Tensor::ones([1, 1, l], FLOAT_CPU)));
 
     let node = SeqBuilder::new(num_features, None)?
         .closure(
@@ -1605,7 +1605,7 @@ pub mod tests {
     use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::MaxParallelCtx;
-    use thoosa_shared::traits::{Adjustable, Named, RunCtx, SimpleId};
+    use thoosa_shared::traits::{Adjustable, Named, RunCtx, DebugId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_store::{RunConfigRow, Store, TrainedNet};
 
@@ -2075,7 +2075,7 @@ pub mod tests {
 
         let test_net = dummy_motif_net::<AnyDims, AnyDims, &str>("test", 100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
-        let resource: ThoTensor<AnyDims, SimpleId> = resource_a_t.shallow_clone().into();
+        let resource: ThoTensor<AnyDims, DebugId> = resource_a_t.shallow_clone().into();
         let out = test_net.tho_forward(&resource, None, false)?.t();//.i((0, .., 0));//channel[1], slices, vals[1]
 
         plot_series_with_lanes(

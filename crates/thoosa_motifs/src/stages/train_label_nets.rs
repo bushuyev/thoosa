@@ -162,9 +162,9 @@ pub struct SyncLabelBatchOutput {
 impl SyncLabelBatchOutput {
     fn into_parts(self) -> (ThoBatch<MotifProbability>, Option<BatchLengths>, ThoBatch<LabelProbability>) {
         (
-            self.x.with_id(thoosa_shared::simple_id!("sync_label_batch_x")),
+            self.x.with_id(thoosa_shared::debug_id!("sync_label_batch_x")),
             Some(BatchLengths::new(self.lengths)),
-            self.y.with_id(thoosa_shared::simple_id!("sync_label_batch_y")),
+            self.y.with_id(thoosa_shared::debug_id!("sync_label_batch_y")),
         )
     }
 }

@@ -11,7 +11,7 @@ use tch::nn::Path;
 use tch::{IndexOp, Kind, Tensor, nn};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::SimpleId;
+use thoosa_shared::traits::DebugId;
 
 
 #[derive(Debug, Clone, Copy)]
@@ -420,7 +420,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
 
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
-    fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
         debug!("MyCosineConv2d::tho_forward: x_in={x_in:?}");
 
         let y = self.forward_anywhere(x_in.as_ref())?; // [B,1,1,1] if full match
@@ -442,7 +442,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
-    use thoosa_shared::{ThoError, simple_id};
+    use thoosa_shared::{ThoError, debug_id};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_check_dims() -> Result<(), ThoError> {
@@ -455,8 +455,8 @@ mod tests {
         let cosine_2d = ThoCosineConv2d::new(
             &vs.root(),
             8000, 4,
-            Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::SimpleId>::new(simple_id!(""), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),
-             1.0, 0.1,
+            Some(Arc::new(ThoTensor::<AnyDims, thoosa_shared::traits::DebugId>::new(debug_id!(""), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)),
+            1.0, 0.1,
         )?;
 
 

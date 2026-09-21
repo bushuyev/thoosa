@@ -40,7 +40,7 @@ use thoosa_shared::comp_id::{SynKey, hashmap_as_vec};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
@@ -870,7 +870,7 @@ where
         let out_id = self.out_id(input.id());
         let input = input.input.as_ref();
         let num_motifs = input.data().size()[0] as usize;
-        let batch_input: ThoTensor<ChannelsMotifsData, SimpleId> = input.data().t_ref().unsqueeze(0).into();//TODO unsqueeze is for dummy batch dimension, batching should be done in ApplyLabelNets
+        let batch_input: ThoTensor<ChannelsMotifsData, DebugId> = input.data().t_ref().unsqueeze(0).into();//TODO unsqueeze is for dummy batch dimension, batching should be done in ApplyLabelNets
 
         // Label nets receive one length per chunk, so use the longest motif row to keep every real score while shorter rows remain zero-padded.
         let mut lengths = BatchLengths::new(vec![*input.extra.as_ref().iter().max().unwrap_or(&0)]);//there is always single element until batching is implemented

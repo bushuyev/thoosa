@@ -67,7 +67,7 @@ use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, SimpleId, ToJsonFile, WithId};
+use thoosa_shared::traits::{Data, DebugId, ToJsonFile, WithId};
 use thoosa_shims::inference_mode::InferenceModeGuard;
 
 #[derive(Debug)]
@@ -1369,7 +1369,7 @@ mod train_tests {
     use thoosa_shared::perf_logging::{PERF, format_perf_map, set_panic_hook};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId};
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::DebugId;
     use thoosa_shared::val::Val;
     use thoosa_shared::{CopyToDevice, ThoError, batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len};
     use thoosa_store::{MockStore, SqlStore, TrainedNet, TrainedNetsBy};
@@ -1398,12 +1398,12 @@ mod train_tests {
         let t_0 = lin_test_tensor(1000, 5);
         debug!("t_0.size={:?}", t_0.size());
 
-        let t: ThoTensor<AnyDims, SimpleId> = t_0.unfold(1, 100, 10).into();
+        let t: ThoTensor<AnyDims, DebugId> = t_0.unfold(1, 100, 10).into();
 
         debug!("t.size={:?}", t.size());
 
         //sums and multiplies by k
-        let r_0: ThoTensor<AnyDims, SimpleId> =
+        let r_0: ThoTensor<AnyDims, DebugId> =
             utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, None, true)?;
         debug!("r_0.size={:?}", r_0.size());
 
@@ -2276,7 +2276,7 @@ mod train_tests {
 
     fn dummy_final_net_input<const LABELS_SIZE: usize, D: Dims>(
         batch_size: usize,
-    ) -> (ThoTensor<D, SimpleId>, Tensor) {
+    ) -> (ThoTensor<D, DebugId>, Tensor) {
         let mut rng = rand::rng();
         let data = (0..batch_size)
             .map(|label| {
