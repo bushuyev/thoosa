@@ -26,9 +26,9 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, DebugId, ThoSelector, WithId};
 use thoosa_shared::{n_trace_line, CopyToDevice, ThoError};
-use thoosa_shared::{panic_to_err, simple_id};
+use thoosa_shared::{panic_to_err, debug_id};
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
 use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
@@ -172,7 +172,7 @@ impl ThoTensor {
 
 }
 
-impl<D: Dims> Display for ThoTensor<D, SimpleId> {
+impl<D: Dims> Display for ThoTensor<D, DebugId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         Display::fmt(self.t_ref(), f)
     }
@@ -292,10 +292,10 @@ impl<D: Dims, Id: Named + Debug + Clone> Borrow<Tensor> for ThoTensor<D, Id> {
     }
 }
 
-impl<D: Dims> From<Tensor> for ThoTensor<D, SimpleId> {
+impl<D: Dims> From<Tensor> for ThoTensor<D, DebugId> {
     fn from(tensor: Tensor) -> Self {
         Self {
-            id: simple_id!("1"),
+            id: debug_id!("1"),
             inner: ThoTensorInner::Val { t: tensor },
             pd: PhantomData,
         }
@@ -312,10 +312,10 @@ impl From<Tensor> for ThoTensor {
     }
 }
 
-impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
+impl<D: Dims> From<&Tensor> for ThoTensor<D, DebugId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
-            id: simple_id!("2"),
+            id: debug_id!("2"),
             inner: ThoTensorInner::Val { t: tensor.shallow_clone() },
             pd: PhantomData,
         }

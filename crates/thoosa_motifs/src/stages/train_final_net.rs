@@ -465,8 +465,8 @@ where
 
         Ok(SyncLogitsBatchOutput {
             id: input.id.clone(),
-            x: ThoTensor::new(thoosa_shared::simple_id!("sync_logits_batch_x"), x)?,
-            y: ThoTensor::new(thoosa_shared::simple_id!("sync_logits_batch_y"), y)?,
+            x: ThoTensor::new(thoosa_shared::debug_id!("sync_logits_batch_x"), x)?,
+            y: ThoTensor::new(thoosa_shared::debug_id!("sync_logits_batch_y"), y)?,
         })
     }
 }

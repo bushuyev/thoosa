@@ -11,7 +11,7 @@ use crate::nets::nodes::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, Binar
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::SimpleId;
+use thoosa_shared::traits::DebugId;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> Result<u32, ThoError> {
@@ -87,7 +87,7 @@ pub enum Node {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
-        init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>
+        init: Option<Arc<ThoTensor<AnyDims, DebugId>>>
     },
     CosineConv1d {
         path:String,
@@ -497,7 +497,7 @@ impl SeqBuilder {
         in_channels: u32,
         out_channels: u32,
         config: ConvConfig,
-        init: Option<Arc<ThoTensor<AnyDims, SimpleId>>>,
+        init: Option<Arc<ThoTensor<AnyDims, DebugId>>>,
     ) -> Result<&mut Self, ThoError> {
         self.elts.push(Node::Conv1d {
             path:path.to_string(),

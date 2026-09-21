@@ -137,9 +137,9 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::dims::{AnyMetrics, Dims};
-    use thoosa_shared::simple_id;
+    use thoosa_shared::debug_id;
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::DebugId;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 
     #[derive(Debug, Clone)]
@@ -150,14 +150,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_append() -> Result<(), ThoError>{
-        let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append)?,
+        let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(
+            SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append)?,
         );
 
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[9]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[9]))?).await;
 
         let out = builder.build().await?;
 
@@ -175,13 +175,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_sum() -> Result<(), ThoError>{
-        let mut builder: Box<SingleDimTensorOutputBuilder<SimpleId, TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new(simple_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum)?,
+        let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(
+            SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum)?,
         );
 
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
-        builder.add_partial_output(ThoTensor::new(simple_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
 
         let out = builder.build().await?;
 

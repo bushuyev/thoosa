@@ -32,7 +32,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, SimpleId, WithId};
+use thoosa_shared::traits::{Data, DebugId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err_async};
 use thoosa_shims::inference_mode::InferenceModeGuard;
@@ -89,7 +89,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
         let _guard = InferenceModeGuard::new(!train);
 
         //TODO move to ThoVarStore?
@@ -188,7 +188,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         self.module.debug();
     }
 
-    pub fn infer(&self, t: &ThoTensor<DI, SimpleId>) -> ThoTensor<DO, SimpleId> {
+    pub fn infer(&self, t: &ThoTensor<DI, DebugId>) -> ThoTensor<DO, DebugId> {
         self.module.tho_forward(t, None, false).unwrap()
     }
 

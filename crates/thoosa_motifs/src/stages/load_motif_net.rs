@@ -22,7 +22,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
-use thoosa_shared::{ThoError, mono_key, perf_log, simple_id, sync_read_lock};
+use thoosa_shared::{ThoError, mono_key, perf_log, debug_id, sync_read_lock};
 #[derive(Debug, Clone, CpuData)]
 pub struct LoadMotifNetInput {
     id: SynKey,

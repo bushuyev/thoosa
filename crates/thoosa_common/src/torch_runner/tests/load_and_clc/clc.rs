@@ -28,8 +28,8 @@ use tch::Device::Cuda;
 use tch::{Device, Kind, Scalar, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage};
-use thoosa_shared::{CopyToDevice, ThoError, simple_id};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, StageWithState, SyncStage};
+use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
 
 // //////////////////////////////
@@ -51,7 +51,7 @@ pub(crate) struct ClcStage {
 pub struct SyncClcStage {
     id: SynKey,
     // Keep the multiplier behind the state contract so worker execution never exports it.
-    k: Mutex<ThoTensor<MulK, SimpleId>>,
+    k: Mutex<ThoTensor<MulK, DebugId>>,
     fail_until: Vec<FailUntil>,
     use_matmul: bool,
 }
@@ -129,14 +129,14 @@ impl SyncClcStage {
         let k =
             if use_matmul {
                 ThoTensor::new(
-                    simple_id!("mul_k"),
+                    debug_id!("mul_k"),
                     Tensor::ones([dim, 1], (kind, device.into()))
                         .f_mul_scalar_(k)
                         .unwrap(),
                 ).unwrap()
             } else {
                 ThoTensor::new(
-                    simple_id!("mul_k"),
+                    debug_id!("mul_k"),
                     Tensor::ones([dim], (kind, device.into()))
                         .f_mul_scalar_(k)
                         .unwrap(),
@@ -254,7 +254,7 @@ impl SyncStage for SyncClcStage {
 }
 
 impl StageWithState for SyncClcStage {
-    type S = ThoTensor<MulK, SimpleId>;
+    type S = ThoTensor<MulK, DebugId>;
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         async move {
@@ -342,7 +342,7 @@ impl SyncStage for ClcDynSyncStage {
 }
 
 impl StageWithState for ClcDynSyncStage {
-    type S = ThoTensor<MulK, SimpleId>;
+    type S = ThoTensor<MulK, DebugId>;
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
         StageWithState::pre_run(self.stage.as_ref(), to_device_idx)

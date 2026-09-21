@@ -265,10 +265,10 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::{Cause, simple_id, CopyToDevice, ThoError, CudaAction};
+    use thoosa_shared::{Cause, debug_id, CopyToDevice, ThoError, CudaAction};
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
-    use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, Data, DebugId, WithId};
     // use crate::common::Data;
     use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::RegisteredCacheHandle;
@@ -278,10 +278,10 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
     async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoError> {
         #[derive(Debug, Clone, CpuData)]
         #[dummy_data(clone)]
-        struct Foo(SimpleId);
+        struct Foo(DebugId);
 
         impl WithId for Foo {
-            type ID = SimpleId;
+            type ID = DebugId;
 
             fn id(&self) -> &Self::ID {
                 &self.0
@@ -290,7 +290,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         impl Output for Foo {  }
 
-        let foo = Foo(simple_id!("foo"));
+        let foo = Foo(debug_id!("foo"));
         let cloned = foo.clone();
 
         assert_eq!(foo.0, cloned.0);
@@ -307,7 +307,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         #[derive(Debug, Clone)]
         struct TestData {
-            id:SimpleId,
+            id: DebugId,
             device:usize
         }
 
@@ -345,7 +345,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
         }
 
         impl WithId for TestData {
-            type ID = SimpleId;
+            type ID = DebugId;
 
             fn id(&self) -> &Self::ID {
                 &self.id
@@ -354,14 +354,14 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
         impl Output for TestData {  }
 
         impl TestData {
-            pub fn new(id: SimpleId, device:usize) -> Self {
+            pub fn new(id: DebugId, device:usize) -> Self {
                 Self { id, device}
             }
         }
 
 
         let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp").await;
-        let foo_id = simple_id!("foo");
+        let foo_id = debug_id!("foo");
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));
 
@@ -391,7 +391,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         #[derive(Debug, Clone)]
         struct TestData {
-            id: SimpleId,
+            id: DebugId,
             device: usize,
         }
 
@@ -435,7 +435,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
         }
 
         impl WithId for TestData {
-            type ID = SimpleId;
+            type ID = DebugId;
 
             fn id(&self) -> &Self::ID {
                 &self.id
@@ -445,7 +445,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
         impl Output for TestData {  }
 
         let tmp_cache: TmpCached<TestData> = TmpCached::new("tmp").await;
-        let foo_id = simple_id!("foo");
+        let foo_id = debug_id!("foo");
 
         tmp_cache.insert(TestData {
             id: foo_id.clone(),

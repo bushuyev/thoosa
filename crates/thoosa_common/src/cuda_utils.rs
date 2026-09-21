@@ -589,7 +589,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, futures_limits};
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::DebugId;
     use thoosa_shims::cpp_log::init_cpp_logging;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use tokio::task::JoinSet;

@@ -31,7 +31,7 @@ use thoosa_common::resources::Simple;
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::{CopyToDevice, ThoError, simple_id};
+use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::stages::dists_tracker::DistsMask;

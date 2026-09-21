@@ -137,54 +137,54 @@ pub trait Named {// like Type name
 ///////////////////////////////////
 ///this should be used when id is only needed for debug. In release build is empty struct. TODO - make it static counter in release?
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Named, Serialize, Deserialize)]
-pub struct SimpleId(
+pub struct DebugId(
     #[cfg(any(debug_assertions, tho_debug))]
     pub Cow<'static, str>,
 
 );
 
 #[macro_export]
-macro_rules! simple_id {
+macro_rules! debug_id {
     ($name:literal $(,)?) => {{
         #[cfg(any(debug_assertions, tho_debug))]
         {
-            thoosa_shared::traits::SimpleId(
+            thoosa_shared::traits::DebugId(
                 std::borrow::Cow::Borrowed($name)
             )
         }
         #[cfg(not(any(debug_assertions, tho_debug)))]
-        thoosa_shared::traits::SimpleId{}
+        thoosa_shared::traits::DebugId{}
     }};
     ($name:expr $(,)?) => {{
          #[cfg(any(debug_assertions, tho_debug))]
         {
-            thoosa_shared::traits::SimpleId(
+            thoosa_shared::traits::DebugId(
                 ::std::borrow::Cow::Owned(::std::string::String::from($name))
             )
         }
         #[cfg(not(any(debug_assertions, tho_debug)))]
-        thoosa_shared::traits::SimpleId{}
+        thoosa_shared::traits::DebugId{}
     }}
 }
 
-unsafe impl Send for SimpleId {}
-unsafe impl Sync for SimpleId {}
+unsafe impl Send for DebugId {}
+unsafe impl Sync for DebugId {}
 
 #[cfg(any(debug_assertions, tho_debug))]
-impl From<&'static str> for SimpleId {
+impl From<&'static str> for DebugId {
     fn from(value: &'static str) -> Self {
-        SimpleId(value.into())
+        DebugId(value.into())
     }
 }
 
 #[cfg(any(debug_assertions, tho_debug))]
-impl From<String> for SimpleId {
+impl From<String> for DebugId {
     fn from(value: String) -> Self {
-        simple_id!(&value)
+        debug_id!(&value)
     }
 }
 #[cfg(any(debug_assertions, tho_debug))]
-impl Display for SimpleId {
+impl Display for DebugId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 
         write!(f, "{}", self.0)
@@ -192,7 +192,7 @@ impl Display for SimpleId {
     }
 }
 #[cfg(not(any(debug_assertions, tho_debug)))]
-impl Display for SimpleId {
+impl Display for DebugId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "n/a")
     }

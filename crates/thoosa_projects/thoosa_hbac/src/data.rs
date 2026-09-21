@@ -17,7 +17,7 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_motifs::data::{AllTrainSplitter, Set, Splitter, parquet_to_tensor_by_path};
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::SimpleId;
+use thoosa_shared::traits::DebugId;
 
 #[allow(dead_code)]
 pub struct ByPatientIdSplitter {
@@ -759,7 +759,7 @@ impl EEGs {
         batch_size: usize,
         data: &Vec<EEG>,
     ) -> (
-        ThoTensor<Batch<ChannelsData>, SimpleId>,
+        ThoTensor<Batch<ChannelsData>, DebugId>,
         Tensor,
     ) {
         let mut rng = rand::rng();
