@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use log::debug;
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::ThoError;
 
 /// Public “area handle”: global bit index (0..n_areas).
 pub type CacheAreaId = u64;
@@ -37,7 +37,7 @@ impl CacheAreasKeeper {
     /// Returns a non-zero CacheArea. First is 1.
     pub fn next_available_cache_area(&mut self) -> Result<CacheAreaId, ThoError> {
         if self.words.is_empty() {
-            return Err(Cause::SomethingElse("no cache areas available".into()).into());
+            return Err(ThoError::new("no cache areas available"));
         }
 
         let n = self.words.len();
@@ -65,7 +65,7 @@ impl CacheAreasKeeper {
             return Ok(area_1_based);
         }
 
-        Err(Cause::SomethingElse("no cache areas available".into()).into())
+        Err(ThoError::new("no cache areas available"))
     }
 
     pub fn dispose_cache_area(&mut self, area: CacheAreaId) {

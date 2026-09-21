@@ -21,7 +21,7 @@ use tokio::net::UnixStream;
 use tokio::task::{JoinError, spawn_blocking};
 use tub::Pool;
 
-use thoosa_shared::{Cause, FuturesOrdering, ThoError, collect_futures_with_progress};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress};
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shims::context::ThoCudaContext;
@@ -35,7 +35,7 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use crate::cuda_utils::{make_chunks, tensor_mem_size};
 
 fn invalid(message: impl Into<String>) -> ThoError {
-    Cause::SomethingElse(message.into()).into()
+    ThoError::new(message)
 }
 
 

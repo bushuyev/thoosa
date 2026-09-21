@@ -728,7 +728,7 @@ pub mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let (trial, stage_ref) = trial_with_batch_factory(Box::new(|_ctx, _rc| ready(Err(ThoError::new("batch factory failed"))).boxed())).await?;
-        assert_eq!(trial.await.unwrap_err().msg, "batch factory failed");
+        assert_eq!(trial.await.unwrap_err().to_string(), "batch factory failed");
         assert!(stage_ref.upgrade().is_none(), "failed batch factory retained its training stage");
         Ok(())
     }
@@ -738,7 +738,7 @@ pub mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let (trial, stage_ref) = trial_with_batch_factory(batch_factory_with_stream_errors(Some("training batch failed"), None)).await?;
-        assert_eq!(trial.await.unwrap_err().msg, "training batch failed");
+        assert_eq!(trial.await.unwrap_err().to_string(), "training batch failed");
         assert!(stage_ref.upgrade().is_none(), "training batch error retained its training stage");
         Ok(())
     }
@@ -748,7 +748,7 @@ pub mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let (trial, stage_ref) = trial_with_batch_factory(batch_factory_with_stream_errors(None, Some("validation batch failed"))).await?;
-        assert_eq!(trial.await.unwrap_err().msg, "validation batch failed");
+        assert_eq!(trial.await.unwrap_err().to_string(), "validation batch failed");
         assert!(stage_ref.upgrade().is_none(), "validation batch error retained its training stage");
         Ok(())
     }

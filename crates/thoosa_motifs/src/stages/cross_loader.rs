@@ -1269,7 +1269,6 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::{FsWorkspace, WsConfigs};
-    use thoosa_shared::Cause::SomethingElse;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;

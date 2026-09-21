@@ -20,7 +20,7 @@ use tokio::{
 };
 use tracing::{debug, warn, Instrument};
 
-use thoosa_shared::{Cause, CudaActivityPauseTicket, CudaActivityScope, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
+use thoosa_shared::{CudaActivityPauseTicket, CudaActivityScope, SyncStageRunnerError, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, futures_limits};
 use thoosa_shared::tracked_await::track_await;
 
@@ -271,12 +271,12 @@ impl ParentSuspendGuard {
                 job_id: parent.job_id,
                 reply: ack_tx,
             })
-            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
 
         // Sending is synchronous: arm compensation before the first cancellation point.
         self.suspended = true;
         track_await(ack_rx).await
-            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
 
         Ok(())
     }
@@ -298,13 +298,13 @@ impl ParentSuspendGuard {
                 job_id: parent.job_id,
                 reply: ack_tx,
             })
-            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
 
         // The manager now owns the resume. Drop must not enqueue a second one while
         // we await capacity, since that could release another nested submission's slot.
         self.suspended = false;
         track_await(ack_rx).await
-            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
 
         Ok(())
     }
@@ -437,18 +437,18 @@ impl SyncStageRunner {
     }
 
     fn closed_error(msg: impl Into<String>) -> ThoError {
-        ThoError::new_with_cause(msg.into(), Cause::SubmitErrorClosed)
+        ThoError::new_with_cause(msg, ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed))
     }
 
     fn resetting_submit_error() -> ThoError {
         ThoError::new_with_cause(
             "Can't submit job: CUDA context reset is in progress",
-            Cause::SubmitErrorClosed,
+            ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed),
         )
     }
 
     fn context_reset_error() -> ThoError {
-        ThoError::new_with_cause("Resetting cuda context", Cause::ContextReset)
+        ThoError::new_with_cause("Resetting cuda context", ThoError::ContextReset)
     }
 
     async fn wait_until_accepting(&self, parent: Option<&CurrentJob>) -> Result<(), ThoError> {
@@ -504,7 +504,7 @@ impl SyncStageRunner {
             let retry = retry_for_job;
             debug!("SyncStageRunner::submit: job_id={job_id} waiting on wrapped fut");
             if !*retry.inner.alive.lock() {
-                result_sender.send(Err(ThoError::new_with_cause("retry owner was cancelled", Cause::SubmitErrorCancelled)));
+                result_sender.send(Err(ThoError::new_with_cause("retry owner was cancelled", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled))));
                 return JobFeedback::Neutral;
             }
             let result = track_await(fut).await;
@@ -545,15 +545,7 @@ impl SyncStageRunner {
             let result = if is_oom && max_other_parallel == 0 {
                 retry.reserve_exclusive();
 
-                result.map_err(|e| {
-                    ThoError::new_with_cause(
-                        e.msg.clone(),
-                        Cause::JobError {
-                            job_id,
-                            inner: Box::new(e.clone()),
-                        },
-                    )
-                })
+                result.map_err(|inner| SyncStageRunnerError::JobError { job_id, inner: Box::new(inner) }.into())
             } else {
                 retry.clear_exclusive();
                 result
@@ -646,7 +638,7 @@ impl SyncStageRunner {
             let result = track_await(result_rx).await.map_err(|_| {
                 ThoError::new_with_cause(
                     "job was cancelled before producing a result",
-                    Cause::SubmitErrorCancelled,
+                    ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled),
                 )
             })?;
             track_await(suspend_guard.resume()).await?;
@@ -1480,12 +1472,12 @@ mod tests {
     use std::io::Write;
     use std::sync::atomic::Ordering::Relaxed;
     use torch_sys::IntListOption;
-    use thoosa_shared::{CudaAction, ThoosaError};
+    use thoosa_shared::CudaAction;
 
     fn needs_reset_error() -> ThoError {
         ThoError::new_with_cause(
             "needs reset",
-            Cause::Cuda {
+            ThoError::Cuda {
                 action: CudaAction::NeedsRestart,
                 msg: "reset me".into(),
             },
@@ -1730,9 +1722,7 @@ mod tests {
         assert!(input_closed);
         for result_rx in [pending_result_rx, channel_result_rx] {
             let result = result_rx.await.expect("purged job must send a result");
-            let Err(ThoosaError { what: Cause::ContextReset, .. }) = result else {
-                panic!("unexpected purge result: {result:?}");
-            };
+            assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {result:?}");
         }
     }
 
@@ -1771,9 +1761,7 @@ mod tests {
         exec.request_cuda_reset();
 
         let pending_result = tokio::time::timeout(Duration::from_secs(2), pending).await.expect("pending job must be purged")?;
-        let Err(ThoosaError { what: Cause::ContextReset, .. }) = pending_result else {
-            panic!("unexpected pending result: {pending_result:?}");
-        };
+        assert!(matches!(pending_result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {pending_result:?}");
         assert!(!pending_ran.load(Ordering::SeqCst));
 
         let _ = release_running_tx.send(());
@@ -1838,9 +1826,7 @@ mod tests {
             .submit(usize::MAX, async move { Err(needs_reset_error()) }, None)
             .await;
 
-        let Err(ThoosaError {  what: Cause::ContextReset, ..}) = reset_err else {
-            panic!("Unexpected result: {reset_err:?}")
-        };
+        assert!(matches!(reset_err.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {reset_err:?}");
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(reset_calls.load(Ordering::SeqCst), 0);
@@ -1925,9 +1911,7 @@ mod tests {
         let _ = release_tx2.send(());
 
         for result in [job1.await?, job2.await?] {
-            let Err(ThoosaError { what: Cause::ContextReset, .. }) = result else {
-                panic!("Unexpected result: {result:?}")
-            };
+            assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {result:?}");
         }
 
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -2000,9 +1984,7 @@ mod tests {
         };
 
 
-        let Err(ThoosaError {  what: Cause::ContextReset, ..}) = result else {
-            panic!("Unexpected result: {result:?}")
-        };
+        assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {result:?}");
 
         tokio::time::timeout(Duration::from_secs(2), async {
             while reset_calls.load(Ordering::SeqCst) == 0 {
@@ -2136,8 +2118,8 @@ mod tests {
                     .await;
 
                 match child_result {
-                    Err(e) => match &e.what {
-                        Cause::JobError { job_id, inner } => {
+                    Err(e) => match e.what() {
+                        ThoError::SyncStageRunner(SyncStageRunnerError::JobError { job_id, inner }) => {
                             assert!(inner.is_oom());
                             assert!(*job_id > 0);
                             Ok::<_, ThoError>(())

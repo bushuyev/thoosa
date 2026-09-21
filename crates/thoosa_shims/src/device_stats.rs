@@ -34,7 +34,7 @@ mod tests {
             return;
         }
 
-        let s = get_device_stats(0).unwrap_or_else(|err| panic!("test_get_device_stats failed: {}", err.msg));
+        let s = get_device_stats(0).unwrap_or_else(|err| panic!("test_get_device_stats failed: {}", err));
 
         debug!("{s:#?}");
         debug!("reusable_cached = {}", s.reusable_cached());
