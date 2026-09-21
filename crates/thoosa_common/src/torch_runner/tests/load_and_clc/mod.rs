@@ -44,9 +44,9 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStageBox, MonoMetrics, Named, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStageBox, MonoMetrics, Named, OutId, RunCtx, Select, DebugId, Stage, SyncStage, WithId};
 use thoosa_shared::{Cause, ThoError};
-use thoosa_shared::{CopyToDevice, mono_key, simple_id};
+use thoosa_shared::{CopyToDevice, mono_key, debug_id};
 use tokio::sync::Mutex;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -759,7 +759,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
     loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableIdTr);
 
     let mut multed_tensors_ids = HashSet::new();
-    let mult_mul_task_0_inp_loaded_resource_3 = simple_id!("mult_mul_task_0_inp_loaded_resource_3");
+    let mult_mul_task_0_inp_loaded_resource_3 = debug_id!("mult_mul_task_0_inp_loaded_resource_3");
     multed_tensors_ids.insert(&mult_mul_task_0_inp_loaded_resource_3 as &dyn CachableIdTr);
 
     let mut required_ids = HashMap::new();
@@ -895,7 +895,7 @@ async fn test_with_tho_tensor() -> Result<(), ThoError> {
     RealGlobalCtx::init_devices(2)?;
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-    let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test").await;
+    let tmp_cache: TmpCached<ThoTensor<AnyDims, DebugId>> = TmpCached::new("test").await;
 
 
     tokio::spawn(async move {
@@ -903,8 +903,8 @@ async fn test_with_tho_tensor() -> Result<(), ThoError> {
         let tensor = Tensor::from_slice(&[0., 1., 2.]);
         debug!("device={:?}", tensor.device());
 
-        tmp_cache.insert(ThoTensor::<AnyDims, SimpleId>::new(simple_id!("test"), tensor)?);
-        let wrap = tmp_cache.get(&simple_id!("test")).unwrap();
+        tmp_cache.insert(ThoTensor::<AnyDims, DebugId>::new(debug_id!("test"), tensor)?);
+        let wrap = tmp_cache.get(&debug_id!("test")).unwrap();
 
         let v = &wrap.load_from_any_device_(1).await?;
 

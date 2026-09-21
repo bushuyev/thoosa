@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tch::{IndexOp, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, SimpleId, ThoSelector};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, DebugId, ThoSelector};
 use thoosa_shared::{CopyToDevice, ThoError};
 
 pub trait Dims: Send + Sync + Clone + Debug {
@@ -55,7 +55,7 @@ impl<D: Dims> Dims for Batch<D> {
 }
 
 
-pub type ThoBatch<D> = ThoTensor<Batch<D>, SimpleId>;
+pub type ThoBatch<D> = ThoTensor<Batch<D>, DebugId>;
 
 #[derive(Clone, Debug, Named)]
 #[name = "n/a"]

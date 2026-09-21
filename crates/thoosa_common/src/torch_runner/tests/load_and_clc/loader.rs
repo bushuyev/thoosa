@@ -32,7 +32,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, DebugId, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::Mutex;
 
@@ -153,7 +153,7 @@ impl LoadedTensor {
     pub(crate) fn clc_hadamard(
         id: SynKey,
         loaded: &ThoTensor<LoadedTensor, SynKey>,
-        k: &ThoTensor<MulK, SimpleId>,
+        k: &ThoTensor<MulK, DebugId>,
     ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
 
         debug!("LoadedTensor::clc_hadamard: loaded={loaded:?} k={k:?}");
@@ -164,7 +164,7 @@ impl LoadedTensor {
     pub(crate) fn clc_sum(
         id: SynKey,
         loaded: &ThoTensor<LoadedTensor, SynKey>,
-        k: &ThoTensor<MulK, SimpleId>,
+        k: &ThoTensor<MulK, DebugId>,
     ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
         debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t_ref(),k.t_ref());
 

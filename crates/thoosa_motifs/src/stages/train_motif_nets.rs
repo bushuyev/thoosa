@@ -804,7 +804,7 @@ pub struct SyncMotifBatchOutput {
 
 impl SyncMotifBatchOutput {
     fn into_parts(self) -> (ThoBatch<Slice>, ThoBatch<MotifProbability>) {
-        (self.x.with_id(thoosa_shared::simple_id!("sync_motif_bastch_x")), self.y.with_id(thoosa_shared::simple_id!("sync_motif_bastch_y")))
+        (self.x.with_id(thoosa_shared::debug_id!("sync_motif_bastch_x")), self.y.with_id(thoosa_shared::debug_id!("sync_motif_bastch_y")))
     }
 }
 
@@ -1463,10 +1463,10 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
     use thoosa_shared::test_utils::TestSignalKind;
-    use thoosa_shared::traits::{AsyncStage, DynSyncStage, DynSyncStageBox, MonoMetrics, Named, RunCtx, SimpleId, SyncStage};
+    use thoosa_shared::traits::{AsyncStage, DynSyncStage, DynSyncStageBox, MonoMetrics, Named, RunCtx, DebugId, SyncStage};
     use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
-    use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key, simple_id};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key, debug_id};
     use thoosa_store::RunConfigRow;
     use tokio::fs;
 
@@ -1746,9 +1746,9 @@ mod tests {
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
                 let input = TrainStepInput::<InDims, OutDims>::new(
-                    cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([3, 100], FLOAT_CPU)?)?, 1.into()).await?.to_types(simple_id!("2"))?,
+                    cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([3, 100], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("2"))?,
                     None,
-                    cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(simple_id!("3"))?,
+                    cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("3"))?,
                     false,
                     false,
                 );
