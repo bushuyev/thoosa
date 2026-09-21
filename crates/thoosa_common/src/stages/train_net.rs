@@ -320,8 +320,6 @@ where
 
                 let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
 
-                // debug!("TrainNet::run_inner, train: descr={descr}  next={:?}", batches.next().await);
-
                 while let Some(batch_result) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
@@ -405,7 +403,7 @@ where
                         } else {
                             bad_epochs += 1;
                             if bad_epochs >= patience {
-                                debug!("TrainNet::run_inner, valid: descr={descr}  early stopping triggered valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                                info!("TrainNet::run_inner, valid: descr={descr}  early stopping triggered valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                                 break;
                             }
                         }
