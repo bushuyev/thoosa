@@ -96,7 +96,6 @@ pub enum OpResult {
 pub struct CudaWorkerMsgOut {
     pub request_id:u64,
     pub status:OpResult
-
 }
 
 #[derive(Debug, Serialize, Deserialize)]

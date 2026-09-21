@@ -81,7 +81,7 @@ typetag.workspace = true
 postcard.workspace = true
 memmap2.workspace = true
 interprocess.workspace = true
-
+anyhow.workspace = true
 [dev-dependencies]
 ctor.workspace = true
 

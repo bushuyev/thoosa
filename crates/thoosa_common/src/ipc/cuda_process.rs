@@ -62,14 +62,6 @@ struct WorkerCopyErrorPayload {
 }
 
 impl WorkerCopyErrorPayload {
-    fn from_error(error: &ThoError) -> Self {
-        Self {
-            msg: error.to_string(),
-            is_oom: error.is_oom(),
-            is_retryable_oom: error.is_retryable_oom(),
-            needs_cuda_ctx_reset: error.needs_cuda_ctx_reset(),
-        }
-    }
 
     fn into_error(self) -> ThoError {
         ThoError::new_with_cause(
@@ -83,15 +75,6 @@ impl WorkerCopyErrorPayload {
         )
     }
 
-    fn from_legacy_message(msg: &str) -> Self {
-        let inferred = ThoError::new(msg.to_string());
-        Self {
-            msg: msg.to_string(),
-            is_oom: inferred.is_oom(),
-            is_retryable_oom: inferred.is_retryable_oom(),
-            needs_cuda_ctx_reset: inferred.needs_cuda_ctx_reset(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

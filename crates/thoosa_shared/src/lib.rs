@@ -394,11 +394,6 @@ pub enum Cause {
         needs_cuda_ctx_reset: bool,
     },
     AdjusterFailed,
-    UnsupportedDegradeLevel,
-    ExpectedValue,
-    ExpectedRange,
-    InvalidRange { range: String },
-    RegexParse(regex::Error),
     CliParse(Arc<clap::Error>),
     External {
         type_name: &'static str,
@@ -568,11 +563,6 @@ impl ThoError {
             Cause::Cuda { action, msg } => format!("cuda {action:?}: {msg}"),
             Cause::CudaWorker { msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset } => format!("CudaWoker happened in the CudaWorker: {msg}; is_oom={is_oom}, is_retryable_oom={is_retryable_oom}, needs_cuda_ctx_reset={needs_cuda_ctx_reset}"),
             Cause::AdjusterFailed => "adjuster failed".into(),
-            Cause::UnsupportedDegradeLevel => "unsupported degrade level".into(),
-            Cause::ExpectedValue => "expected value".into(),
-            Cause::ExpectedRange => "expected range".into(),
-            Cause::InvalidRange { range } => format!("invalid range: {range}"),
-            Cause::RegexParse(err) => format!("regex parse: {err}"),
             Cause::CliParse(err) => format!("cli parse: {err}"),
             Cause::External { type_name, source } => format!("{type_name}: {source}"),
             Cause::SomethingElse(msg) => msg.clone(),
@@ -1298,7 +1288,6 @@ impl Debug for ThoError {
 impl Error for ThoError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.what {
-            Cause::RegexParse(err) => Some(err),
             Cause::CliParse(err) => Some(err.as_ref()),
             Cause::External { source, .. } => Some(source.as_ref()),
             Cause::JobError { inner, .. } => Some(inner.as_ref()),
@@ -1966,33 +1955,6 @@ where
         Self::Dynamic(Arc::new(resolve))
     }
 
-    pub fn expect_value(&self) -> Result<&V, ThoError> {
-        match self {
-            RangeOrValue::Range { .. } => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Value, got Range",
-                Cause::ExpectedValue,
-            )),
-            RangeOrValue::Value(v) => Ok(v),
-            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Value, got Dynamic",
-                Cause::ExpectedValue,
-            )),
-        }
-    }
-
-    pub fn expect_range(&self) -> Result<&Range<V>, ThoError> {
-        match self {
-            RangeOrValue::Range { range, step: _ } => Ok(range),
-            RangeOrValue::Value(_v) => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Range, got Value",
-                Cause::ExpectedRange,
-            )),
-            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Range, got Dynamic",
-                Cause::ExpectedRange,
-            )),
-        }
-    }
 }
 
 impl<T: FieldName> From<f64> for RangeOrValue<f64, T> {
@@ -2038,36 +2000,6 @@ where
                 step: None,
             }
         }
-    }
-}
-
-pub fn parse_range_or_value<'a, V>(
-    s: &str,
-) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
-where
-    V: FromStr,
-    V::Err: Error + Send + Sync + 'static,
-{
-    if s.contains("..") {
-        let ((from, from_d_len), (to, to_d_len), step) =
-            parse_range_str(s).expect("parse_range_str"); //.map_err(|e|)?;
-
-        Ok(RangeOrValue::Range {
-            range: from.parse()?..to.parse()?,
-            step: step.map(|(step, step_len)| {
-                (
-                    step.parse().unwrap(),
-                    10u32.pow(
-                        [from_d_len, to_d_len, step_len]
-                            .into_iter()
-                            .max()
-                            .unwrap_or(0) as u32,
-                    ),
-                )
-            }),
-        })
-    } else {
-        Ok(RangeOrValue::Value(s.parse()?))
     }
 }
 
@@ -2150,21 +2082,6 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> (u32, u32) {
     (step, pad)
 }
 
-pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoError> {
-    let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)
-        .map_err(|e| {
-            ThoError::new_with_cause("compile corr labels regex", Cause::RegexParse(e))
-        })?; //TODO const, error
-    Ok(re
-        .captures_iter(descr)
-        .map(|caps| {
-            (
-                caps["id"].parse::<i64>().expect(&caps["id"]),
-                caps["kind"].into(),
-            )
-        })
-        .collect::<Vec<(i64, String)>>())
-}
 
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -2215,52 +2132,6 @@ where
     Ok(buf)
 }
 
-fn parse_range_str(
-    range: &str,
-) -> Result<((String, u8), (String, u8), Option<(String, u8)>), ThoError> {
-    lazy_static!{
-        static ref RANGE_RE:Regex = Regex::new(r"^(?P<from>-?\d+(\.(?P<from_d>\d+))?)\.{2}(?P<to>-?\d+(\.(?P<to_d>\d+))?)(:(?P<step>-?\d+(\.(?P<step_d>\d+))?))?$").unwrap();
-    }
-
-    RANGE_RE
-        .captures(range)
-        .map(|caps| {
-            let from_i = caps
-                .name("from")
-                .map(|v| v.as_str().to_string())
-                .expect("from");
-            let from_d = caps
-                .name("from_d")
-                .and_then(|v| v.as_str().len().try_into().ok())
-                .unwrap_or(0);
-
-            let to_i = caps.name("to").map(|v| v.as_str().to_string()).expect("to");
-            let to_d = caps
-                .name("to_d")
-                .and_then(|v| v.as_str().len().try_into().ok())
-                .unwrap_or(0);
-
-            let step_i = caps.name("step").map(|v| v.as_str().to_string());
-            let step_d = caps
-                .name("step_d")
-                .and_then(|v| v.as_str().len().try_into().ok())
-                .unwrap_or(0);
-
-            Ok((
-                (from_i, from_d),
-                (to_i, to_d),
-                step_i.map(|step| (step, step_d)),
-            ))
-        })
-        .unwrap_or_else(|| {
-            Err(ThoError::new_with_cause(
-                format!("can't parse range {range}"),
-                Cause::InvalidRange {
-                    range: range.to_string(),
-                },
-            ))
-        })
-}
 
 pub fn make_combos<V: Clone>(iters: impl Iterator<Item = impl Iterator<Item = V>>) -> Vec<Vec<V>> {
     let mut combos: Vec<Vec<V>> = vec![vec![]];
@@ -2418,7 +2289,7 @@ mod shared_tests {
     use crate::{Cause, FuturesOrdering,
                 RangeOrValue, ResourceType, ThoError,
                 add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
-                make_combos, parse_range_str, snake_to_camel, test_utils,
+                make_combos, snake_to_camel, test_utils,
     };
     use clap::{Args, Parser};
     use log::debug;
@@ -2604,63 +2475,6 @@ mod shared_tests {
         assert!(format!("{err:?}").contains("backtrace:"), "expected non-OOM debug output to contain formatted backtrace");
     }
 
-    #[test]
-    fn test_parse_corr_labels() -> Result<(), ThoError> {
-        assert_eq!(
-            vec![
-                (1, "seizure_vote".into()),
-                (0, "lpd_vote".into()),
-                (0, "gpd_vote".into()),
-                (0, "lrda_vote".into()),
-                (0, "grda_vote".into()),
-                (0, "other_vote".into())
-            ],
-            super::parse_corr_labels(
-                "[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]"
-            )?
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_range_or_value_range() -> Result<(), ThoError> {
-        use crate::parse_range_or_value;
-
-        #[derive(Debug, Parser, Clone, PartialEq)]
-        struct TestParams {
-            #[arg(long, value_parser=parse_range_or_value::<i32>)]
-            window: RangeOrValue<i32>,
-
-            #[arg(long, value_parser=parse_range_or_value::<f32>)]
-            step: RangeOrValue<f32>,
-        }
-
-        let params =
-            TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())
-                .map_err(|e| {
-                    ThoError::new_with_cause(
-                        "parse range-or-value args",
-                        Cause::CliParse(Arc::new(e)),
-                    )
-                })?; //TODO error
-
-        assert_eq!(
-            TestParams {
-                window: RangeOrValue::Range {
-                    range: 1..2,
-                    step: None
-                },
-                step: RangeOrValue::Range {
-                    range: 1.1..2.2,
-                    step: None
-                }
-            },
-            params
-        );
-
-        Ok(())
-    }
 
     #[test]
     fn test_resources_param() -> Result<(), ThoError> {
@@ -2679,7 +2493,7 @@ mod shared_tests {
                         "parse resources args (list)",
                         Cause::CliParse(Arc::new(e)),
                     )
-                })?; //TODO error
+                })?;
 
         assert_eq!(
             ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
@@ -2691,7 +2505,7 @@ mod shared_tests {
                     "parse resources args (set)",
                     Cause::CliParse(Arc::new(e)),
                 )
-            })?; //TODO error
+            })?;
         assert_eq!(ResourceType::Set("aaa".into()), params.resources);
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
@@ -2700,150 +2514,8 @@ mod shared_tests {
                     "parse resources args (group)",
                     Cause::CliParse(Arc::new(e)),
                 )
-            })?; //TODO error
+            })?;
         assert_eq!(ResourceType::Group("bbb".into()), params.resources);
-
-        Ok(())
-    }
-
-    //TODO when deserialized by serde range with step requires number of decimals - 1.01..2.2:0.1*,1*
-    #[test]
-    fn test_parse_range_or_value_range_with_step() -> Result<(), ThoError> {
-        use crate::parse_range_or_value;
-
-        #[derive(Debug, Parser, Clone, PartialEq)]
-        struct TestParams {
-            #[arg(long, value_parser=parse_range_or_value::<i32>)]
-            window: RangeOrValue<i32>,
-
-            #[arg(long, value_parser=parse_range_or_value::<f64>)]
-            step: RangeOrValue<f64>,
-        }
-
-        let params = TestParams::try_parse_from(
-            vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter(),
-        )
-        .map_err(|e| {
-            ThoError::new_with_cause(
-                "parse range-or-value args with step",
-                Cause::CliParse(Arc::new(e)),
-            )
-        })?; //TODO error
-
-        assert_eq!(
-            TestParams {
-                window: RangeOrValue::Range {
-                    range: -20..20,
-                    step: Some((2, 1))
-                },
-                step: RangeOrValue::Range {
-                    range: -1.01..2.2,
-                    step: Some((0.1, 100))
-                }
-            },
-            params
-        );
-
-        assert_eq!(
-            (-20..20).step_by(2).collect::<Vec<i32>>(),
-            params.window.into_iter().collect::<Vec<i32>>()
-        );
-
-        assert_eq!(
-            (-101..220)
-                .step_by(10)
-                .map(|i| i as f64 / 100.)
-                .collect::<Vec<f64>>(),
-            params.step.into_iter().collect::<Vec<f64>>()
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_range_or_value_value() -> Result<(), ThoError> {
-        use crate::parse_range_or_value;
-
-        #[derive(Debug, Parser, Clone, PartialEq)]
-        struct TestParams {
-            #[arg(long, value_parser=parse_range_or_value::<i32>)]
-            window: RangeOrValue<i32>,
-
-            #[arg(long, value_parser=parse_range_or_value::<f32>)]
-            step: RangeOrValue<f32>,
-        }
-
-        let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())
-            .map_err(|e| {
-                ThoError::new_with_cause(
-                    "parse range-or-value args (value)",
-                    Cause::CliParse(Arc::new(e)),
-                )
-            })?; //TODO error
-
-        assert_eq!(
-            TestParams {
-                window: RangeOrValue::Value(10),
-                step: RangeOrValue::Value(1.1)
-            },
-            params
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parser_regex_str() -> Result<(), ThoError> {
-        let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("1.22..333.4444")?;
-
-        assert_eq!("1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert!(step.is_none());
-
-        let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("-1.22..-333.4444")?;
-
-        assert_eq!("-1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("-333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert!(step.is_none());
-
-        let ((from, from_d_len), (to, to_d_len), Some((step, step_d_len))) =
-            parse_range_str("-1.22..-333.4444:7.8")?
-        else {
-            panic!("no step");
-        };
-
-        assert_eq!("-1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("-333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert_eq!("7.8".to_string(), step);
-        assert_eq!(1, step_d_len);
-
-        let ((from, from_d_len), (to, to_d_len), Some((step, step_d_len))) =
-            parse_range_str("-1.22..-333.4444:-7.8")?
-        else {
-            panic!("no step");
-        };
-        // println!("from_i={from} from_d={from_d_len:?} to={to} to_d_len={to_d_len} step={step:?}");
-
-        assert_eq!("-1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("-333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert_eq!("-7.8".to_string(), step);
-        assert_eq!(1, step_d_len);
 
         Ok(())
     }

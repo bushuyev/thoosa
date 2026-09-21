@@ -139,17 +139,17 @@ impl Job {
 
     async fn run(self) -> JobFeedback {
         let job_id = self.id;
-        debug!("StageExecutor, Job::run: running job {self:?}");
+        debug!("SyncStageRunner, Job::run: running job {self:?}");
 
         let r = track_await(self.fut).await;
 
-        debug!("StageExecutor, Job::run: done job {job_id:?}");
+        debug!("SyncStageRunner, Job::run: done job {job_id:?}");
 
         r
     }
 
     fn fail_pending(mut self, error: ThoError) {
-        debug!("StageExecutor, Job::fail_pending: job_id={} error={error:?}", self.id);
+        debug!("SyncStageRunner, Job::fail_pending: job_id={} error={error:?}", self.id);
         if let Some(pending_failure) = self.pending_failure.take() {
             pending_failure(error);
         }
@@ -341,7 +341,7 @@ pub struct SyncStageRunner {
 
 impl Debug for SyncStageRunner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StageExecutor")
+        f.debug_struct("SyncStageRunner")
             .field("tx", &self.tx)
             .field("cmd_tx", &self.cmd_tx)
             .field("worker", &self.worker)
@@ -397,7 +397,7 @@ impl SyncStageRunner {
         reset_fn: ResetFn,
         buffer_limits: Arc<FuturesLimits>,
     ) -> Self {
-        debug!("StageExecutor::new_inner: queue_capacity={queue_capacity} tho_device_idx={tho_device_idx}");
+        debug!("SyncStageRunner::new_inner: queue_capacity={queue_capacity} tho_device_idx={tho_device_idx}");
 
         let (tx, rx) = mpsc::channel(queue_capacity);
         let sync_capacity_rx = buffer_limits.sync_capacity();
@@ -489,7 +489,7 @@ impl SyncStageRunner {
         }
 
 
-        debug!("StageExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
+        debug!("SyncStageRunner::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         // Admission can close while reserve/suspend awaits. Keep ownership of the
         // unqueued job until the gate atomically accepts it, including across resets.
@@ -502,17 +502,17 @@ impl SyncStageRunner {
         let result_sender_for_job = Arc::clone(&result_sender);
         let wrapped = async move {
             let retry = retry_for_job;
-            debug!("StageExecutor::submit: job_id={job_id} waiting on wrapped fut");
+            debug!("SyncStageRunner::submit: job_id={job_id} waiting on wrapped fut");
             if !*retry.inner.alive.lock() {
                 result_sender.send(Err(ThoError::new_with_cause("retry owner was cancelled", Cause::SubmitErrorCancelled)));
                 return JobFeedback::Neutral;
             }
             let result = track_await(fut).await;
-            debug!("StageExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
+            debug!("SyncStageRunner::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
             if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
                 if tho_device_idx > 0 {//if on GPU
-                    warn!("StageExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
+                    warn!("SyncStageRunner::submit: job_id={job_id} needs CUDA reset, result={result:?}");
 
                     retry.clear_exclusive();
 
@@ -525,7 +525,7 @@ impl SyncStageRunner {
                     let pause_ticket = cuda_activity_gate().request_pause();
                     if pause_ticket.is_owner() {
                         if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
-                            error!("StageExecutor::submit: manager is closed while requesting CUDA reset");
+                            error!("SyncStageRunner::submit: manager is closed while requesting CUDA reset");
                             cuda_activity_gate().finish_pause(pause_ticket);
                         }
                     }
@@ -533,14 +533,14 @@ impl SyncStageRunner {
                     result_sender.send(Err(Self::context_reset_error()));
                     return JobFeedback::Neutral;
                 } else {
-                    warn!("StageExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
+                    warn!("SyncStageRunner::submit: job_id={job_id} reset requested on CPU/test executor");
                 }
             };
 
             let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
             let is_ok = result.is_ok();
 
-            debug!("StageExecutor::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
+            debug!("SyncStageRunner::submit: job_id={job_id} got r={result:?} max_other_parallel={max_other_parallel}");
 
             let result = if is_oom && max_other_parallel == 0 {
                 retry.reserve_exclusive();
@@ -559,7 +559,7 @@ impl SyncStageRunner {
                 result
             };
 
-            debug!("StageExecutor::submit: job_id={job_id} wrapped result={result:?}");
+            debug!("SyncStageRunner::submit: job_id={job_id} wrapped result={result:?}");
 
             result_sender.send(result);
 
@@ -579,7 +579,7 @@ impl SyncStageRunner {
         loop {
             track_await(self.wait_until_accepting(parent.as_ref())).await?;
 
-            debug!("StageExecutor::submit: job_id={job_id} accepted");
+            debug!("SyncStageRunner::submit: job_id={job_id} accepted");
 
             // Reserve queue capacity before suspending a parent. Otherwise a nested submit
             // could remove its parent from active accounting while still waiting for space
@@ -594,12 +594,12 @@ impl SyncStageRunner {
             let send_permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
-                    error!("StageExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
+                    error!("SyncStageRunner::submit: reserve job_id={job_id} failed: e={e:?}");
                     retry.clear_exclusive();
                     return Err(Self::closed_error(format!("Can't submit job: executor is_closed={}", self.tx.is_closed())));
                 }
                 Err(e) => {
-                    error!("StageExecutor::submit: reserve job_id={job_id} timed out: e={e:?}");
+                    error!("SyncStageRunner::submit: reserve job_id={job_id} timed out: e={e:?}");
                     retry.clear_exclusive();
                     return Err(ThoError::new("Can't submit job: timed out"));
                 }
@@ -613,7 +613,7 @@ impl SyncStageRunner {
                 if parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(Self::resetting_submit_error());
                 }
-                debug!("StageExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 1");
+                debug!("SyncStageRunner::submit: reserve job_id={job_id} cuda_activity_gate is paused 1");
 
                 continue;
             }
@@ -639,7 +639,7 @@ impl SyncStageRunner {
                 continue;
             }
 
-            debug!("StageExecutor::submit: job_id={job_id} submitted job_id={job_id}");
+            debug!("SyncStageRunner::submit: job_id={job_id} submitted job_id={job_id}");
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
@@ -661,7 +661,7 @@ impl SyncStageRunner {
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
         pending_reset: PendingCudaReset,
     ) {
-        debug!("StageExecutor::run_cuda_reset: tho_device_idx={tho_device_idx} exclusive_job_id={exclusive_job_id:?}");
+        debug!("SyncStageRunner::run_cuda_reset: tho_device_idx={tho_device_idx} exclusive_job_id={exclusive_job_id:?}");
         // The manager calls this only after all jobs and their Tokio stages have completed,
         // making reset equivalent to an exclusive max_other_parallel=0 job. Keeping the
         // reopen operation in Drop also covers cancellation or reset_fn failure.
@@ -675,11 +675,11 @@ impl SyncStageRunner {
                 {
                     let mut exclusive = self.exclusive_job_id.write();
                     if exclusive.is_some() {
-                        warn!("StageExecutor::run_cuda_reset: clearing stale exclusive_job_id={exclusive:?} after reset");
+                        warn!("SyncStageRunner::run_cuda_reset: clearing stale exclusive_job_id={exclusive:?} after reset");
                         exclusive.take();
                     }
                 }
-                debug!("StageExecutor::run_cuda_reset: exclusive_job_id={:?}", self.exclusive_job_id);
+                debug!("SyncStageRunner::run_cuda_reset: exclusive_job_id={:?}", self.exclusive_job_id);
                 cuda_activity_gate().finish_pause(self.pause_ticket);
             }
         }
@@ -694,14 +694,14 @@ impl SyncStageRunner {
         // They must finish before the reset hook invalidates their CUDA storage.
         cuda_activity_gate().wait_until_idle().await;
         if let Err(e) = track_await(CudaActivityScope::run_reset(pause_ticket, reset_fn(tho_device_idx))).await {
-            error!("StageExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
+            error!("SyncStageRunner::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
         } else {
-            info!("StageExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
+            info!("SyncStageRunner::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
         }
     }
 
     pub fn clear_exclusive_job_id(&self, job_id: u64) {
-        debug!("StageExecutor::clear_exclusive_job_id: job_id={job_id}");
+        debug!("SyncStageRunner::clear_exclusive_job_id: job_id={job_id}");
 
         let mut exclusive_job_id = self.exclusive_job_id.write();
 
@@ -716,9 +716,9 @@ impl SyncStageRunner {
         // already observe the same closed gate and must not reopen it independently.
         let pause_ticket = cuda_activity_gate().request_pause();
         if pause_ticket.is_owner() {
-            debug!("StageExecutor::request_cuda_reset: got pause_ticket");
+            debug!("SyncStageRunner::request_cuda_reset: got pause_ticket");
             if self.cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "request_cuda_reset" }).is_err() {
-                error!("StageExecutor::request_cuda_reset: manager is closed");
+                error!("SyncStageRunner::request_cuda_reset: manager is closed");
                 cuda_activity_gate().finish_pause(pause_ticket);
             }
         }
@@ -756,7 +756,7 @@ impl SyncStageRunner {
 
         loop {
             let max_parallel_jobs = *sync_capacity_rx.borrow_and_update();
-            debug!("StageExecutor::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} max_parallel_jobs={max_parallel_jobs} jobs.len={}",running.len(),pending.len(),jobs.len());
+            debug!("SyncStageRunner::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} max_parallel_jobs={max_parallel_jobs} jobs.len={}",running.len(),pending.len(),jobs.len());
 
             Self::drain_finished(
                 &mut running,
@@ -790,7 +790,7 @@ impl SyncStageRunner {
             // continue to completion, and suspended parents are allowed to resume so they
             // can observe a child's ContextReset and unwind before reset_fn runs.
             let cuda_activity_gate_is_paused = cuda_activity_gate().is_paused();
-            debug!("StageExecutor::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}" );
+            debug!("SyncStageRunner::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}" );
 
             if !cuda_activity_gate_is_paused {
                 let current_exclusive_job_id = *exclusive_job_id.read();
@@ -848,7 +848,7 @@ impl SyncStageRunner {
             if !cuda_activity_gate().is_paused() && !pending.is_empty() && jobs.is_empty() {
                 let exclusive = *exclusive_job_id.read();
 
-                warn!("StageExecutor::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",pending.len(),pending.front().map(|j| (j.id, j.total_parallel_cap())),active_count,);
+                warn!("SyncStageRunner::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",pending.len(),pending.front().map(|j| (j.id, j.total_parallel_cap())),active_count,);
             }
 
             tokio::select! {
@@ -924,7 +924,7 @@ impl SyncStageRunner {
         buffer_limits: &FuturesLimits,
         pending_reset: &mut Option<PendingCudaReset>,
     ) {
-        debug!("StageExecutor::run_manager: manager cmd={cmd:?}");
+        debug!("SyncStageRunner::run_manager: manager cmd={cmd:?}");
 
         match cmd {
             ManagerCmd::Suspend { job_id, reply } => {
@@ -1023,7 +1023,7 @@ impl SyncStageRunner {
         }
 
         if purged > 0 {
-            debug!("StageExecutor::purge_pending_jobs: purged={purged}");
+            debug!("SyncStageRunner::purge_pending_jobs: purged={purged}");
         }
     }
 
@@ -1039,7 +1039,7 @@ impl SyncStageRunner {
         exclusive_job_id: Option<JobId>,
         buffer_limits: &Arc<FuturesLimits>,
     ) {
-        debug!("StageExecutor::try_spawn_ready_jobs: pending={pending:?}");
+        debug!("SyncStageRunner::try_spawn_ready_jobs: pending={pending:?}");
 
         loop {
             let mut spawned_any = false;
@@ -1088,10 +1088,10 @@ impl SyncStageRunner {
                     let cmd_tx_for_tasks = cmd_tx_for_tasks.clone();
                     let buffer_limits = Arc::clone(buffer_limits);
 
-                    debug!("StageExecutor::try_spawn_ready_jobs: spawning job_id={job_id}");
+                    debug!("SyncStageRunner::try_spawn_ready_jobs: spawning job_id={job_id}");
 
                     running.spawn(async move {
-                        debug!("StageExecutor::try_spawn_ready_jobs: spawned job_id={job_id}");
+                        debug!("SyncStageRunner::try_spawn_ready_jobs: spawned job_id={job_id}");
 
                         struct DoneGuard {
                             job_id: JobId,
@@ -1113,7 +1113,7 @@ impl SyncStageRunner {
                                     cmd_tx: cmd_tx_for_tasks,
                                 },
                                 async move {
-                                    debug!("StageExecutor::try_spawn_ready_jobs: running job job_id={job_id}");
+                                    debug!("SyncStageRunner::try_spawn_ready_jobs: running job job_id={job_id}");
 
                                     track_await(job.run())
                                         .await
@@ -1123,15 +1123,15 @@ impl SyncStageRunner {
 
                         match feedback {
                             JobFeedback::Oom => {
-                                debug!("StageExecutor::try_spawn_ready_jobs: OOM job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                                debug!("SyncStageRunner::try_spawn_ready_jobs: OOM job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
                                 buffer_limits.on_oom();
                             }
                             JobFeedback::Success => {
-                                debug!("StageExecutor::try_spawn_ready_jobs: success job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                                debug!("SyncStageRunner::try_spawn_ready_jobs: success job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
                                 buffer_limits.on_ok();
                             }
                             JobFeedback::Neutral => {
-                                debug!("StageExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
+                                debug!("SyncStageRunner::try_spawn_ready_jobs: neutral job job_id={job_id}, max_parallel_jobs={}",buffer_limits.max_parallel_jobs());
                             }
                         }
                     }.instrument(tracing::info_span!(
@@ -1180,7 +1180,7 @@ impl SyncStageRunner {
         exclusive_job_id: Option<JobId>,
     ) -> bool {
         if exclusive_job_id.is_some_and(|exclusive_job_id| exclusive_job_id != job_id) {
-            debug!("StageExecutor::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
+            debug!("SyncStageRunner::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
             return false;
         }
 
@@ -1190,7 +1190,7 @@ impl SyncStageRunner {
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!("StageExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} max_parallel_jobs={max_parallel_jobs} min={min} r={r}");
+        debug!("SyncStageRunner::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} max_parallel_jobs={max_parallel_jobs} min={min} r={r}");
         r
     }
 
@@ -1389,7 +1389,7 @@ impl SyncStageRunner {
                 })
                 .collect();
 
-            debug!("StageExecutor::try_resume_waiters: waiting_ids={waiting_ids:?}");
+            debug!("SyncStageRunner::try_resume_waiters: waiting_ids={waiting_ids:?}");
 
             let mut progressed = false;
 
@@ -1436,13 +1436,13 @@ impl SyncStageRunner {
         job_id: JobId,
     ) {
         if let Some(job) = jobs.remove(&job_id) {
-            debug!("StageExecutor::note_job_finished: job={job:?}");
+            debug!("SyncStageRunner::note_job_finished: job={job:?}");
 
             if job.active {
                 Self::remove_active(active_caps, active_count, job.cap);
             }
         } else {
-            warn!("StageExecutor::note_job_finished: no {job_id}");
+            warn!("SyncStageRunner::note_job_finished: no {job_id}");
         }
     }
 
@@ -1459,7 +1459,7 @@ impl SyncStageRunner {
 
         while let Some(res) = running.try_join_next() {
             if let Err(err) = res {
-                error!("StageExecutor::drain_finished: err={err:?}");
+                error!("SyncStageRunner::drain_finished: err={err:?}");
             }
         }
     }

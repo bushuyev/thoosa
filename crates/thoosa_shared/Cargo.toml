@@ -66,6 +66,7 @@ ogg = { version = "0.8", optional = true }
 hound = { version = "3.5", optional = true }
 pin-project = "1"
 typetag.workspace = true
+anyhow.workspace = true
 [dev-dependencies]
 rustfft = "6"
 

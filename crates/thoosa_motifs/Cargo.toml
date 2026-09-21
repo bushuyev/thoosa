@@ -74,7 +74,7 @@ file-rotate.workspace = true
 console-subscriber.workspace = true
 mockall_double.workspace = true
 blake3.workspace = true
-
+anyhow.workspace = true
 [dev-dependencies]
 ctor.workspace = true
 sci-rs = "0"
