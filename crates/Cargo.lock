@@ -128,9 +128,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.99"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "approx"
@@ -5063,6 +5063,7 @@ name = "thoosa_common"
 version = "0.1.0"
 dependencies = [
  "ambassador",
+ "anyhow",
  "async-trait",
  "cached_derive",
  "chrono",
@@ -5151,6 +5152,7 @@ dependencies = [
 name = "thoosa_hbac"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "approx",
  "async-trait",
  "chrono",
@@ -5195,6 +5197,7 @@ name = "thoosa_motifs"
 version = "0.1.0"
 dependencies = [
  "ambassador",
+ "anyhow",
  "approx",
  "async-trait",
  "blake3",
@@ -5305,6 +5308,7 @@ name = "thoosa_shared"
 version = "0.1.0"
 dependencies = [
  "ambassador",
+ "anyhow",
  "async-trait",
  "bytemuck",
  "cached_derive",
@@ -5359,6 +5363,7 @@ dependencies = [
 name = "thoosa_shims"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cmake",
  "ctor 0.5.0",
  "log",
@@ -5374,6 +5379,7 @@ dependencies = [
 name = "thoosa_store"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "crossbeam-channel",
  "futures",
@@ -5392,6 +5398,7 @@ dependencies = [
 name = "thoosa_tui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "clap",
  "crossterm 0.29.0",

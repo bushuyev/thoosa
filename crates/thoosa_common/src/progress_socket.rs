@@ -172,7 +172,7 @@ fn read_device_stats_snapshot() -> Option<ThoDeviceStats> {
                 total = total.saturating_add(device_stats);
             }
             Err(err) => {
-                debug!("failed to read device stats for device={device}: {}", err.msg);
+                debug!("failed to read device stats for device={device}: {}", err);
                 return None;
             }
         }

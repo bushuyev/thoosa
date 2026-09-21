@@ -625,7 +625,7 @@ mod tests {
     use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, AsyncStage, Stage, SyncStage};
     use thoosa_shared::traits::{Data, OutId, RunCtx, WithId};
-    use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::ThoError;
     use tokio::process::{Child, Command};
     #[double]
     use crate::runner::global_ctx::GlobalCtx;

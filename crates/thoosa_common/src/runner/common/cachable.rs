@@ -25,7 +25,7 @@ use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use thoosa_shared::{n_trace_line, Cause};
+use thoosa_shared::n_trace_line;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
@@ -414,7 +414,7 @@ where
 
                     }
 
-                    Err(Cause::NotFound.into())
+                    Err(ThoError::NotFound)
                 }
             }
         }
@@ -683,7 +683,7 @@ where
             }
         }
 
-        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound))
     }
 
     //needed only for TmpCached to return not yet loaded data retrieving TmpCached after dump to cpu.
@@ -704,7 +704,7 @@ where
             }
         }
 
-        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound))
     }
 
     pub async fn load_from_any_device_(
@@ -755,7 +755,7 @@ where
             self.mark_not_resident_on_device(source_device_idx);
         }
 
-        Err(Cause::NotFound.into())
+        Err(ThoError::NotFound)
     }
 
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
@@ -892,7 +892,7 @@ where
 
             let Some(copy_to_device) = &self.copy_to_device else {
                 inflight_guard.clear();
-                return Err(ThoError::new_with_cause(format!("DevicesWrap::ensure_copied: no copy_to_device for {:?}", self.id), Cause::SomethingElse("no copy_to_device".into())));
+                return Err(ThoError::new(format!("DevicesWrap::ensure_copied: no copy_to_device for {:?}", self.id)));
             };
 
             debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);

@@ -14,7 +14,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
 use thoosa_shared::os_thread_id;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::{Cause, CudaActivityScope, FuturesOrdering, ThoError, collect_futures_with_progress};
+use thoosa_shared::{CudaActivityScope, FuturesOrdering, ThoError, collect_futures_with_progress};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{CUDA_SUCCESS, ThoCudaStream, ThoStreamGuard};
@@ -37,7 +37,7 @@ pub(crate) fn make_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) 
         return Ok(Vec::new());
     }
     if buf_size == 0 {
-        return Err(Cause::SomethingElse(format!("{label} requires a non-zero copy buffer for {tensor_mem_size} bytes")).into());
+        return Err(ThoError::new(format!("{label} requires a non-zero copy buffer for {tensor_mem_size} bytes")));
     }
 
     let chunks = tensor_mem_size / buf_size;
@@ -57,12 +57,9 @@ pub(crate) fn make_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) 
         .collect())
 }
 
-// Preserve the existing ThoError shape when a blocking copy task panics or is cancelled.
+// Keep JoinError available to callers inspecting task cancellation or panic.
 fn join_error_to_tho_error(e: JoinError) -> ThoError {
-    Cause::External {
-        type_name: std::any::type_name::<JoinError>(),
-        source: Arc::new(e),
-    }.into()
+    ThoError::from(e).context("join blocking CUDA copy task")
 }
 
 pub struct PinnedHostBuffer {
@@ -162,9 +159,9 @@ fn ensure_copy_d2h_source_is_device_memory(src_ptr: usize) -> Result<(), ThoErro
     check_cuda_status(result, "cuPointerGetAttribute")?;
 
     if is_device_memory == 0 {
-        return Err(Cause::SomethingElse(format!(
+        return Err(ThoError::new(format!(
             "copy_d2h_from_ptr expected CUDA device memory but src_ptr={src_ptr} is not device memory"
-        )).into());
+        )));
     }
 
     Ok(())

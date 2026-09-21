@@ -106,6 +106,7 @@ postcard = { version = "1", features = ["alloc"] }
 talc = "5.1"
 memmap2 = "0.9"
 rusqlite = { version = "0.37", features = ["bundled", "trace"] }
+anyhow = "1.0.104"
 [profile.test]
 opt-level = 0
 [profile.dev]

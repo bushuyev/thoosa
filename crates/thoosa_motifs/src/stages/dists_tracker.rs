@@ -1703,7 +1703,7 @@ mod tests {
     use thoosa_common::utils::reset_print_options;
     use crate::stages::cross_batch_clc::CrossClcResultMerge;
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
-    use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::ThoError;
 
     #[ctor::ctor]
     pub fn init() {
@@ -1799,8 +1799,8 @@ mod tests {
 
         let err = left.merge_batch_1(right).expect_err("expected dists mismatch");
         match err.what() {
-            Cause::SomethingElse(msg) => {
-                assert_eq!(msg, "DistsMask merge: dists mismatch");
+            ThoError::Anyhow(msg) => {
+                assert_eq!(msg.to_string(), "DistsMask merge: dists mismatch");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1828,8 +1828,8 @@ mod tests {
 
         let err = left.merge_batch_1(right).expect_err("expected pack mismatch");
         match err.what() {
-            Cause::SomethingElse(msg) => {
-                assert_eq!(msg, "DistsMask merge: type mismatch");
+            ThoError::Anyhow(msg) => {
+                assert_eq!(msg.to_string(), "DistsMask merge: type mismatch");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1924,8 +1924,8 @@ mod tests {
             .merge_batch_1_many(vec![mid])
             .expect_err("expected dists mismatch");
         match err.what() {
-            Cause::SomethingElse(msg) => {
-                assert_eq!(msg, "DistsMask merge: dists mismatch");
+            ThoError::Anyhow(msg) => {
+                assert_eq!(msg.to_string(), "DistsMask merge: dists mismatch");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1955,8 +1955,8 @@ mod tests {
             .merge_batch_1_many(vec![mid])
             .expect_err("expected pack mismatch");
         match err.what() {
-            Cause::SomethingElse(msg) => {
-                assert_eq!(msg, "DistsMask merge: type mismatch");
+            ThoError::Anyhow(msg) => {
+                assert_eq!(msg.to_string(), "DistsMask merge: type mismatch");
             }
             other => panic!("unexpected error: {other:?}"),
         }

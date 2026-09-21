@@ -5,7 +5,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use tch::Tensor;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::ThoError;
 
 use crate as thoosa_common;
 use crate::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
@@ -58,13 +58,13 @@ impl AsyncStage for BatchBuilder {
         let (id_key, files) = (input.id.0.to_string(), input.files.clone());
 
         if files.is_empty() {
-            return Err(Cause::SomethingElse("empty file list".into()).into());
+            return Err(ThoError::new("empty file list"));
         }
         if files.len() < 2 {
-            return Err(Cause::SomethingElse("need at least 2 files".into()).into());
+            return Err(ThoError::new("need at least 2 files"));
         }
         if self.batch_size == 0 {
-            return Err(Cause::SomethingElse("batch_size must be >= 1".into()).into());
+            return Err(ThoError::new("batch_size must be >= 1"));
         }
 
         let seed: u64 = id_key
