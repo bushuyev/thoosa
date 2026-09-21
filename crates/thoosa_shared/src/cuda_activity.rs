@@ -1,6 +1,6 @@
 use std::{future::Future, sync::Arc};
 
-use crate::{Cause, CudaActivityPauseTicket, ThoError, cuda_activity_gate};
+use crate::{CudaActivityPauseTicket, ThoError, cuda_activity_gate};
 
 tokio::task_local! {
     static CURRENT_ACTIVITY: CudaActivityScope;
@@ -45,7 +45,7 @@ impl CudaActivityScope {
     /// an unadmitted operation during pause rather than wait while holding them.
     pub fn for_operation() -> Result<Self, ThoError> {
         Self::current().or_else(Self::try_enter).ok_or_else(|| {
-            ThoError::new_with_cause("CUDA operation interrupted by context reset", Cause::ContextReset)
+            ThoError::new_with_cause("CUDA operation interrupted by context reset", ThoError::ContextReset)
         })
     }
 

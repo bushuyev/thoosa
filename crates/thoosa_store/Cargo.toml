@@ -20,5 +20,6 @@ async-trait.workspace = true
 tracing.workspace = true
 crossbeam-channel.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
+anyhow.workspace = true
 [lints]
 workspace = true

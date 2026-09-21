@@ -226,7 +226,7 @@ mod tests {
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::mock_cachable_id::MockCachableId;
     use thoosa_shared::traits::{Adjustable, Data, Stage, SyncStage, WithId};
-    use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::ThoError;
 
     mock! {
         #[derive(Debug)]
@@ -393,15 +393,15 @@ mod tests {
         let mut selector = MockTestSelector::new();
 
 
-        let adjusted_selector = splits_adjuster.adjust(selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 0", Cause::AdjusterFailed))?;
+        let adjusted_selector = splits_adjuster.adjust(selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 0", ThoError::AdjusterFailed))?;
 
         assert!(splits_adjuster.degrade(&mut context_impl));//returns true, can degrade further
 
-        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 1", Cause::AdjusterFailed))?;
+        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 1", ThoError::AdjusterFailed))?;
 
         context_impl.add_partial_output(MockTestOutput::new()).await;
 
-        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 2", Cause::AdjusterFailed))?;
+        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 2", ThoError::AdjusterFailed))?;
 
         context_impl.add_partial_output(MockTestOutput::new()).await;
 

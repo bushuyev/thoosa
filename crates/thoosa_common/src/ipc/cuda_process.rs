@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tch::Device::{Cpu, Cuda};
 use tch::{Device, Tensor};
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::ThoError;
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
 use thoosa_shims::context::ThoCudaContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -52,47 +52,6 @@ pub(crate) fn endpoint_stage_key(endpoint_name: &str, stage_id: u32) -> String {
     format!("{endpoint_name}{stage_id}")
 }
 
-
-#[derive(Debug, Serialize, Deserialize)]
-struct WorkerCopyErrorPayload {
-    msg: String,
-    is_oom: bool,
-    is_retryable_oom: bool,
-    needs_cuda_ctx_reset: bool,
-}
-
-impl WorkerCopyErrorPayload {
-    fn from_error(error: &ThoError) -> Self {
-        Self {
-            msg: error.to_string(),
-            is_oom: error.is_oom(),
-            is_retryable_oom: error.is_retryable_oom(),
-            needs_cuda_ctx_reset: error.needs_cuda_ctx_reset(),
-        }
-    }
-
-    fn into_error(self) -> ThoError {
-        ThoError::new_with_cause(
-            "CudaWoker happened in the CudaWorker",
-            Cause::CudaWorker {
-                msg: self.msg,
-                is_oom: self.is_oom,
-                is_retryable_oom: self.is_retryable_oom,
-                needs_cuda_ctx_reset: self.needs_cuda_ctx_reset,
-            },
-        )
-    }
-
-    fn from_legacy_message(msg: &str) -> Self {
-        let inferred = ThoError::new(msg.to_string());
-        Self {
-            msg: msg.to_string(),
-            is_oom: inferred.is_oom(),
-            is_retryable_oom: inferred.is_retryable_oom(),
-            needs_cuda_ctx_reset: inferred.needs_cuda_ctx_reset(),
-        }
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct WorkerTensorInfoPayload {
@@ -510,9 +469,9 @@ impl CudaIPCActor {
                 debug!("await_unit_reply: id={id:?} ok");
                 Ok(())
             }
-            OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
-                debug!("await_unit_reply: id={id:?} error={msg:?}");
-                Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset))
+            OpResult::Failed(error) => {
+                debug!("await_unit_reply: id={id:?} error={error:?}");
+                Err(error.into())
             }
         }
     }
@@ -527,7 +486,7 @@ impl CudaIPCActor {
                     .map_err(|_| ThoError::new(format!("worker copy request {} returned an unexpected output type", response.request_id)))
             }
             OpResult::Ok(None) => Err(ThoError::new(format!("worker copy request {} returned no output", response.request_id))),
-            OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset)),
+            OpResult::Failed(error) => Err(error.into()),
         }
     }
 
@@ -690,7 +649,7 @@ fn worker_tensor_info(response: CudaWorkerMsgOut) -> Result<WorkerTensorInfoPayl
                 .map_err(|_| ThoError::new(format!("worker describe request {request_id} returned an unexpected output type")))
         }
         OpResult::Ok(None) => Err(ThoError::new(format!("worker describe request {request_id} returned no tensor metadata"))),
-        OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset)),
+        OpResult::Failed(error) => Err(error.into()),
     }
 }
 
@@ -1254,12 +1213,63 @@ mod tests {
     use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
     use thoosa_shared::tracked_await::track_await;
     use thoosa_shared::traits::RunCtx;
-    use thoosa_shared::{Cause, ThoError, mono_key};
+    use thoosa_shared::{ThoError, mono_key};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
     use tokio::process::{Child, Command};
     use tokio::sync::Mutex;
     use tokio::task::JoinSet;
+
+    fn round_trip_worker_error(error: ThoError) -> ThoError {
+        use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
+        use crate::ipc::worker_msg::CudaWorkerMsgOut;
+
+        // Exercise the worker's reply encoding and the parent's actual copy error consumer.
+        let reply = CudaWorkerMsgOut { request_id: 42, status: error.into() };
+        let bytes = PostcardToFromBytes::to_bytes(&reply).unwrap();
+        let decoded = PostcardToFromBytes::from_bytes(&bytes).unwrap();
+        CudaIPCActor::copy_result(decoded).expect_err("worker error must fail the copy")
+    }
+
+    #[test]
+    fn test_worker_error_round_trip_preserves_cuda_recovery() {
+        use thoosa_shared::{CudaAction, SyncStageRunnerError};
+
+        for action in [CudaAction::HandleOOM, CudaAction::NeedsRestart, CudaAction::Other] {
+            let error = ThoError::Cuda { action, msg: "device failure detail".into() }.context("forward model");
+            let job = ThoError::from(SyncStageRunnerError::JobError { job_id: 27, inner: Box::new(error) });
+            let received = round_trip_worker_error(job.context("worker request 42"));
+            assert!(matches!(&received, ThoError::Cuda { action: received_action, .. } if *received_action == action));
+            assert_eq!(received.is_oom(), action == CudaAction::HandleOOM);
+            assert_eq!(received.is_retryable_oom(), action == CudaAction::HandleOOM);
+            assert_eq!(received.needs_cuda_ctx_reset(), action == CudaAction::NeedsRestart);
+            let message = received.to_string();
+            assert!(message.contains("worker request 42") && message.contains("job 27") && message.contains("forward model") && message.contains("device failure detail"));
+        }
+    }
+
+    #[test]
+    fn test_worker_error_round_trip_preserves_non_cuda_semantics() {
+        use thoosa_shared::SyncStageRunnerError;
+
+        for error in [
+            ThoError::AdjusterFailed,
+            ThoError::ContextReset,
+            ThoError::NotFound,
+            SyncStageRunnerError::SubmitErrorClosed.into(),
+            SyncStageRunnerError::SubmitErrorCancelled.into(),
+        ] {
+            let received = round_trip_worker_error(error.clone().context("worker operation"));
+            assert_eq!(std::mem::discriminant(received.what()), std::mem::discriminant(error.what()));
+            assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_ctx_reset()), (error.is_oom(), error.is_retryable_oom(), error.needs_cuda_ctx_reset()));
+            assert_eq!(received.what().to_string(), error.to_string());
+        }
+
+        let received = round_trip_worker_error(ThoError::from(std::io::Error::other("CUDA out of memory")).context("read model"));
+        assert!(matches!(received, ThoError::Anyhow(_)));
+        assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_ctx_reset());
+        assert!(received.to_string().contains("read model") && received.to_string().contains("CUDA out of memory"));
+    }
 
     #[tokio::test]
     async fn test_cancelled_copy_caller_keeps_activity_with_request() {
@@ -1386,16 +1396,10 @@ mod tests {
 
             debug!("run_ipc_copy_oom: error={error:?}");
 
-            match error.what() {
-                Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
-                    assert!(*is_oom, "worker OOM flag was not propagated: {error:?}");
-                    assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
-                    assert!(!*needs_cuda_ctx_reset, "plain worker OOM should not request CUDA context reset: {error:?}");
-                }
-                other => return Err(ThoError::new(format!("expected Cause::CudaWoker, got {other:?}: {error:?}"))),
-            }
-            assert!(error.is_oom(), "ThoError::is_oom should delegate to Cause::CudaWoker: {error:?}");
-            assert!(error.is_retryable_oom(), "ThoError::is_retryable_oom should delegate to Cause::CudaWoker: {error:?}");
+            assert!(matches!(error, ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, .. }), "worker OOM action was not propagated: {error:?}");
+            assert!(error.is_oom(), "worker OOM classification was lost: {error:?}");
+            assert!(error.is_retryable_oom(), "worker OOM retryability was lost: {error:?}");
+            assert!(!error.needs_cuda_ctx_reset(), "ordinary worker OOM must not reset CUDA: {error:?}");
 
 
             debug!("All ok");
@@ -1488,16 +1492,11 @@ mod tests {
 
             debug!("run_main: copy r={r:?}");
 
-            let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
+            let Err(error) = r else {
                 panic!("Got r={r:?}, expected CudaWorker error");
             } ;
-
-            debug!("run_main: what_msg={what_msg:?}");
-            debug!("run_main: msg={msg:?}");
-
-
-            assert_eq!("Worker", what_msg);//TODO err code
-            assert_eq!("worker tensor tensor_key=1000000 not found", msg);//TODO err code
+            assert!(matches!(error, ThoError::Anyhow(_)));
+            assert_eq!("worker tensor tensor_key=1000000 not found", error.to_string());
 
 
             info!("main: \n{}", format_perf_map(&PERF));

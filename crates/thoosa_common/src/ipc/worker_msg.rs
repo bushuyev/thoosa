@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use serde::{Deserialize, Serialize};
-use thoosa_shared::ThoError;
+use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 use crate::ipc::cuda_wokrer::WorkerStageOutput;
 use crate::ipc::ipc_cuda_utils::IpcTensorKind;
 use crate::runner::common::cachable::ThoDataRef;
@@ -88,15 +88,68 @@ impl CudaWorkerMsgIn {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum OpResult {
     Ok(Option<Box<dyn WorkerOutput>>),
-    // Preserve retryability separately because not every worker OOM can be handled by an input/run-context adjuster.
-    Failed{msg:String, is_oom:bool, is_retryable_oom: bool, needs_reset:bool}
+    Failed(WorkerError),
+}
+
+// Serialize recovery semantics and diagnostics explicitly; anyhow itself is process-local.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkerError {
+    kind: WorkerErrorKind,
+    message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum WorkerErrorKind {
+    Cuda(CudaAction),
+    AdjusterFailed,
+    NotFound,
+    ContextReset,
+    SubmitErrorClosed,
+    SubmitErrorCancelled,
+    Other,
+}
+
+impl WorkerErrorKind {
+    fn from_error(error: &ThoError) -> Self {
+        match error.what() {
+            ThoError::Cuda { action, .. } => Self::Cuda(*action),
+            ThoError::AdjusterFailed => Self::AdjusterFailed,
+            ThoError::NotFound => Self::NotFound,
+            ThoError::ContextReset => Self::ContextReset,
+            ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed) => Self::SubmitErrorClosed,
+            ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled) => Self::SubmitErrorCancelled,
+            // Job IDs remain in the diagnostic; the parent needs the underlying recovery action.
+            ThoError::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => Self::from_error(inner),
+            ThoError::Anyhow(_) => Self::Other,
+        }
+    }
+}
+
+impl From<ThoError> for WorkerError {
+    fn from(error: ThoError) -> Self {
+        Self { kind: WorkerErrorKind::from_error(&error), message: format!("{error:#}") }
+    }
+}
+
+impl From<WorkerError> for ThoError {
+    fn from(error: WorkerError) -> Self {
+        let WorkerError { kind, message } = error;
+        match kind {
+            WorkerErrorKind::Cuda(action) => Self::Cuda { action, msg: message },
+            WorkerErrorKind::AdjusterFailed => Self::AdjusterFailed.context(message),
+            WorkerErrorKind::NotFound => Self::NotFound.context(message),
+            WorkerErrorKind::ContextReset => Self::ContextReset.context(message),
+            WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
+            WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
+            WorkerErrorKind::Other => Self::new(message),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgOut {
     pub request_id:u64,
     pub status:OpResult
-
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,20 +163,12 @@ impl WorkerOutput for WorkerCopyDonePayload {}
 
 impl OpResult {
     pub fn failed(msg:String)-> Self {
-        OpResult::Failed {msg, is_oom:false, is_retryable_oom: false, needs_reset:false}
+        ThoError::new(msg).into()
     }
 }
 
 impl From<ThoError> for OpResult {
     fn from(e: ThoError) -> Self {
-        let is_oom = e.is_oom();
-        let is_retryable_oom = e.is_retryable_oom();
-        let needs_reset = e.needs_cuda_ctx_reset();
-        OpResult::Failed {
-            msg: e.msg,
-            is_oom,
-            is_retryable_oom,
-            needs_reset,
-        }
+        OpResult::Failed(e.into())
     }
 }

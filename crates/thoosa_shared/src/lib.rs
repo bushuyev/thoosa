@@ -377,7 +377,7 @@ impl Display for TensorIdSliceIdx {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CudaAction {
     NeedsRestart,
     HandleOOM,
@@ -385,269 +385,189 @@ pub enum CudaAction {
 }
 
 #[derive(Debug, Clone)]
-pub enum Cause {
-    Cuda { action: CudaAction, msg: String },
-    CudaWorker {
-        msg: String,
-        is_oom: bool,
-        is_retryable_oom: bool,
-        needs_cuda_ctx_reset: bool,
-    },
-    AdjusterFailed,
-    UnsupportedDegradeLevel,
-    ExpectedValue,
-    ExpectedRange,
-    InvalidRange { range: String },
-    RegexParse(regex::Error),
-    CliParse(Arc<clap::Error>),
-    External {
-        type_name: &'static str,
-        source: Arc<dyn Error + Send + Sync>,
-    },
-    SomethingElse(String),
-    NotFound,
+pub enum SyncStageRunnerError {
     SubmitErrorClosed,
     SubmitErrorCancelled,
-    JobError{job_id:u64, inner:Box<ThoosaError>},
-    ContextReset
+    JobError { job_id: u64, inner: Box<ThoError> },
 }
 
-pub struct ThoError {
-
-    pub msg: String,
-    #[allow(dead_code)]
-    backtrace: Arc<Backtrace>,
-    pub what: Cause,
+// Only failures that affect application control flow have dedicated variants.
+#[derive(Debug, Clone)]
+pub enum ThoError {
+    Cuda { action: CudaAction, msg: String },
+    AdjusterFailed,
+    // Shared futures require Clone; sharing keeps the original source and backtrace intact.
+    Anyhow(Arc<anyhow::Error>),
+    NotFound,
+    SyncStageRunner(SyncStageRunnerError),
+    ContextReset,
 }
-
-
 
 pub type ThoosaError = ThoError;//TODO used in macros, remove
 
-impl Clone for ThoError {
-    fn clone(&self) -> Self {
-        ThoError {
-            msg: self.msg.clone(),
-            backtrace: Arc::clone(&self.backtrace),
-            what: self.what.clone(),
+impl Display for SyncStageRunnerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SubmitErrorClosed => f.write_str("submit error: closed"),
+            Self::SubmitErrorCancelled => f.write_str("submit error: cancelled"),
+            Self::JobError { job_id, inner } => write!(f, "job {job_id}: {inner:#}"),
         }
+    }
+}
+
+impl Error for SyncStageRunnerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::JobError { inner, .. } => Some(inner.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl From<SyncStageRunnerError> for ThoError {
+    fn from(value: SyncStageRunnerError) -> Self {
+        Self::SyncStageRunner(value)
     }
 }
 
 impl Display for ThoError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "ThoError: {}, cause={}", self.msg, self.cause_summary())
+        match self {
+            Self::Cuda { action, msg } => write!(f, "CUDA {action:?}: {msg}"),
+            Self::AdjusterFailed => f.write_str("adjuster failed"),
+            Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
+            Self::NotFound => f.write_str("not found"),
+            Self::SyncStageRunner(error) => Display::fmt(error, f),
+            Self::ContextReset => f.write_str("context reset"),
+        }
     }
 }
 
-unsafe impl Send for ThoError {}
+impl Error for ThoError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Anyhow(error) => Some(error.as_ref().as_ref()),
+            Self::SyncStageRunner(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl ThoError {
-    pub fn new(msg: impl Into<String> + Display) -> Self {
-        let msg = msg.into();
-        let msg_lc = msg.to_lowercase();
-
-        if msg_lc.contains("cuda") {
-            Self::from_cuda_message(msg_lc)
-        } else {
-            Self::new_with_cause(msg.to_string(), Cause::SomethingElse(msg))
-        }
+    pub fn new(msg: impl Into<String>) -> Self {
+        Self::Anyhow(Arc::new(anyhow::Error::msg(msg.into())))
     }
 
-    pub fn from_cuda_message(msg: impl Into<String> + Display) -> Self {
-        Self::new_with_cause("Cuda error", cuda_cause_from_msg(msg))
+    pub fn from_cuda_message(msg: impl Into<String>) -> Self {
+        cuda_cause_from_msg(msg)
     }
 
-    pub fn from_cuda_error(_msg: impl Into<String> + Display, cuda_error:i32) -> Self {
-        Self::new_with_cause("Cuda error", cuda_cause_from_error_code(cuda_error))
+    pub fn from_cuda_error(msg: impl Into<String>, cuda_error: i32) -> Self {
+        cuda_cause_from_error_code(cuda_error).context(msg.into())
     }
 
-    pub fn new_with_cause(msg: impl Into<String> + Display, what: Cause) -> Self {
-        debug!("ThoosaError::new: msg={msg}");
-
-        let backtrace = Backtrace::capture();
-        trace!("ThoosaError::new: msg={msg} {}", backtrace.to_string());
-
-        Self {
-            msg: msg.into(),
-            backtrace: Arc::new(backtrace),
-            what,
-        }
-    }
-
-    // Keep the worker's OOM classification intact so main-process adjusters can retry only recoverable failures.
-    pub fn from_worker(msg: String, is_oom: bool, is_retryable_oom: bool, needs_cuda_ctx_reset: bool) -> ThoError {
-        debug!("ThoosaError::new: msg={msg}");
-
-        let backtrace = Backtrace::capture();
-        trace!("msg={msg} {}", backtrace.to_string());
-
-
-        Self {
-            msg: msg.into(),
-            backtrace: Arc::new(backtrace),
-            what: Cause::CudaWorker {
-                msg:"Worker".to_string(),
-                is_oom,
-                is_retryable_oom,
-                needs_cuda_ctx_reset,
+    // Use anyhow for context and backtraces, keeping typed recovery errors in its chain.
+    pub fn context(self, context: impl Display + Send + Sync + 'static) -> Self {
+        let error = match self {
+            Self::Anyhow(error) => match Arc::try_unwrap(error) {
+                Ok(error) => error,
+                Err(error) => anyhow::Error::new(Self::Anyhow(error)),
             },
-        }
+            error => anyhow::Error::new(error),
+        };
+        Self::from(error.context(context))
     }
 
-    // #[cfg(test)] - used from other crates
+    pub fn new_with_cause(msg: impl Into<String>, cause: Self) -> Self {
+        cause.context(msg.into())
+    }
+
+    // Used to inject recoverable failures in stage and runner tests.
     pub fn oom() -> Self {
-        debug!("ThoosaError::new: oom");
-        let backtrace = Backtrace::capture();
-
-        Self {
-            msg: "oom".into(),
-            backtrace: Arc::new(backtrace),
-            what: Cause::Cuda {
-                action: CudaAction::HandleOOM,
-                msg: "test".to_string(),
-            },
-        }
+        Self::Cuda { action: CudaAction::HandleOOM, msg: "out of memory".into() }
     }
 
     pub fn is_oom(&self) -> bool {
-        match &self.what{
-            Cause::Cuda { action, msg: _ } => {
-                match action {
-                    CudaAction::HandleOOM => true,
-                    _=> false
-                }
-            }
-            Cause::JobError { job_id: _, inner } => {
-                inner.is_oom()
-            },
-            Cause::CudaWorker { is_oom, .. } => *is_oom,
-            _=> false
+        match self.what() {
+            Self::Cuda { action: CudaAction::HandleOOM, .. } => true,
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_oom(),
+            _ => false,
         }
-
     }
 
-
     pub fn is_retryable_oom(&self) -> bool {
-        match &self.what{
-            Cause::Cuda { action, msg: _ } => {
-                match action {
-                    CudaAction::HandleOOM => true,
-                    _=> false
-                }
-            }
-            Cause::AdjusterFailed => true,
-            Cause::JobError { job_id: _, inner } => {
-                inner.is_retryable_oom()
-            },
-            Cause::CudaWorker { is_retryable_oom, .. } => *is_retryable_oom,
-            _=> false
+        match self.what() {
+            Self::Cuda { action: CudaAction::HandleOOM, .. } | Self::AdjusterFailed => true,
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_retryable_oom(),
+            _ => false,
         }
     }
 
     pub fn needs_cuda_ctx_reset(&self) -> bool {
-        match &self.what {
-            Cause::Cuda { action, .. } => {
-                match action {
-                    CudaAction::NeedsRestart => true,
-                    _=> false
-                }
-            },
-            Cause::CudaWorker { needs_cuda_ctx_reset, .. } => *needs_cuda_ctx_reset,
-
-            _=> false
+        match self.what() {
+            Self::Cuda { action: CudaAction::NeedsRestart, .. } => true,
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_ctx_reset(),
+            _ => false,
         }
     }
 
-    pub fn what(&self) -> &Cause {
-        &self.what
-    }
-
-    fn cause_summary(&self) -> String {
-        match &self.what {
-            Cause::Cuda { action, msg } => format!("cuda {action:?}: {msg}"),
-            Cause::CudaWorker { msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset } => format!("CudaWoker happened in the CudaWorker: {msg}; is_oom={is_oom}, is_retryable_oom={is_retryable_oom}, needs_cuda_ctx_reset={needs_cuda_ctx_reset}"),
-            Cause::AdjusterFailed => "adjuster failed".into(),
-            Cause::UnsupportedDegradeLevel => "unsupported degrade level".into(),
-            Cause::ExpectedValue => "expected value".into(),
-            Cause::ExpectedRange => "expected range".into(),
-            Cause::InvalidRange { range } => format!("invalid range: {range}"),
-            Cause::RegexParse(err) => format!("regex parse: {err}"),
-            Cause::CliParse(err) => format!("cli parse: {err}"),
-            Cause::External { type_name, source } => format!("{type_name}: {source}"),
-            Cause::SomethingElse(msg) => msg.clone(),
-            Cause::NotFound => "not found".into(),
-            Cause::SubmitErrorClosed => "submit error: closed".into(),
-            Cause::SubmitErrorCancelled => "submit error: cancelled".into(),
-            Cause::JobError { job_id, inner } => format!("job {job_id}: {inner}"),
-            Cause::ContextReset => "context reset".into(),
+    /// Inspect the typed error even after adding anyhow context or cloning a shared error.
+    pub fn what(&self) -> &Self {
+        match self {
+            Self::Anyhow(error) => Self::typed_error(error).map_or(self, Self::what),
+            _ => self,
         }
     }
 
-    fn backtrace_text(&self) -> String {
-        self.backtrace.to_string()
+    fn typed_error(error: &anyhow::Error) -> Option<&Self> {
+        // Downcasting sees typed anyhow context; the source chain also reaches shared wrappers.
+        error.downcast_ref::<Self>().or_else(|| error.chain().find_map(|source| source.downcast_ref::<Self>()))
     }
 
     fn from_source<E>(value: E) -> Self
     where
         E: Error + Send + Sync + 'static,
     {
-        let msg = value.to_string();
-        debug!("ThoosaError::from: value={msg}");
-        if msg.to_ascii_lowercase().contains("cuda") {
-            ThoError::from_cuda_message(msg)
-        } else {
-            ThoError::new_with_cause(
-                msg,
-                Cause::External {
-                    type_name: std::any::type_name::<E>(),
-                    source: Arc::new(value),
-                },
-            )
-        }
+        anyhow::Error::new(value).into()
     }
 
-    #[deprecated] //it's not checked for cuda/oom. Use into()
-    pub fn from_error<E>(msg: impl Into<String> + Display, err: E) -> Self
+    pub fn from_error<E>(msg: impl Into<String>, err: E) -> Self
     where
         E: Error + Send + Sync + 'static,
     {
-        ThoError::new_with_cause(
-            msg,
-            Cause::External {
-                type_name: std::any::type_name::<E>(),
-                source: Arc::new(err),
-            },
-        )
+        Self::from_source(err).context(msg.into())
     }
 
-
-    pub fn from_msg(msg: impl Into<String> + Display) -> Self
-    {
-        ThoError::new(msg)
+    pub fn from_msg(msg: impl Into<String>) -> Self {
+        Self::new(msg)
     }
 
-
-    #[deprecated] //it's not checked for cuda/oom. Use into()
-    pub fn from_boxed_error(
-        msg: impl Into<String> + Display,
-        err: Box<dyn Error + Send + Sync + 'static>,
-    ) -> Self {
-        ThoError::new_with_cause(
-            msg,
-            Cause::External {
-                type_name: std::any::type_name_of_val(err.as_ref()),
-                source: Arc::from(err),
-            },
-        )
+    pub fn from_boxed_error(msg: impl Into<String>, err: Box<dyn Error + Send + Sync + 'static>) -> Self {
+        Self::from(anyhow::Error::from_boxed(err)).context(msg.into())
     }
 }
 
-fn cuda_cause(action: CudaAction, msg: impl Into<String>) -> Cause {
-    Cause::Cuda {
-        action,
-        msg: msg.into(),
+impl From<anyhow::Error> for ThoError {
+    fn from(error: anyhow::Error) -> Self {
+        // LibTorch exposes no CUDA status in TchError. Confine its legacy text adapter to
+        // the raw Torch payload; never classify application context or arbitrary Display text.
+        #[cfg(feature = "tch-error")]
+        if Self::typed_error(&error).is_none() {
+            if let Some(tch::TchError::Torch(msg)) = error.downcast_ref::<tch::TchError>() {
+                if msg.to_ascii_lowercase().contains("cuda") {
+                    let classification = cuda_cause_from_msg(msg.clone());
+                    let Self::Cuda { action, .. } = classification else { unreachable!() };
+                    let marker = Self::Cuda { action, msg: "LibTorch operation failed".into() };
+                    return Self::Anyhow(Arc::new(error.context(marker)));
+                }
+            }
+        }
+        Self::Anyhow(Arc::new(error))
     }
+}
+
+fn cuda_cause(action: CudaAction, msg: impl Into<String>) -> ThoError {
+    ThoError::Cuda { action, msg: msg.into() }
 }
 
 pub fn last_trace_line(backtrace: &Backtrace) -> Option<String> {
@@ -668,7 +588,7 @@ pub fn n_trace_line(backtrace: &Backtrace, n:usize) -> String {
 ///   illegal address = 700.
 /// - libtorch usually reports Runtime API text, but if you get raw codes from
 ///   `/usr/local/cuda/include/cuda.h`, those are Driver API `CUresult` codes.
-pub fn cuda_cause_from_error_code(code: i32) -> Cause {
+pub fn cuda_cause_from_error_code(code: i32) -> ThoError {
     match code {
         // --------------------------------------------------------------------
         // Recoverable / mitigation path.
@@ -902,10 +822,9 @@ pub fn cuda_cause_from_error_code(code: i32) -> Cause {
         ),
     }
 }
-pub fn cuda_cause_from_msg(p0: impl Into<String> + Display) -> Cause {
-    // Use Display, not Into<String>, so this also works nicely with things like
-    // &TchError, anyhow::Error, etc.
-    let msg = p0.to_string();
+pub fn cuda_cause_from_msg(msg: impl Into<String>) -> ThoError {
+    // Compatibility adapter for CUDA APIs that only expose raw error messages.
+    let msg = msg.into();
     let lower = msg.to_ascii_lowercase();
 
     // ------------------------------------------------------------------------
@@ -1269,52 +1188,6 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 }
 
 
-impl Debug for ThoError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
-
-        writeln!(f, "ThoosaError")?;
-        writeln!(f, "  message: {}", self.msg)?;
-        writeln!(f, "  what: {:?}", self.what)?;
-
-        let mut source = Error::source(self);
-        let mut index = 0usize;
-        while let Some(err) = source {
-            if index == 0 {
-                writeln!(f, "  sources:")?;
-            }
-            writeln!(f, "    {index}: {err}")?;
-            source = err.source();
-            index += 1;
-        }
-        writeln!(f, "  backtrace:")?;
-        for line in self.backtrace_text().lines() {
-            writeln!(f, "    {line}")?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for ThoError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.what {
-            Cause::RegexParse(err) => Some(err),
-            Cause::CliParse(err) => Some(err.as_ref()),
-            Cause::External { source, .. } => Some(source.as_ref()),
-            Cause::JobError { inner, .. } => Some(inner.as_ref()),
-            _ => None,
-        }
-    }
-}
-
-impl From<Cause> for ThoError {
-    fn from(value: Cause) -> Self {
-        match value {
-            e => Self::new_with_cause(format!("e={e:?}"), e),
-        }
-    }
-}
-
 macro_rules! impl_from_external_error {
     ($($ty:ty),+ $(,)?) => {
         $(
@@ -1358,13 +1231,13 @@ impl From<std::convert::Infallible> for ThoError {
 
 impl From<clap::Error> for ThoError {
     fn from(value: clap::Error) -> Self {
-        ThoError::new_with_cause("parse cli", Cause::CliParse(Arc::new(value)))
+        Self::from_source(value).context("parse cli")
     }
 }
 
 impl From<Arc<clap::Error>> for ThoError {
     fn from(value: Arc<clap::Error>) -> Self {
-        ThoError::new_with_cause("parse cli", Cause::CliParse(value))
+        Self::from_source(value).context("parse cli")
     }
 }
 
@@ -1966,33 +1839,6 @@ where
         Self::Dynamic(Arc::new(resolve))
     }
 
-    pub fn expect_value(&self) -> Result<&V, ThoError> {
-        match self {
-            RangeOrValue::Range { .. } => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Value, got Range",
-                Cause::ExpectedValue,
-            )),
-            RangeOrValue::Value(v) => Ok(v),
-            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Value, got Dynamic",
-                Cause::ExpectedValue,
-            )),
-        }
-    }
-
-    pub fn expect_range(&self) -> Result<&Range<V>, ThoError> {
-        match self {
-            RangeOrValue::Range { range, step: _ } => Ok(range),
-            RangeOrValue::Value(_v) => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Range, got Value",
-                Cause::ExpectedRange,
-            )),
-            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_cause(
-                "expected RangeOrValue::Range, got Dynamic",
-                Cause::ExpectedRange,
-            )),
-        }
-    }
 }
 
 impl<T: FieldName> From<f64> for RangeOrValue<f64, T> {
@@ -2038,36 +1884,6 @@ where
                 step: None,
             }
         }
-    }
-}
-
-pub fn parse_range_or_value<'a, V>(
-    s: &str,
-) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
-where
-    V: FromStr,
-    V::Err: Error + Send + Sync + 'static,
-{
-    if s.contains("..") {
-        let ((from, from_d_len), (to, to_d_len), step) =
-            parse_range_str(s).expect("parse_range_str"); //.map_err(|e|)?;
-
-        Ok(RangeOrValue::Range {
-            range: from.parse()?..to.parse()?,
-            step: step.map(|(step, step_len)| {
-                (
-                    step.parse().unwrap(),
-                    10u32.pow(
-                        [from_d_len, to_d_len, step_len]
-                            .into_iter()
-                            .max()
-                            .unwrap_or(0) as u32,
-                    ),
-                )
-            }),
-        })
-    } else {
-        Ok(RangeOrValue::Value(s.parse()?))
     }
 }
 
@@ -2150,21 +1966,6 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> (u32, u32) {
     (step, pad)
 }
 
-pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoError> {
-    let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)
-        .map_err(|e| {
-            ThoError::new_with_cause("compile corr labels regex", Cause::RegexParse(e))
-        })?; //TODO const, error
-    Ok(re
-        .captures_iter(descr)
-        .map(|caps| {
-            (
-                caps["id"].parse::<i64>().expect(&caps["id"]),
-                caps["kind"].into(),
-            )
-        })
-        .collect::<Vec<(i64, String)>>())
-}
 
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -2215,52 +2016,6 @@ where
     Ok(buf)
 }
 
-fn parse_range_str(
-    range: &str,
-) -> Result<((String, u8), (String, u8), Option<(String, u8)>), ThoError> {
-    lazy_static!{
-        static ref RANGE_RE:Regex = Regex::new(r"^(?P<from>-?\d+(\.(?P<from_d>\d+))?)\.{2}(?P<to>-?\d+(\.(?P<to_d>\d+))?)(:(?P<step>-?\d+(\.(?P<step_d>\d+))?))?$").unwrap();
-    }
-
-    RANGE_RE
-        .captures(range)
-        .map(|caps| {
-            let from_i = caps
-                .name("from")
-                .map(|v| v.as_str().to_string())
-                .expect("from");
-            let from_d = caps
-                .name("from_d")
-                .and_then(|v| v.as_str().len().try_into().ok())
-                .unwrap_or(0);
-
-            let to_i = caps.name("to").map(|v| v.as_str().to_string()).expect("to");
-            let to_d = caps
-                .name("to_d")
-                .and_then(|v| v.as_str().len().try_into().ok())
-                .unwrap_or(0);
-
-            let step_i = caps.name("step").map(|v| v.as_str().to_string());
-            let step_d = caps
-                .name("step_d")
-                .and_then(|v| v.as_str().len().try_into().ok())
-                .unwrap_or(0);
-
-            Ok((
-                (from_i, from_d),
-                (to_i, to_d),
-                step_i.map(|step| (step, step_d)),
-            ))
-        })
-        .unwrap_or_else(|| {
-            Err(ThoError::new_with_cause(
-                format!("can't parse range {range}"),
-                Cause::InvalidRange {
-                    range: range.to_string(),
-                },
-            ))
-        })
-}
 
 pub fn make_combos<V: Clone>(iters: impl Iterator<Item = impl Iterator<Item = V>>) -> Vec<Vec<V>> {
     let mut combos: Vec<Vec<V>> = vec![vec![]];
@@ -2415,10 +2170,10 @@ mod shared_tests {
     use crate::hyperparameter::FieldName;
     use crate::pulse_v;
     use crate::val::NamedVal;
-    use crate::{Cause, FuturesOrdering,
-                RangeOrValue, ResourceType, ThoError,
+    use crate::{FuturesOrdering,
+                RangeOrValue, ResourceType, SyncStageRunnerError, ThoError,
                 add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
-                make_combos, parse_range_str, snake_to_camel, test_utils,
+                make_combos, snake_to_camel, test_utils,
     };
     use clap::{Args, Parser};
     use log::debug;
@@ -2597,70 +2352,71 @@ mod shared_tests {
 
     #[test]
     fn test_tho_error_implements_error_and_keeps_source() {
-        fn assert_error<E: std::error::Error>() {}
+        fn assert_error<E: std::error::Error + Send + Sync + Clone>() {}
         assert_error::<ThoError>();
-        let err = ThoError::from(std::io::Error::new(std::io::ErrorKind::Other, "io failed"));
-        assert!(std::error::Error::source(&err).is_some(), "expected source for converted external error");
-        assert!(format!("{err:?}").contains("backtrace:"), "expected non-OOM debug output to contain formatted backtrace");
+        let err = ThoError::from(std::io::Error::other("io failed")).context("read configuration");
+        let ThoError::Anyhow(source) = &err else { panic!("expected anyhow error") };
+        assert!(source.downcast_ref::<std::io::Error>().is_some(), "context must preserve the original error type");
+
+        // Cloning a cached error must preserve its source even when it gains more context.
+        let cloned = err.clone().context("initialize worker");
+        let diagnostic = format!("{cloned:#}");
+        assert!(diagnostic.contains("initialize worker") && diagnostic.contains("read configuration") && diagnostic.contains("io failed"));
+        assert!(format!("{cloned:?}").contains("io failed"));
+        assert!(anyhow::Error::new(cloned).chain().any(|cause| cause.is::<std::io::Error>()));
     }
 
     #[test]
-    fn test_parse_corr_labels() -> Result<(), ThoError> {
-        assert_eq!(
-            vec![
-                (1, "seizure_vote".into()),
-                (0, "lpd_vote".into()),
-                (0, "gpd_vote".into()),
-                (0, "lrda_vote".into()),
-                (0, "grda_vote".into()),
-                (0, "other_vote".into())
-            ],
-            super::parse_corr_labels(
-                "[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]"
-            )?
-        );
+    fn test_tho_error_context_preserves_recovery() {
+        use anyhow::Context;
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_range_or_value_range() -> Result<(), ThoError> {
-        use crate::parse_range_or_value;
-
-        #[derive(Debug, Parser, Clone, PartialEq)]
-        struct TestParams {
-            #[arg(long, value_parser=parse_range_or_value::<i32>)]
-            window: RangeOrValue<i32>,
-
-            #[arg(long, value_parser=parse_range_or_value::<f32>)]
-            step: RangeOrValue<f32>,
+        for (error, oom, retryable, reset) in [
+            (ThoError::oom(), true, true, false),
+            (ThoError::from_cuda_error("launch kernel", 700), false, false, true),
+            (ThoError::AdjusterFailed, false, true, false),
+        ] {
+            let job = ThoError::from(SyncStageRunnerError::JobError { job_id: 42, inner: Box::new(error) });
+            let wrapped: ThoError = Err::<(), _>(job).context("run stage").unwrap_err().into();
+            let shared = wrapped.clone().context("worker request");
+            assert!(matches!(shared.what(), ThoError::SyncStageRunner(SyncStageRunnerError::JobError { job_id: 42, .. })));
+            assert_eq!((shared.is_oom(), shared.is_retryable_oom(), shared.needs_cuda_ctx_reset()), (oom, retryable, reset));
         }
 
-        let params =
-            TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())
-                .map_err(|e| {
-                    ThoError::new_with_cause(
-                        "parse range-or-value args",
-                        Cause::CliParse(Arc::new(e)),
-                    )
-                })?; //TODO error
-
-        assert_eq!(
-            TestParams {
-                window: RangeOrValue::Range {
-                    range: 1..2,
-                    step: None
-                },
-                step: RangeOrValue::Range {
-                    range: 1.1..2.2,
-                    step: None
-                }
-            },
-            params
-        );
-
-        Ok(())
+        let error: ThoError = Err::<(), _>(ThoError::ContextReset).context("cancel stage").unwrap_err().into();
+        assert!(matches!(error.what(), ThoError::ContextReset));
     }
+
+    #[test]
+    fn test_tho_error_does_not_classify_application_messages() {
+        for error in [
+            ThoError::new("CUDA out of memory"),
+            ThoError::from(std::io::Error::other("CUDA error: illegal memory access")),
+            anyhow::anyhow!("read failed").context("CUDA out of memory").into(),
+        ] {
+            assert!(matches!(error.what(), ThoError::Anyhow(_)));
+            assert!(!error.is_oom() && !error.is_retryable_oom() && !error.needs_cuda_ctx_reset());
+        }
+    }
+
+    #[cfg(feature = "tch-error")]
+    #[test]
+    fn test_tho_error_libtorch_adapter_preserves_source_and_recovery() {
+        for (message, oom, reset) in [
+            ("CUDA out of memory. Tried to allocate 128 MiB", true, false),
+            ("CUDA error: an illegal memory access was encountered", false, true),
+        ] {
+            let source = anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model");
+            let error = ThoError::from(source);
+            assert_eq!((error.is_oom(), error.needs_cuda_ctx_reset()), (oom, reset));
+            let ThoError::Anyhow(source) = &error else { panic!("expected original Torch error") };
+            assert!(source.downcast_ref::<tch::TchError>().is_some());
+            assert!(format!("{error:#}").contains(message));
+        }
+
+        let error = ThoError::from(tch::TchError::Shape("CUDA out of memory".into()));
+        assert!(!error.is_oom(), "only the raw Torch variant uses the CUDA message adapter");
+    }
+
 
     #[test]
     fn test_resources_param() -> Result<(), ThoError> {
@@ -2677,9 +2433,9 @@ mod shared_tests {
                 .map_err(|e| {
                     ThoError::new_with_cause(
                         "parse resources args (list)",
-                        Cause::CliParse(Arc::new(e)),
+                        e.into(),
                     )
-                })?; //TODO error
+                })?;
 
         assert_eq!(
             ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
@@ -2689,161 +2445,19 @@ mod shared_tests {
             .map_err(|e| {
                 ThoError::new_with_cause(
                     "parse resources args (set)",
-                    Cause::CliParse(Arc::new(e)),
+                    e.into(),
                 )
-            })?; //TODO error
+            })?;
         assert_eq!(ResourceType::Set("aaa".into()), params.resources);
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
             .map_err(|e| {
                 ThoError::new_with_cause(
                     "parse resources args (group)",
-                    Cause::CliParse(Arc::new(e)),
+                    e.into(),
                 )
-            })?; //TODO error
+            })?;
         assert_eq!(ResourceType::Group("bbb".into()), params.resources);
-
-        Ok(())
-    }
-
-    //TODO when deserialized by serde range with step requires number of decimals - 1.01..2.2:0.1*,1*
-    #[test]
-    fn test_parse_range_or_value_range_with_step() -> Result<(), ThoError> {
-        use crate::parse_range_or_value;
-
-        #[derive(Debug, Parser, Clone, PartialEq)]
-        struct TestParams {
-            #[arg(long, value_parser=parse_range_or_value::<i32>)]
-            window: RangeOrValue<i32>,
-
-            #[arg(long, value_parser=parse_range_or_value::<f64>)]
-            step: RangeOrValue<f64>,
-        }
-
-        let params = TestParams::try_parse_from(
-            vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter(),
-        )
-        .map_err(|e| {
-            ThoError::new_with_cause(
-                "parse range-or-value args with step",
-                Cause::CliParse(Arc::new(e)),
-            )
-        })?; //TODO error
-
-        assert_eq!(
-            TestParams {
-                window: RangeOrValue::Range {
-                    range: -20..20,
-                    step: Some((2, 1))
-                },
-                step: RangeOrValue::Range {
-                    range: -1.01..2.2,
-                    step: Some((0.1, 100))
-                }
-            },
-            params
-        );
-
-        assert_eq!(
-            (-20..20).step_by(2).collect::<Vec<i32>>(),
-            params.window.into_iter().collect::<Vec<i32>>()
-        );
-
-        assert_eq!(
-            (-101..220)
-                .step_by(10)
-                .map(|i| i as f64 / 100.)
-                .collect::<Vec<f64>>(),
-            params.step.into_iter().collect::<Vec<f64>>()
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_range_or_value_value() -> Result<(), ThoError> {
-        use crate::parse_range_or_value;
-
-        #[derive(Debug, Parser, Clone, PartialEq)]
-        struct TestParams {
-            #[arg(long, value_parser=parse_range_or_value::<i32>)]
-            window: RangeOrValue<i32>,
-
-            #[arg(long, value_parser=parse_range_or_value::<f32>)]
-            step: RangeOrValue<f32>,
-        }
-
-        let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())
-            .map_err(|e| {
-                ThoError::new_with_cause(
-                    "parse range-or-value args (value)",
-                    Cause::CliParse(Arc::new(e)),
-                )
-            })?; //TODO error
-
-        assert_eq!(
-            TestParams {
-                window: RangeOrValue::Value(10),
-                step: RangeOrValue::Value(1.1)
-            },
-            params
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parser_regex_str() -> Result<(), ThoError> {
-        let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("1.22..333.4444")?;
-
-        assert_eq!("1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert!(step.is_none());
-
-        let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("-1.22..-333.4444")?;
-
-        assert_eq!("-1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("-333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert!(step.is_none());
-
-        let ((from, from_d_len), (to, to_d_len), Some((step, step_d_len))) =
-            parse_range_str("-1.22..-333.4444:7.8")?
-        else {
-            panic!("no step");
-        };
-
-        assert_eq!("-1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("-333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert_eq!("7.8".to_string(), step);
-        assert_eq!(1, step_d_len);
-
-        let ((from, from_d_len), (to, to_d_len), Some((step, step_d_len))) =
-            parse_range_str("-1.22..-333.4444:-7.8")?
-        else {
-            panic!("no step");
-        };
-        // println!("from_i={from} from_d={from_d_len:?} to={to} to_d_len={to_d_len} step={step:?}");
-
-        assert_eq!("-1.22".to_string(), from);
-        assert_eq!(2, from_d_len);
-
-        assert_eq!("-333.4444".to_string(), to);
-        assert_eq!(4, to_d_len);
-
-        assert_eq!("-7.8".to_string(), step);
-        assert_eq!(1, step_d_len);
 
         Ok(())
     }

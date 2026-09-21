@@ -25,7 +25,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, RunCtx, ThoSelector, WithId};
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::ThoError;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::task::spawn_blocking;
@@ -368,9 +368,9 @@ where
                 match adjuster_err {
                     AdjusterError::AdjustFailed(v) => {
                         *input_select_adjusted = Some(v);
-                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
+                        Err(ThoError::new_with_cause(msg, ThoError::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
+                    AdjusterError::SomethingElse => Err(ThoError::new(msg)),
                 }
             }
         }
@@ -436,9 +436,9 @@ where
                 match adjuster_err {
                     AdjusterError::AdjustFailed(v) => {
                         *task = Some(v);
-                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
+                        Err(ThoError::new_with_cause(msg, ThoError::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
+                    AdjusterError::SomethingElse => Err(ThoError::new(msg)),
                 }
             }
         }
@@ -486,9 +486,9 @@ where
                 match adjuster_err {
                     AdjusterError::AdjustFailed(v) => {
                         *run_context = Some(v);
-                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
+                        Err(ThoError::new_with_cause(msg, ThoError::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
+                    AdjusterError::SomethingElse => Err(ThoError::new(msg)),
                 }
             }
         }
@@ -1343,7 +1343,7 @@ where
             #[cfg(tho_debug)]
             GlobalCtx::global().cuda_actor(device_idx).debug_worker().await?;
 
-            Err(Cause::SomethingElse(format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task"))).into())
+            Err(ThoError::new(format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task"))))
         }
         Ok(o) => {
             debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());
@@ -1779,7 +1779,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RangeSelector, Stage, WithId};
-    use thoosa_shared::{Cause, ThoError};
+    use thoosa_shared::ThoError;
     // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
@@ -1819,7 +1819,7 @@ mod tests {
                 .results
                 .lock().unwrap()
                 .pop_front()
-                .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
+                .unwrap_or_else(|| Err(ThoError::new("no more results")));
 
             match next {
                 Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o))),

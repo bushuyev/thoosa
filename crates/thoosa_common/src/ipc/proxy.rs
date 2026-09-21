@@ -195,8 +195,8 @@ where
                         })
 
                     }
-                    OpResult::Failed{ msg, is_oom, is_retryable_oom, needs_reset } => {
-                        Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset))
+                    OpResult::Failed(error) => {
+                        Err(error.into())
                     }
                 }
             }
@@ -225,8 +225,8 @@ where
                             }
                         }
                     }
-                    OpResult::Failed { msg, is_oom, is_retryable_oom, needs_reset } => {
-                        Err(ThoError::from_worker(msg, is_oom, is_retryable_oom, needs_reset))
+                    OpResult::Failed(error) => {
+                        Err(error.into())
                     }
                 }
             }
