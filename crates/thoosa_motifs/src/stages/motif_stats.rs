@@ -566,7 +566,7 @@ fn calc_metrics(
         channels_values.push(MetricsValue::new(metric.clone(), metric_channels_values));
     }
 
-    info!("motif_stats::calc_metrics: input_id={input_id:?} channels={channels} channels_values={channels_values:?}");
+    debug!("motif_stats::calc_metrics: input_id={input_id:?} channels={channels} channels_values={channels_values:?}");
 
     Ok(MotifStatsOutput::new(out_id, channels_values, num_slices as u32))
 }
