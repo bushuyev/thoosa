@@ -12,7 +12,7 @@ use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
-use thoosa_shared::os_thread_id;
+use thoosa_shared::{cuda_cause_from_error_code, os_thread_id};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{CudaActivityScope, FuturesOrdering, ThoError, collect_futures_with_progress};
 use thoosa_shims::context::ThoCudaContext;
@@ -111,7 +111,8 @@ impl Drop for PinnedHostBuffer {
             thoosa_shims::memcpy::tho_cu_mem_free_host(self.ptr as *mut c_void)
         };
 
-        if let Err(err) = check_cuda_status(res, "cuMemFreeHost") {
+        if res != 4 &&//CUDA error 4: CUDA runtime/driver is deinitializing; usually process shutdown or teardown ordering
+            let Err(err) = check_cuda_status(res, "cuMemFreeHost") {
             log::error!("{err:?}");
         }
     }
