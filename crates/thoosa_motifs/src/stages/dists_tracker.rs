@@ -888,8 +888,8 @@ pub fn tensor_to_ipc_bytes(tensor: &Tensor) -> Result<Vec<u8>, ThoError> {
     Ok(bytes)
 }
 
-pub fn tensor_from_ipc_bytes(bytes: Vec<u8>) -> Result<Tensor, ThoError> {
-    Tensor::load_from_stream(Cursor::new(bytes)).map_err(ThoError::from)
+pub fn tensor_from_ipc_bytes(bytes: Vec<u8>) -> anyhow::Result<Tensor> {
+    Ok(Tensor::load_from_stream(Cursor::new(bytes))?)
 }
 
 fn rebase_flat_indices_last_dim(

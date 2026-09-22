@@ -847,12 +847,9 @@ impl Store for SqlStore {
                 stmt.query_map([run_config_id], |row| Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?)))?
                     .enumerate()
                     .map(|(i, ord_key)| {
-                        ord_key
-                            .map(|(ord, key)| {
-                                assert!(ord == i as i64);
-                                key
-                            })
-                            .map_err(anyhow::Error::from)
+                        let (ord, key) = ord_key?;
+                        assert!(ord == i as i64);
+                        Ok(key)
                     })
                     .collect::<anyhow::Result<Vec<String>>>()
             };
@@ -875,8 +872,7 @@ impl Store for SqlStore {
                         run_on: row.get::<usize, String>(3)?,
                     })
                 })?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?
+                .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?
             };
 
             Ok(run_configs)
@@ -895,8 +891,7 @@ impl Store for SqlStore {
                ], |row| {
                     row.get::<usize, RunConfigId>(0)
                 })?
-                    .map(|v| v.map_err(anyhow::Error::from))
-                    .collect::<anyhow::Result<Vec<RunConfigId>>>()?
+                    .collect::<rusqlite::Result<Vec<RunConfigId>>>()?
             };
 
             Ok(run_configs)
@@ -917,8 +912,7 @@ impl Store for SqlStore {
                         run_on: row.get::<usize, String>(3)?,
                     })
                 })?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?
+                .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?
             };
 
             Ok(run_configs)
@@ -958,8 +952,7 @@ impl Store for SqlStore {
                             run_on: row.get::<usize, String>(3)?,
                         })
                     })?
-                    .map(|v| v.map_err(anyhow::Error::from))
-                    .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?;
+                    .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?;
                 run_configs.extend(chunk_rows);
             }
 
@@ -1006,7 +999,7 @@ impl Store for SqlStore {
             );
 
             let mut stmt = conn.prepare(query.as_str())?;
-            stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+            Ok(stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                 Ok(RunConfigEntry {
                     id: row.get::<usize, RunConfigId>(0)?,
                     run_config_type: row.get::<usize, String>(1)?,
@@ -1014,8 +1007,7 @@ impl Store for SqlStore {
                     run_on: row.get::<usize, String>(3)?,
                 })
             })?
-            .map(|value| value.map_err(anyhow::Error::from))
-            .collect::<anyhow::Result<Vec<RunConfigEntry>>>()
+            .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?)
         })
         .await
     }
@@ -1025,8 +1017,7 @@ impl Store for SqlStore {
             let run_config_types = {
                 let mut stmt = conn.prepare("SELECT DISTINCT type FROM run_configs ORDER BY type ASC")?;
                 stmt.query_map([], |row| row.get::<usize, String>(0))?
-                    .map(|v| v.map_err(anyhow::Error::from))
-                    .collect::<anyhow::Result<Vec<String>>>()?
+                    .collect::<rusqlite::Result<Vec<String>>>()?
             };
 
             Ok(run_config_types)
@@ -1078,7 +1069,7 @@ impl Store for SqlStore {
             let id_input_id = {
                 let mut stmt = conn.prepare(q)?;
                 stmt.query_map([input_run_config_id], |row| row.get::<usize, usize>(0))?
-                    .map(|v| v.map(|v| v as RunConfigId).map_err(|e| e.into()))
+                    .map(|v| Ok::<_, anyhow::Error>(v? as RunConfigId))
                     .collect::<anyhow::Result<Vec<_>>>()
             };
             id_input_id
@@ -1172,36 +1163,32 @@ impl Store for SqlStore {
     async fn list_trained_net_entries(&self) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_trained_net_entries", move |conn| {
             let mut stmt = conn.prepare("SELECT id, net_path FROM trained_nets")?;
-            stmt.query_map([], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map([], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_label_trained_nets_before", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND rc.run_on < ?")?;
-            stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
     async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
-            stmt.query_map(params![net_type, loss], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map(params![net_type, loss], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
     async fn list_unused_motif_trained_nets(&self) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_unused_motif_trained_nets", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND NOT EXISTS (SELECT 1 FROM trained_nets_input nti WHERE nti.input_id=tn.id)")?;
-            stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
@@ -1233,11 +1220,10 @@ impl Store for SqlStore {
         self.with_reader_conn("list_input_nets", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.run_config_id FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
 
-            stmt.query_map(params![net_id], |row| {
+            Ok(stmt.query_map(params![net_id], |row| {
                 row.get::<usize, u32>(0)
             })?
-                .map(|v| v.map_err(|e|e.into()))
-                .collect::<anyhow::Result<Vec<_>>>()
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
@@ -1348,7 +1334,7 @@ impl SqlStore {
             row.get::<usize, i64>(0)
         })?;
 
-        usize::try_from(count).map_err(|_| anyhow::anyhow!("count_motif_slices: invalid count={count} for motif_id={motif_id}"))
+        Ok(usize::try_from(count).with_context(|| format!("count_motif_slices: invalid count={count} for motif_id={motif_id}"))?)
     }
 
     pub fn load_motif_target_positions(
@@ -1429,7 +1415,7 @@ impl SqlStore {
             "SELECT r.id, r.import_id, r.key, r.length FROM main.resources r WHERE r.id NOT IN (SELECT resource_id FROM slices s WHERE s.motif_id=?)",
         )?;
 
-        stmt.query_map(params![motif_id as i64], |row| {
+        Ok(stmt.query_map(params![motif_id as i64], |row| {
             Ok(RandomSliceResourceCtx {
                 resource: Resource::new(
                     row.get::<usize, ResourceId>(0)?,
@@ -1441,8 +1427,7 @@ impl SqlStore {
                 target_positions: vec![],
             })
         })?
-        .map(|row| row.map_err(anyhow::Error::from))
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     fn merge_intervals(mut xs: Vec<(i64, i64)>) -> Vec<(i64, i64)> {

@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
 use crate::motif_tracker_store::IdSlice;
@@ -266,7 +267,7 @@ where
 
         let temp_stores_by_bucket =
             (0..run_config.bucket_count).map(|bucket| {
-                let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+                let bucket = u16::try_from(bucket).with_context(|| format!("BucketingStage::run: bucket={bucket} does not fit into u16"))?;
                 PatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
@@ -621,10 +622,10 @@ where
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
 
             for ((sample_start, _sample_end), bucket) in patch_ranges[channel].iter().zip(channels_bucket_ids[channel].iter()) {
-                let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: bucket={bucket} does not fit into u16")))?;
-                let sample_start = i64::try_from(*sample_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: sample_start={sample_start} does not fit into i64")))?;
+                let group = u16::try_from(*bucket).with_context(|| format!("SyncBucketingStage::save_resource_patches: bucket={bucket} does not fit into u16"))?;
+                let sample_start = i64::try_from(*sample_start).with_context(|| format!("SyncBucketingStage::save_resource_patches: sample_start={sample_start} does not fit into i64"))?;
                 let slice_start = input.sample_offset.checked_add(sample_start).ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_patches: sample_start overflow"))?;
-                let slice_start = u32::try_from(slice_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: sample_start={slice_start} does not fit into u32")))?;
+                let slice_start = u32::try_from(slice_start).with_context(|| format!("SyncBucketingStage::save_resource_patches: sample_start={slice_start} does not fit into u32"))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(input.resource_id, slice_start));
             }
 
@@ -675,9 +676,9 @@ where
         for (channel, bucket_ids) in channels_bucket_ids.iter().enumerate() {
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
             for (slice_idx, bucket) in bucket_ids.iter().enumerate() {
-                let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: bucket={bucket} does not fit into u16")))?;
+                let group = u16::try_from(*bucket).with_context(|| format!("SyncBucketingStage::save_resource_plain_buckets: bucket={bucket} does not fit into u16"))?;
                 let sample_start = (slice_idx as i64).checked_mul(self.step).and_then(|v| v.checked_add(input.sample_offset)).ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
-                let slice_start = u32::try_from(sample_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: sample_start={sample_start} does not fit into u32")))?;
+                let slice_start = u32::try_from(sample_start).with_context(|| format!("SyncBucketingStage::save_resource_plain_buckets: sample_start={sample_start} does not fit into u32"))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(input.resource_id, slice_start));
             }
 
@@ -1011,9 +1012,9 @@ where
             let mut temp_stores_by_bucket = self.temp_stores_by_bucket.lock();
             let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/buckets", temp_stores_by_bucket.len() as usize, 1);
             for (bucket, mut temp_store) in temp_stores_by_bucket.drain(..).enumerate() {
-                let group = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+                let group = u16::try_from(bucket).with_context(|| format!("BucketingStage::run: bucket={bucket} does not fit into u16"))?;
                 for (channel, slices) in temp_store.load_channel_groups(group)? {
-                    let channel = usize::try_from(channel).map_err(|_| ThoError::new(format!("BucketingStage::run: channel={channel} does not fit into usize")))?;
+                    let channel = usize::try_from(channel).with_context(|| format!("BucketingStage::run: channel={channel} does not fit into usize"))?;
                     if channel >= groups_by_channel.len() {
                         return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={}", self.channels)));
                     }
@@ -1069,7 +1070,7 @@ fn bucket_ids_from_one_hot_3d(buckets: &Tensor) -> Result<Vec<Vec<usize>>, ThoEr
     for channel in 0..channels {
         for slice in 0..slices {
             let idx = (channel * slices + slice) as usize;
-            let bucket = usize::try_from(flat[idx]).map_err(|_| ThoError::new(format!("bucket_ids_from_one_hot_3d: bucket={} does not fit into usize", flat[idx])))?;
+            let bucket = usize::try_from(flat[idx]).with_context(|| format!("bucket_ids_from_one_hot_3d: bucket={} does not fit into usize", flat[idx]))?;
             result[channel as usize].push(bucket);
         }
     }
@@ -1077,15 +1078,16 @@ fn bucket_ids_from_one_hot_3d(buckets: &Tensor) -> Result<Vec<Vec<usize>>, ThoEr
     Ok(result)
 }
 
-fn deterministic_plain_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, device: Device) -> Result<Tensor, ThoError> {
+fn deterministic_plain_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, device: Device) -> anyhow::Result<Tensor> {
     if data_dim <= 0 {
-        return Err(ThoError::new("deterministic_plain_lsh_planes: data_dim must be > 0"));
+        anyhow::bail!("deterministic_plain_lsh_planes: data_dim must be > 0");
     }
     if num_bits <= 0 || num_bits > 30 {
-        return Err(ThoError::new("deterministic_plain_lsh_planes: num_bits must be in 1..=30"));
+        anyhow::bail!("deterministic_plain_lsh_planes: num_bits must be in 1..=30");
     }
 
-    let count = usize::try_from(data_dim.checked_mul(num_bits).ok_or_else(|| ThoError::new("deterministic_plain_lsh_planes: plane size overflow"))?).map_err(|_| ThoError::new("deterministic_plain_lsh_planes: plane size does not fit into usize"))?;
+    let count = usize::try_from(data_dim.checked_mul(num_bits).context("deterministic_plain_lsh_planes: plane size overflow")?)
+        .context("deterministic_plain_lsh_planes: plane size does not fit into usize")?;
     let mut seed = 0x9e3779b97f4a7c15u64 ^ (data_dim as u64).wrapping_mul(0xbf58476d1ce4e5b9) ^ (num_bits as u64).wrapping_mul(0x94d049bb133111eb);
     let mut values = Vec::with_capacity(count);
     for idx in 0..count {
@@ -1098,16 +1100,16 @@ fn deterministic_plain_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, devi
     Ok(Tensor::f_from_slice(&values)?.f_to_kind(kind)?.f_to_device(device)?.f_view([data_dim, num_bits])?)
 }
 
-fn deterministic_plain_lsh_planes_for_buckets(data_dim: i64, wanted_buckets: i64, kind: Kind, device: Device) -> Result<LshPlanes, ThoError> {
+fn deterministic_plain_lsh_planes_for_buckets(data_dim: i64, wanted_buckets: i64, kind: Kind, device: Device) -> anyhow::Result<LshPlanes> {
     if wanted_buckets <= 1 {
-        return Err(ThoError::new("deterministic_plain_lsh_planes_for_buckets: wanted_buckets must be > 1"));
+        anyhow::bail!("deterministic_plain_lsh_planes_for_buckets: wanted_buckets must be > 1");
     }
     let mut num_bits = 0_i64;
     let mut raw_buckets = 1_i64;
     while raw_buckets < wanted_buckets {
         num_bits += 1;
         if num_bits > 30 {
-            return Err(ThoError::new("deterministic_plain_lsh_planes_for_buckets: too many buckets requested; refusing num_bits > 30"));
+            anyhow::bail!("deterministic_plain_lsh_planes_for_buckets: too many buckets requested; refusing num_bits > 30");
         }
         raw_buckets <<= 1;
     }
@@ -1250,7 +1252,7 @@ impl BucketRunConfig {
                 if window == 0 || step == 0 || mel_config.mel_patch_size <= 0 {
                     return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid window={window} step={step} mel_config={mel_config:?}")));
                 }
-                let patch_frames = u32::try_from(mel_config.mel_patch_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size)))?;
+                let patch_frames = u32::try_from(mel_config.mel_patch_size).with_context(|| format!("BucketRunConfig::window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size))?;
 
                 step.checked_mul(patch_frames.saturating_sub(1)).and_then(|tail| tail.checked_add(window)).ok_or_else(|| ThoError::new(format!("BucketRunConfig::window_samples: sample span overflow for window={window} step={step} mel_config={mel_config:?}")))
             }

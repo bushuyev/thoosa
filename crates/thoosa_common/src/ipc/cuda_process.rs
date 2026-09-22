@@ -6,6 +6,7 @@ use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operat
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use log::{debug, error, info, trace};
 use serde::{Deserialize, Serialize};
@@ -174,7 +175,7 @@ impl SpawnedState {
             Ok(Err(error)) => Err(error.into()),
             Err(_) => {
                 error!("CUDA worker did not exit within {WORKER_SHUTDOWN_TIMEOUT:?} after shutdown; killing it");
-                self.child.kill().await.map_err(|error| ThoError::new(format!("failed to kill CUDA worker after shutdown timeout: {error}")))?;
+                self.child.kill().await.context("kill CUDA worker after shutdown timeout")?;
                 Err(ThoError::new(format!("CUDA worker did not exit within {WORKER_SHUTDOWN_TIMEOUT:?} after shutdown")))
             }
         }
@@ -463,7 +464,7 @@ impl CudaIPCActor {
     }
 
     async fn await_unit_reply(id: u64, reply_rx: tokio::sync::oneshot::Receiver<Result<CudaWorkerMsgOut, ThoError>>) -> Result<(), ThoError> {
-        let reply = reply_rx.await.map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))??;
+        let reply = reply_rx.await.with_context(|| format!("response channel for request {id} was dropped"))??;
         match reply.status {
             OpResult::Ok(_) => {
                 debug!("await_unit_reply: id={id:?} ok");
@@ -601,7 +602,7 @@ impl CudaIPCActor {
                 // Older CPU tensors may predate allocator installation; copy only those tensors once into arena-owned storage before sharing their offset.
                 let (shared_source, arena_offset) = spawn_blocking(move || ensure_parent_shared_arena_tensor(src_tensor, tensor_byte_len))
                     .await
-                    .map_err(|error| ThoError::new(format!("parent H2D arena staging task failed: {error}")))??;
+                    .context("join parent H2D arena staging task")??;
                 let response = send_request_and_wait_msg(
                     self_tx,
                     pending,
@@ -662,7 +663,7 @@ fn parent_shared_arena_offset(tensor: &Tensor, tensor_byte_len: usize, label: &s
     if raw_offset < 0 {
         return Err(ThoError::new(format!("{label} is not allocated in the parent shared arena")));
     }
-    let arena_offset = usize::try_from(raw_offset).map_err(|_| ThoError::new(format!("{label} arena offset {raw_offset} does not fit usize")))?;
+    let arena_offset = usize::try_from(raw_offset).with_context(|| format!("{label} arena offset {raw_offset} does not fit usize"))?;
     let arena_end = arena_offset.checked_add(tensor_byte_len).ok_or_else(|| ThoError::new(format!("{label} arena range overflow")))?;
     let arena_capacity = unsafe { shared_arena_capacity() };
     if arena_end > arena_capacity {
@@ -815,7 +816,7 @@ async fn send_request_and_wait_msg(
     }
     reply_rx
         .await
-        .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))?
+        .with_context(|| format!("response channel for request {id} was dropped"))?
 }
 
 
@@ -869,7 +870,7 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn invoke_stage(&self, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> Result<CudaWorkerMsgOut, ThoError> {
+    pub async fn invoke_stage(&self, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> anyhow::Result<CudaWorkerMsgOut> {
         debug!("CudaIPCActorHandle::invoke_stage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -887,12 +888,12 @@ impl CudaIPCActorHandle {
             }
         )
         .instrument(tracing::debug_span!("CudaIPCActorHandle::invoke_stage",agg_perf="CudaIPCActorHandle::send_msg",)).await
-        .map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        .context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    pub async fn install_stage(&self, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> Result<CudaWorkerMsgOut, ThoError> {
+    pub async fn install_stage(&self, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> anyhow::Result<CudaWorkerMsgOut> {
         debug!("CudaIPCActorHandle::invoke_stage: install_stage_2={endpoint_name} stage_id={stage_id} init_data={init_data:?}");
 
         let (respond_to, recv) = oneshot::channel();
@@ -910,9 +911,9 @@ impl CudaIPCActorHandle {
             }
         )
         .instrument(tracing::debug_span!("CudaIPCActorHandle::send_msg",agg_perf="CudaIPCActorHandle::install_stage_2",)).await
-        .map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        .context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
 
@@ -961,15 +962,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
                 activity,
                 respond_to,
             }
-        ).await.map_err(|e|{
-            let msg = format!("e={e:?}");
-            error!("CudaIPCActorHandle::copy: msg={msg:?}");
+        ).await.context("CUDA actor channel closed")?;
 
-            ThoError::new(msg)
-        })?;//TODO error
-
-
-        let r = recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        let r = recv.await.context("CUDA actor response channel closed")?;
         debug!("CudaIPCActorHandle::copy:  get result: r={r:?}");
         r
     }
@@ -980,9 +975,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
             CudaIPCActorMessage::Reset {
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+        ).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+        recv.await.context("CUDA actor response channel closed")?
 
     }
 
@@ -994,11 +989,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
             CudaIPCActorMessage::Shutdown {
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        ).await.context("CUDA actor channel closed")?;
 
         debug!("CudaIPCActorHandle::shutdown: recv={recv:?}");
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        recv.await.context("CUDA actor response channel closed")?
 
     }
 
@@ -1010,9 +1005,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
                 key,
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        ).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        recv.await.context("CUDA actor response channel closed")?
     }
 
 
@@ -1036,9 +1031,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
         ).instrument(tracing::debug_span!(
             "CudaIPCActorHandle::purge_endpoint_bytes",
             agg_perf="CudaIPCActorHandle::purge_endpoint_bytes",
-        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        )).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        recv.await.context("CUDA actor response channel closed")?
     }
 
     async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
@@ -1057,9 +1052,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
         ).instrument(tracing::debug_span!(
             "CudaIPCActorHandle::drop_endpoint",
             agg_perf="CudaIPCActorHandle::drop_endpoint",
-        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        )).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        recv.await.context("CUDA actor response channel closed")?
     }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
@@ -1076,9 +1071,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
             }
         )
             .instrument(tracing::debug_span!("CudaIPCActorHandle::send_msg",agg_perf="CudaIPCActorHandle::install_stage_2",)).await
-            .map_err(|e|ThoError::new(format!("e={e:?}")))?;
+            .context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+        recv.await.context("CUDA actor response channel closed")?
     }
 
 }

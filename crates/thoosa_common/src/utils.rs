@@ -963,9 +963,7 @@ pub fn pad_to(input: &Tensor, to_size: &[i64], pad_with: f64) -> anyhow::Result<
         })
         .collect::<Vec<i64>>();
 
-    input
-        .f_pad(pad_idx.as_slice(), "constant", pad_with)
-        .map_err(anyhow::Error::from)
+    Ok(input.f_pad(pad_idx.as_slice(), "constant", pad_with)?)
 }
 
 pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool) -> anyhow::Result<(Tensor, Option<Tensor>)> {

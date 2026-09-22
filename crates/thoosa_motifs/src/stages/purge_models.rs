@@ -1,5 +1,6 @@
 use crate::motifs_store::MotifsStore;
 use crate::motifs_ws::MotifsWorkspace;
+use anyhow::Context as _;
 use clap::Args;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
@@ -254,7 +255,7 @@ where
             .collect::<Vec<_>>();
         let futures = entries.into_iter().map(|entry| {
             async move {
-                track_await(tokio::task::spawn_blocking(move || {
+                Ok::<_, ThoError>(track_await(tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "purge_models::purge_entry",
                         kind = "spawn_blocking",
@@ -262,8 +263,7 @@ where
                         line = line!(),
                         task = "purge selected model entry",
                     ).in_scope(|| purge_entry(entry))
-                })).await
-                    .map_err(|e| ThoError::from_error("join purge models worker", e))?
+                })).await.context("join purge models worker")??)
             }
         });
 
@@ -405,7 +405,7 @@ fn rows_to_purge_entries(roots: &ModelRoots, net_type: PurgeModelType, rows: Vec
         .collect()
 }
 
-fn purge_entry(entry: PurgeEntry) -> Result<PurgedModel, ThoError> {
+fn purge_entry(entry: PurgeEntry) -> anyhow::Result<PurgedModel> {
     debug!("purge_entry: entry={entry:?}");
     let removed_from_disk = remove_disk_path(&entry.disk_path)?;
     Ok(PurgedModel {
@@ -418,7 +418,7 @@ fn purge_entry(entry: PurgeEntry) -> Result<PurgedModel, ThoError> {
     })
 }
 
-fn remove_disk_path(path: &Path) -> Result<bool, ThoError> {
+fn remove_disk_path(path: &Path) -> anyhow::Result<bool> {
     if !path.exists() {
         return Ok(false);
     }

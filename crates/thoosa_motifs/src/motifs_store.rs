@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
@@ -451,7 +452,7 @@ impl MotifsStore for SqlStore {
 
                 let motif_id: i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                let motif_id_u32 = u32::try_from(motif_id).map_err(|_| anyhow::anyhow!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32"))?;
+                let motif_id_u32 = u32::try_from(motif_id).with_context(|| format!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32"))?;
                 motif_ids.push(motif_id_u32);
 
                 debug!("save_groups_as_motifs: group={group:?}, run_config_id={run_config_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());

@@ -564,9 +564,9 @@ pub fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) ->
         let mask_f = mask.f_to_kind(kind)?.f_unsqueeze(-1)?;
         let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, kind)?;
         let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, kind)?.f_clamp_min(1.0)?;
-        sum.f_div(&denom).map_err(|e| e.into())
+        Ok(sum.f_div(&denom)?)
     } else {
-        h.f_mean_dim(1, false, None).map_err(|e| e.into())
+        Ok(h.f_mean_dim(1, false, None)?)
     }
 }
 

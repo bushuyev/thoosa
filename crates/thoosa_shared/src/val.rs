@@ -521,13 +521,9 @@ impl TryFrom<Val> for f64 {
     fn try_from(value: Val) -> anyhow::Result<f64> {
         match value {
             Val::Int(v) => Ok(v as f64), //TODO
-            Val::UInt(v) => v
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Real(v) => v
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::UInt(v) => Ok(v.try_into()?),
+            Val::Real(v) => Ok(v.try_into()?),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("TryFrom<Val> for f64: can't convert {value:?}")),
         }
     }
@@ -544,13 +540,9 @@ impl TryFrom<Val> for i64 {
                 }
                 Ok(v as i64)
             },
-            Val::Int(v) => v
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::UInt(v) => v
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Int(v) => Ok(v.try_into()?),
+            Val::UInt(v) => Ok(v.try_into()?),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("TryFrom<Val> for i64: can't convert {value:?}")),
         }
     }
@@ -567,13 +559,9 @@ impl TryFrom<&Val> for i64 {
                 }
                 Ok(*v as i64)
             },
-            Val::Int(v) => (*v)
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::UInt(v) => (*v)
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Int(v) => Ok((*v).try_into()?),
+            Val::UInt(v) => Ok((*v).try_into()?),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("TryFrom<&Val> for i64: can't convert {value:?}")),
         }
     }
@@ -585,13 +573,9 @@ impl TryFrom<Val> for u32 {
     fn try_from(value: Val) -> anyhow::Result<u32> {
         match value {
             Val::Real(v) => Ok(v as u32), //v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
-            Val::Int(v) => v
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::UInt(v) => v
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Int(v) => Ok(v.try_into()?),
+            Val::UInt(v) => Ok(v.try_into()?),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("TryFrom<Val> for u32: can't convert {value:?}")),
         }
     }
@@ -605,7 +589,7 @@ impl TryFrom<Val> for f32 {
             Val::Real(v) => Ok(v as f32), //TODO safe
             Val::Int(v) => Ok(v as f32),
             Val::UInt(v) => Ok(v as f32),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }
@@ -619,13 +603,9 @@ impl TryFrom<&Val> for f64 {
             Val::Int(v) => (*v)
                 .to_f64()
                 .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
-            Val::UInt(v) => (*v)
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Real(v) => (*v)
-                .try_into()
-                .map_err(anyhow::Error::from),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::UInt(v) => Ok((*v).try_into()?),
+            Val::Real(v) => Ok((*v).try_into()?),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }
@@ -641,7 +621,7 @@ impl TryFrom<&Val> for u32 {
                 .to_u32()
                 .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
             Val::UInt(v) => Ok(*v),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }
@@ -657,7 +637,7 @@ impl TryFrom<&Val> for i32 {
                 .to_i32()
                 .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
             Val::UInt(v) => Ok(*v as i32),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }
@@ -670,7 +650,7 @@ impl TryFrom<&Val> for f32 {
         match value {
             Val::Real(v) => Ok(*v as f32),
             Val::UInt(v) => Ok(*v as f32),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }
@@ -682,9 +662,7 @@ impl TryFrom<&Val> for String {
     fn try_from(value: &Val) -> anyhow::Result<String> {
         match value {
             Val::Str(v) => Ok(v.to_string()), // Return a string slice with the correct lifetime
-            v => v
-                .try_into()
-                .map_err(anyhow::Error::from),
+            v => Ok(v.try_into()?),
         }
     }
 }
@@ -696,7 +674,7 @@ impl TryFrom<&Val> for usize {
         match value {
             Val::Int(v) => Ok(*v as usize),
             Val::UInt(v) => Ok(*v as usize),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }
@@ -709,7 +687,7 @@ impl TryFrom<Val> for usize {
         match value {
             Val::Int(v) => Ok(v as usize),
             Val::UInt(v) => Ok(v as usize),
-            Val::Str(v) => v.parse().map_err(anyhow::Error::from),
+            Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
     }

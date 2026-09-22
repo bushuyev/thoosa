@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use clap::{Args, ValueEnum};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
@@ -227,7 +228,7 @@ where
         let target_precision = self.args.target_precision();
         let futures = entries.into_iter().map(move |entry| {
             async move {
-                track_await(tokio::task::spawn_blocking(move || {
+                Ok::<_, ThoError>(track_await(tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "convert_precision::convert_entry",
                         kind = "spawn_blocking",
@@ -235,8 +236,7 @@ where
                         line = line!(),
                         task = format!("convert net entry to {target_precision:?}"),
                     ).in_scope(|| convert_entry(entry, target_precision))
-                })).await
-                    .map_err(|e| ThoError::from_error("join convert precision worker", e))?
+                })).await.context("join convert precision worker")??)
             }
         });
 
@@ -406,7 +406,7 @@ fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
     }
 }
 
-fn convert_entry<N>(entry: NetEntry<N>, target_precision: ConvertPrecisionTarget) -> Result<ConvertedNet<N>, ThoError>
+fn convert_entry<N>(entry: NetEntry<N>, target_precision: ConvertPrecisionTarget) -> anyhow::Result<ConvertedNet<N>>
 where
     N: Debug,
 {
@@ -419,7 +419,7 @@ where
 
     for (name, tensor) in vs.variables() {
         if is_float_like(tensor.kind()) && tensor.kind() != target_precision.kind() {
-            return Err(ThoError::new(format!("ConvertPrecision: variable {name} in {:?} has kind {:?}, expected {:?}", entry.weights_path, tensor.kind(), target_precision.kind())));
+            anyhow::bail!("ConvertPrecision: variable {name} in {:?} has kind {:?}, expected {:?}", entry.weights_path, tensor.kind(), target_precision.kind());
         }
     }
 
@@ -427,7 +427,7 @@ where
     Ok(ConvertedNet { net_type: entry.net_type, weights_path: entry.weights_path, float_vars, total_vars })
 }
 
-fn load_var_store(weights_path: &Path) -> Result<VarStore, ThoError> {
+fn load_var_store(weights_path: &Path) -> anyhow::Result<VarStore> {
     let mut vs = VarStore::new(Device::Cpu);
     for (name, tensor) in Tensor::read_safetensors(weights_path)? {
         add_named_tensor_to_var_store(&vs, &name, tensor)?;
@@ -436,10 +436,10 @@ fn load_var_store(weights_path: &Path) -> Result<VarStore, ThoError> {
     Ok(vs)
 }
 
-fn add_named_tensor_to_var_store(vs: &VarStore, name: &str, tensor: Tensor) -> Result<(), ThoError> {
+fn add_named_tensor_to_var_store(vs: &VarStore, name: &str, tensor: Tensor) -> anyhow::Result<()> {
     let parts = name.split('.').collect::<Vec<_>>();
     if parts.iter().any(|part| part.is_empty()) {
-        return Err(ThoError::new(format!("ConvertPrecision: bad tensor name {name:?}")));
+        anyhow::bail!("ConvertPrecision: bad tensor name {name:?}");
     }
 
     let mut path = vs.root();
@@ -450,7 +450,7 @@ fn add_named_tensor_to_var_store(vs: &VarStore, name: &str, tensor: Tensor) -> R
     Ok(())
 }
 
-fn replace_var_store(vs: &VarStore, weights_path: &Path) -> Result<(), ThoError> {
+fn replace_var_store(vs: &VarStore, weights_path: &Path) -> anyhow::Result<()> {
     let tmp_path = tmp_weights_path(weights_path)?;
     vs.save(&tmp_path)?;
     std::fs::remove_file(weights_path)?;
@@ -458,8 +458,8 @@ fn replace_var_store(vs: &VarStore, weights_path: &Path) -> Result<(), ThoError>
     Ok(())
 }
 
-fn tmp_weights_path(weights_path: &Path) -> Result<PathBuf, ThoError> {
-    let parent = weights_path.parent().ok_or_else(|| ThoError::new(format!("ConvertPrecision: weights path {weights_path:?} has no parent")))?;
+fn tmp_weights_path(weights_path: &Path) -> anyhow::Result<PathBuf> {
+    let parent = weights_path.parent().ok_or_else(|| anyhow::anyhow!("ConvertPrecision: weights path {weights_path:?} has no parent"))?;
     let stem = weights_path.file_stem().and_then(|v| v.to_str()).unwrap_or("weights");
     Ok(parent.join(format!("{stem}.convert_precision_{}.safetensors", std::process::id())))
 }

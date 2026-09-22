@@ -867,7 +867,7 @@ impl BinaryHead {
 
     pub fn forward_max(&self, sims: &Tensor) -> anyhow::Result<Tensor> {
         let pooled = pool_time_max(sims).context("BinaryHead::forward_max failed")?;
-        pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
+        Ok(pooled.f_mul(&self.alpha)?.f_add(&self.beta)?)
     }
 
     pub fn forward_lse(&self, sims: &Tensor, tau: f64) -> anyhow::Result<Tensor> {
@@ -877,12 +877,12 @@ impl BinaryHead {
             return Err(anyhow::anyhow!("BinaryHead::forward_lse tau must be > 0, got {tau}"));
         }
         let pooled = pool_time_lse(sims, tau).context("BinaryHead::forward_lse failed")?;
-        pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
+        Ok(pooled.f_mul(&self.alpha)?.f_add(&self.beta)?)
     }
 
     pub fn forward_mean(&self, sims: &Tensor) -> anyhow::Result<Tensor> {
         let pooled = pool_time_mean(sims).context("BinaryHead::forward_mean failed")?;
-        pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
+        Ok(pooled.f_mul(&self.alpha)?.f_add(&self.beta)?)
     }
 }
 
@@ -941,7 +941,7 @@ impl ThoSharpeningHead1d {
     fn same_avgpool1d(x: &Tensor, kernel: i64) -> anyhow::Result<Tensor> {
         let (pad_left, pad_right) = Self::same_pad(kernel);
         let padded = x.f_pad([pad_left, pad_right], "replicate", 0.0)?;
-        padded.f_avg_pool1d(kernel, 1, 0, false, true).map_err(|e| e.into())
+        Ok(padded.f_avg_pool1d(kernel, 1, 0, false, true)?)
     }
 
     fn morph_opening1d(x: &Tensor, kernel: i64) -> anyhow::Result<Tensor> {
@@ -951,10 +951,9 @@ impl ThoSharpeningHead1d {
             .f_pad([pad_left, pad_right], "replicate", 0.0)?
             .f_max_pool1d(kernel, 1, 0, 1, false)?
             .f_neg()?;
-        erode
+        Ok(erode
             .f_pad([pad_left, pad_right], "replicate", 0.0)?
-            .f_max_pool1d(kernel, 1, 0, 1, false)
-            .map_err(|e| e.into())
+            .f_max_pool1d(kernel, 1, 0, 1, false)?)
     }
 
     pub fn forward_with_thp(&self, sims: &Tensor) -> anyhow::Result<(Tensor, Tensor)> {
@@ -1270,9 +1269,9 @@ pub fn configure_dense(
     let dense_block = |b: &mut SeqBuilder| -> anyhow::Result<()> {
         b.n_blocks(
             |b: &mut SeqBuilder, _i| {
-                b.func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                b.func(|t|Ok(Tensor::f_relu(t)?))?
                     .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
-                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                    .func(|t|Ok(Tensor::f_relu(t)?))?
                     .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
                     .end()
             },
@@ -1283,15 +1282,15 @@ pub fn configure_dense(
 
     builder
         .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
-        .func(|t| t.f_elu().map_err(|e|e.into()))?
+        .func(|t| Ok(t.f_elu()?))?
         .max_pool(3, 2, 1)?
         .n_blocks(
             |b: &mut SeqBuilder, _i| {
                 b.block(dense_block)?
                     .block(|b: &mut SeqBuilder| {
-                        b.func(|t|Tensor::f_elu(t).map_err(|e|e.into()))?
+                        b.func(|t|Ok(Tensor::f_elu(t)?))?
                             .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
-                            .func(|t|Tensor::f_elu(t).map_err(|e|e.into()))?
+                            .func(|t|Ok(Tensor::f_elu(t)?))?
                             .conv_1d("conv", kernel, channels, channels, ConvConfig::default(), None)?
                             .end()
                     })?
@@ -1300,7 +1299,7 @@ pub fn configure_dense(
             num_blocks,
         )?
         .block(dense_block)?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        .func(|t|Ok(Tensor::f_relu(t)?))?
         .avg_pool(7, 3, 0)?
         .dropout(0.5)?
         .linear_s(
@@ -1378,7 +1377,7 @@ fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device)
     }
     let pos = Tensor::f_arange(max_l, (Kind::Int64, device))?.f_unsqueeze(0)?;
     let len = Tensor::f_from_slice(lengths)?.f_to_device(device)?.f_view([batch, 1])?;
-    pos.f_lt_tensor(&len).map_err(|e| e.into())
+    Ok(pos.f_lt_tensor(&len)?)
 }
 
 fn self_attention_forward_t(
@@ -1466,7 +1465,7 @@ fn self_attention_forward_t(
     let out = y.f_linear(&w_o.ws, w_o.bs.as_ref())?;
     drop(y);
 
-    out.f_dropout(dropout, train).map_err(Into::into)
+    Ok(out.f_dropout(dropout, train)?)
 }
 
 fn attn_block_forward_t(
@@ -1586,11 +1585,10 @@ fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device
     let exponent = Tensor::f_arange(half, (Kind::Float, device))?.f_mul_scalar(-2.0 * 10000_f64.ln() / d_model as f64)?;
     let div_term = exponent.f_exp()?.f_unsqueeze(0)?;
     let angles = pos.f_mul(&div_term)?;
-    Tensor::f_stack(&[angles.f_sin()?, angles.f_cos()?], -1)?
+    Ok(Tensor::f_stack(&[angles.f_sin()?, angles.f_cos()?], -1)?
         .f_flatten(1, 2)?
         .f_narrow(1, 0, d_model)?
-        .f_to_kind(kind)
-        .map_err(|e| e.into())
+        .f_to_kind(kind)?)
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
@@ -1814,7 +1812,7 @@ mod tch_tests {
                 1,
                 "todo",
             )?
-            .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
+            .func(|t|Ok(Tensor::f_sigmoid(t)?))?
             .end_seq()?
             .build_tch_module(&vs.root())
     }
@@ -1931,9 +1929,9 @@ mod tch_tests {
                         SeqBuilder::new(123, None)?
                             .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
                             .linear("todo")? //2 weight bias
-                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                            .func(|t|Ok(Tensor::f_relu(t)?))?
                             .linear("todo")? //2 weight bias
-                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                            .func(|t|Ok(Tensor::f_relu(t)?))?
                             .linear_s(
                                 1,
                                 "todo",
@@ -1942,7 +1940,7 @@ mod tch_tests {
                         SeqBuilder::new(321, None)?
                             .batch_norm(BatchNormConfig::default(), None)? //3 weight bias running_var
                             .linear("todo")? //2 weight bias
-                            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                            .func(|t|Ok(Tensor::f_relu(t)?))?
                             .linear_s(
                                 1,
                                 "todo",
@@ -1962,7 +1960,7 @@ mod tch_tests {
                     20,
                     "todo",
                 )? //2 weight bias
-                .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
+                .func(|t|Ok(Tensor::f_sigmoid(t)?))?
                 .end_seq()
         }
 
