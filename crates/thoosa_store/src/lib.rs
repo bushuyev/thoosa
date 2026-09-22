@@ -350,7 +350,7 @@ impl ResourceStore for SqlStore {
         descr: &str,
     ) -> anyhow::Result<Vec<Resource>> {
         let descr = descr.to_string();
-        let descr_for_err = descr.to_string();
+        let descr_for_err = descr.clone();
         self.with_reader_conn("list_resource_set_resources_by_descr",  move|conn| {
             let r = Self::list_resource_set_resources(
                 conn.query_row("SELECT id FROM resource_set WHERE descr=?", [descr.as_str()], |row| row.get(0))?,
@@ -359,10 +359,7 @@ impl ResourceStore for SqlStore {
             debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
             Ok(r)
         })
-        .await.map_err(|e|{
-            error!("list_resource_set_resources_by_descr: descr={descr_for_err} got error {e:?}");
-            e
-        })
+        .await.with_context(|| format!("list resource set with description {descr_for_err:?}"))
     }
     async fn list_resources_by_file_stems<'a>(
         &self,
@@ -2856,7 +2853,7 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_get_input_run_config_ids().returning(
             move |run_config_id, input_type|{
-                map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
+                map.get(&run_config_id).cloned().map(|result| Ok(result?)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
             }
         );
         self
@@ -2866,7 +2863,7 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_run_config_descr().returning(
             move |run_config_id| {
-                map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
+                map.get(&run_config_id).cloned().map(|result| Ok(result?)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
             }
         );
         self
@@ -2884,7 +2881,7 @@ impl MockStoreBuilder {
         self.store.expect_save_run_config().returning(move |p_input_run_config_id, p_run_config_type, p_descr, p_properties_vals| {
             let p_input_run_config_id = p_input_run_config_id.map(|ids| ids.to_vec());
             if p_input_run_config_id == input_run_config_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
-                result.clone().map_err(Into::into)
+                Ok(result.clone()?)
             } else {
                 Err(anyhow::anyhow!(format!(
                     "mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}"
@@ -2923,7 +2920,7 @@ impl MockStoreBuilder {
             move |run_config_ids, loss, limit| {
                 data.iter()
                     .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_ref().as_slice() && *expected_loss == loss && *expected_limit == limit)
-                    .map(|(_, _, _, result)| result.clone().map_err(Into::into))
+                    .map(|(_, _, _, result)| Ok(result.clone()?))
                     .unwrap_or_else(|| Err(anyhow::anyhow!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}")))
             }
         );
@@ -2944,7 +2941,7 @@ impl MockStoreBuilder {
             move |run_config_id| {
                 data.iter()
                     .find(|(expected_run_config_id, _)| expected_run_config_id == &run_config_id)
-                    .map(|(_, result)| result.clone().map_err(Into::into))
+                    .map(|(_, result)| Ok(result.clone()?))
                     .unwrap_or_else(|| Err(anyhow::anyhow!("with_list_input_nets is not configured to return  nets for run_config_id={run_config_id:?}")))
             }
         );
@@ -2959,7 +2956,7 @@ impl MockStoreBuilder {
         self.store.expect_list_run_config_values()
             .returning(move |p_run_config_id| {
                 map.get(&p_run_config_id)
-                    .cloned().map(|result| result.map_err(Into::into))
+                    .cloned().map(|result| Ok(result?))
                     .expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
             });
 
@@ -2974,7 +2971,7 @@ impl MockStoreBuilder {
         self.store.expect_list_output_run_config_ids().returning(
             move |input_run_config_id| {
                 map.get(&input_run_config_id)
-                    .cloned().map(|result| result.map_err(Into::into))
+                    .cloned().map(|result| Ok(result?))
                     .expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
             },
         );
@@ -2989,7 +2986,7 @@ impl MockStoreBuilder {
         self.store.expect_list_run_config_ids_with_outputs().returning(
             move |input_run_config_ids| {
                 map.get(&input_run_config_ids.to_vec())
-                    .cloned().map(|result| result.map_err(Into::into))
+                    .cloned().map(|result| Ok(result?))
                     .expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
             },
         );
@@ -3006,7 +3003,7 @@ impl MockStoreBuilder {
             .returning(move |requested| {
                 let stems = requested.iter().map(|stem| stem.to_string()).collect::<Vec<_>>();
                 if stems == expected_stems {
-                    result.clone().map_err(Into::into)
+                    Ok(result.clone()?)
                 } else {
                     Err(anyhow::anyhow!("Not found"))
                 }
@@ -3020,7 +3017,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_set_group_sets()
             .returning(move |group| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
+                Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()?)
             });
 
         self
@@ -3031,7 +3028,7 @@ impl MockStoreBuilder {
 
     self.store.expect_list_group_labeled_resources_sets()
         .returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()?)
         });
 
         self
@@ -3042,7 +3039,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resources_not_in_group()
             .returning(move |group, _limit| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
+                Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()?)
             });
 
 
@@ -3054,7 +3051,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_random_resources()
             .returning(move |limit| {
-                map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone().map_err(Into::into)
+                Ok(map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone()?)
             });
 
 
@@ -3066,7 +3063,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_random_in_group()
             .returning(move |group| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone().map_err(Into::into)
+                Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone()?)
             });
 
         self
@@ -3077,7 +3074,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_set_resources_by_descr()
         .returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()?)
         });
 
 

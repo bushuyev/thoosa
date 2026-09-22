@@ -1167,6 +1167,7 @@ pub(crate) struct DeviceInfo {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context as _;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
     use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload};
@@ -1313,7 +1314,7 @@ mod tests {
         }
 
         while let Some(result) = tasks.join_next().await {
-            result.map_err(|e| ThoError::new(format!("IPC copy perf task join error: {e}")))??;
+            result.context("join IPC copy perf task")??;
         }
 
         let total_copied_mem_size = input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
@@ -1380,7 +1381,7 @@ mod tests {
             let copy_result = tokio::time::timeout(
                 std::time::Duration::from_secs(600),
                 track_await(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
-            ).await.map_err(|_| ThoError::new("timed out waiting for worker IPC oversized H2D copy to fail"))?;
+            ).await.context("timed out waiting for worker IPC oversized H2D copy to fail")?;
 
             debug!("test_copy_ipc_cuda_worker_propagates_oom: copy_result={copy_result:?}");
 

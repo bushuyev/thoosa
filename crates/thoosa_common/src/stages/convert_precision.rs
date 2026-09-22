@@ -58,7 +58,7 @@ impl ConvertPrecisionTarget {
 }
 
 /// Describes a workspace-specific model layout without exposing its concrete model types to common code.
-pub trait PrecisionModelType<W>: Debug + Clone + Copy + Eq + Hash + Send + Sync + FromStr<Err = String> + 'static
+pub trait PrecisionModelType<W>: Debug + Clone + Copy + Eq + Hash + Send + Sync + FromStr<Err = anyhow::Error> + 'static
 where
     W: Workspace + ?Sized,
 {
@@ -77,27 +77,27 @@ pub enum ConvertPrecisionBy<N> {
 
 impl<N> FromStr for ConvertPrecisionBy<N>
 where
-    N: FromStr<Err = String>,
+    N: FromStr<Err = anyhow::Error>,
 {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         if let Some(rest) = v.strip_prefix("path:") {
             let path = rest.trim().trim_matches(|ch| ch == '\'' || ch == '"');
             if path.is_empty() {
-                return Err("path payload is empty".to_string());
+                anyhow::bail!("path payload is empty");
             }
             Ok(Self::Path(PathBuf::from(path)))
         } else if let Some(rest) = v.strip_prefix("run_config_id:").or_else(|| v.strip_prefix("run_config_ids:")) {
             let run_config_ids = parse_run_config_ids_vec(rest)?;
             if run_config_ids.is_empty() {
-                return Err("run_config_id payload is empty".to_string());
+                anyhow::bail!("run_config_id payload is empty");
             }
             Ok(Self::RunId(run_config_ids))
         } else if let Some(rest) = v.strip_prefix("type:").or_else(|| v.strip_prefix("net_type:")) {
             Ok(Self::Type(N::from_str(rest)?))
         } else {
-            Err(format!("unexpected selector {v:?}; expected path:<path>, run_config_id:<id[,id]>, or type:<model-type>"))
+            anyhow::bail!("unexpected selector {v:?}; expected path:<path>, run_config_id:<id[,id]>, or type:<model-type>")
         }
     }
 }
@@ -105,7 +105,7 @@ where
 #[derive(Debug, Args, Clone)]
 pub struct ConvertPrecisionArgs<N>
 where
-    N: Clone + FromStr<Err = String> + Send + Sync + 'static,
+    N: Clone + FromStr<Err = anyhow::Error> + Send + Sync + 'static,
 {
     #[arg(long)]
     nets_by: ConvertPrecisionBy<N>,
@@ -116,7 +116,7 @@ where
 
 impl<N> ConvertPrecisionArgs<N>
 where
-    N: Clone + FromStr<Err = String> + Send + Sync + 'static,
+    N: Clone + FromStr<Err = anyhow::Error> + Send + Sync + 'static,
 {
     pub fn new(nets_by: ConvertPrecisionBy<N>, target_precision: ConvertPrecisionTarget) -> Self {
         Self { nets_by, target_precision }

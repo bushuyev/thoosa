@@ -33,7 +33,7 @@ use tokio::task::spawn_blocking;
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
     AdjustFailed(A),
-    SomethingElse
+    SomethingElse(ThoError)
 
 }
 #[async_trait]
@@ -370,7 +370,7 @@ where
                         *input_select_adjusted = Some(v);
                         Err(ThoError::new_with_cause(msg, ThoError::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new(msg)),
+                    AdjusterError::SomethingElse(error) => Err(error.context("input adjuster failed")),
                 }
             }
         }
@@ -438,7 +438,7 @@ where
                         *task = Some(v);
                         Err(ThoError::new_with_cause(msg, ThoError::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new(msg)),
+                    AdjusterError::SomethingElse(error) => Err(error.context("task adjuster failed")),
                 }
             }
         }
@@ -488,7 +488,7 @@ where
                         *run_context = Some(v);
                         Err(ThoError::new_with_cause(msg, ThoError::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new(msg)),
+                    AdjusterError::SomethingElse(error) => Err(error.context("run context adjuster failed")),
                 }
             }
         }

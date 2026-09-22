@@ -26,7 +26,7 @@ use thoosa_store::{Store, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetEntry};
 pub struct PurgeDate(String);
 
 impl PurgeDate {
-    pub fn new(date: impl Into<String>) -> Result<Self, String> {
+    pub fn new(date: impl Into<String>) -> anyhow::Result<Self> {
         let date = date.into();
         validate_purge_date(&date)?;
         Ok(Self(date))
@@ -38,14 +38,14 @@ impl PurgeDate {
 }
 
 impl FromStr for PurgeDate {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         Self::new(v.trim().trim_matches(|ch| ch == '\'' || ch == '"'))
     }
 }
 
-fn validate_purge_date(date: &str) -> Result<(), String> {
+fn validate_purge_date(date: &str) -> anyhow::Result<()> {
     let bytes = date.as_bytes();
     if bytes.len() == 10
         && bytes[4] == b'-'
@@ -54,7 +54,7 @@ fn validate_purge_date(date: &str) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err("date must be YYYY-MM-DD".to_string())
+        anyhow::bail!("date must be YYYY-MM-DD")
     }
 }
 
@@ -65,17 +65,17 @@ pub enum PurgeLabelModelsBy {
 }
 
 impl FromStr for PurgeLabelModelsBy {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         let value = v.trim().trim_matches(|ch| ch == '\'' || ch == '"');
         let (kind, raw_value) = value
             .split_once(':')
-            .ok_or_else(|| format!("unexpected label purge selector {v:?}; expected date:YYYY-MM-DD or loss:<value>"))?;
+            .ok_or_else(|| anyhow::anyhow!("unexpected label purge selector {v:?}; expected date:YYYY-MM-DD or loss:<value>"))?;
         match kind.trim().to_ascii_lowercase().as_str() {
             "date" | "run_on" | "before" => Ok(Self::Date(PurgeDate::from_str(raw_value)?)),
-            "loss" => Ok(Self::Loss(raw_value.trim().parse::<f32>().map_err(|e| format!("bad loss value {raw_value:?}: {e}"))?)),
-            other => Err(format!("unexpected label purge selector {other:?}; expected date or loss")),
+            "loss" => Ok(Self::Loss(raw_value.trim().parse::<f32>().with_context(|| format!("bad loss value {raw_value:?}"))?)),
+            other => anyhow::bail!("unexpected label purge selector {other:?}; expected date or loss"),
         }
     }
 }
@@ -94,7 +94,7 @@ pub enum PurgeMode {
 }
 
 impl FromStr for PurgeMode {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         let value = v.trim().trim_matches(|ch| ch == '\'' || ch == '"');
@@ -111,7 +111,7 @@ impl FromStr for PurgeMode {
             }
         }
 
-        Err(format!("unexpected purge mode {v:?}; expected lost, label:date:<YYYY-MM-DD>, label:loss:<value>, or unused_motifs"))
+        anyhow::bail!("unexpected purge mode {v:?}; expected lost, label:date:<YYYY-MM-DD>, label:loss:<value>, or unused_motifs")
     }
 }
 

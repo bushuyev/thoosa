@@ -231,6 +231,7 @@ fn recv_fd_once(socket_fd: RawFd) -> io::Result<OwnedFd> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context as _;
     use std::path::PathBuf;
     use std::process::Stdio;
 
@@ -316,7 +317,7 @@ mod tests {
     async fn wait_worker(mut child: Child) -> Result<(), ThoError> {
         let status = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
             .await
-            .map_err(|_| invalid("memfd copy worker did not exit"))??;
+            .context("memfd copy worker did not exit")??;
         if !status.success() {
             return Err(invalid(format!("memfd copy worker exited with {status}")));
         }

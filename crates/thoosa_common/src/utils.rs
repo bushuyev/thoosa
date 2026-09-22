@@ -254,21 +254,16 @@ lazy_static! {
     static ref DEBUG_PLOT_LABEL_COUNTS: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
 }
 
-static DEBUG_PLOT_DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+static DEBUG_PLOT_DIR: OnceLock<PathBuf> = OnceLock::new();
 const DEFAULT_MAX_PATH_COMPONENT_BYTES: usize = 255;
 const DEFAULT_MAX_PATH_BYTES: usize = 4096;
 const MIN_SHORTENED_COMPONENT_BYTES: usize = 24;
 
 fn debug_plot_dir() -> anyhow::Result<&'static PathBuf> {
-    let path = DEBUG_PLOT_DIR.get_or_init(|| {
-        let path = std::env::temp_dir().join("plots").join(cdt_for_dir());
-        fs::create_dir_all(&path).map_err(|e| format!("debug_plot: create_dir_all({path:?}) failed: {e}"))?;
-        Ok(path)
-    });
-    match path {
-        Ok(path) => Ok(path),
-        Err(e) => Err(anyhow::anyhow!(e.clone())),
-    }
+    let path = DEBUG_PLOT_DIR.get_or_init(|| std::env::temp_dir().join("plots").join(cdt_for_dir()));
+    // Retry directory creation on each plot so an earlier I/O error retains its source.
+    fs::create_dir_all(path).with_context(|| format!("create debug plot directory {path:?}"))?;
+    Ok(path)
 }
 
 fn sanitize_debug_plot_label(label: &str) -> String {
@@ -1759,29 +1754,29 @@ pub fn stretch<T: AsRef<Tensor>>(
     Ok(t.f_index_select(dim as i64, &index)?)
 }
 
-pub fn parse_run_config_ids_vec(payload: &str) -> Result<Vec<RunConfigId>, String> {
+pub fn parse_run_config_ids_vec(payload: &str) -> anyhow::Result<Vec<RunConfigId>> {
     payload
         .trim()
         .trim_matches(|ch| ch == '\'' || ch == '"')
         .split(',')
         .filter(|part| !part.is_empty())
         .map(|part| {
-            part
+            Ok(part
                 .trim()
                 .trim_matches(|ch| ch == '\'' || ch == '"')
                 .replace(" ", "")
                 .parse::<RunConfigId>()
-                .map_err(|e| format!("can't parse {part:?}: {e}"))
+                .with_context(|| format!("can't parse {part:?}"))?)
         })
         .collect()
 }
 
-pub fn parse_run_config_ids(s: &str) -> Result<u32, String> {
-    s.trim()
+pub fn parse_run_config_ids(s: &str) -> anyhow::Result<u32> {
+    Ok(s.trim()
         .trim_matches(|ch| ch == '\'' || ch == '"')
         .replace(" ", "")
         .parse::<u32>()
-        .map_err(|e| format!("invalid integer '{s}': {e}"))
+        .with_context(|| format!("invalid integer '{s}'"))?)
 }
 
 

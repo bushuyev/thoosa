@@ -27,7 +27,7 @@ pub enum ConvertPrecisionNetType {
 }
 
 impl FromStr for ConvertPrecisionNetType {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw.trim().trim_matches(|ch| ch == '\'' || ch == '"').to_ascii_lowercase().as_str() {
@@ -35,7 +35,7 @@ impl FromStr for ConvertPrecisionNetType {
             "label" | "labels" => Ok(Self::Labels),
             "final" => Ok(Self::Final),
             "all" => Ok(Self::All),
-            other => Err(format!("unexpected net type {other:?}; expected motifs, labels, final, or all")),
+            other => anyhow::bail!("unexpected net type {other:?}; expected motifs, labels, final, or all"),
         }
     }
 }
