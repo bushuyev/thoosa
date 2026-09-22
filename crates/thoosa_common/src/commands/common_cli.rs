@@ -41,12 +41,12 @@ pub async fn run_common_cli<C, CS, R, W>(
     ws: Arc<RwLock<Box<W>>>,
     resource_to_tensor: R,
     cdt_for_dir: String,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: Subcommand + StageCommand<Store=Arc<CS>, Workspace=W, Ctx=RunCtxImpl>+ Clone + std::fmt::Debug + Debug,
     CS:?Sized + Store,
     W: Workspace + ?Sized,
-    R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
+    R: Fn(&dyn AsRef<Path>, &str) -> anyhow::Result<Tensor> + Sync + Send,
 {
     unsafe {
         at_grad_set_enabled(0);

@@ -366,7 +366,7 @@ pub(crate) fn mul_check(
     atol: f64,
 ) {
     mul_check_with_exp_f(mul_k, res, result, rtol, atol, |k, t| {
-        lin_for_size(k, (&size).into(), t.kind(), &t.device())
+        Ok(lin_for_size(k, (&size).into(), t.kind(), &t.device())?)
     })
 }
 

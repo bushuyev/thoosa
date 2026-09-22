@@ -48,7 +48,7 @@ impl FsWorkspace {
     pub fn new(
         base_path: impl Into<PathBuf>,
         ws_configs: WsConfigs,
-    ) -> Result<Box<dyn Workspace>, ThoError> {
+    ) -> anyhow::Result<Box<dyn Workspace>> {
         Ok(Box::new(Self::new_concrete(base_path, ws_configs)?))
     }
 
@@ -56,7 +56,7 @@ impl FsWorkspace {
     pub fn new_concrete(
         base_path: impl Into<PathBuf>,
         ws_configs: WsConfigs,
-    ) -> Result<Self, ThoError> {
+    ) -> anyhow::Result<Self> {
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
 
@@ -92,7 +92,7 @@ impl FsWorkspace {
         base_path: impl Into<PathBuf>,
         app_configs:&WsConfigs,
         models_dir:&String
-    ) -> Result<Box<dyn Workspace>, ThoError> {
+    ) -> anyhow::Result<Box<dyn Workspace>> {
         Ok(Box::new(Self::new_concrete_with_models_dir(base_path, app_configs, models_dir)?))
     }
 
@@ -101,7 +101,7 @@ impl FsWorkspace {
         base_path: impl Into<PathBuf>,
         app_configs:&WsConfigs,
         models_dir:&String
-    ) -> Result<Self, ThoError> {
+    ) -> anyhow::Result<Self> {
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
 
@@ -143,7 +143,7 @@ impl FsWorkspace {
     }
 
     /// Resolves one model category lazily so feature crates own category names and creation timing.
-    pub fn model_type_path(&self, model_type: &str) -> Result<PathBuf, ThoError> {
+    pub fn model_type_path(&self, model_type: &str) -> anyhow::Result<PathBuf> {
         let path = self.nets_path.join(model_type);
         fs::create_dir_all(&path)?;
         Ok(path)
@@ -156,14 +156,10 @@ impl Workspace for FsWorkspace {
         t: Tensor,
         import_id: u32,
         key: &str,
-    ) -> Result<ResourceStats, ThoError> {
+    ) -> anyhow::Result<ResourceStats> {
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
-        t.save(&path)
-            .map_err(|e| {
-                error!("import_tensor, save tensor error {e}");
-                ThoError::from_error(format!("save tensor to {path:?}"), e)
-            })?;
+        t.save(&path)?;
 
         Ok(ResourceStats::new(
             t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>(),
@@ -209,7 +205,7 @@ impl Workspace for FsWorkspace {
         vs_or_path: VarStoreOrPath<'a>,
         model_type:&str,
         params: &dyn ToJsonFile,
-    ) -> Result<PathBuf, ThoError> {
+    ) -> anyhow::Result<PathBuf> {
 
 
         let net_id = PathBuf::from(format!("{run_config_id}"));
@@ -245,7 +241,7 @@ impl Workspace for FsWorkspace {
         self.ws_configs
     }
 
-    fn clc_records(&self, _resource_ids: &Vec<String>) -> Result<i64, ThoError> {
+    fn clc_records(&self, _resource_ids: &Vec<String>) -> anyhow::Result<i64> {
         debug!(
             "FsWorkspace::clc_records: self.tensors_path={:?}",
             self.tensors_path
@@ -297,7 +293,7 @@ pub enum VarStoreOrPath<'a> {
 
 impl <'a> VarStoreOrPath<'a> {
     /// Saves or moves a checkpoint so feature-specific workspace extensions can reuse the common transport.
-    pub fn save(&self, to:&PathBuf) -> Result<(), ThoError> {
+    pub fn save(&self, to:&PathBuf) -> anyhow::Result<()> {
 
         match self {
             VarStoreOrPath::VarStore(vs) => {
@@ -341,7 +337,7 @@ pub trait Workspace: Sync + Send + Debug {
         t: Tensor,
         import_id: u32,
         key: &'a str,
-    ) -> Result<ResourceStats, ThoError>;
+    ) -> anyhow::Result<ResourceStats>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -358,11 +354,11 @@ pub trait Workspace: Sync + Send + Debug {
         vs_or_path: VarStoreOrPath<'a>,
         model_type:&str,
         params: &dyn ToJsonFile,
-    ) -> Result<PathBuf, ThoError>;
+    ) -> anyhow::Result<PathBuf>;
     fn channels(&self) -> u32;
     fn sample_rate(&self) -> u32;
     fn max_input(&self) -> u32;
-    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoError>;
+    fn clc_records(&self, resource_ids: &Vec<String>) -> anyhow::Result<i64>;
     fn ws_configs(&self)->WsConfigs;
 }
 
@@ -398,7 +394,7 @@ fn _mock_simp(
     ws_mock.expect_sample_rate().return_const(sample_rate);
     ws_mock.expect_channels().return_const(channels);
     ws_mock.expect_max_input().return_const(max_input);
-    ws_mock.expect_import_tensor().return_const(Ok(ResourceStats::new(vec![20, 100])));
+    ws_mock.expect_import_tensor().returning(|_, _, _|Ok(ResourceStats::new(vec![20, 100])));
     ws_mock
 }
 

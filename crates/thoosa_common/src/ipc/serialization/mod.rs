@@ -14,10 +14,10 @@ use thoosa_shared::traits::{Stage, SyncStage};
 
 
 pub trait ToFromBytes { //TODO rename
-    fn to_bytes<T>(value: &T) -> Result<Vec<u8>, ThoError>
+    fn to_bytes<T>(value: &T) -> anyhow::Result<Vec<u8>>
     where
         T: Serialize + ?Sized;
-    fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T, ThoError>
+    fn from_bytes<'a, T>(s: &'a [u8]) -> anyhow::Result<T>
     where
         T: Deserialize<'a>;
 }
@@ -26,17 +26,17 @@ pub struct PostcardToFromBytes;
 
 impl ToFromBytes for PostcardToFromBytes {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="PostcardToFromBytes::to_bytes"))]
-    fn to_bytes<T>(value: &T) -> Result<Vec<u8>, ThoError>
+    fn to_bytes<T>(value: &T) -> anyhow::Result<Vec<u8>>
     where
         T: Serialize + ?Sized{
-        postcard::to_allocvec(&value).map_err(|e|ThoError::new(e.to_string()))
+        Ok(postcard::to_allocvec(&value)?)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="PostcardToFromBytes::from_bytes"))]
-    fn from_bytes<'a, T>(s: &'a [u8]) -> Result<T, ThoError>
+    fn from_bytes<'a, T>(s: &'a [u8]) -> anyhow::Result<T>
     where
         T: Deserialize<'a>
     {
-        postcard::from_bytes::<T>(s).map_err(|e|ThoError::new(e.to_string()))
+        Ok(postcard::from_bytes::<T>(s)?)
     }
 }

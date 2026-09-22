@@ -706,12 +706,12 @@ pub fn hump(x: f64, center: f64, steepness: f64, flatness: f64) -> f64 {
 }
 
 pub trait FromJsonFile {
-    fn from_file(path: &PathBuf) -> Result<Self, ThoError>
+    fn from_file(path: &PathBuf) -> anyhow::Result<Self>
         where Self:Sized;
 }
 
 pub trait ToJsonFile:Debug {
-    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError>;
+    fn to_file(&self, path: &PathBuf) -> anyhow::Result<()>;
 }
 
 #[delegatable_trait]

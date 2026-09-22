@@ -41,7 +41,7 @@ pub trait WithCommonTrainingRunConfig {
     fn config(&self)->&CommonTrainingRunConfig;
 }
 
-type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError>;
+type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>>;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
     id:SynKey,
@@ -89,7 +89,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         let _guard = InferenceModeGuard::new(!train);
 
         //TODO move to ThoVarStore?
@@ -105,7 +105,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for
                 kind
             }
             VarStoreFloatPrecision::Mixed(_) => {
-                return Err(ThoError::new(format!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id)))
+                return Err(anyhow::anyhow!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id))
             }
         };
 
@@ -142,9 +142,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
     }
 
-    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device, quantize: bool) -> Result<Self, ThoError>
+    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device, quantize: bool) -> anyhow::Result<Self>
     where
-        F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> + Send + Sync + 'static,
+        F: Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> + Send + Sync + 'static,
     {
         let _guard = InferenceModeGuard::enabled();
 
@@ -405,7 +405,7 @@ impl CommonTrainingRunConfig {
         }
     }
 
-    pub fn build_optimizer(&self, vs: &VarStore)->Result<Optimizer, ThoError>{
+    pub fn build_optimizer(&self, vs: &VarStore)->anyhow::Result<Optimizer>{
         self.tho_optimizer().build_for(vs, self.lr)
     }
 
@@ -553,10 +553,10 @@ impl ConvNetParams {
     }
 }
 
-pub fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Result<Tensor, ThoError> {
+pub fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> anyhow::Result<Tensor> {
     let h_size = h.size();
     if h_size.len() != 3 {
-        return Err(ThoError::new(format!("self_attention_masked_mean expected [B,L,D], got {:?}", h_size)));
+        return Err(anyhow::anyhow!("self_attention_masked_mean expected [B,L,D], got {:?}", h_size));
     }
     if let Some(lengths) = lengths {
         let kind = h.kind();
@@ -683,7 +683,7 @@ pub async fn opt_train<P, R, F, N: Debug + Default, A: Debug + Send + Sync + 'st
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     descr: &str,
     reusable_completed_trials: Vec<CompletedTrial>,
-) -> Result<(A, N, R, f32), ThoError>
+) -> anyhow::Result<(A, N, R, f32)>
 where
     P: FieldName + 'static,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
@@ -782,10 +782,10 @@ where
     Arc::into_inner(min_var_store)
         .expect("min_var_store is used somewhere else")
         .into_inner()
-        .ok_or_else(|| ThoError::new("no min_var_store"))
+        .ok_or_else(|| anyhow::anyhow!("no min_var_store"))
 }
 
-pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoError> {
+pub fn is_nonzero(t_1: &Tensor) -> anyhow::Result<bool> {
     Ok(t_1
         .flatten(0, (t_1.size().len() - 1) as i64)
         .iter::<f64>()?
@@ -901,15 +901,15 @@ impl StftRunConfig {
         Self { n_fft, hop_length, win_length, normalized, onesided, align_to_window }
     }
 
-    pub fn validate(&self) -> Result<(), ThoError> {
+    pub fn validate(&self) -> anyhow::Result<()> {
         if self.n_fft <= 0 {
-            return Err(ThoError::new(format!("StftRunConfig::validate: n_fft must be positive, got {}", self.n_fft)));
+            return Err(anyhow::anyhow!("StftRunConfig::validate: n_fft must be positive, got {}", self.n_fft));
         }
         if matches!(self.hop_length, Some(v) if v <= 0) {
-            return Err(ThoError::new(format!("StftRunConfig::validate: hop_length must be positive, got {:?}", self.hop_length)));
+            return Err(anyhow::anyhow!("StftRunConfig::validate: hop_length must be positive, got {:?}", self.hop_length));
         }
         if matches!(self.win_length, Some(v) if v <= 0) {
-            return Err(ThoError::new(format!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length)));
+            return Err(anyhow::anyhow!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length));
         }
         Ok(())
     }

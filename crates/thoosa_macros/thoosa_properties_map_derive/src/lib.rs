@@ -224,7 +224,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 fields_in_from_properties.push(quote! {
                                     #field_ident: properties.get(&thoosa_shared::conc_str(&prefix, #field_name))
                                         .map(|v|v.try_into().expect(&format!("can't convert {}: value={v:?}", #field_name)))
-                                        .ok_or_else(||thoosa_shared::ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, #field_name))))?,
+                                        .ok_or_else(||thoosa_shared::anyhow::anyhow!(format!("no {} in properties", thoosa_shared::conc_str(&prefix, #field_name))))?,
 
                                 });
                             } else {
@@ -268,7 +268,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             }
 
                             impl thoosa_properties_map::FromHashmap for #target_ident {
-                                fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoosaError> {
+                                fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> thoosa_shared::anyhow::Result<Self> {
                                     let _prefix = parent.unwrap_or(#target_ident_prefix.to_string());
                                     let _ = properties;
 
@@ -291,7 +291,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             }
 
                             impl thoosa_properties_map::FromHashmap for #target_ident {
-                                fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoosaError> {
+                                fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> thoosa_shared::anyhow::Result<Self> {
                                     let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
 
                                     Ok(#target_ident {
@@ -361,7 +361,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
             variants_in_from_properties.push(quote! {
                 else {
-                    Err(thoosa_shared::ThoosaError::new(format!("Unexpected variant prefix={prefix} in {properties:?} ")))
+                    Err(thoosa_shared::anyhow::anyhow!(format!("Unexpected variant prefix={prefix} in {properties:?} ")))
                 }
             });
 
@@ -377,7 +377,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                 impl thoosa_properties_map::FromHashmap for #target_ident {
 
-                    fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoosaError>{
+                    fn from_properties_map(parent:Option<String>, properties: &std::collections::HashMap<String, thoosa_shared::val::Val>) -> thoosa_shared::anyhow::Result<Self>{
                         log::debug!("{}from_properties_map: parent={parent:?} properties={properties:?}", #target_ident_prefix);
 
                         let prefix = parent.unwrap_or(#target_ident_prefix.to_string());

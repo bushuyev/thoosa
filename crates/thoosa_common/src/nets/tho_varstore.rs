@@ -27,8 +27,8 @@ pub struct ModConfig<DI, DO>
 where
     DI: Dims, DO: Dims
 {
-    optimizer_builder: Box<dyn Fn(&VarStore) -> Result<Pin<Box<Optimizer>>, ThoError> + Send + Sync>,
-    net: Box<dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync>,
+    optimizer_builder: Box<dyn Fn(&VarStore) -> anyhow::Result<Pin<Box<Optimizer>>> + Send + Sync>,
+    net: Box<dyn Fn(&VarStore) -> anyhow::Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>> + Send + Sync>,
     opt_config: ThoOptimizers
 }
 
@@ -53,7 +53,7 @@ where
      */
     pub fn new<NB>(opt_config: ThoOptimizers, net: NB, lr: f64) -> Self
     where
-        NB: Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync + 'static,
+        NB: Fn(&VarStore) -> anyhow::Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>> + Send + Sync + 'static,
     {
         let opt_config_for_builder = opt_config.clone();
         Self {
@@ -73,7 +73,7 @@ pub enum ThoOptimizers {
 }
 
 impl ThoOptimizers {
-    fn build(&self, vs:&VarStore, lr: f64) -> Result<Optimizer,ThoError>
+    fn build(&self, vs:&VarStore, lr: f64) -> anyhow::Result<Optimizer>
     {
         Ok(match self {
             ThoOptimizers::Adam { config } => config.build(vs, lr)?,
@@ -82,13 +82,13 @@ impl ThoOptimizers {
         })
     }
 
-    pub fn build_for(&self, vs: &VarStore, lr: f64) -> Result<Optimizer, ThoError> {
+    pub fn build_for(&self, vs: &VarStore, lr: f64) -> anyhow::Result<Optimizer> {
         // Keep legacy callers on the same optimizer construction path used by
         // stateful training modules.
         self.build(vs, lr)
     }
 
-    unsafe fn snapshot(&self, optimizer: *const torch_sys::C_optimizer, tho_device_idx: usize) -> Result<OptimizerSnapshot, ThoError> {
+    unsafe fn snapshot(&self, optimizer: *const torch_sys::C_optimizer, tho_device_idx: usize) -> anyhow::Result<OptimizerSnapshot> {
         // The configuration is the authoritative optimizer type because tch erases it behind Optimizer.
         Ok(match self {
             ThoOptimizers::Adam { .. } => OptimizerSnapshot::Adam(unsafe { adam_snapshot(optimizer, tho_device_idx)? }),
@@ -97,12 +97,12 @@ impl ThoOptimizers {
         })
     }
 
-    unsafe fn restore_snapshot(&self, snapshot: &OptimizerSnapshot, optimizer: *mut torch_sys::C_optimizer) -> Result<(), ThoError> {
+    unsafe fn restore_snapshot(&self, snapshot: &OptimizerSnapshot, optimizer: *mut torch_sys::C_optimizer) -> anyhow::Result<()> {
         match (self, snapshot) {
-            (ThoOptimizers::Adam { .. }, OptimizerSnapshot::Adam(snapshot)) => unsafe { restore_adam_snapshot(snapshot, optimizer) },
-            (ThoOptimizers::AdamW { .. }, OptimizerSnapshot::AdamW(snapshot)) => unsafe { restore_adam_w_snapshot(snapshot, optimizer) },
-            (ThoOptimizers::Sgd { .. }, OptimizerSnapshot::Sgd(snapshot)) => unsafe { restore_sgd_snapshot(snapshot, optimizer) },
-            (config, snapshot) => Err(ThoError::new(format!("optimizer configuration {config:?} does not match snapshot {snapshot:?}"))),
+            (ThoOptimizers::Adam { .. }, OptimizerSnapshot::Adam(snapshot)) => Ok(unsafe { restore_adam_snapshot(snapshot, optimizer) }?),
+            (ThoOptimizers::AdamW { .. }, OptimizerSnapshot::AdamW(snapshot)) => Ok(unsafe { restore_adam_w_snapshot(snapshot, optimizer) }?),
+            (ThoOptimizers::Sgd { .. }, OptimizerSnapshot::Sgd(snapshot)) => Ok(unsafe { restore_sgd_snapshot(snapshot, optimizer) }?),
+            (config, snapshot) => Err(anyhow::anyhow!("optimizer configuration {config:?} does not match snapshot {snapshot:?}")),
         }
     }
 }
@@ -169,7 +169,7 @@ impl <DI, DO> ThoTrainModule<DI, DO>
 where
     DI: Dims, DO: Dims
 {
-    pub fn new_on_device(config: ModConfig<DI, DO>, device: ThoDevice) -> Result<Self, ThoError> {
+    pub fn new_on_device(config: ModConfig<DI, DO>, device: ThoDevice) -> anyhow::Result<Self> {
         let (module, var_store) = Self::init_opt(&config.net, device)?;
         let opt = (config.optimizer_builder)(&var_store)?;
         Ok(Self {
@@ -178,7 +178,7 @@ where
         })
     }
 
-    fn init_opt(net: &dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError>, device: ThoDevice) -> Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, VarStore), ThoError> {
+    fn init_opt(net: &dyn Fn(&VarStore) -> anyhow::Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>, device: ThoDevice) -> anyhow::Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, VarStore)> {
         let var_store = nn::VarStore::new(device.into());
         let module = net(&var_store)?;
         Ok((module, var_store))
@@ -206,7 +206,7 @@ where
         }
     }
 
-    pub fn into_var_store(self) -> Result<VarStore, ThoError> {
+    pub fn into_var_store(self) -> anyhow::Result<VarStore> {
         match self.opt_state {
             OptSnapshot::Opt { opt, vs, module } => {
                 /*
@@ -221,13 +221,13 @@ where
         }
     }
 
-    pub fn save_var_store_to_stream(&self, output: &mut dyn std::io::Write) -> Result<(), ThoError> {
+    pub fn save_var_store_to_stream(&self, output: &mut dyn std::io::Write) -> anyhow::Result<()> {
         match &self.opt_state {
-            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => vs.save_to_stream(output).map_err(ThoError::from),
+            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => vs.save_to_stream(output).map_err(anyhow::Error::from),
         }
     }
 
-    pub fn save_var_store<T>(&self, path:T) -> Result<(), ThoError>
+    pub fn save_var_store<T>(&self, path:T) -> anyhow::Result<()>
     where
         T:AsRef<std::path::Path> + Debug
     {
@@ -235,7 +235,7 @@ where
 
         match &self.opt_state {
             OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => {
-                panic_to_err!(vs.save(&path))
+                Ok(panic_to_err!(vs.save(&path))?)
             },
         }
 
@@ -364,7 +364,7 @@ fn add_named_tensor(
 pub async fn clone_adam_snapshot_to(
     src: &AdamOptimizerSnapshot,
     tho_device: ThoDevice,
-) -> Result<AdamOptimizerSnapshot, ThoError> {
+) -> anyhow::Result<AdamOptimizerSnapshot> {
     /*
      * Own every tensor handle before the first await. Tensor is Send but not
      * Sync, so borrowing snapshot states across an await makes this future
@@ -376,7 +376,7 @@ pub async fn clone_adam_snapshot_to(
 pub async fn clone_adam_w_snapshot_to(
     src: &AdamWOptimizerSnapshot,
     tho_device: ThoDevice,
-) -> Result<AdamWOptimizerSnapshot, ThoError> {
+) -> anyhow::Result<AdamWOptimizerSnapshot> {
     // AdamW shares the tensor-state representation but keeps a named copy entry point for optimizer-specific routing.
     clone_owned_adam_w_snapshot_to(detach_adam_w_snapshot(src), tho_device).await
 }
@@ -384,7 +384,7 @@ pub async fn clone_adam_w_snapshot_to(
 pub async fn clone_sgd_snapshot_to(
     src: &SgdOptimizerSnapshot,
     tho_device: ThoDevice,
-) -> Result<SgdOptimizerSnapshot, ThoError> {
+) -> anyhow::Result<SgdOptimizerSnapshot> {
     // Detaching before the await keeps the non-Sync borrowed snapshot out of the returned future.
     clone_owned_sgd_snapshot_to(detach_sgd_snapshot(src), tho_device).await
 }
@@ -439,18 +439,18 @@ fn detach_adam_like_snapshot(src: &AdamOptimizerSnapshot) -> AdamOptimizerSnapsh
 async fn clone_owned_adam_snapshot_to(
     src: AdamOptimizerSnapshot,
     tho_device: ThoDevice,
-) -> Result<AdamOptimizerSnapshot, ThoError> {
+) -> anyhow::Result<AdamOptimizerSnapshot> {
     clone_owned_adam_like_snapshot_to(src, tho_device, "Adam").await
 }
 
 async fn clone_owned_adam_w_snapshot_to(
     src: AdamWOptimizerSnapshot,
     tho_device: ThoDevice,
-) -> Result<AdamWOptimizerSnapshot, ThoError> {
+) -> anyhow::Result<AdamWOptimizerSnapshot> {
     clone_owned_adam_like_snapshot_to(src, tho_device, "AdamW").await
 }
 
-async fn clone_owned_adam_like_snapshot_to(src: AdamOptimizerSnapshot, tho_device: ThoDevice, optimizer_name: &str) -> Result<AdamOptimizerSnapshot, ThoError> {
+async fn clone_owned_adam_like_snapshot_to(src: AdamOptimizerSnapshot, tho_device: ThoDevice, optimizer_name: &str) -> anyhow::Result<AdamOptimizerSnapshot> {
     debug!("clone_owned_adam_like_snapshot_to: optimizer_name={optimizer_name} src={src:?} tho_device={tho_device:?}");
     let actor_device_idx = optimizer_copy_actor_device_idx(src.tho_device_idx, tho_device);
 
@@ -493,7 +493,7 @@ async fn clone_owned_adam_like_snapshot_to(src: AdamOptimizerSnapshot, tho_devic
     })
 }
 
-async fn clone_owned_sgd_snapshot_to(src: SgdOptimizerSnapshot, tho_device: ThoDevice) -> Result<SgdOptimizerSnapshot, ThoError> {
+async fn clone_owned_sgd_snapshot_to(src: SgdOptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<SgdOptimizerSnapshot> {
     debug!("clone_owned_sgd_snapshot_to: src={src:?} tho_device={tho_device:?}");
     let actor_device_idx = optimizer_copy_actor_device_idx(src.tho_device_idx, tho_device);
 
@@ -532,7 +532,7 @@ fn detach_optimizer_snapshot(src: &OptimizerSnapshot) -> OptimizerSnapshot {
     }
 }
 
-async fn clone_owned_optimizer_snapshot_to(src: OptimizerSnapshot, tho_device: ThoDevice) -> Result<OptimizerSnapshot, ThoError> {
+async fn clone_owned_optimizer_snapshot_to(src: OptimizerSnapshot, tho_device: ThoDevice) -> anyhow::Result<OptimizerSnapshot> {
     Ok(match src {
         OptimizerSnapshot::Adam(snapshot) => OptimizerSnapshot::Adam(clone_owned_adam_snapshot_to(snapshot, tho_device).await?),
         OptimizerSnapshot::AdamW(snapshot) => OptimizerSnapshot::AdamW(clone_owned_adam_w_snapshot_to(snapshot, tho_device).await?),
@@ -544,7 +544,7 @@ async fn clone_owned_optimizer_snapshot_to(src: OptimizerSnapshot, tho_device: T
 pub async fn clone_var_store_to(
     src: &VarStore,
     tho_device: ThoDevice,
-) -> Result<VarStore, ThoError> {
+) -> anyhow::Result<VarStore> {
 
     let actor_device_idx = if tho_device.is_cuda() {
         assert_eq!(src.device(), Cpu);
@@ -678,13 +678,13 @@ pub async fn clone_var_store_to(
 }
 
 
-pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> {
+pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> anyhow::Result<()> {
     let mut dst_variables = dst.variables_.lock().unwrap();
     let src_variables = src.variables_.lock().unwrap();
 
     for name in dst_variables.named_variables.keys() {
         if !src_variables.named_variables.contains_key(name) {
-            return Err(ThoError::new(format!("no {name} in src")));
+            return Err(anyhow::anyhow!("no {name} in src"));
         }
     }
 
@@ -692,20 +692,20 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> 
         let src_var = &src_variables.named_variables[name];
 
         if dst_var.device() != src_var.device() {
-            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.device(), src_var.device())));
+            return Err(anyhow::anyhow!("dst device {:?} != {:?} src device", dst_var.device(), src_var.device()));
         }
 
         if dst_var.kind() != src_var.kind() {
-            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.kind(),  src_var.kind())));
+            return Err(anyhow::anyhow!("dst device {:?} != {:?} src device", dst_var.kind(),  src_var.kind()));
         }
 
         if dst_var.size() != src_var.size() {
-            return Err(ThoError::new(format!("dst size {:?} != {:?} src device", dst_var.size(),  src_var.size())));
+            return Err(anyhow::anyhow!("dst size {:?} != {:?} src device", dst_var.size(),  src_var.size()));
         }
 
         if dst_var.grad().defined() {
 
-            return Err(ThoError::new(format!("destination parameter {name} has a defined gradient")));
+            return Err(anyhow::anyhow!("destination parameter {name} has a defined gradient"));
         }
 
         no_grad(|| dst_var.f_set_data(src_var))?;
@@ -714,7 +714,7 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> 
     Ok(())
 }
 
-async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'static str) -> Result<(), ThoError>{
+async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'static str) -> anyhow::Result<()>{
     // Every supported optimizer uses the same deterministic trajectory so device restoration is compared under identical pressure.
     const IMAGE_DIM: i64 = 128;
     const TEACHER_HIDDEN: i64 = 64;
@@ -730,7 +730,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
     const RESET_EPOCH: i64 = 50;
     const LEARNING_RATE: f64 = 1e-3;
 
-    pub fn test_net() -> Result<Node, ThoError> {
+    pub fn test_net() -> anyhow::Result<Node> {
         /*
          * Keep the same classifier topology that this optimizer-state test
          * used before ModConfig switched from Module to ThoModule.
@@ -782,7 +782,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
         train_labels: &Tensor,
         test_images: &Tensor,
         test_labels: &Tensor,
-    ) -> Result<Vec<f64>, ThoError> {
+    ) -> anyhow::Result<Vec<f64>> {
 
         // Makes both runs start from identical model parameters.
         tch::manual_seed(1234);
@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_clone_var_store_to() -> Result<(), ThoError> {
+    async fn test_clone_var_store_to() -> anyhow::Result<()> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1015,7 +1015,7 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_reset_adam_local() -> Result<(), ThoError> {
+    async fn test_reset_adam_local() -> anyhow::Result<()> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_reset_adam_w_local() -> Result<(), ThoError> {
+    async fn test_reset_adam_w_local() -> anyhow::Result<()> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1033,7 +1033,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_reset_sgd_local() -> Result<(), ThoError> {
+    async fn test_reset_sgd_local() -> anyhow::Result<()> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 

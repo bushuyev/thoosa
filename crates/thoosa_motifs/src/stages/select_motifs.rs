@@ -1240,12 +1240,12 @@ pub mod tests {
             if group == resources_group {
                 Ok(vec![resource_for_resources_query.clone()])
             } else {
-                Err(ThoError::new(format!("unexpected resources group: {group}")))
+                Err(anyhow::anyhow!("unexpected resources group: {group}"))
             }
         });
         store_mock.expect_list_motifs().times(1).returning(move |run_config_id| {
             if run_config_id != find_motifs_run_config_id {
-                return Err(ThoError::new(format!("unexpected find_motifs_run_config_id: {run_config_id}")));
+                return Err(anyhow::anyhow!("unexpected find_motifs_run_config_id: {run_config_id}"));
             }
             Ok(vec![11, 12])
         });
@@ -1315,12 +1315,12 @@ pub mod tests {
             if group == resources_group {
                 Ok(vec![resource_for_resources_query.clone()])
             } else {
-                Err(ThoError::new(format!("unexpected resources group: {group}")))
+                Err(anyhow::anyhow!("unexpected resources group: {group}"))
             }
         });
         store_mock.expect_list_motifs().times(1).returning(move |run_config_id| {
             if run_config_id != find_motifs_run_config_id {
-                return Err(ThoError::new(format!("unexpected find_motifs_run_config_id: {run_config_id}")));
+                return Err(anyhow::anyhow!("unexpected find_motifs_run_config_id: {run_config_id}"));
             }
             Ok(vec![21, 22])
         });

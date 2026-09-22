@@ -963,7 +963,7 @@ impl ToHashmap for ExtendMotifsConfig {
 }
 
 impl FromHashmap for ExtendMotifsConfig {
-    fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoError> {
+    fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> anyhow::Result<Self> {
         let prefix = parent.unwrap_or("ExtendMotifsConfig::".to_string());
         Ok(Self {
             slices_selector_metric: SimilarityMetric::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "slices_selector_metric.")), properties)?,
@@ -1586,7 +1586,7 @@ impl SavableResult for SelectMotifsSavableResult {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
 
         for run_result in &self.run_results {
             track_await(store.save_selected_motifs(

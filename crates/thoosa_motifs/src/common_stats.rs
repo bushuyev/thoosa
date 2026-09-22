@@ -170,16 +170,16 @@ pub fn estimate_channel_stats_from_windows(
     q_hi: f64,                 // e.g. 0.95
     scale_q: f64,              // e.g. 0.50 median, or 0.75/0.90 stricter
     eps: f64,
-) -> Result<Vec<Stats>, ThoError> {
+) -> anyhow::Result<Vec<Stats>> {
     let sz = channels_windows.size();
     if sz.len() != 3 {
-        return Err(ThoError::new(format!("expected [C,M,L], got {:?}", sz)));
+        return Err(anyhow::anyhow!("expected [C,M,L], got {:?}", sz));
     }
     let c = sz[0];
     let m = sz[1];
     let l = sz[2];
     if m < 1 || l < 2 {
-        return Err(ThoError::new(format!("need M>=1 and L>=2, got M={m} L={l}")));
+        return Err(anyhow::anyhow!("need M>=1 and L>=2, got M={m} L={l}"));
     }
 
     // For stats/scalar extraction, easiest is CPU float.

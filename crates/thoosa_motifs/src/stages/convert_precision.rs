@@ -54,10 +54,10 @@ impl PrecisionModelType<dyn MotifsWorkspace> for ConvertPrecisionNetType {
         }
     }
 
-    fn root(self, ws: &dyn MotifsWorkspace) -> Result<PathBuf, ThoError> {
+    fn root(self, ws: &dyn MotifsWorkspace) -> anyhow::Result<PathBuf> {
         match self {
-            Self::Motifs => ws.motifs_nets_path(),
-            Self::Labels => ws.labels_nets_path(),
+            Self::Motifs => Ok(ws.motifs_nets_path()?),
+            Self::Labels => Ok(ws.labels_nets_path()?),
             Self::Final => ws.final_nets_path(),
             Self::All => Ok(ws.models_path().clone()),
         }

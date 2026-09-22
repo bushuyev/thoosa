@@ -38,7 +38,7 @@ mod tests {
     }
 
     #[test]
-    fn test_morlet_wavelet() -> Result<(), ThoError> {
+    fn test_morlet_wavelet() -> anyhow::Result<()> {
         let sample_rate = 1000.0; // Hz
         let duration_secs = 2.0;
         let samples = (duration_secs * sample_rate) as i64;

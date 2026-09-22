@@ -258,7 +258,7 @@ where
         }
     }
 
-    async fn load_resources_for_input(&self, resources_config: Option<RC>) -> Result<Vec<Resource>, ThoError> {
+    async fn load_resources_for_input(&self, resources_config: Option<RC>) -> anyhow::Result<Vec<Resource>> {
         match resources_config {
             Some(resources_config) => track_await(resources_config.to_resources(&self.store)).await,
             None => {

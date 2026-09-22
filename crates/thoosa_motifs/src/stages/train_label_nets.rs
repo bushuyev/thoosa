@@ -533,7 +533,7 @@ impl SavableResult for TrainLabelNetsOutput {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
 
         let mut run_config_ids = Vec::with_capacity(self.results.len());
 
@@ -984,8 +984,8 @@ fn train_label_step_params(run_config: &TrainLabelNetRunConfig, num_nets: u32) -
     }
 }
 
-fn train_label_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
-    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).map_err(ThoError::from)
+fn train_label_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
+    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).map_err(anyhow::Error::from)
 }
 
 impl WorkerStageInput for TrainLabelStepIpcInit {
@@ -1638,7 +1638,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
 
         let run_config_id = track_await(store.save_run_config(
             Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput

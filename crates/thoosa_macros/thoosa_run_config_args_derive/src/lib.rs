@@ -824,7 +824,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident<#fields_enum_ident> {
                 type P =  #fields_enum_ident;
 
-                fn opt_run_configs(&self) -> Result<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident>, thoosa_shared::ThoError> {
+                fn opt_run_configs(&self) -> thoosa_shared::anyhow::Result<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident>> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
@@ -837,7 +837,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                         .iter()
                         .any(|grid_param| grid_param.grid_value_sets().into_iter().any(|value_set| !value_set.pending_fields().is_empty()));
                     if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
-                        return Err(thoosa_shared::ThoError::new("no opt params in run config"));
+                        return Err(thoosa_shared::anyhow::anyhow!("no opt params in run config"));
                     }
 
                     Ok(thoosa_shared::run_configs::OptRunConfigs::new(
@@ -855,14 +855,14 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             impl thoosa_run_config_args::GridRunConfigSource for #range_or_value_struct_ident<#fields_enum_ident> {
                 type P =  #fields_enum_ident;
 
-                fn grid_run_configs(&self) -> Result<thoosa_shared::run_configs::GridRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>>, thoosa_shared::ThoError> {
+                fn grid_run_configs(&self) -> thoosa_shared::anyhow::Result<thoosa_shared::run_configs::GridRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>>> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
                     self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
                     if !opt_params.is_empty() {
-                        return Err(thoosa_shared::ThoError::new("opt params in grid run config"));
+                        return Err(thoosa_shared::anyhow::anyhow!("opt params in grid run config"));
                     }
 
                     Ok(thoosa_shared::run_configs::GridRunConfigs::new(

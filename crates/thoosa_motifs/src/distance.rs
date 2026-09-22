@@ -20,7 +20,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{ThoError, panic_to_err};
 
 #[allow(dead_code)]
-pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     Ok(z_norm(t_0, 1)?
         .f_sub(&z_norm(t_1, 1)?)?
         .f_pow_tensor_scalar(2)?
@@ -28,7 +28,7 @@ pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Te
         .f_pow_tensor_scalar(0.5)?)
 }
 
-pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoError> {
+pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> anyhow::Result<Tensor> {
     //https://github.com/pytorch/pytorch/blob/96487d0d1f638ae9c665dcd3d4b79e7e2a976f59/aten/src/ATen/native/cuda/DistanceKernel.cu#L188
     //0 -use_mm_for_euclid_dist_if_necessary
     //1 -use_mm_for_euclid_dist
@@ -69,7 +69,7 @@ pub enum MaskMaker<'a> {
 }
 
 impl<'a> MaskMaker<'a> {
-    pub fn make_mask(&mut self, prev_mask: Option<Tensor>, dists: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn make_mask(&mut self, prev_mask: Option<Tensor>, dists: &Tensor) -> anyhow::Result<Tensor> {
         debug!("make_mask: prev_mask={prev_mask:?} dists={dists:?} self={self:?}");
 
         match self {
@@ -140,7 +140,7 @@ impl<'a> MaskMaker<'a> {
         }
     }
 
-    fn apply_prev(perv_mask: &Option<Tensor>, mask: Tensor) -> Result<Tensor, ThoError> {
+    fn apply_prev(perv_mask: &Option<Tensor>, mask: Tensor) -> anyhow::Result<Tensor> {
         trace!("apply_prev: perv_mask={perv_mask:?} mask=\n{mask}");
         match perv_mask {
             None => Ok(mask),
@@ -159,7 +159,7 @@ impl<'a> MaskMaker<'a> {
     t_0, t_1 - channels x slices x slice_len
 */
 /// returns bool mask and, if with_distances is true, distances
-pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> Result<Tensor, ThoError> {
+pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> anyhow::Result<Tensor> {
     match similarity_metric {
         SimilarityMetric::EucDist(config) => {
             if config.z_normalize {
@@ -217,18 +217,18 @@ pub fn clc_d2_similarity_and_mask(
     similarity_metric: SimilarityMetric,
     with_distances: bool,
     mask_makers: &mut [MaskMaker],
-) -> Result<(Tensor, Option<Tensor>), ThoError> {
+) -> anyhow::Result<(Tensor, Option<Tensor>)> {
     let device = t_0.device();
 
     if t_0.size()[1] < 2 {
-        return Err(ThoError::new(format!(
+        return Err(anyhow::anyhow!(format!(
             "not enough slices in dimension 0 to calculate distances and mask: t_0.size={:?} t_1.size={:?}",
             t_0.size(),
             t_1.size()
         )));
     }
     if t_1.size()[1] < 2 {
-        return Err(ThoError::new(format!(
+        return Err(anyhow::anyhow!(format!(
             "not enough slices in dimension 1 to calculate distances and mask: t_0.size={:?} t_1.size={:?}",
             t_0.size(),
             t_1.size()
@@ -266,7 +266,7 @@ pub fn clc_d2_similarity_and_mask(
 }
 
 /// distances - [channels x slices 0 x slices 1]
-fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Result<Tensor, ThoError> {
+fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> anyhow::Result<Tensor> {
     let distances_size = distances.size();
 
     trace!("quantile_mask: after pre_mask distances=\n{distances}");
@@ -328,7 +328,7 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Resul
 ///
 /// * distances - [channels x slices 0 x slices 1]
 /// * returns - Bool tensor of same size with true for local minimums for  slice 1 along slices 0.
-fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+fn local_min_mask(distances: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     debug!("local_min_mask: distances.size={:?} dim={dim}", distances.size());
     trace!("local_min_mask: distances=\n{distances}");
     let distances_size = distances.size();
@@ -379,7 +379,7 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
 
 /// Minimum over a sliding window of size (2*radius+1) along `dim`.
 /// Implemented as: minpool(x) = -maxpool(-x) using max_pool2d on a [B,1,1,L] view.
-fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> Result<Tensor, ThoError> {
+fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> anyhow::Result<Tensor> {
     if radius <= 0 {
         return Ok(x.shallow_clone());
     }
@@ -388,7 +388,7 @@ fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> Result<Tensor, Tho
     let ndim = sizes.len() as i64;
     let dim = if dim < 0 { dim + ndim } else { dim };
     if dim < 0 || dim >= ndim {
-        return Err(ThoError::new(format!("window_min_along_dim: invalid dim={dim} for ndim={ndim}")));
+        return Err(anyhow::anyhow!("window_min_along_dim: invalid dim={dim} for ndim={ndim}"));
     }
 
     // permute so that `dim` becomes the last dimension
@@ -425,7 +425,7 @@ fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> Result<Tensor, Tho
     Ok(win_min_perm.f_permute(&inv)?)
 }
 
-fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> Result<Tensor, ThoError> {
+fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> anyhow::Result<Tensor> {
     if radius0 <= 0 && radius1 <= 0 {
         return Ok(x_bhw.shallow_clone());
     }
@@ -500,9 +500,9 @@ pub fn local_min_mask_suppressed_2d_pool(
     dim1: i64,
     radius0: i64,
     radius1: i64,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     if radius0 < 0 || radius1 < 0 {
-        return Err(ThoError::new(format!(
+        return Err(anyhow::anyhow!(format!(
             "local_min_mask_suppressed_2d_pool: negative radius radius0={radius0} radius1={radius1}"
         )));
     }
@@ -514,7 +514,7 @@ pub fn local_min_mask_suppressed_2d_pool(
     let dim1 = if dim1 < 0 { dim1 + ndim } else { dim1 };
 
     if dim0 < 0 || dim0 >= ndim || dim1 < 0 || dim1 >= ndim || dim0 == dim1 {
-        return Err(ThoError::new(format!(
+        return Err(anyhow::anyhow!(format!(
             "local_min_mask_suppressed_2d_pool: invalid dims dim0={dim0} dim1={dim1} ndim={ndim}"
         )));
     }
@@ -539,7 +539,7 @@ pub fn local_min_mask_suppressed_2d_pool(
     // Use Float for lexicographic indices when exactly representable, otherwise Double.
     let hw = h
         .checked_mul(w)
-        .ok_or_else(|| ThoError::new("local_min_mask_suppressed_2d_pool: h*w overflow"))?;
+        .ok_or_else(|| anyhow::anyhow!("local_min_mask_suppressed_2d_pool: h*w overflow"))?;
     let idx_kind = if hw <= 16_777_216 {
         Kind::Float
     } else {
@@ -602,7 +602,7 @@ pub fn local_min_mask_suppressed_2d_pool(
 
 /// Keep only "well-separated" local minima:
 /// a point must be a local minimum AND the minimum in its ±radius neighborhood.
-fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> Result<Tensor, ThoError> {
+fn local_min_mask_suppressed(distances: &Tensor, dim: i64, radius: i64) -> anyhow::Result<Tensor> {
 
     if radius <= 0 {
         local_min_mask(distances, dim)
@@ -623,7 +623,7 @@ fn accumulating_mean_mask(
     pre_mask: Option<&Tensor>,
     means_acc: &Mutex<Tensor>,
     total_samples: &Mutex<Tensor>,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let distances_size = distances.size();
 
     debug!("mean_mask: k={k} distances={distances:?} pre_mask={pre_mask:?} means_acc={means_acc:?} total_samples={total_samples:?}");
@@ -728,7 +728,7 @@ fn accumulating_quantile_mask(
     pre_mask: Option<&Tensor>,
     quantiles_acc: &Mutex<Tensor>,
     total_samples: &Mutex<Tensor>,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let distances_size = distances.size();
     let q = q.clamp(0.0, 1.0);
 
@@ -816,7 +816,7 @@ fn accumulating_quantile_mask(
     Ok(le)
 }
 
-pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoError> {
+pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> anyhow::Result<Tensor> {
     let t_0 = t_0.f_unsqueeze(dim + 1)?; // channels x num_slices x 1 x slice_len
     let t_1 = t_1.f_unsqueeze(dim)?; // channels x 1 x num_slices x slice_len
 
@@ -855,7 +855,7 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
     Tensor::stack(&tensors_vec, 0)
 }
 
-pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
+pub fn average_euclidean_distance(t: &Tensor) -> anyhow::Result<f32> {
     let n = t.size()[0];
     debug!("average_euclidean_distance: n={n}");
 
@@ -951,7 +951,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_z_normalized_euclidean() -> Result<(), ThoError> {
+    fn test_z_normalized_euclidean() -> anyhow::Result<()> {
         let d = z_normalized_euclidean(
             &Tensor::vstack(&[
                 Tensor::from_slice(&[1., 0., 1., 0., 1.]),
@@ -984,7 +984,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_clc_dist_d2_0() -> Result<(), ThoError> {
+    fn test_clc_dist_d2_0() -> anyhow::Result<()> {
         let tensor_0 = Tensor::from_slice(&[0.0, 1.0, 2., 3.]).view((1, -1));
         let tensor_1 = Tensor::from_slice(&[0.0, 1.0, 2., 3.]).view((1, -1));
 
@@ -1286,7 +1286,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_clc_d2_similarity_and_mask_pearson_route() -> Result<(), ThoError> {
+    fn test_clc_d2_similarity_and_mask_pearson_route() -> anyhow::Result<()> {
         let t_0 = Tensor::from_slice(&[
             1.0f32, 2.0, 3.0,
             2.0, 3.0, 4.0,
@@ -1313,7 +1313,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_clc_d2_similarity_and_mask_dot_product_route() -> Result<(), ThoError> {
+    fn test_clc_d2_similarity_and_mask_dot_product_route() -> anyhow::Result<()> {
         let t_0 = Tensor::from_slice(&[
             1.0f32, 2.0,
             3.0, 4.0,
@@ -1339,7 +1339,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_clc_d2_similarity_and_mask_z_normalized_euclidean_route() -> Result<(), ThoError> {
+    fn test_clc_d2_similarity_and_mask_z_normalized_euclidean_route() -> anyhow::Result<()> {
         let t_0 = Tensor::from_slice(&[
             1.0f32, 3.0, 5.0,
             2.0, 4.0, 6.0,
@@ -2179,7 +2179,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_average_euclidean_distance() -> Result<(), ThoError> {
+    fn test_average_euclidean_distance() -> anyhow::Result<()> {
         let d = [1., 2., 3., 4., 5., 6., 7., 8., 9.];
         let ab = _dist_3(&d[0..3], &d[3..6]);
         let ac = _dist_3(&d[0..3], &d[6..9]);
@@ -2233,7 +2233,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_mask_maker_local_min() -> Result<(), ThoError> {
+    fn test_mask_maker_local_min() -> anyhow::Result<()> {
         // reset_print_options();
         // set_max_level(Trace);
 

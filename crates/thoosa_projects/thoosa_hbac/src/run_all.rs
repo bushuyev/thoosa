@@ -80,7 +80,7 @@ pub(crate) async fn run_all(
     mut root_ctx: RunCtxImpl,
     run_all_args: &RunAllArgs,
     all_config:AllConfigs
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     debug!("run_all: run_all_args={run_all_args:?} all_config={all_config:?}");
 
     let find_motifs_input = Arc::new(track_await(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?);
@@ -265,7 +265,7 @@ pub(crate) async fn run_all(
                 false,
             )).await?);
 
-            track_await(new_train_label_nets(
+            Ok(Arc::new(track_await(new_train_label_nets(
                 train_motif_nets_run_config_ids.clone(),
                 Arc::clone(&loader),
                 apply_motif_nets,
@@ -274,7 +274,7 @@ pub(crate) async fn run_all(
                 &store_in_train_labels,
                 Arc::clone(&all_config.train_labels_opt_config),
                 labels_filter.clone(),
-            )).await.map(|v| Arc::new(v))
+            )).await?))
         },
         || root_ctx.branch(true),
     )).await?;
@@ -299,7 +299,7 @@ pub(crate) async fn run_all(
         &ws,
         &store,
         async move |run_configs| {
-            track_await(new_train_final_net(
+            Ok(Arc::new(track_await(new_train_final_net(
                 train_label_nets_run_config_ids,
                 loader_in_train_final,
                 run_configs,
@@ -309,7 +309,7 @@ pub(crate) async fn run_all(
                 Arc::clone(&all_config.train_final_opt_config),
                 50, //TODO
                 run_all_args.selected_motif_nets_limit,
-            )).await.map(|v| Arc::new(v))
+            )).await?))
         },
         || root_ctx.branch(true),
     )).await?;
@@ -957,11 +957,11 @@ mod tests {
 
     #[derive(Debug)]
     struct PrepareRunAllData {
-        label_makers: Vec<fn() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError>>
+        label_makers: Vec<fn() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)>>
     }
 
     impl PrepareRunAllData {
-        pub fn new(label_makers: Vec<fn() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError>>) -> Self {
+        pub fn new(label_makers: Vec<fn() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)>>) -> Self {
             Self { label_makers }
         }
     }
@@ -997,7 +997,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn heavy_test_run_all_local() -> Result<(), ThoError> {
+    async fn heavy_test_run_all_local() -> anyhow::Result<()> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1014,9 +1014,9 @@ mod tests {
 
 
     #[test]
-    fn heavy_test_run_all_ipc() -> Result<(), ThoError> {
+    fn heavy_test_run_all_ipc() -> anyhow::Result<()> {
         let test_fn_name = "heavy_test_run_all_ipc";
-        run_ipc_test(
+        Ok(run_ipc_test(
             module_path!(),
             async {
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
@@ -1046,13 +1046,13 @@ mod tests {
                     r
                 }
             },
-        )
+        )?)
     }
 
     const CHANNELS:u32 = 3;
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
-    async fn do_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
+    async fn do_heavy_test_run_all(test_name: &str) -> anyhow::Result<()> {
 
         let settings = RunAllSettings {
             resources_per_label: 30,
@@ -1149,7 +1149,7 @@ mod tests {
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
                 Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
-                    .map_err(ThoError::from)
+                    .map_err(anyhow::Error::from)
             },
             None,
             true,
@@ -1211,10 +1211,10 @@ mod tests {
 
         info!("heavy_test_run_all: final_nets={final_nets:?}");
 
-        r
+        Ok(r?)
     }
 
-    fn tensor_0() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+    fn tensor_0() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
 
         let r = resource_tensor_two_easy_motifs(
             rng().random_range(1000..2000),
@@ -1232,7 +1232,7 @@ mod tests {
         Ok((r.0, r.1))
     }
 
-    fn tensor_1() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+    fn tensor_1() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
 
         let r = resource_tensor_two_easy_motifs(
             rng().random_range(1000..2000),
@@ -1250,7 +1250,7 @@ mod tests {
         Ok((r.0, r.1))
     }
 
-    fn tensor_2() -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+    fn tensor_2() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
 
         let r = resource_tensor_two_easy_motifs(
             2000, //rng().random_range(1000..2000),
