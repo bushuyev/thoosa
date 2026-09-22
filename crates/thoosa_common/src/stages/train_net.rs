@@ -569,7 +569,7 @@ pub mod tests {
         t
     }
 
-    fn dummy_loss_fn(pred: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
+    fn dummy_loss_fn(pred: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
         LOSS_FN_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(pred.f_sub(target)?.pow_tensor_scalar(2.).mean(tch::Kind::Float))
     }

@@ -25,7 +25,6 @@ use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgre
 use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
 use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::val::Val;
-use thoosa_shared::ThoError;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_store::{RunConfigEntry, RunConfigFilter, RunMotifEntry, SqlStore};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -711,7 +710,7 @@ impl App {
         self.ensure_motif_selection_visible();
     }
 
-    async fn load_run_motifs(&mut self, run_config_id: u32) -> Result<Vec<RunMotifEntry>, ThoError> {
+    async fn load_run_motifs(&mut self, run_config_id: u32) -> anyhow::Result<Vec<RunMotifEntry>> {
         if let Some(cached) = self.run_motifs_cache.get(&run_config_id).cloned() {
             return Ok(cached);
         }
@@ -841,7 +840,7 @@ impl App {
         }
     }
 
-    async fn load_next_run_config_page(&mut self, keep_run_config_id: Option<u32>) -> Result<bool, ThoError> {
+    async fn load_next_run_config_page(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<bool> {
         if !self.has_more_paged_run_configs {
             return Ok(false);
         }
@@ -881,7 +880,7 @@ impl App {
         Ok(true)
     }
 
-    async fn ensure_all_run_configs_loaded(&mut self, keep_run_config_id: Option<u32>) -> Result<(), ThoError> {
+    async fn ensure_all_run_configs_loaded(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
         while self.has_more_paged_run_configs {
             if !track_await(self.load_next_run_config_page(keep_run_config_id)).await? {
                 break;
@@ -890,7 +889,7 @@ impl App {
         Ok(())
     }
 
-    async fn ensure_run_config_ids_loaded(&mut self, run_config_ids: &[u32], keep_run_config_id: Option<u32>) -> Result<bool, ThoError> {
+    async fn ensure_run_config_ids_loaded(&mut self, run_config_ids: &[u32], keep_run_config_id: Option<u32>) -> anyhow::Result<bool> {
         let existing_ids = self.all_run_configs.iter().map(|entry| entry.id).collect::<HashSet<u32>>();
         let missing_ids = run_config_ids
             .iter()
@@ -912,7 +911,7 @@ impl App {
         Ok(true)
     }
 
-    async fn ensure_run_children_loaded(&mut self, run_config_id: u32, keep_run_config_id: Option<u32>) -> Result<bool, ThoError> {
+    async fn ensure_run_children_loaded(&mut self, run_config_id: u32, keep_run_config_id: Option<u32>) -> anyhow::Result<bool> {
         let output_run_config_ids = track_await(self.store.list_output_run_config_ids(run_config_id)).await?;
         if output_run_config_ids.is_empty() {
             self.known_run_config_ids_with_outputs.remove(&run_config_id);
@@ -930,7 +929,7 @@ impl App {
         Ok(!output_run_config_ids.is_empty())
     }
 
-    async fn maybe_load_more_run_configs(&mut self) -> Result<bool, ThoError> {
+    async fn maybe_load_more_run_configs(&mut self) -> anyhow::Result<bool> {
         if self.search_filters.is_empty()
             && self.has_more_paged_run_configs
             && self.selected_idx + self.main_page_size() >= self.run_configs.len()
@@ -1253,7 +1252,7 @@ impl App {
             .unwrap_or(0);
     }
 
-    async fn refresh_run_config_types(&mut self) -> Result<(), ThoError> {
+    async fn refresh_run_config_types(&mut self) -> anyhow::Result<()> {
         self.run_config_types = track_await(self.store.list_run_config_types()).await?;
         Ok(())
     }
@@ -1973,8 +1972,8 @@ impl App {
         }
     }
 
-    async fn load_filtered_run_configs(&mut self, keep_run_config_id: Option<u32>) -> Result<(), ThoError> {
-        let normalized = self.search_filters.normalized().map_err(ThoError::new)?;
+    async fn load_filtered_run_configs(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
+        let normalized = self.search_filters.normalized().map_err(anyhow::Error::msg)?;
         let run_configs = track_await(self
             .store
             .list_run_configs_filtered(RunConfigFilter {
@@ -2004,7 +2003,7 @@ impl App {
         Ok(())
     }
 
-    async fn try_refresh_run_configs(&mut self, keep_run_config_id: Option<u32>) -> Result<(), ThoError> {
+    async fn try_refresh_run_configs(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
         self.all_run_configs.clear();
         self.loaded_input_pairs.clear();
         self.known_output_run_config_ids.clear();
@@ -3818,7 +3817,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_apply_search_from_popup_filters_visible_rows() ->Result<(), ThoError>{
+    async fn test_apply_search_from_popup_filters_visible_rows() ->anyhow::Result<()>{
         // The TUI displays motif rows, so its test store must include the motif schema and trait boundary.
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables]).await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");

@@ -11,11 +11,11 @@ use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::run_ctx::RunCtxImpl;
 
 pub trait IpcCodec: Debug + Send + Sync + 'static {
-    fn encode<T>(value: &T) -> Result<Vec<u8>, ThoError>
+    fn encode<T>(value: &T) -> anyhow::Result<Vec<u8>>
     where
         T: Serialize + ?Sized;
 
-    fn decode<T>(bytes: &[u8]) -> Result<T, ThoError>
+    fn decode<T>(bytes: &[u8]) -> anyhow::Result<T>
     where
         T: DeserializeOwned;
 }
@@ -24,18 +24,18 @@ pub trait IpcCodec: Debug + Send + Sync + 'static {
 pub struct JsonIpcCodec;
 
 impl IpcCodec for JsonIpcCodec {
-    fn encode<T>(value: &T) -> Result<Vec<u8>, ThoError>
+    fn encode<T>(value: &T) -> anyhow::Result<Vec<u8>>
     where
         T: Serialize + ?Sized,
     {
-        serde_json::to_vec(value).map_err(ThoError::from)
+        Ok(serde_json::to_vec(value)?)
     }
 
-    fn decode<T>(bytes: &[u8]) -> Result<T, ThoError>
+    fn decode<T>(bytes: &[u8]) -> anyhow::Result<T>
     where
         T: DeserializeOwned,
     {
-        serde_json::from_slice(bytes).map_err(ThoError::from)
+        Ok(serde_json::from_slice(bytes)?)
     }
 }
 

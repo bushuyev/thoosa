@@ -1,4 +1,3 @@
-use crate::ThoError;
 use crate::applicables_runner::Input;
 use crate::traits::WithId;
 use async_trait::async_trait;
@@ -20,40 +19,40 @@ pub trait ResourceStore {
     async fn list_resources_by_file_stems<'a>(
         &self,
         file_stems: &'a [&'a str],
-    ) -> Result<Vec<Resource>, ThoError>;
+    ) -> anyhow::Result<Vec<Resource>>;
 
     async fn list_resource_set_resources_by_descr(
         &self,
         descr: &str,
-    ) -> Result<Vec<Resource>, ThoError>;
+    ) -> anyhow::Result<Vec<Resource>>;
 
     async fn list_resource_set_group_sets(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(usize, String)>, ThoError>;
+    ) -> anyhow::Result<Vec<(usize, String)>>;
 
     async fn list_group_labeled_resources_sets(
         &self,
         group_decr: &str,
-    ) -> Result<Vec<(String, String)>, ThoError>;
+    ) -> anyhow::Result<Vec<(String, String)>>;
 
-    async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
+    async fn list_resource_set_resources(&self, set_id: usize) -> anyhow::Result<Vec<Resource>>;
 
     async fn list_resource_random_in_group(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
+    ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>>;
 
     async fn list_resources_not_in_group(
         &self,
         group_descr: &str,
         limit: u32,
-    ) -> Result<Vec<Resource>, ThoError>;
+    ) -> anyhow::Result<Vec<Resource>>;
 
     async fn list_random_resources(
         &self,
         limit: Option<u32>,
-    ) -> Result<Vec<Resource>, ThoError>;
+    ) -> anyhow::Result<Vec<Resource>>;
 
 }
 
@@ -246,10 +245,10 @@ pub trait ResourcesConfig {
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         store: &Arc<S>,
-    ) -> Result<Self::R, ThoError>;
+    ) -> anyhow::Result<Self::R>;
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> Result<(), ThoError> {
-        Err(ThoError::new("resource config check is not implemented"))
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("resource config check is not implemented"))
     }
 }
 

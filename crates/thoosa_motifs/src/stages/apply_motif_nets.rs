@@ -865,7 +865,7 @@ where
                     Ok(stretched) => stretched,
                     Err(error) => {
                         input.motif_nets_applied = motif_nets_applied;
-                        return ConsumeResult::Failed { input, error };
+                        return ConsumeResult::Failed { input, error: error.into() };
                     }
                 };
                 &stretched

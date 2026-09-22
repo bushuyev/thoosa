@@ -121,7 +121,7 @@ impl Debug for FileMotifTrackerStore {
 }
 
 impl FileMotifTrackerStore {
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_config_id: RunConfigId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_config_id: RunConfigId, channel: u32) -> anyhow::Result<Box<dyn MotifTrackerStore>> {
         let file_path = path.as_ref().join(format!("{run_config_id}_{channel}_slices.zstd").as_str());
 
         let file = std::fs::OpenOptions::new().create(true).read(true).write(true).open(&file_path)?;
@@ -141,7 +141,7 @@ impl FileMotifTrackerStore {
 
 #[async_trait]
 impl MotifTrackerStore for FileMotifTrackerStore {
-    fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoError> {
+    fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> anyhow::Result<()> {
         trace!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
 
         self.writer.write_items(&slices_pairs)?;
@@ -150,7 +150,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> Result<usize, ThoError> {
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> anyhow::Result<usize> {
         debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;

@@ -13,6 +13,7 @@ extern crate core;
 
 mod tokio_rusqlite;
 
+use anyhow::Context as _;
 pub use rusqlite;
 
 use parking_lot::{Mutex, RwLock};
@@ -46,30 +47,6 @@ use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
 use thoosa_shared::traits::DataId;
-
-impl From<tokio_rusqlite::Error> for ThoError {
-    fn from(value: tokio_rusqlite::Error) -> Self {
-        match value {
-            tokio_rusqlite::Error::ConnectionClosed => ThoError::new("tokio_rusqlite connection closed"),
-            tokio_rusqlite::Error::WorkerGone => ThoError::new("tokio_rusqlite worker gone"),
-            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
-            tokio_rusqlite::Error::Panic(err) => ThoError::from_error("tokio_rusqlite worker panic", err),
-            tokio_rusqlite::Error::Error(err) => ThoError::from(err),
-        }
-    }
-}
-
-impl From<tokio_rusqlite::Error<ThoError>> for ThoError {
-    fn from(value: tokio_rusqlite::Error<ThoError>) -> Self {
-        match value {
-            tokio_rusqlite::Error::ConnectionClosed => ThoError::new("tokio_rusqlite connection closed"),
-            tokio_rusqlite::Error::WorkerGone => ThoError::new("tokio_rusqlite worker gone"),
-            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
-            tokio_rusqlite::Error::Panic(err) => ThoError::from_error("tokio_rusqlite worker panic", err),
-            tokio_rusqlite::Error::Error(err) => err,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum SetCond {
@@ -161,63 +138,63 @@ impl AsRef<Vec<u32>> for TrainedNetsBy {
 
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
-    fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
-    async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
-    async fn save_run(&self, descr: String) -> Result<RunId, ThoError>;
+    fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
+    async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
+    async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
     async fn save_run_config<'a, 'b, 'c>(
         &self,
         input_run_config_id: Option<&'a [RunConfigId]>,
         run_config_type: &'b str,
         descr: &'c str,
         properties_vals: HashMap<String, Val>,
-    ) -> Result<RunConfigId, ThoError>;
+    ) -> anyhow::Result<RunConfigId>;
 
-    async fn get_input_run_config_ids<'a>(&self, run_config_id: RunConfigId, input_type: Option<&'a str>) -> Result<Vec<RunConfigId>, ThoError>;
+    async fn get_input_run_config_ids<'a>(&self, run_config_id: RunConfigId, input_type: Option<&'a str>) -> anyhow::Result<Vec<RunConfigId>>;
 
-    async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError>; //corr_run_config_id, run_config_id, label
+    async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<(RunConfigId, RunConfigId)>>; //corr_run_config_id, run_config_id, label
 
-    async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
+    async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>>;
 
-    async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError>; //corr_run_config_id, run_config_id, label
+    async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> anyhow::Result<Vec<RunConfigId>>; //corr_run_config_id, run_config_id, label
 
     async fn save_resources_set(
         &self,
         set: String,
         resource_keys: Vec<String>,
         group_id: Option<usize>,
-    ) -> Result<usize, ThoError>;
-    async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
+    ) -> anyhow::Result<usize>;
+    async fn save_resource_set_group(&self, descr: String) -> anyhow::Result<usize>;
     async fn list_resources_by_ids(
         &self,
         file_stem: &Vec<ResourceId>,
-    ) -> Result<Vec<Resource>, ThoError>;
+    ) -> anyhow::Result<Vec<Resource>>;
 
 
-    async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError>;
+    async fn list_run_resources(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<String>>;
 
-    async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+    async fn list_run_configs(&self) -> anyhow::Result<Vec<RunConfigEntry>>;
 
-    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError>;
-    async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
-    async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError>;
+    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> anyhow::Result<Vec<RunConfigId>>;
+    async fn list_run_configs_page(&self, limit: usize, offset: usize) -> anyhow::Result<Vec<RunConfigEntry>>;
+    async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigEntry>>;
 
-    async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
-    async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
+    async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> anyhow::Result<Vec<RunConfigEntry>>;
+    async fn list_run_config_types(&self) -> anyhow::Result<Vec<String>>;
 
-    async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError>;
+    async fn list_run_config_values(&self, run_config_id: RunConfigId) -> anyhow::Result<HashMap<String, Val>>;
 
-    async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<u32, ThoError>;
+    async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> anyhow::Result<u32>;
 
-    async fn list_trained_nets(&self, run_config_ids: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
-    async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
-    async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> Result<Vec<TrainedNetEntry>, ThoError>;
-    async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
-    async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
-    async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
-    async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError>;
+    async fn list_trained_nets(&self, run_config_ids: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> anyhow::Result<Vec<TrainedNet>>;
+    async fn list_trained_net_entries(&self) -> anyhow::Result<Vec<TrainedNetEntry>>;
+    async fn list_label_trained_nets_before(&self, run_on_before: String) -> anyhow::Result<Vec<TrainedNetEntry>>;
+    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> anyhow::Result<Vec<TrainedNetEntry>>;
+    async fn list_unused_motif_trained_nets(&self) -> anyhow::Result<Vec<TrainedNetEntry>>;
+    async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> anyhow::Result<usize>;
+    async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> anyhow::Result<()>;
+    async fn list_input_nets(&self, net_id: u32) -> anyhow::Result<Vec<u32>>;
 
-    async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError>;
+    async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> anyhow::Result<RunConfigRow>;
     #[cfg(test)]
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
@@ -227,61 +204,61 @@ mock! {
 
     #[async_trait]
     impl Store for Store {
-        fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
-        async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
-        async fn save_run(&self, descr: String) -> Result<RunId, ThoError>;
+        fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
+        async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
+        async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
         async fn save_run_config<'a, 'b, 'c>(
             &self,
             input_run_config_id: Option<&'a [RunConfigId]>,
             run_config_type: &'b str,
             descr: &'c str,
             properties_vals: HashMap<String, Val>,
-        ) -> Result<RunConfigId, ThoError>;
-        async fn get_input_run_config_ids<'a>(&self,run_config_id: RunConfigId,input_type: Option<&'a str>,) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError>;
-        async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError>;
+        ) -> anyhow::Result<RunConfigId>;
+        async fn get_input_run_config_ids<'a>(&self,run_config_id: RunConfigId,input_type: Option<&'a str>,) -> anyhow::Result<Vec<RunConfigId>>;
+        async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<(RunConfigId, RunConfigId)>>;
+        async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>>;
+        async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> anyhow::Result<Vec<RunConfigId>>;
 
         async fn save_resources_set(
             &self,
             set: String,
             resource_keys: Vec<String>,
             group_id: Option<usize>,
-        ) -> Result<usize, ThoError>;
-        async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
+        ) -> anyhow::Result<usize>;
+        async fn save_resource_set_group(&self, descr: String) -> anyhow::Result<usize>;
         async fn list_resources_by_ids(
             &self,
             file_stem: &Vec<ResourceId>,
-        ) -> Result<Vec<Resource>, ThoError>;
-        async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError>;
-        async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
-        async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
+        async fn list_run_resources(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<String>>;
+        async fn list_run_configs(&self) -> anyhow::Result<Vec<RunConfigEntry>>;
+        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> anyhow::Result<Vec<RunConfigId>>;
+        async fn list_run_configs_page(&self, limit: usize, offset: usize) -> anyhow::Result<Vec<RunConfigEntry>>;
+        async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigEntry>>;
+        async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> anyhow::Result<Vec<RunConfigEntry>>;
+        async fn list_run_config_types(&self) -> anyhow::Result<Vec<String>>;
+        async fn list_run_config_values(&self, run_config_id: RunConfigId) -> anyhow::Result<HashMap<String, Val>>;
         async fn save_trained_net(
             &self,
             run_config_id: RunConfigId,
             path: PathBuf,
             loss: f32,
             input_nets:Option<Vec<u32>>
-        ) -> Result<u32, ThoError>;
+        ) -> anyhow::Result<u32>;
         async fn list_trained_nets(
             &self,
             run_config_ids: TrainedNetsBy,
             loss: Option<f32>,
             limit: Option<usize>,
-        ) -> Result<Vec<TrainedNet>, ThoError>;
-        async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type:&'static str) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
-        async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
-        async fn list_input_nets(&self, net_id: RunConfigId) -> Result<Vec<u32>, ThoError>;
-        async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError>;
+        ) -> anyhow::Result<Vec<TrainedNet>>;
+        async fn list_trained_net_entries(&self) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn list_label_trained_nets_before(&self, run_on_before: String) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type:&'static str) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn list_unused_motif_trained_nets(&self) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> anyhow::Result<usize>;
+        async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> anyhow::Result<()>;
+        async fn list_input_nets(&self, net_id: RunConfigId) -> anyhow::Result<Vec<u32>>;
+        async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> anyhow::Result<RunConfigRow>;
         #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
@@ -291,40 +268,40 @@ mock! {
         async fn list_resources_by_file_stems<'a>(
             &self,
             file_stems: &'a [&'a str],
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_resource_set_resources_by_descr(
             &self,
             descr: &str,
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_resource_set_group_sets(
             &self,
             group_descr: &str,
-        ) -> Result<Vec<(usize, String)>, ThoError>;
+        ) -> anyhow::Result<Vec<(usize, String)>>;
 
         async fn list_group_labeled_resources_sets(
             &self,
             group_decr: &str,
-        ) -> Result<Vec<(String, String)>, ThoError>;
+        ) -> anyhow::Result<Vec<(String, String)>>;
 
-        async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
+        async fn list_resource_set_resources(&self, set_id: usize) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_resource_random_in_group(
             &self,
             group_descr: &str,
-        ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
+        ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>>;
 
         async fn list_resources_not_in_group(
             &self,
             group_descr: &str,
             limit:u32
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_random_resources(
             &self,
             limit: Option<u32>
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
     }
 }
@@ -371,7 +348,7 @@ impl ResourceStore for SqlStore {
     async fn list_resource_set_resources_by_descr(
         &self,
         descr: &str,
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         let descr = descr.to_string();
         let descr_for_err = descr.to_string();
         self.with_reader_conn("list_resource_set_resources_by_descr",  move|conn| {
@@ -390,7 +367,7 @@ impl ResourceStore for SqlStore {
     async fn list_resources_by_file_stems<'a>(
         &self,
         file_stems: &'a [&'a str],
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         let file_stems = file_stems.iter().map(|v| (*v).to_string()).collect::<Vec<String>>();
         self.with_reader_conn("list_resources_by_file_stems", move |conn| {
             let (mut q, params) = file_stems.into_iter().fold(
@@ -429,7 +406,7 @@ impl ResourceStore for SqlStore {
     async fn list_resource_set_group_sets(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(usize, String)>, ThoError> {
+    ) -> anyhow::Result<Vec<(usize, String)>> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resource_set_group_sets", move |conn| {
             let group_sets = {
@@ -456,7 +433,7 @@ impl ResourceStore for SqlStore {
     async fn list_group_labeled_resources_sets(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(String, String)>, ThoError> {
+    ) -> anyhow::Result<Vec<(String, String)>> {
         let group_descr = group_descr.to_string();
         debug!("list_group_labeled_resources_sets: group_descr={group_descr}");
         self.with_reader_conn("list_group_labeled_resources_sets", move |conn| {
@@ -479,7 +456,7 @@ impl ResourceStore for SqlStore {
         .await
     }
 
-    async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError> {
+    async fn list_resource_set_resources(&self, set_id: usize) -> anyhow::Result<Vec<Resource>> {
         self.with_reader_conn("list_resource_set_resources", move |conn| {
             let set_resources = Self::list_resource_set_resources(set_id, conn)?;
             Ok(set_resources)
@@ -490,7 +467,7 @@ impl ResourceStore for SqlStore {
     async fn list_resource_random_in_group(
         &self,
         group_descr: &str,
-    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
+    ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resource_random_in_group", move |conn| {
             let labels = Self::list_labels(conn, true)?;
@@ -541,7 +518,7 @@ impl ResourceStore for SqlStore {
         &self,
         group_descr: &str,
         limit:u32
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resources_not_in_group", move |conn| {
             let group_sets = {
@@ -571,7 +548,7 @@ impl ResourceStore for SqlStore {
     async fn list_random_resources(
         &self,
         limit: Option<u32>
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         self.with_reader_conn("list_random_resources", move |conn| {
             let resources = if let Some(limit) = limit {
                 let mut stmt = conn.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM() LIMIT ?")?;
@@ -609,14 +586,14 @@ impl ResourceStore for SqlStore {
 #[async_trait]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
-    fn open_external_writer_conn(&self) -> Result<Connection, ThoError> {
+    fn open_external_writer_conn(&self) -> anyhow::Result<Connection> {
         let mut conn = Connection::open_with_flags(&self.conn_target, self.conn_flags)?;
         create_tables(&mut conn)?;
         Self::init_external_writer_conn(&mut conn)?;
         Ok(conn)
     }
 
-    async fn save_import(&self, descr: String) -> Result<u32, ThoError> {
+    async fn save_import(&self, descr: String) -> anyhow::Result<u32> {
         self.with_writer_conn("save_import", move |conn| {
             let t = conn.transaction()?;
             let import_id = Self::save_import(descr.as_str(), &t)?;
@@ -626,10 +603,10 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn save_run(&self, descr: String) -> Result<RunId, ThoError> {
+    async fn save_run(&self, descr: String) -> anyhow::Result<RunId> {
         debug!("SqlStore::save_run: descr={descr}");
         self.with_writer_conn("save_run", move |conn| {
-            let t = conn.transaction().map_err(|e| ThoError::from_error("start sqlite transaction", e))?;
+            let t = conn.transaction().with_context(|| "start sqlite transaction")?;
             t.execute("INSERT INTO runs (descr) VALUES (?)", params![descr])?;
 
             let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
@@ -648,13 +625,13 @@ impl Store for SqlStore {
         run_config_type: &'b str,
         descr: &'c str,
         properties_vals: HashMap<String, Val>,
-    ) -> Result<RunConfigId, ThoError> {
+    ) -> anyhow::Result<RunConfigId> {
         let input_run_config_id = input_run_config_id.map(|v| v.to_vec());
         let run_config_type = run_config_type.to_string();
         let descr = descr.to_string();
         debug!("SqlStore::save_run_config: input_run_config_id={input_run_config_id:?} run_config_type={run_config_type} descr={descr}");
         self.with_writer_conn("save_run_config", move |conn| {
-            let t = conn.transaction().map_err(|e| ThoError::from_error("start sqlite transaction", e))?;
+            let t = conn.transaction().with_context(|| "start sqlite transaction")?;
 
             t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params![run_config_type, descr, run_id()])?;
 
@@ -680,7 +657,7 @@ impl Store for SqlStore {
         &self,
         run_config_id: RunConfigId,
         input_type: Option<&'a str>,
-    ) -> Result<Vec<RunConfigId>, ThoError> {
+    ) -> anyhow::Result<Vec<RunConfigId>> {
         let input_type = input_type.map(|v| v.to_string());
         debug!("SqlStore::get_input_run_config_ids: run_config_id={run_config_id} input_type={input_type:?}");
         self.with_reader_conn("get_input_run_config_ids", move |conn| {
@@ -692,7 +669,7 @@ impl Store for SqlStore {
     }
 
     /// returns - Vec<run_config_id, input_run_config_id>
-    async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError> {
+    async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<(RunConfigId, RunConfigId)>> {
         assert!(!ids.is_empty());
         let ids = ids.to_vec();
         self.with_reader_conn("list_input_run_config_ids", move |conn| {
@@ -727,7 +704,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError> {
+    async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>> {
         if input_run_config_ids.is_empty() {
             return Ok(vec![]);
         }
@@ -771,7 +748,7 @@ impl Store for SqlStore {
         descr: String,
         resource_keys: Vec<String>,
         group_id: Option<usize>,
-    ) -> Result<usize, ThoError> {
+    ) -> anyhow::Result<usize> {
         self.with_writer_conn("save_resources_set", move |conn| {
             let t = conn.transaction()?;
 
@@ -807,7 +784,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError> {
+    async fn save_resource_set_group(&self, descr: String) -> anyhow::Result<usize> {
         self.with_writer_conn("save_resource_set_group", move |conn| {
             let mut t = conn.transaction()?;
             let group_id = Self::save_resource_set_group(descr, &mut t)?;
@@ -820,7 +797,7 @@ impl Store for SqlStore {
     async fn list_resources_by_ids(
         &self,
         resource_ids: &Vec<ResourceId>,
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         assert!(!resource_ids.is_empty(), "resource_ids are empty");
         let resource_ids = resource_ids.clone();
         self.with_reader_conn("list_resources_by_ids", move |conn| {
@@ -860,7 +837,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError> {
+    async fn list_run_resources(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<String>> {
         self.with_reader_conn("list_run_resources", move |conn| {
             let result = {
                 let count: i64 = conn.query_row("SELECT count(*) FROM run_resources WHERE run_config_id=?", [run_config_id], |row| row.get(0))?;
@@ -875,9 +852,9 @@ impl Store for SqlStore {
                                 assert!(ord == i as i64);
                                 key
                             })
-                            .map_err(ThoError::from)
+                            .map_err(anyhow::Error::from)
                     })
-                    .collect::<Result<Vec<String>, ThoError>>()
+                    .collect::<anyhow::Result<Vec<String>>>()
             };
 
             debug!("list_run_resources: result.is_ok={}", result.is_ok());
@@ -886,7 +863,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError> {
+    async fn list_run_configs(&self) -> anyhow::Result<Vec<RunConfigEntry>> {
         self.with_reader_conn("list_run_configs", move |conn| {
             let run_configs = {
                 let mut stmt = conn.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC")?;
@@ -898,8 +875,8 @@ impl Store for SqlStore {
                         run_on: row.get::<usize, String>(3)?,
                     })
                 })?
-                .map(|v| v.map_err(ThoError::from))
-                .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?
+                .map(|v| v.map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?
             };
 
             Ok(run_configs)
@@ -907,7 +884,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError> {
+    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> anyhow::Result<Vec<RunConfigId>> {
         self.with_reader_conn("list_run_configs", move |conn| {
             let run_configs = {
                 let mut stmt = conn.prepare("SELECT id FROM run_configs WHERE run_id=? AND descr=? AND type=?")?;
@@ -918,8 +895,8 @@ impl Store for SqlStore {
                ], |row| {
                     row.get::<usize, RunConfigId>(0)
                 })?
-                    .map(|v| v.map_err(ThoError::from))
-                    .collect::<Result<Vec<RunConfigId>, ThoError>>()?
+                    .map(|v| v.map_err(anyhow::Error::from))
+                    .collect::<anyhow::Result<Vec<RunConfigId>>>()?
             };
 
             Ok(run_configs)
@@ -928,7 +905,7 @@ impl Store for SqlStore {
     }
 
 
-    async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError> {
+    async fn list_run_configs_page(&self, limit: usize, offset: usize) -> anyhow::Result<Vec<RunConfigEntry>> {
         self.with_reader_conn("list_run_configs_page", move |conn| {
             let run_configs = {
                 let mut stmt = conn.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC LIMIT ? OFFSET ?")?;
@@ -940,8 +917,8 @@ impl Store for SqlStore {
                         run_on: row.get::<usize, String>(3)?,
                     })
                 })?
-                .map(|v| v.map_err(ThoError::from))
-                .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?
+                .map(|v| v.map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?
             };
 
             Ok(run_configs)
@@ -949,7 +926,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError> {
+    async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigEntry>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -981,8 +958,8 @@ impl Store for SqlStore {
                             run_on: row.get::<usize, String>(3)?,
                         })
                     })?
-                    .map(|v| v.map_err(ThoError::from))
-                    .collect::<Result<Vec<RunConfigEntry>, ThoError>>()?;
+                    .map(|v| v.map_err(anyhow::Error::from))
+                    .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?;
                 run_configs.extend(chunk_rows);
             }
 
@@ -992,7 +969,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError> {
+    async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> anyhow::Result<Vec<RunConfigEntry>> {
         self.with_reader_conn("list_run_configs_filtered", move |conn| {
             let mut where_clauses = vec![];
             let mut params = vec![];
@@ -1037,19 +1014,19 @@ impl Store for SqlStore {
                     run_on: row.get::<usize, String>(3)?,
                 })
             })?
-            .map(|value| value.map_err(ThoError::from))
-            .collect::<Result<Vec<RunConfigEntry>, ThoError>>()
+            .map(|value| value.map_err(anyhow::Error::from))
+            .collect::<anyhow::Result<Vec<RunConfigEntry>>>()
         })
         .await
     }
 
-    async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError> {
+    async fn list_run_config_types(&self) -> anyhow::Result<Vec<String>> {
         self.with_reader_conn("list_run_config_types", move |conn| {
             let run_config_types = {
                 let mut stmt = conn.prepare("SELECT DISTINCT type FROM run_configs ORDER BY type ASC")?;
                 stmt.query_map([], |row| row.get::<usize, String>(0))?
-                    .map(|v| v.map_err(ThoError::from))
-                    .collect::<Result<Vec<String>, ThoError>>()?
+                    .map(|v| v.map_err(anyhow::Error::from))
+                    .collect::<anyhow::Result<Vec<String>>>()?
             };
 
             Ok(run_config_types)
@@ -1057,7 +1034,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError> {
+    async fn list_run_config_values(&self, run_config_id: RunConfigId) -> anyhow::Result<HashMap<String, Val>> {
         self.with_reader_conn("list_run_config_values", move |conn| {
             let result = {
                 let mut stmt = conn.prepare("SELECT name, real_value, int_value, str_value, bool_value, unsigned FROM run_config_values WHERE run_config_id=?")?;
@@ -1094,7 +1071,7 @@ impl Store for SqlStore {
     }
 
 
-    async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError> {
+    async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> anyhow::Result<Vec<RunConfigId>> {
         self.with_reader_conn("list_output_run_config_ids", move |conn| {
             let q = "SELECT run_config_id FROM run_configs_input WHERE input_run_config_id=?";
 
@@ -1102,7 +1079,7 @@ impl Store for SqlStore {
                 let mut stmt = conn.prepare(q)?;
                 stmt.query_map([input_run_config_id], |row| row.get::<usize, usize>(0))?
                     .map(|v| v.map(|v| v as RunConfigId).map_err(|e| e.into()))
-                    .collect::<Result<Vec<_>, ThoError>>()
+                    .collect::<anyhow::Result<Vec<_>>>()
             };
             id_input_id
         })
@@ -1114,7 +1091,7 @@ impl Store for SqlStore {
                                path: PathBuf,
                                loss: f32,
                                input_net_ids: Option<Vec<u32>>,
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
         self.with_writer_conn("save_trained_net", move |conn| {
             let t = conn.transaction()?;
             t.execute(
@@ -1136,7 +1113,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_trained_nets(&self, by: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError> {
+    async fn list_trained_nets(&self, by: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> anyhow::Result<Vec<TrainedNet>> {
         self.with_reader_conn("list_trained_nets", move |conn| {
             let (field, ids) = match by {
                 TrainedNetsBy::RunConfigIds(ids) => {
@@ -1192,43 +1169,43 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError> {
+    async fn list_trained_net_entries(&self) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_trained_net_entries", move |conn| {
             let mut stmt = conn.prepare("SELECT id, net_path FROM trained_nets")?;
             stmt.query_map([], Self::trained_net_entry)?
-                .map(|v| v.map_err(ThoError::from))
-                .collect::<Result<Vec<_>, ThoError>>()
+                .map(|v| v.map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<Vec<_>>>()
         }).await
     }
 
-    async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError> {
+    async fn list_label_trained_nets_before(&self, run_on_before: String) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_label_trained_nets_before", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND rc.run_on < ?")?;
             stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
-                .map(|v| v.map_err(ThoError::from))
-                .collect::<Result<Vec<_>, ThoError>>()
+                .map(|v| v.map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<Vec<_>>>()
         }).await
     }
 
-    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> Result<Vec<TrainedNetEntry>, ThoError> {
+    async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
             stmt.query_map(params![net_type, loss], Self::trained_net_entry)?
-                .map(|v| v.map_err(ThoError::from))
-                .collect::<Result<Vec<_>, ThoError>>()
+                .map(|v| v.map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<Vec<_>>>()
         }).await
     }
 
-    async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError> {
+    async fn list_unused_motif_trained_nets(&self) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_unused_motif_trained_nets", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND NOT EXISTS (SELECT 1 FROM trained_nets_input nti WHERE nti.input_id=tn.id)")?;
             stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
-                .map(|v| v.map_err(ThoError::from))
-                .collect::<Result<Vec<_>, ThoError>>()
+                .map(|v| v.map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<Vec<_>>>()
         }).await
     }
 
-    async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError> {
+    async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> anyhow::Result<usize> {
         self.with_writer_conn("delete_trained_nets", move |conn| {
             if net_ids.is_empty() {
                 return Ok(0);
@@ -1244,7 +1221,7 @@ impl Store for SqlStore {
         }).await
     }
 
-    async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError> {
+    async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> anyhow::Result<()> {
         self.with_writer_conn("update_run_config_run_on", move |conn| {
             conn.execute("UPDATE run_configs SET run_on=? WHERE id=?", params![run_on, run_config_id])?;
             Ok(())
@@ -1252,7 +1229,7 @@ impl Store for SqlStore {
     }
 
     //TODO rename list_input_nets_run_configs?
-    async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError> {
+    async fn list_input_nets(&self, net_id: u32) -> anyhow::Result<Vec<u32>> {
         self.with_reader_conn("list_input_nets", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.run_config_id FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
 
@@ -1260,11 +1237,11 @@ impl Store for SqlStore {
                 row.get::<usize, u32>(0)
             })?
                 .map(|v| v.map_err(|e|e.into()))
-                .collect::<Result<Vec<_>, ThoError>>()
+                .collect::<anyhow::Result<Vec<_>>>()
         }).await
     }
 
-    async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError> {
+    async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> anyhow::Result<RunConfigRow> {
         self.with_reader_conn("run_config_descr", move |conn| {
             let run_config = conn.query_row("SELECT id, type, descr, run_on FROM run_configs WHERE id=?", [corr_run_config_id], |row| {
                 Ok(RunConfigRow {
@@ -1355,7 +1332,7 @@ fn debug_trace_event(ev: TraceEvent) {
     }
 }
 
-type CreateTablesFn = fn(&mut Connection) -> Result<(), ThoError>;
+type CreateTablesFn = fn(&mut Connection) -> anyhow::Result<()>;
 
 //TODO move all prepare to init
 impl SqlStore {
@@ -1366,18 +1343,18 @@ impl SqlStore {
         })
     }
 
-    pub fn count_motif_slices(motif_id: u32, conn: &Connection) -> Result<usize, ThoError> {
+    pub fn count_motif_slices(motif_id: u32, conn: &Connection) -> anyhow::Result<usize> {
         let count = conn.query_row("SELECT count(*) FROM slices WHERE motif_id = ?", [motif_id], |row| {
             row.get::<usize, i64>(0)
         })?;
 
-        usize::try_from(count).map_err(|_| ThoError::new(format!("count_motif_slices: invalid count={count} for motif_id={motif_id}")))
+        usize::try_from(count).map_err(|_| anyhow::anyhow!("count_motif_slices: invalid count={count} for motif_id={motif_id}"))
     }
 
     pub fn load_motif_target_positions(
         motif_id: u32,
         conn: &Connection,
-    ) -> Result<(HashMap<ResourceId, Vec<i64>>, usize), ThoError> {
+    ) -> anyhow::Result<(HashMap<ResourceId, Vec<i64>>, usize)> {
         let mut target_positions_by_res: HashMap<ResourceId, Vec<i64>> = HashMap::new();
         let mut num_motif_slices = 0usize;
         let mut stmt = conn.prepare(
@@ -1393,7 +1370,7 @@ impl SqlStore {
                 row.get::<usize, i64>(1)?,
             ))
         })?
-        .try_for_each(|row| -> Result<(), ThoError> {
+        .try_for_each(|row| -> anyhow::Result<()> {
             let (resource_id, slice_idx) = row?;
             target_positions_by_res.entry(resource_id).or_default().push(slice_idx);
             num_motif_slices += 1;
@@ -1412,7 +1389,7 @@ impl SqlStore {
         input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
         conn: &Connection,
         mut target_positions_by_res: HashMap<ResourceId, Vec<i64>>,
-    ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
+    ) -> anyhow::Result<Vec<RandomSliceResourceCtx>> {
         let mut stmt = conn.prepare(
             "SELECT DISTINCT r.id, r.import_id, r.key, r.length
              FROM slices s
@@ -1438,7 +1415,7 @@ impl SqlStore {
                 target_positions: target_positions_by_res.remove(&resource_id).unwrap_or_default(),
             })
         })
-        .collect::<Result<Vec<_>, ThoError>>()
+        .collect::<anyhow::Result<Vec<_>>>()
     }
 
     pub fn load_non_motif_resource_contexts(
@@ -1447,7 +1424,7 @@ impl SqlStore {
         channel: i64,
         input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
         conn: &Connection,
-    ) -> Result<Vec<RandomSliceResourceCtx>, ThoError> {
+    ) -> anyhow::Result<Vec<RandomSliceResourceCtx>> {
         let mut stmt = conn.prepare(
             "SELECT r.id, r.import_id, r.key, r.length FROM main.resources r WHERE r.id NOT IN (SELECT resource_id FROM slices s WHERE s.motif_id=?)",
         )?;
@@ -1464,8 +1441,8 @@ impl SqlStore {
                 target_positions: vec![],
             })
         })?
-        .map(|row| row.map_err(ThoError::from))
-        .collect::<Result<Vec<_>, ThoError>>()
+        .map(|row| row.map_err(anyhow::Error::from))
+        .collect::<anyhow::Result<Vec<_>>>()
     }
 
     fn merge_intervals(mut xs: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
@@ -1588,96 +1565,34 @@ impl SqlStore {
         }
     }
 
-    fn map_tokio_rusqlite_err(
-        ctx: &'static str,
-        e: tokio_rusqlite::Error<ThoError>,
-    ) -> ThoError {
-        match e {
+    // Unwrap the worker envelope so anyhow retains the original application error.
+    fn map_tokio_rusqlite_err(ctx: &'static str, error: tokio_rusqlite::Error<anyhow::Error>) -> anyhow::Error {
+        let error = match error {
             tokio_rusqlite::Error::Error(inner) => inner,
-            tokio_rusqlite::Error::ConnectionClosed => {
-                ThoError::new(format!("{ctx}: connection closed"))
-            }
-            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
-            _ => ThoError::new(format!("{ctx}: unexpected tokio_rusqlite error")),
-        }
+            tokio_rusqlite::Error::Close((_, error)) => error.into(),
+            tokio_rusqlite::Error::Panic(error) => error.into(),
+            tokio_rusqlite::Error::ConnectionClosed => anyhow::anyhow!("sqlite connection closed"),
+            tokio_rusqlite::Error::WorkerGone => anyhow::anyhow!("sqlite worker gone"),
+        };
+        error.context(ctx)
     }
 
-    pub async fn with_writer_conn<T, F>(&self, ctx: &'static str, f: F) -> Result<T, ThoError>
+    pub async fn with_writer_conn<T, F>(&self, ctx: &'static str, f: F) -> anyhow::Result<T>
     where
         T: Send + Debug + 'static,
-        F: FnOnce(&mut Connection) -> Result<T, ThoError> + Send + 'static,
+        F: FnOnce(&mut Connection) -> anyhow::Result<T> + Send + 'static,
     {
-        // self.writer.call(move |conn| {
-        //     debug!("[db writer enter {ctx}");
-        //     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(conn)));
-        //     match res {
-        //         Ok(ok) => {
-        //             debug!("[db writer exit {ctx}: {:?}", ok.as_ref().map(|_| "ok"));
-        //             ok
-        //         }
-        //         Err(panic) => {
-        //             error!("[db writer PANIC in {ctx}: {:?}", panic);
-        //             Err(ThoError::new(format!("panic in sqlite closure: {ctx}")))
-        //         }
-        //     }
-        // }).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
-        match panic_to_err_async!(
-            async {
-                self.writer
-                .call(f).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
-            }
-        ) {
-            Ok(r) => {
-                trace!("with_writer_conn: got result={r:?}");
-                Ok(r)
-            }
-            Err(e) => {
-                error!("with_writer_conn: got error={e:?}");
-                Err(e)
-            }
-        }
-
+        // Connection::call already catches worker panics; preserve its source without another wrapper.
+        self.writer.call(f).await.map_err(|error| Self::map_tokio_rusqlite_err(ctx, error))
     }
 
-    pub async fn with_reader_conn<T, F>(&self, ctx: &'static str, f: F) -> Result<T, ThoError>
+    pub async fn with_reader_conn<T, F>(&self, ctx: &'static str, f: F) -> anyhow::Result<T>
     where
         T: Send + Debug + 'static,
-        F: FnOnce(&mut Connection) -> Result<T, ThoError> + Send + 'static,
+        F: FnOnce(&mut Connection) -> anyhow::Result<T> + Send + 'static,
     {
         let reader_id = self.rr.fetch_add(1, Ordering::Relaxed) % self.readers.len();
-
-
-        match panic_to_err_async!(
-            async {
-                self.readers[reader_id]
-                .call(f).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
-            }
-        ) {
-            Ok(r) => {
-                trace!("with_reader_conn: got result={r:?}");
-                Ok(r)
-            }
-            Err(e) => {
-                error!("with_reader_conn: got error={e:?}");
-                Err(e)
-            }
-        }
-
-
-        // self.readers[reader_id].call(move |conn| {
-        //     debug!("[db reader={reader_id}] enter {ctx}");
-        //     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(conn)));
-        //     match res {
-        //         Ok(ok) => {
-        //             debug!("[db reader={reader_id}] exit {ctx}: {:?}", ok.as_ref().map(|_| "ok"));
-        //             ok
-        //         }
-        //         Err(panic) => {
-        //             error!("[db reader={reader_id}] PANIC in {ctx}: {:?}", panic);
-        //             Err(ThoError::new(format!("panic in sqlite closure: {ctx}")))
-        //         }
-        //     }
-        // }).await.map_err(|e| Self::map_tokio_rusqlite_err(ctx, e))
+        self.readers[reader_id].call(f).await.map_err(|error| Self::map_tokio_rusqlite_err(ctx, error))
     }
 
     fn reader(&self) -> &tokio_rusqlite::Connection {
@@ -1689,7 +1604,7 @@ impl SqlStore {
         resource_keys_iter: IntoIter<(String, u32, Vec<(String, f32)>), 500>,
         import_id: u32,
         t: &Transaction,
-    ) -> Result<Vec<ResourceId>, ThoError> {
+    ) -> anyhow::Result<Vec<ResourceId>> {
         let (mut insert_resources_q, insert_resources_params, insert_labeled_resources_params) =
             resource_keys_iter.fold(
                 (
@@ -1796,16 +1711,16 @@ impl SqlStore {
         }
     }
 
-    pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Arc<dyn Store>, ThoError> {
+    pub async fn from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Arc<dyn Store>> {
        Ok(Arc::new(Self::from_path_(path).await?))
     }
 
-    pub async fn from_path_<P: AsRef<Path>>(path: P) -> Result<SqlStore, ThoError> {
+    pub async fn from_path_<P: AsRef<Path>>(path: P) -> anyhow::Result<SqlStore> {
 
         Self::from_path_with_tables(path, vec![crate::create_tables]).await
     }
 
-    pub async fn from_path_with_tables<P: AsRef<Path>>(path: P, create_tables: Vec<CreateTablesFn>) -> Result<SqlStore, ThoError> {
+    pub async fn from_path_with_tables<P: AsRef<Path>>(path: P, create_tables: Vec<CreateTablesFn>) -> anyhow::Result<SqlStore> {
         let path_buf = path.as_ref().to_path_buf();
         let conn_target = path_buf.to_string_lossy().to_string();
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
@@ -1843,12 +1758,12 @@ impl SqlStore {
         })
     }
 
-    pub async fn from_path_readonly<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
+    pub async fn from_path_readonly<P: AsRef<Path>>(path: P) -> anyhow::Result<Box<dyn Store>> {
         Ok(Box::new(Self::from_path_readonly_(path).await?))
     }
 
     /// Returns the concrete store so downstream crates can construct their specialized store trait objects.
-    pub async fn from_path_readonly_<P: AsRef<Path>>(path: P) -> Result<SqlStore, ThoError> {
+    pub async fn from_path_readonly_<P: AsRef<Path>>(path: P) -> anyhow::Result<SqlStore> {
         let path_buf = path.as_ref().to_path_buf();
         let conn_target = path_buf.to_string_lossy().to_string();
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_ONLY;
@@ -1873,14 +1788,14 @@ impl SqlStore {
 
 
     // #[cfg(test)]
-    pub async fn in_mem() -> Result<Arc<dyn Store>, ThoError> {
+    pub async fn in_mem() -> anyhow::Result<Arc<dyn Store>> {
         Ok(Arc::new(Self::in_mem_(vec![
             create_tables,
         ]).await?))
     }
 
     /// Returns the concrete in-memory store for specialized store trait objects in downstream tests.
-    pub async fn in_mem_(create_tables: Vec<CreateTablesFn>) -> Result<SqlStore, ThoError> {
+    pub async fn in_mem_(create_tables: Vec<CreateTablesFn>) -> anyhow::Result<SqlStore> {
         let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
         let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
@@ -1918,7 +1833,7 @@ impl SqlStore {
         })
     }
 
-    pub fn export_apply_label_nets_records(conn: &mut Connection, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> Result<(), ThoError> {
+    pub fn export_apply_label_nets_records(conn: &mut Connection, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> anyhow::Result<()> {
         if label_net_run_config_ids.is_empty() {
             warn!("export_apply_label_nets_records: no label_net_run_config_ids");
             return Ok(());
@@ -2073,7 +1988,7 @@ impl SqlStore {
             )?;
 
             tx.commit()?;
-            Ok::<_, ThoError>(())
+            Ok::<_, anyhow::Error>(())
         })();
 
         conn.execute_batch("DETACH DATABASE target;")?;
@@ -2081,7 +1996,7 @@ impl SqlStore {
     }
 
 
-    fn list_resource_set_resources(set_id: usize, conn: &Connection) -> Result<Vec<Resource>, ThoError> {
+    fn list_resource_set_resources(set_id: usize, conn: &Connection) -> anyhow::Result<Vec<Resource>> {
         let set_resources = {
             // because the running-mean mask (LeRunningMean) is order-sensitive, any non-deterministic resource ordering (or random selection) changes which pairs pass the mask, ORDER BY id is to fix it.
             let mut stmt = conn.prepare("SELECT rs.id as id, rs.import_id, rs.key, rs.length FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=? ORDER BY id")?;
@@ -2108,7 +2023,7 @@ impl SqlStore {
     /**
     defines global label order
     */
-    pub fn list_labels(conn: &Connection, only_with_resources: bool) -> Result<Vec<(usize, String)>, ThoError> {
+    pub fn list_labels(conn: &Connection, only_with_resources: bool) -> anyhow::Result<Vec<(usize, String)>> {
         let set_resources = {
             let mut stmt = if only_with_resources {
                 conn.prepare("SELECT id, label FROM labels  l where exists (select 1 from labeled_resources where label_id=l.id) ORDER BY id;")?
@@ -2127,18 +2042,18 @@ impl SqlStore {
         Ok(set_resources)
     }
 
-    pub fn init_external_writer_conn(conn: &mut Connection) -> Result<(), ThoError> {
+    pub fn init_external_writer_conn(conn: &mut Connection) -> anyhow::Result<()> {
         init_sqlite_writer(conn)?;
         Ok(())
     }
 
-    pub fn save_import(descr: &str, t: &Transaction) -> Result<u32, ThoError> {
+    pub fn save_import(descr: &str, t: &Transaction) -> anyhow::Result<u32> {
         t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
         let import_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
         Ok(import_id)
     }
 
-    pub fn save_label(label: &str, t: &Transaction) -> Result<u32, ThoError> {
+    pub fn save_label(label: &str, t: &Transaction) -> anyhow::Result<u32> {
         t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
         let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
         Ok(label_id)
@@ -2148,7 +2063,7 @@ impl SqlStore {
         resource_stats_labels_probs: Vec<(String, u32, Vec<(String, f32)>)>,
         import_id: u32,
         t: &Transaction,
-    ) -> Result<Vec<ResourceId>, ThoError> {
+    ) -> anyhow::Result<Vec<ResourceId>> {
         debug!("save_resources_labels: resource_labels_probs={resource_stats_labels_probs:?}");
         let mut counts = HashMap::new();
         for e in resource_stats_labels_probs.iter() {
@@ -2179,7 +2094,7 @@ impl SqlStore {
     pub fn save_groups_by_label_cnt(
         max_resources_in_set: usize,
         t: &Transaction,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         let labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = {
             let mut stmt = t.prepare(
                 "SELECT r.id, GROUP_CONCAT(l.label, ','), count(lr.resource_id) labels_cnt FROM resources r JOIN labeled_resources lr ON lr.resource_id=r.id JOIN labels l ON l.id=lr.label_id GROUP BY resource_id ORDER BY labels_cnt"
@@ -2230,9 +2145,9 @@ impl SqlStore {
                             )
                             .map(|g| (i, i + *max_r, g))
                         })
-                        .collect::<Result<Vec<(usize, usize, usize)>, ThoError>>()
+                        .collect::<anyhow::Result<Vec<(usize, usize, usize)>>>()
                 })
-                .collect::<Result<Vec<Vec<(usize, usize, usize)>>, ThoError>>()?;
+                .collect::<anyhow::Result<Vec<Vec<(usize, usize, usize)>>>>()?;
 
             let group_all_id = Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), t)?;
 
@@ -2280,7 +2195,7 @@ impl SqlStore {
         max_len: usize,
         only_unused: bool,
         t: &Transaction,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         debug!("save_pure_sets: max_len={max_len} only_unused={only_unused}");
 
         let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
@@ -2318,7 +2233,7 @@ impl SqlStore {
         Ok(())
     }
 
-    pub fn save_all_sets(t: &Transaction) -> Result<(), ThoError> {
+    pub fn save_all_sets(t: &Transaction) -> anyhow::Result<()> {
         let all_group_id = Self::save_resource_set_group("all group".into(), t)?;
 
         let mut resource_resources_set_all_stmt = t.prepare("INSERT INTO resource_resources_set (resource_id, set_id) SELECT  lr.resource_id, ? FROM labeled_resources lr WHERE lr.label_id=?")?;
@@ -2353,7 +2268,7 @@ impl SqlStore {
         valid_coeff: f32,
         min_p: f32,
         t: &Transaction,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
 
         let num_prefix = match limit {
             LimitBy::Count(n) | LimitBy::Length(n)=> {
@@ -2363,11 +2278,11 @@ impl SqlStore {
         };
 
         if train_coeff < 0.0 || valid_coeff < 0.0 {
-            return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
+            return Err(anyhow::anyhow!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})"));
         }
 
         if train_coeff + valid_coeff > 1.0 {
-            return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
+            return Err(anyhow::anyhow!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})"));
         }
 
         Self::validate_min_probability(min_p)?;
@@ -2472,7 +2387,7 @@ impl SqlStore {
         t: &Transaction,
         not_in_prefix: Option<&str>,
         min_length: Option<u32>,
-    ) -> Result<(Vec<(usize, String)>, HashMap<usize, (Vec<usize>, Vec<usize>)>), ThoError> {
+    ) -> anyhow::Result<(Vec<(usize, String)>, HashMap<usize, (Vec<usize>, Vec<usize>)>)> {
         Self::validate_min_probability(min_p)?;
         let labels = Self::list_labels(t, true)?;
         let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, (Vec::new(), Vec::new()))).collect::<HashMap<usize, (Vec<usize>, Vec<usize>)>>();
@@ -2507,9 +2422,9 @@ impl SqlStore {
         Ok((labels, resources_by_label))
     }
 
-    pub fn validate_min_probability(min_p: f32) -> Result<(), ThoError> {
+    pub fn validate_min_probability(min_p: f32) -> anyhow::Result<()> {
         if !(0.0..=1.0).contains(&min_p) {
-            return Err(ThoError::new(format!("min_p must be in range [0.0, 1.0] (min_p={min_p})")));
+            return Err(anyhow::anyhow!("min_p must be in range [0.0, 1.0] (min_p={min_p})"));
         }
         Ok(())
     }
@@ -2586,7 +2501,7 @@ impl SqlStore {
         param_name: &str,
         value: Val,
         label_id: Option<usize>,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         match value {
             Val::Real(v) => {
                 t.execute("INSERT INTO run_config_values (run_config_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_config_id, label_id, param_name, v])?;
@@ -2609,7 +2524,7 @@ impl SqlStore {
         Ok(())
     }
 
-    fn save_resource_set_group(descr: String, t: &Transaction) -> Result<usize, ThoError> {
+    fn save_resource_set_group(descr: String, t: &Transaction) -> anyhow::Result<usize> {
         t.execute(
             "INSERT INTO resource_set_group (descr) VALUES (?)",
             params![descr],
@@ -2630,7 +2545,7 @@ impl SqlStore {
         descr: String,
         label_id: Option<&usize>,
         resources: &[usize],
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
 
         debug!("insert_resource_set_resources: group_id={group_id} descr={descr} label_id={label_id:?} resources={resources:?}");
 
@@ -2673,7 +2588,7 @@ impl SqlStore {
         conn: &Connection,
         run_config_id: RunConfigId,
         input_type: Option<&str>,
-    ) -> Result<Vec<RunConfigId>, ThoError> {
+    ) -> anyhow::Result<Vec<RunConfigId>> {
         let mut stmt = conn.prepare("SELECT rci.input_run_config_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_config_id WHERE run_config_id=?")?;
 
         let vec = stmt
@@ -2736,7 +2651,7 @@ impl SqlStore {
         e
     }
 
-    pub fn _motif_meta(motif_id: u32, conn: &Connection) -> Result<(i64, RunConfigId), ThoError> {
+    pub fn _motif_meta(motif_id: u32, conn: &Connection) -> anyhow::Result<(i64, RunConfigId)> {
         // Pre-load the motif metadata to identify its channel and run.
         let (channel, run_config_id): (i64, RunConfigId) = conn.query_row(
             "SELECT channel_id, run_config_id FROM motifs WHERE id=?",
@@ -2746,7 +2661,7 @@ impl SqlStore {
         Ok((channel, run_config_id))
     }
 
-    fn insert_input(input_run_config_id: Option<Vec<RunConfigId>>, t: &Transaction, run_config_id: RunConfigId, sql: &str) -> Result<(), ThoError> {
+    fn insert_input(input_run_config_id: Option<Vec<RunConfigId>>, t: &Transaction, run_config_id: RunConfigId, sql: &str) -> anyhow::Result<()> {
         if let Some(input_run_config_ids) = input_run_config_id {
             let (mut q, params) = input_run_config_ids.into_iter().fold(
                 (
@@ -2780,7 +2695,7 @@ impl SqlStore {
     }
 }
 
-pub fn create_tables( conn: &mut Connection) -> Result<(), ThoError> {
+pub fn create_tables( conn: &mut Connection) -> anyhow::Result<()> {
 
     init_sqlite_writer(conn)?;
 
@@ -2956,7 +2871,7 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_get_input_run_config_ids().returning(
             move |run_config_id, input_type|{
-                map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
+                map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
             }
         );
         self
@@ -2966,7 +2881,7 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_run_config_descr().returning(
             move |run_config_id| {
-                map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
+                map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
             }
         );
         self
@@ -2984,9 +2899,9 @@ impl MockStoreBuilder {
         self.store.expect_save_run_config().returning(move |p_input_run_config_id, p_run_config_type, p_descr, p_properties_vals| {
             let p_input_run_config_id = p_input_run_config_id.map(|ids| ids.to_vec());
             if p_input_run_config_id == input_run_config_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
-                result.clone()
+                result.clone().map_err(Into::into)
             } else {
-                Err(ThoError::new(format!(
+                Err(anyhow::anyhow!(format!(
                     "mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}"
                 )))
             }
@@ -3004,7 +2919,7 @@ impl MockStoreBuilder {
                 .expect_save_trained_net()
                 .with(eq(run_config_id), eq(path), eq(loss), eq(None))
                 .times(1)
-                .return_const(Ok(run_config_id));
+                .returning(move |_, _, _, _| Ok(run_config_id));
         }
         self
     }
@@ -3023,8 +2938,8 @@ impl MockStoreBuilder {
             move |run_config_ids, loss, limit| {
                 data.iter()
                     .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_ref().as_slice() && *expected_loss == loss && *expected_limit == limit)
-                    .map(|(_, _, _, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
+                    .map(|(_, _, _, result)| result.clone().map_err(Into::into))
+                    .unwrap_or_else(|| Err(anyhow::anyhow!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}")))
             }
         );
         self
@@ -3044,8 +2959,8 @@ impl MockStoreBuilder {
             move |run_config_id| {
                 data.iter()
                     .find(|(expected_run_config_id, _)| expected_run_config_id == &run_config_id)
-                    .map(|(_, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("with_list_input_nets is not configured to return  nets for run_config_id={run_config_id:?}"))))
+                    .map(|(_, result)| result.clone().map_err(Into::into))
+                    .unwrap_or_else(|| Err(anyhow::anyhow!("with_list_input_nets is not configured to return  nets for run_config_id={run_config_id:?}")))
             }
         );
         self
@@ -3059,7 +2974,7 @@ impl MockStoreBuilder {
         self.store.expect_list_run_config_values()
             .returning(move |p_run_config_id| {
                 map.get(&p_run_config_id)
-                    .cloned()
+                    .cloned().map(|result| result.map_err(Into::into))
                     .expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
             });
 
@@ -3074,7 +2989,7 @@ impl MockStoreBuilder {
         self.store.expect_list_output_run_config_ids().returning(
             move |input_run_config_id| {
                 map.get(&input_run_config_id)
-                    .cloned()
+                    .cloned().map(|result| result.map_err(Into::into))
                     .expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
             },
         );
@@ -3089,7 +3004,7 @@ impl MockStoreBuilder {
         self.store.expect_list_run_config_ids_with_outputs().returning(
             move |input_run_config_ids| {
                 map.get(&input_run_config_ids.to_vec())
-                    .cloned()
+                    .cloned().map(|result| result.map_err(Into::into))
                     .expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
             },
         );
@@ -3106,9 +3021,9 @@ impl MockStoreBuilder {
             .returning(move |requested| {
                 let stems = requested.iter().map(|stem| stem.to_string()).collect::<Vec<_>>();
                 if stems == expected_stems {
-                    result.clone()
+                    result.clone().map_err(Into::into)
                 } else {
-                    Err(ThoError::new("Not found"))
+                    Err(anyhow::anyhow!("Not found"))
                 }
             });
 
@@ -3120,7 +3035,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_set_group_sets()
             .returning(move |group| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
+                map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
             });
 
         self
@@ -3131,7 +3046,7 @@ impl MockStoreBuilder {
 
     self.store.expect_list_group_labeled_resources_sets()
         .returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
         });
 
         self
@@ -3142,7 +3057,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resources_not_in_group()
             .returning(move |group, _limit| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
+                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
             });
 
 
@@ -3154,7 +3069,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_random_resources()
             .returning(move |limit| {
-                map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone()
+                map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone().map_err(Into::into)
             });
 
 
@@ -3166,7 +3081,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_random_in_group()
             .returning(move |group| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone()
+                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone().map_err(Into::into)
             });
 
         self
@@ -3177,7 +3092,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_set_resources_by_descr()
         .returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
         });
 
 
@@ -3188,4 +3103,36 @@ impl MockStoreBuilder {
         Box::new(self.store)
     }
 
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::SqlStore;
+
+    #[tokio::test]
+    async fn test_database_workers_preserve_anyhow_sources() -> anyhow::Result<()> {
+        let store = SqlStore::in_mem_(vec![]).await?;
+        // Exercise both real worker routes, including anyhow downcasting after operation context.
+        let writer_error = store.with_writer_conn("write fixture", |_| {
+            Err::<(), _>(std::io::Error::other("fixture failure").into())
+        }).await.unwrap_err();
+        let reader_error = store.with_reader_conn("read fixture", |_| {
+            Err::<(), _>(std::io::Error::other("fixture failure").into())
+        }).await.unwrap_err();
+        for (error, operation) in [(writer_error, "write fixture"), (reader_error, "read fixture")] {
+            assert!(error.downcast_ref::<std::io::Error>().is_some());
+            assert_eq!(format!("{error:#}"), format!("{operation}: fixture failure"));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_database_worker_panic_preserves_source_and_worker() -> anyhow::Result<()> {
+        let store = SqlStore::in_mem_(vec![]).await?;
+        let error = store.with_writer_conn::<(), _>("panic fixture", |_| panic!("fixture panic")).await.unwrap_err();
+        assert!(error.downcast_ref::<crate::tokio_rusqlite::PanicInfo>().is_some());
+        assert!(format!("{error:#}").contains("fixture panic"));
+        assert_eq!(store.with_writer_conn("after panic", |_| Ok(42)).await?, 42);
+        Ok(())
+    }
 }

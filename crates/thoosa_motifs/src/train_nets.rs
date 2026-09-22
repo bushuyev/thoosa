@@ -1,6 +1,7 @@
 #![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
 
+use anyhow::Context as _;
 use clap::clap_derive::Args;
 use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::builder::{Node, SeqBuilder};
@@ -112,11 +113,11 @@ impl TrainMotifsNetsArgs {
         Empty {}
     }
 
-    pub fn motifs_by(&self) -> Result<MotifsBy, ThoError> {
+    pub fn motifs_by(&self) -> anyhow::Result<MotifsBy> {
         match (self.motif_id, self.select_motifs_run_config_ids.clone()) {
             (Some(motif_id), select_motifs_run_config_ids) => Ok(MotifsBy::MotifId { motif_id, select_motifs_run_config_ids }),
             (None, Some(select_motifs_run_config_ids)) => Ok(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids }),
-            (None, None) => Err(ThoError::new("TrainMotifsNetsArgs: either --select-motifs-run-ids or --motif-id must be provided")),
+            (None, None) => Err(anyhow::anyhow!("TrainMotifsNetsArgs: either --select-motifs-run-ids or --motif-id must be provided")),
         }
     }
 }
@@ -392,7 +393,7 @@ pub struct MotifNetParams {
 }
 
 impl ToJsonFile for MotifNetParams {
-    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError> {
+    fn to_file(&self, path: &PathBuf) -> anyhow::Result<()> {
         // Generic workspace persistence needs model parameters to provide the same JSON representation as the former specialized methods.
         fs::write(path, serde_json5::to_string(self)?)?;
         Ok(())
@@ -425,10 +426,8 @@ impl MotifNetParams {
     }
 
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
-        serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).map_err(
-            |serde_err| ThoError::from_error(format!("read motif net params from {path:?}"), serde_err),
-        )
+    pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
+        serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).with_context(|| format!("read motif net params from {path:?}"))
     }
 
     pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_motifs/src/stages/apply_motif_nets.rs
@@ -440,7 +439,7 @@ impl MotifNetParams {
         }
     }
 
-    pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
+    pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> anyhow::Result<Node> {
         debug!("motif_net: motif {motif:?}");
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
@@ -455,7 +454,7 @@ impl MotifNetParams {
 }
 
 
-pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
+pub fn conv_motif_node(params: &MotifConvNetParams) -> anyhow::Result<Node> {
     debug!("motif_node: params={params:?}");
 
     let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -572,7 +571,7 @@ net.closure(
 
 }
 
-pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<Spectorgram, SynKey>>>) -> Result<Node, ThoError> {
+pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<Spectorgram, SynKey>>>) -> anyhow::Result<Node> {
     debug!("cosine_2d_motif_node: params={params:?} motif={motif:?}");
 
     let mut builder = SeqBuilder::new(0, None)?;
@@ -605,7 +604,7 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
         .end_seq()
 }
 
-pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
+pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> anyhow::Result<Node> {
     debug!("cosine_motif_node: params={params:?}");
 
     let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -641,7 +640,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
 }
 
 
-pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
+pub fn lin_motif_node(params: &MotifLinNetParams) -> anyhow::Result<Node> {
     debug!("motif_node: params={params:?}");
 
     let mut builder = SeqBuilder::new(params.num_features, None)?;
@@ -682,7 +681,7 @@ pub struct LabelNetParams {
 }
 
 impl ToJsonFile for LabelNetParams {
-    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError> {
+    fn to_file(&self, path: &PathBuf) -> anyhow::Result<()> {
         // Generic workspace persistence needs model parameters to provide the same JSON representation as the former specialized methods.
         fs::write(path, serde_json5::to_string(self)?)?;
         Ok(())
@@ -715,14 +714,12 @@ impl LabelNetParams {
         }
     }
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
-        serde_json5::from_str::<LabelNetParams>(fs::read_to_string(&path)?.as_str())
-            .map_err(|serde_err| {
-                ThoError::from_error(format!("read label net params from {path:?}"), serde_err)
-            })
+    pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
+        Ok(serde_json5::from_str::<LabelNetParams>(fs::read_to_string(&path)?.as_str())
+            .with_context(|| format!("read label net params from {path:?}"))?)
     }
 
-    pub fn label_net(&self) -> Result<Node, ThoError> {
+    pub fn label_net(&self) -> anyhow::Result<Node> {
         match &self.net_type {
             LabelNetTypeParams::LinNetParams(_) => {
                 lin_label_node(&self)
@@ -739,7 +736,7 @@ impl LabelNetParams {
 
 }
 
-pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
     let LabelNetTypeParams::ConvNetParams(cnn_params) = &params.net_type else {
         panic!("Unexpected params type: {:?}", params.net_type);
     };
@@ -884,7 +881,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     .end_seq()
 }
 
-pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+pub fn self_attention_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
     let LabelNetTypeParams::SelfAttentionNetParams(sa_params) = &params.net_type else {
         panic!("Unexpected params type: {:?}", params.net_type);
     };
@@ -938,7 +935,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
     builder .end_seq()
 }
 
-pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
     debug!("lin_label_node: params={params:?}");
 
     let LabelNetTypeParams::LinNetParams(lin_params) = &params.net_type else {
@@ -994,7 +991,7 @@ pub struct FinalNetParams {
 }
 
 impl ToJsonFile for FinalNetParams {
-    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError> {
+    fn to_file(&self, path: &PathBuf) -> anyhow::Result<()> {
         // Generic workspace persistence needs model parameters to provide the same JSON representation as the former specialized methods.
         fs::write(path, serde_json5::to_string(self)?)?;
         Ok(())
@@ -1011,15 +1008,13 @@ impl FinalNetParams {
         }
     }
 
-    pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
-        serde_json5::from_str::<FinalNetParams>(fs::read_to_string(&path)?.as_str())
-            .map_err(|serde_err| {
-                ThoError::from_error(format!("read final net params from {path:?}"), serde_err)
-            })
+    pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
+        Ok(serde_json5::from_str::<FinalNetParams>(fs::read_to_string(&path)?.as_str())
+            .with_context(|| format!("read final net params from {path:?}"))?)
     }
 }
 
-pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
+pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
     debug!("final_node: params={:?}", params);
 
     let mut builder = SeqBuilder::new(params.in_features, None)?;
@@ -1243,7 +1238,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     k: f64,
     device: Device,
     descr: &str,
-) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> {
+) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> {
     let vs = VarStore::new(device);
 
     SeqBuilder::new(num_features, None)?
@@ -1319,6 +1314,7 @@ pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
 mod train_tests {
+    use anyhow::Context as _;
     use super::{CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinNetArgs, MotifCosine2dNetParams, MotifCosineNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node};
     use super::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams,
@@ -1394,7 +1390,7 @@ mod train_tests {
 
 
     #[test]
-    fn test_test_net() -> Result<(), ThoError> {
+    fn test_test_net() -> anyhow::Result<()> {
         let t_0 = lin_test_tensor(1000, 5);
         debug!("t_0.size={:?}", t_0.size());
 
@@ -1437,7 +1433,7 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_load_lin_label_node() -> Result<(), ThoError> {
+    async fn test_save_load_lin_label_node() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
         let channels = 3;
@@ -1501,7 +1497,7 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_load_conv_label_node() -> Result<(), ThoError> {
+    async fn test_save_load_conv_label_node() -> anyhow::Result<()> {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1519,7 +1515,7 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_load_conv_label_node_1() -> Result<(), ThoError> {
+    async fn test_save_load_conv_label_node_1() -> anyhow::Result<()> {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1537,7 +1533,7 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_load_self_attention_label_node() -> Result<(), ThoError> {
+    async fn test_save_load_self_attention_label_node() -> anyhow::Result<()> {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1561,7 +1557,7 @@ mod train_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_test_train_conv_label_node() -> Result<(), ThoError> {
+    async fn heavy_test_train_conv_label_node() -> anyhow::Result<()> {
         let motif_nets= 100;
         let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
         let params = LabelNetParams::new(
@@ -1628,7 +1624,7 @@ mod train_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_test_train_lin_label_node_on_kernels() -> Result<(), ThoError> {
+    async fn heavy_test_train_lin_label_node_on_kernels() -> anyhow::Result<()> {
         let motif_nets= 100;
         let conv_net_params = LinLenNetParams::new(256, 4);
         let params = LabelNetParams::new(
@@ -1693,7 +1689,7 @@ mod train_tests {
     }
 
 
-    fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError>{
+    fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> anyhow::Result<(Tensor, Option<BatchLengths>, Tensor)>{
         assert_eq!(batch%2, 0);
 
         // debug_plot_impl(motifs, "motifs", 0)?;
@@ -1704,7 +1700,7 @@ mod train_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_test_train_cosine_motif_node() -> Result<(), ThoError> {
+    async fn heavy_test_train_cosine_motif_node() -> anyhow::Result<()> {
         let motif_width= 100usize;
         let batch = 64usize;
 
@@ -1734,7 +1730,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn run_cosine_motif_node(vs_0: &mut VarStore, x_train: &Tensor, y_train: &Tensor, x_eval: &Tensor, y_eval: &Tensor, net: &Box<dyn ThoModule<AnyDims, AnyDims>>) -> Result<u32, ThoError> {
+    fn run_cosine_motif_node(vs_0: &mut VarStore, x_train: &Tensor, y_train: &Tensor, x_eval: &Tensor, y_eval: &Tensor, net: &Box<dyn ThoModule<AnyDims, AnyDims>>) -> anyhow::Result<u32> {
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
 
         let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), None, false)?;
@@ -1763,11 +1759,11 @@ mod train_tests {
 
             opt.backward_step(&loss);
         }
-        Err(ThoError::new("failed"))
+        Err(anyhow::anyhow!("failed"))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_test_train_cosine_motif_node_2d() -> Result<(), ThoError> {
+    async fn heavy_test_train_cosine_motif_node_2d() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/plots/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
@@ -1809,7 +1805,7 @@ mod train_tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_train_self_attention_label_node() -> Result<(), ThoError> {
+    async fn test_train_self_attention_label_node() -> anyhow::Result<()> {
         tch::manual_seed(42);
         let motif_nets = 2;
 
@@ -1859,7 +1855,7 @@ mod train_tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_test_train_self_attention_label_node() -> Result<(), ThoError> {
+    async fn heavy_test_train_self_attention_label_node() -> anyhow::Result<()> {
         tch::manual_seed(42);
         let motif_nets = 30;
 
@@ -1895,9 +1891,9 @@ mod train_tests {
         Ok(())
     }
 
-    fn train_self_attention<XYF>(motif_nets: u32, attention_net_params: SelfAttentionNetParams, batch: usize, x_y_lengths_eval: (Tensor, Tensor, Vec<usize>), x_y_lengths_train: XYF, steps: i32) -> Result<(f64, Option<f64>, f64, f64), ThoError>
+    fn train_self_attention<XYF>(motif_nets: u32, attention_net_params: SelfAttentionNetParams, batch: usize, x_y_lengths_eval: (Tensor, Tensor, Vec<usize>), x_y_lengths_train: XYF, steps: i32) -> anyhow::Result<(f64, Option<f64>, f64, f64)>
     where
-        XYF: Fn(i32)->Result<(Tensor, Tensor, Vec<usize>), ThoError>
+        XYF: Fn(i32)->anyhow::Result<(Tensor, Tensor, Vec<usize>)>
     {
 
         let params = LabelNetParams::new(
@@ -1939,7 +1935,7 @@ mod train_tests {
         Ok((eval_loss_before, first_loss, last_loss, eval_loss))
     }
 
-    async fn _test_save_load_conv_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<(), ThoError> {
+    async fn _test_save_load_conv_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
 
@@ -2017,7 +2013,7 @@ mod train_tests {
         Ok(())
     }
 
-    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams, half: bool) -> Result<(), ThoError> {
+    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams, half: bool) -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("_test_save_load_self_attention_label_node: test_dir={test_dir:?}");
 
@@ -2105,7 +2101,7 @@ mod train_tests {
     }
 
     #[test]
-    fn test_cnn_label_node_with_mask() -> Result<(), ThoError>{
+    fn test_cnn_label_node_with_mask() -> anyhow::Result<()>{
         reset_print_options();
         let motif_nets = 3;
         let params = LabelNetParams::new(
@@ -2360,7 +2356,7 @@ mod train_tests {
         fs::write(&input_path.join(name), "lalalal").unwrap();
     }
 
-    fn save_test_final_model(models_path: &PathBuf, features: u32) -> Result<(), ThoError> {
+    fn save_test_final_model(models_path: &PathBuf, features: u32) -> anyhow::Result<()> {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2379,7 +2375,7 @@ mod train_tests {
     }
 
     #[test]
-    fn test_is_nonzero() -> Result<(), ThoError> {
+    fn test_is_nonzero() -> anyhow::Result<()> {
         assert!(common_nets::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
         assert!(common_nets::is_nonzero(&Tensor::stack(
             &[
@@ -2434,7 +2430,7 @@ mod train_tests {
         label_signal: LabelSignal,
         similarity: f32,
         seed: Option<u64>,
-    ) -> Result<(Tensor, Tensor, Vec<usize>), ThoError> {
+    ) -> anyhow::Result<(Tensor, Tensor, Vec<usize>)> {
         assert_ne!(batch, 0, "batch must be > 0");
         assert_ne!(motif_nets, 0, "motif_nets must be > 0");
 
@@ -2486,7 +2482,7 @@ mod train_tests {
         let radius: isize = 6;
 
         let normal = Normal::new(base_mean as f64, noise_std as f64)
-            .map_err(|e| ThoError::new(format!("Normal dist error: {e:?}")))?;
+            .context("construct normal distribution")?;
 
         // Allocate padded tensor storage: [batch * motif_nets * max_l]
         // Fill padding with a constant "no match" value (base_mean).
@@ -2656,7 +2652,7 @@ mod train_tests {
 
 
     #[test]
-    fn test_inference_mode() -> Result<(), ThoError>{
+    fn test_inference_mode() -> anyhow::Result<()>{
 
         assert!(!Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
 
@@ -2668,7 +2664,7 @@ mod train_tests {
     }
 
     #[test]
-    fn test_mix_masks_align_with_rows_2() -> Result<(), ThoError> {
+    fn test_mix_masks_align_with_rows_2() -> anyhow::Result<()> {
         // set_max_level(Trace);
         //resource lengths (resources are the net's inputs, i.e. what needs to be classified)
         let resource_0_len = 100;

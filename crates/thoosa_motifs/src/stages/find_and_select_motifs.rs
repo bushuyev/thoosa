@@ -110,7 +110,7 @@ impl SavableResult for FindAndSelectMotifsResult {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<Vec<u32>, ThoError> {
+    ) -> anyhow::Result<Vec<u32>> {
 
 
         let best_run_config_ids = self

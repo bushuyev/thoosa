@@ -14,22 +14,22 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::DebugId;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> Result<u32, ThoError> {
+pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig, path: &P) -> anyhow::Result<u32> {
     debug!("clc_conv1d_out: path={path} l_in={l_in} kernel={kernel} padding={} dilation={} stride={}", c.padding, c.dilation, c.stride);
 
     if l_in == 0 { //convolution was first layer, num_features is not known
         return  Ok(0);
     }
     if kernel == 0 {// if kernel is calculated in runtime
-        return Err(ThoError::new(format!("kernel={kernel} should be bigger than 0")))
+        return Err(anyhow::anyhow!("kernel={kernel} should be bigger than 0"))
     }
     if l_in + 2 * (c.padding as u32) < c.dilation as u32  * (kernel - 1) {
-        return Err(ThoError::new(format!("clc_conv1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} padding={}", kernel, c.dilation, c.padding)))
+        return Err(anyhow::anyhow!("clc_conv1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} padding={}", kernel, c.dilation, c.padding))
     }
 
     if l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1{
 
-        return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={}", kernel, c.dilation)))
+        return Err(anyhow::anyhow!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={}", kernel, c.dilation))
     }
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
@@ -39,14 +39,14 @@ pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig,
     Ok(r)
 }
 
-pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> Result<u32, ThoError> {
+pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, stride: u32) -> anyhow::Result<u32> {
     // throwing error should cause f32::MAX loss in optimizer
     if kernel < 2 {// if kernel is calculated in runtime
-        return Err(ThoError::new(format!("kernel={kernel} should be bigger than 2")))
+        return Err(anyhow::anyhow!("kernel={kernel} should be bigger than 2"))
     }
 
     if l_in + 2 * padding < dilation * (kernel - 1) - 1 {
-        return Err(ThoError::new(format!("clc_max_pool1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} padding={padding}")))
+        return Err(anyhow::anyhow!("clc_max_pool1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} padding={padding}"))
     }
 
     debug!("clc_max_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} dilation={dilation} stride={stride}");
@@ -73,13 +73,13 @@ pub enum Node {
     },
     Par {
         elts: Vec<Node>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
     },
     Split1 {
         node: Box<Node>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
     },
     Conv1d {
         path:String,
@@ -170,7 +170,7 @@ pub enum Node {
         p: f64,
     },
     Closure {
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>
     },
 }
 
@@ -208,7 +208,7 @@ impl Node {
     pub fn build_tch_module<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         self,
         vs: &nn::Path,
-    ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> {
+    ) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> {
         Ok(match self {
             Node::Seq { elts, split_input } => {
                 let layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>> =
@@ -265,7 +265,7 @@ impl Node {
                 // Initialization belongs only to a newly created variable;
                 // copied tensors must retain their existing values.
                 if !had_weight && let Some(init) = init {
-                    no_grad(|| -> Result<(), ThoError> {
+                    no_grad(|| -> anyhow::Result<()> {
                         conv.ws.f_copy_(&init.t_ref().f_view((1, 1, kernel as i64))?)?;
                         Ok(())
                     })?;
@@ -431,7 +431,7 @@ pub struct SeqBuilder {
 }
 
 impl SeqBuilder {
-    pub fn new(num_features: u32, split_input_dim: Option<i64>) -> Result<Self, ThoError> {
+    pub fn new(num_features: u32, split_input_dim: Option<i64>) -> anyhow::Result<Self> {
         Ok(Self {
             num_features,
             kernel: None,
@@ -443,9 +443,9 @@ impl SeqBuilder {
     pub fn split(
         &mut self,
         elts: Vec<Node>,
-        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
-    ) -> Result<&mut Self, ThoError> {
+        split: Box<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
+    ) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Par {
             elts,
             split: Arc::from(split),
@@ -458,9 +458,9 @@ impl SeqBuilder {
     pub fn split1(
         &mut self,
         node: Node,
-        split: Box<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-        join: Box<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
-    ) -> Result<&mut Self, ThoError> {
+        split: Box<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+        join: Box<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
+    ) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Split1 {
             node: Box::new(node),
             split: Arc::from(split),
@@ -471,7 +471,7 @@ impl SeqBuilder {
     }
 
 
-    pub fn end_seq(&mut self) -> Result<Node, ThoError> {
+    pub fn end_seq(&mut self) -> anyhow::Result<Node> {
         let mut elts = Vec::new();
 
         std::mem::swap(&mut elts, &mut self.elts);
@@ -482,7 +482,7 @@ impl SeqBuilder {
         })
     }
 
-    pub fn batch_norm(&mut self, config: BatchNormConfig, option: Option<u32>) -> Result<&mut Self, ThoError> {
+    pub fn batch_norm(&mut self, config: BatchNormConfig, option: Option<u32>) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::BatchNorm {
             num_features: option.unwrap_or(self.num_features),
             config,
@@ -498,7 +498,7 @@ impl SeqBuilder {
         out_channels: u32,
         config: ConvConfig,
         init: Option<Arc<ThoTensor<AnyDims, DebugId>>>,
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Conv1d {
             path:path.to_string(),
             kernel,
@@ -522,7 +522,7 @@ impl SeqBuilder {
         a: f64,
         b: f64,
         init_mode: InitMode
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
 
         self.elts.push(Node::CosineConv1d {
             path:path.to_string(),
@@ -547,7 +547,7 @@ impl SeqBuilder {
         a: f64,
         b: f64,
         init_mode: InitMode
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
 
         self.elts.push(Node::CosineConv2d {
             path:path.to_string(),
@@ -565,7 +565,7 @@ impl SeqBuilder {
     }
 
 
-    pub fn sharpening_head_1d<P:ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> Result<&mut Self, ThoError> {
+    pub fn sharpening_head_1d<P:ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::SharpeningHead1d {
             path: path.to_string(),
             in_channels,
@@ -578,7 +578,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn binary_head<P:ToString>(&mut self, path: P, pool: BinaryHeadPool) -> Result<&mut Self, ThoError> {
+    pub fn binary_head<P:ToString>(&mut self, path: P, pool: BinaryHeadPool) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::BinaryHead {
             path: path.to_string(),
             pool,
@@ -592,11 +592,11 @@ impl SeqBuilder {
         _in_channels: u32,
         _out_channels: u32,
         _config: ConvConfig,
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
         todo!()
     }
 
-    pub fn max_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> Result<&mut Self, ThoError> {
+    pub fn max_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::MaxPool {
             kernel_size: kernel,
             stride,
@@ -608,7 +608,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn adaptive_max_pool(&mut self, output_size:u32, num_features:u32) -> Result<&mut Self, ThoError> {
+    pub fn adaptive_max_pool(&mut self, output_size:u32, num_features:u32) -> anyhow::Result<&mut Self> {
         self.num_features = num_features;
 
         self.elts.push(Node::AdaptiveMaxPool {
@@ -618,7 +618,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn adaptive_avg_pool(&mut self, output_size:u32, num_features:u32) -> Result<&mut Self, ThoError> {
+    pub fn adaptive_avg_pool(&mut self, output_size:u32, num_features:u32) -> anyhow::Result<&mut Self> {
         self.num_features = num_features;
 
         self.elts.push(Node::AdaptiveAvgPool1d {
@@ -628,7 +628,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn attn_pool1d<P:ToString>(&mut self, path:P, channels:u32, attn_hidden:u32) -> Result<&mut Self, ThoError> {
+    pub fn attn_pool1d<P:ToString>(&mut self, path:P, channels:u32, attn_hidden:u32) -> anyhow::Result<&mut Self> {
 
         self.elts.push(Node::AttnPool1d {
             path: path.to_string(),
@@ -639,15 +639,15 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn self_attention<P: ToString>(&mut self, path: P, d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> Result<&mut Self, ThoError> {
+    pub fn self_attention<P: ToString>(&mut self, path: P, d_model: u32, n_heads: u32, ff_mult: u32, dropout: f64) -> anyhow::Result<&mut Self> {
         if d_model == 0 {
-            return Err(ThoError::new(format!("self_attention, d_model > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("self_attention, d_model > 0: path={}", path.to_string()));
         }
         if n_heads == 0 {
-            return Err(ThoError::new(format!("self_attention, n_heads > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("self_attention, n_heads > 0: path={}", path.to_string()));
         }
         if ff_mult == 0 {
-            return Err(ThoError::new(format!("self_attention, ff_mult > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("self_attention, ff_mult > 0: path={}", path.to_string()));
         }
 
         self.elts.push(Node::SelfAttention {
@@ -661,7 +661,7 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn avg_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> Result<&mut Self, ThoError> {
+    pub fn avg_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::AvgPool {
             kernel_size: kernel,
             stride,
@@ -673,14 +673,14 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn dropout(&mut self, p: f64) -> Result<&mut Self, ThoError> {
+    pub fn dropout(&mut self, p: f64) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Dropout { p });
         Ok(self)
     }
 
-    pub fn linear<P:ToString>(&mut self, path: P) -> Result<&mut Self, ThoError> {
+    pub fn linear<P:ToString>(&mut self, path: P) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
-            return Err(ThoError::new(format!("linear, self.num_features > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear, self.num_features > 0: path={}", path.to_string()));
         }
 
         self.elts.push(Node::Linear {
@@ -697,9 +697,9 @@ impl SeqBuilder {
         path: P,
         num_features: u32,
         out_feats: u32,
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
         if num_features == 0 {
-            return Err(ThoError::new(format!("linear_feats, num_features > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_feats, num_features > 0: path={}", path.to_string()));
         }
 
         self.elts.push(Node::Linear {
@@ -712,9 +712,9 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32) -> Result<&mut Self, ThoError> {
+    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
-            return Err(ThoError::new(format!("linear_f, self.num_features > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_f, self.num_features > 0: path={}", path.to_string()));
         }
 
         let out_feats = (self.num_features as f32 * f) as u32;
@@ -733,12 +733,12 @@ impl SeqBuilder {
         &mut self,
         out_feats: u32,
         path: P,
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
-            return Err(ThoError::new(format!("linear_f, self.num_features > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_f, self.num_features > 0: path={}", path.to_string()));
         }
         if out_feats == 0 {
-            return Err(ThoError::new(format!("linear_f, out_feats > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_f, out_feats > 0: path={}", path.to_string()));
         }
 
         self.elts.push(Node::Linear {
@@ -757,12 +757,12 @@ impl SeqBuilder {
         path: P,
         out_feats: u32,
         config: LinearConfig,
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
         if self.num_features == 0 {
-            return Err(ThoError::new(format!("linear_s_with_conf, self.num_features > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_s_with_conf, self.num_features > 0: path={}", path.to_string()));
         }
         if out_feats == 0 {
-            return Err(ThoError::new(format!("linear_s_with_conf, out_feats > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_s_with_conf, out_feats > 0: path={}", path.to_string()));
         }
 
         self.elts.push(Node::Linear {
@@ -777,15 +777,15 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn linear_p<P:ToString>(&mut self, path: P, n: usize, p: &impl NthParams<Params = u32>) -> Result<&mut Self, ThoError> {
+    pub fn linear_p<P:ToString>(&mut self, path: P, n: usize, p: &impl NthParams<Params = u32>) -> anyhow::Result<&mut Self> {
 
         let out_feats = p.on_nth_layer(n);
 
         if self.num_features == 0 {
-            return Err(ThoError::new(format!("linear_p, self.num_features > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_p, self.num_features > 0: path={}", path.to_string()));
         }
         if out_feats == 0 {
-            return Err(ThoError::new(format!("linear_p, out_feats > 0: path={}", path.to_string())));
+            return Err(anyhow::anyhow!("linear_p, out_feats > 0: path={}", path.to_string()));
         }
 
         self.elts.push(Node::Linear {
@@ -800,16 +800,16 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn func(&mut self, func: Fp) -> Result<&mut Self, ThoError> {
+    pub fn func(&mut self, func: Fp) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Func { func });
         Ok(self)
     }
 
     pub fn closure(
         &mut self,
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>,
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>,
         num_features: Option<u32>,
-    ) -> Result<&mut Self, ThoError> {
+    ) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Closure { cl });
         if let Some(num_features) = num_features {
             self.num_features = num_features;
@@ -818,9 +818,9 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn n_blocks<F>(&mut self, mut block: F, n: usize) -> Result<&mut Self, ThoError>
+    pub fn n_blocks<F>(&mut self, mut block: F, n: usize) -> anyhow::Result<&mut Self>
     where
-        F: for<'a> FnMut(&'a mut SeqBuilder, usize) -> Result<(), ThoError>,
+        F: for<'a> FnMut(&'a mut SeqBuilder, usize) -> anyhow::Result<()>,
     {
         for i in 0..n {
             block(self, i)?;
@@ -829,16 +829,16 @@ impl SeqBuilder {
         Ok(self)
     }
 
-    pub fn block<F>(&mut self, mut block: F) -> Result<&mut Self, ThoError>
+    pub fn block<F>(&mut self, mut block: F) -> anyhow::Result<&mut Self>
     where
-        F: for<'a> FnMut(&'a mut SeqBuilder) -> Result<(), ThoError>,
+        F: for<'a> FnMut(&'a mut SeqBuilder) -> anyhow::Result<()>,
     {
         block(self)?;
 
         Ok(self)
     }
 
-    pub fn end(&mut self) -> Result<(), ThoError> {
+    pub fn end(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }

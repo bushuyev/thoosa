@@ -637,7 +637,7 @@ mod tests {
         Ok(())
     }
 
-    async fn set_run_on(store: &Arc<dyn MotifsStore>, run_config_id: u32, run_on: &str) -> Result<(), ThoError> {
+    async fn set_run_on(store: &Arc<dyn MotifsStore>, run_config_id: u32, run_on: &str) -> anyhow::Result<()> {
         store.update_run_config_run_on(run_config_id, run_on.to_string()).await
     }
 }

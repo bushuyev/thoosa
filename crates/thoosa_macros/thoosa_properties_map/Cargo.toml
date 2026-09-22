@@ -9,6 +9,7 @@ path = "src/lib.rs"
 
 
 [dependencies]
+anyhow.workspace = true
 thoosa_shared = {path = "../../thoosa_shared" }
 clap.workspace = true
 [lints]

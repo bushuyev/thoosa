@@ -290,24 +290,24 @@ fn solve_symmetric_pentadiagonal(
     Ok(x)
 }
 
-fn odd_window(window: u32, filter_name: &str) -> Result<i64, ThoError> {
+fn odd_window(window: u32, filter_name: &str) -> anyhow::Result<i64> {
     let normalized = if window % 2 == 0 { window + 1 } else { window };
     if normalized <= 3 {
-        return Err(ThoError::new(format!("{filter_name} window must be > 3 after odd normalization, got {window}")));
+        return Err(anyhow::anyhow!("{filter_name} window must be > 3 after odd normalization, got {window}"));
     }
 
     Ok(normalized as i64)
 }
 
-fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str, step: i64) -> Result<Tensor, ThoError> {
+fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str, step: i64) -> anyhow::Result<Tensor> {
     let size = x.size();
     if size.len() != 2 {
-        return Err(ThoError::new(format!("{filter_name}: expected input of shape [C, Data], got {size:?}")));
+        return Err(anyhow::anyhow!("{filter_name}: expected input of shape [C, Data], got {size:?}"));
     }
 
     let data_len = size[1];
     if data_len < 1 {
-        return Err(ThoError::new(format!("{filter_name}: expected Data dimension > 0, got {size:?}")));
+        return Err(anyhow::anyhow!("{filter_name}: expected Data dimension > 0, got {size:?}"));
     }
 
     let radius = window / 2;
@@ -334,7 +334,7 @@ fn windows_with_replicate_padding(x: &Tensor, window: i64, filter_name: &str, st
 ///
 /// Requirements:
 /// - `window` must be > 3 after odd normalization
-pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
+pub fn median(x: &Tensor, window: u32) -> anyhow::Result<Tensor> {
     let window = odd_window(window, "median")?;
     let windows = windows_with_replicate_padding(x, window, "median", 1)?;
     let radius = window / 2;
@@ -363,7 +363,7 @@ pub fn median(x: &Tensor, window: u32) -> Result<Tensor, ThoError> {
 ///
 /// Requirements:
 /// - `window` must be > 3 after odd normalization
-pub fn moving_average(x: &Tensor, window: u32, step: i64) -> Result<Tensor, ThoError> {
+pub fn moving_average(x: &Tensor, window: u32, step: i64) -> anyhow::Result<Tensor> {
     let window = odd_window(window, "moving average")?;
     let windows = windows_with_replicate_padding(x, window, "moving_average", step)?;
     let moving_average = windows.f_mean_dim(2, false, None)?;
@@ -380,7 +380,7 @@ mod tests {
 
 
     #[test]
-    fn test_moving_average_replicates_edges() -> Result<(), ThoError> {
+    fn test_moving_average_replicates_edges() -> anyhow::Result<()> {
         let input = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let output = moving_average(&input, 4, 1)?;
         let expected = Tensor::from_slice(&[1.6f32, 2.2, 3.0, 3.8, 4.4, 4.4, 3.8, 3.0, 2.2, 1.6]).f_view([2, 5])?;

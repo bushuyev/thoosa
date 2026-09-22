@@ -1,4 +1,3 @@
-use crate::ThoError;
 
 /// Simple Gauss-Jordan inversion for small matrices.
 /// Returns None if singular / numerically unstable.
@@ -64,16 +63,16 @@ pub fn invert_square(mat: &Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
 /// Compute Savitzky–Golay smoothing (derivative=0) convolution coefficients.
 /// Window length must be odd. poly_order must be < window_len.
 /// Returns coefficients in left-to-right order over the window.
-pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> Result<Vec<f64>, ThoError> {
+pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> anyhow::Result<Vec<f64>> {
     if window_len < 3 || window_len % 2 == 0 {
-        return Err(ThoError::new("window_len must be odd and >= 3"));
+        return Err(anyhow::anyhow!("window_len must be odd and >= 3"));
     }
     if poly_order == 0 {
         // With poly=0, SG is just a moving average.
         return Ok(vec![1.0 / window_len as f64; window_len]);
     }
     if poly_order >= window_len {
-        return Err(ThoError::new("poly_order must be < window_len"));
+        return Err(anyhow::anyhow!("poly_order must be < window_len"));
     }
 
     let m = (window_len / 2) as i32; // window positions: -m..m
@@ -103,7 +102,7 @@ pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> Result<Vec<f
     }
 
     // Invert ATA via Gauss-Jordan: inv = (ATA)^-1  [p x p]
-    let inv = invert_square(&ata).ok_or_else(||ThoError::new("failed to invert (A^T A)"))?;
+    let inv = invert_square(&ata).ok_or_else(||anyhow::anyhow!("failed to invert (A^T A)"))?;
 
     // Pseudoinverse B = (A^T A)^-1 A^T  =>  [p x window_len]
     // We only need the first row (corresponding to value at x=0), i.e. row 0 of B:

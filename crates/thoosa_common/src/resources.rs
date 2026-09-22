@@ -32,7 +32,7 @@ impl ResourcesConfig for Simple {
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         store: &Arc<S>,
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         Ok(match self.resources() {
             ResourceType::List(list) => track_await(store
                 .list_resources_by_file_stems(&list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>())).await?,
@@ -57,16 +57,16 @@ impl ResourcesConfig for Simple {
         })
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
         if let ResourceType::List(list) = self.resources() {
             if list.is_empty() {
-                return Err(ThoError::new("resource list should not be empty"));
+                return Err(anyhow::anyhow!("resource list should not be empty"));
             }
         }
 
         let resources = track_await(self.to_resources(store)).await?;
         if resources.is_empty() {
-            Err(ThoError::new(format!(
+            Err(anyhow::anyhow!(format!(
                 "resource config {self:?} resolved to no resources"
             )))
         } else {
@@ -85,11 +85,11 @@ impl ResourcesConfig for Empty {
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         _store: &Arc<S>,
-    ) -> Result<Self::R, ThoError> {
+    ) -> anyhow::Result<Self::R> {
         Ok(())
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, _store: &Arc<S>) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -119,7 +119,7 @@ impl ResourcesConfig for Labeled {
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         store: &Arc<S>,
-    ) -> Result<Vec<(String, Vec<Resource>)>, ThoError> {
+    ) -> anyhow::Result<Vec<(String, Vec<Resource>)>> {
         let store_guard = store;
         let mut out = Vec::new();
         for (label, resource_set) in track_await(store_guard.list_group_labeled_resources_sets(&self.group)).await? {
@@ -128,17 +128,17 @@ impl ResourcesConfig for Labeled {
         Ok(out)
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
         let labeled_resources = track_await(self.to_resources(store)).await?;
         if labeled_resources.is_empty() {
-            return Err(ThoError::new(format!(
+            return Err(anyhow::anyhow!(format!(
                 "resource config {self:?} resolved to no labeled resource sets"
             )));
         }
 
         for (label, resources) in &labeled_resources {
             if resources.is_empty() {
-                return Err(ThoError::new(format!(
+                return Err(anyhow::anyhow!(format!(
                     "label {label} in resource config {self:?} has no resources"
                 )));
             }
@@ -173,7 +173,7 @@ impl ResourcesConfig for Logits {
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         store: &Arc<S>,
-    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
+    ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
         track_await(store
             .list_resource_random_in_group(&self.group)).await?
             .into_iter()
@@ -190,9 +190,9 @@ impl ResourcesConfig for Logits {
             .collect()
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
         if track_await(store.list_resource_random_in_group(&self.group)).await?.is_empty() {
-            Err(ThoError::new(format!(
+            Err(anyhow::anyhow!(format!(
                 "resource config {self:?} resolved to no logits resources"
             )))
         } else {
@@ -233,11 +233,11 @@ where
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,
         store: &Arc<S>,
-    ) -> Result<(RC::R, RC::R), ThoError> {
+    ) -> anyhow::Result<(RC::R, RC::R)> {
         Ok((track_await(self.train_resources.to_resources(store)).await?, track_await(self.valid_resources.to_resources(store)).await?))
     }
 
-    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> Result<(), ThoError> {
+    async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<S>) -> anyhow::Result<()> {
         track_await(self.train_resources.check(store)).await?;
         track_await(self.valid_resources.check(store)).await?;
         Ok(())
@@ -264,7 +264,7 @@ pub trait SavableResult: Sync + Send + Debug {
         store: &Arc<Self::Store>,
         ws: &Arc<RwLock<Box<Self::Workspace>>>,
         p: Self::P<'_>
-    ) -> Result<Self::R, ThoError>;
+    ) -> anyhow::Result<Self::R>;
 }
 
 #[async_trait]
@@ -278,7 +278,7 @@ where
     type P<'a> = S::P<'a>;
     type R = S::R;
 
-    async fn save(&mut self, store: &Arc<Self::Store>, ws: &Arc<RwLock<Box<Self::Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
-        Arc::get_mut(self).ok_or_else(|| ThoError::new("SavableResult::save: result should not be shared"))?.save(store, ws, p).await
+    async fn save(&mut self, store: &Arc<Self::Store>, ws: &Arc<RwLock<Box<Self::Workspace>>>, p: Self::P<'_>) -> anyhow::Result<Self::R> {
+        Arc::get_mut(self).ok_or_else(|| anyhow::anyhow!("SavableResult::save: result should not be shared"))?.save(store, ws, p).await
     }
 }

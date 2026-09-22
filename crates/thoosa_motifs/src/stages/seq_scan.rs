@@ -56,7 +56,7 @@ impl SavableResult for SeqScanOutput {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
         Ok(0)
     }
 }
