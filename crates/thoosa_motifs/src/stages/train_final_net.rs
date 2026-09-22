@@ -172,7 +172,7 @@ impl SavableResult for TrainFinalNetOutput {
 
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
         let _ = track_await(self.result.save(store, ws, ())).await;
 
         Ok(vec![0])//TODO
@@ -628,7 +628,7 @@ type SyncTrainFinalStep<C> = TrainStep<TrainStepXFn<LabelProbability>, LabelProb
 ///
 /// `sum_dim_intlist(-1)` sums the per-class cross-entropy for each sample,
 /// producing [B], and `mean()` averages it over the batch.
-fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
+fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
     debug!("train_final_loss: pred_y={pred_y:?} target={target:?}");
     trace!("train_final_loss: pred_y=\n{pred_y} target=\n{target}");
 
@@ -638,7 +638,7 @@ fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError
         .f_sum_dim_intlist(&[-1i64][..], false, Kind::Float)?
         .f_mean(Kind::Float)?
         .f_multiply_scalar(-1.)
-        .map_err(ThoError::from)
+        .map_err(anyhow::Error::from)
 }
 
 impl WorkerStageInput for TrainFinalStepIpcInit {
@@ -1047,7 +1047,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
         let run_config_id = track_await(store.save_run_config(
             Some(&self.train_label_nets_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),

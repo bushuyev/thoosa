@@ -40,8 +40,8 @@ pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 
 #[async_trait]
 pub trait MotifTrackerStore: Debug + Send + Sync {
-    fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError>;
-    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
+    fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> anyhow::Result<()>;
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> anyhow::Result<usize>;
 
     fn run_config_id(&self) -> RunConfigId;
     fn channel(&self) -> u32;
@@ -79,7 +79,7 @@ impl SqlMotifTrackerStore {
         path: P,
         run_config_id: RunConfigId,
         channel: u32,
-    ) -> Result<Box<dyn MotifTrackerStore>, ThoError> {
+    ) -> anyhow::Result<Box<dyn MotifTrackerStore>> {
         let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
         {
             let t = conn.transaction()?;
@@ -111,7 +111,7 @@ impl SqlMotifTrackerStore {
 
 #[async_trait]
 impl MotifTrackerStore for SqlMotifTrackerStore {
-    fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError> {
+    fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> anyhow::Result<()> {
         debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_config_id={:?}",slices.len(),self.run_config_id);
 
         let mut conn_guard = self.conn.lock();
@@ -149,7 +149,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         &mut self,
         store: &dyn MotifsStore,
         max_slices_counts: Option<u32>,
-    ) -> Result<usize, ThoError> {
+    ) -> anyhow::Result<usize> {
         let groups = {
             let guard = self.conn.lock();
             debug!("set_motifs: run_config_id={:?}, channel={:?}", self.run_config_id, self.channel);

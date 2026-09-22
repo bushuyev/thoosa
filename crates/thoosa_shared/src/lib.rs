@@ -403,6 +403,9 @@ pub enum ThoError {
     ContextReset,
 }
 
+// Generated configuration implementations use anyhow without requiring a downstream dependency.
+pub use anyhow;
+
 pub type ThoosaError = ThoError;//TODO used in macros, remove
 
 impl Display for SyncStageRunnerError {

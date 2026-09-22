@@ -60,7 +60,7 @@ pub fn run_ipc_test<'f, FM, FW>(
 ) -> Result<(), ThoError>
 where
     FM:Future<Output=Result<(), ThoError>>,
-    FW:AsyncFn(OsString)->Result<(), ThoError>,
+    FW:AsyncFn(OsString)->anyhow::Result<()>,
 {
     if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
         init_test_logging();

@@ -9,7 +9,6 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use tch::Tensor;
-use thoosa_shared::ThoError;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::tracked_await::track_await;
@@ -85,7 +84,7 @@ pub trait ParzenEstimator: Send {
         &self,
         samples: &mut dyn Iterator<Item = Val>,
         weights: Option<Tensor>,
-    ) -> Result<Box<dyn Distribution>, ThoError>;
+    ) -> anyhow::Result<Box<dyn Distribution>>;
 }
 
 pub trait Distribution: Debug + Send {
@@ -167,7 +166,7 @@ impl TreeStructuredParzenEstimator {
         }
     }
 
-    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) ->Result<(), ThoError>{
+    pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) ->anyhow::Result<()>{
         self.observations.push(Reverse(RunResult::new(
             loss,
             eval_config.clone(),
@@ -194,7 +193,7 @@ impl TreeStructuredParzenEstimator {
                     pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v| v[param_i].clone()), None)?,
                 );
 
-                Ok::<_, ThoError>(lower_upper_esitmators)
+                Ok::<_, anyhow::Error>(lower_upper_esitmators)
             },
         )?;
 
@@ -319,8 +318,7 @@ mod tree_structured_parzen_estimator_tests {
     };
     use log::debug;
     use tch::{Kind, Tensor};
-    use thoosa_shared::ThoError;
-    use thoosa_shared::hyperparameter::Hyperparameter;
+        use thoosa_shared::hyperparameter::Hyperparameter;
 
     #[test]
     fn test_percentile() {
@@ -330,7 +328,7 @@ mod tree_structured_parzen_estimator_tests {
     }
 
     #[test]
-    fn test_configuration_space() ->Result<(), ThoError> {
+    fn test_configuration_space() ->anyhow::Result<()> {
         let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
             Hyperparameter::UniformFloat {
                 name: "x_0".into(),
@@ -627,7 +625,7 @@ where
         }
     }
 
-    async fn optimize(&mut self) -> Result<Vec<Val>, ThoError> {
+    async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
         let mut bad_evals = 0_u32;
@@ -768,7 +766,7 @@ where
         }
     }
 
-    pub async fn optimize(&mut self) -> Result<Vec<Val>, ThoError> {
+    pub async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
         track_await(self.inner.optimize()).await
     }
 
@@ -813,7 +811,7 @@ where
         }
     }
 
-    pub async fn optimize(&mut self) -> Result<Vec<Val>, ThoError> {
+    pub async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
         track_await(self.inner.optimize()).await
     }
 
@@ -847,8 +845,7 @@ mod tpe_optimizer_tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tch::Tensor;
-    use thoosa_shared::ThoError;
-    use thoosa_shared::hyperparameter::Hyperparameter;
+        use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
 
     #[ctor::ctor]
@@ -884,7 +881,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_numeric() ->Result<(), ThoError>{
+    async fn test_optimize_numeric() ->anyhow::Result<()>{
         let sphere = sphere(300);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
@@ -912,7 +909,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_numeric_int()->Result<(), ThoError> {
+    async fn test_optimize_numeric_int()->anyhow::Result<()> {
         let sphere = sphere(300);
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
@@ -940,7 +937,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_categoric() ->Result<(), ThoError> {
+    async fn test_optimize_categoric() ->anyhow::Result<()> {
         let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| {
                 debug!("params={params:?}");
@@ -999,7 +996,7 @@ mod tpe_optimizer_tests {
     }
 
     #[tokio::test]
-    async fn test_optimize_constrained() ->Result<(), ThoError> {
+    async fn test_optimize_constrained() ->anyhow::Result<()> {
         let mut opt: AsyncCTPEOptimizer<_, String> = AsyncCTPEOptimizer::new(
             async move |params| {
                 let x: f32 = (&params[0]).try_into().unwrap();

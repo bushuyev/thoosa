@@ -70,14 +70,14 @@ pub fn cosine_conv2d_bank_logits(
     alpha: &Tensor,
     beta: &Tensor,
     cfg: CosineConv2dBankConfig,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     debug!("cosine_conv2d_bank_logits: x={x:?} kernels={kernels:?} alpha={alpha:?} beta={beta:?} cfg={cfg:?}  x.isnan={}", x.isnan().any());
     debug!("cosine_conv2d_bank_logits: devices x={:?} kernels={:?} alpha={:?} beta={:?} ",  x.device(), kernels.device(), alpha.device(), beta.device());
     trace!("cosine_conv2d_bank_logits: x=\n{x} kernels=\n{kernels} alpha=\n{alpha} beta=\n{beta}");
 
     let x_sz = x.size();
     if x_sz.len() != 4 {
-        return Err(ThoError::new(
+        return Err(anyhow::anyhow!(
             format!("x must have shape [B,C,H,W], got {:?}", x_sz),
         ));
     }
@@ -89,7 +89,7 @@ pub fn cosine_conv2d_bank_logits(
 
     let k_sz = kernels.size();
     if k_sz.len() != 4 {
-        return Err(ThoError::new(format!("kernels must have shape [M,C,KH,KW], got {:?}", k_sz)));
+        return Err(anyhow::anyhow!("kernels must have shape [M,C,KH,KW], got {:?}", k_sz));
     }
 
     let m = k_sz[0];
@@ -98,11 +98,11 @@ pub fn cosine_conv2d_bank_logits(
     let kw = k_sz[3];
 
     if kc != c {
-        return Err(ThoError::new(format!("kernel input channels must match x channels: x C={}, kernel C={}", c, kc)));
+        return Err(anyhow::anyhow!("kernel input channels must match x channels: x C={}, kernel C={}", c, kc));
     }
 
     if h < kh || w < kw {
-        return Err(ThoError::new(format!("input spatial size ({h},{w}) smaller than kernel size ({kh},{kw})")));
+        return Err(anyhow::anyhow!("input spatial size ({h},{w}) smaller than kernel size ({kh},{kw})"));
     }
 
     // alpha/beta: allow scalar for M=1, or [M].
@@ -230,7 +230,7 @@ impl ThoCosineConv2d {
         init_patches: Option<Arc<dyn TensorInitRef>>, // [N,KH,KW] or [N,1,KH,KW]
         a: f64,
         b: f64,
-    ) -> Result<Self, ThoError> {
+    ) -> anyhow::Result<Self> {
         debug!("MyCosineConv2d::new: init_patches={init_patches:?} kh={kh} kw={kw} a={a} b={b}");
         // Rebuilding over a copied VarStore must retain its kernel rather than
         // creating and initializing a second tensor under a suffixed name.
@@ -248,7 +248,7 @@ impl ThoCosineConv2d {
                     let psz = patches.size();
 
                     if psz[2] != kh || psz[3] != kw {
-                        return Err(ThoError::new(format!("init patches must have spatial size [{kh},{kw}], got {psz:?}")));
+                        return Err(anyhow::anyhow!("init patches must have spatial size [{kh},{kw}], got {psz:?}"));
                     }
                     let kh_freq = psz[2];//frequencies
                     let kw_time = psz[3];//time
@@ -263,7 +263,7 @@ impl ThoCosineConv2d {
 
                     let mut kernel = path_var(vs, "kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?;
 
-                    tch::no_grad(|| -> Result<(), ThoError> {
+                    tch::no_grad(|| -> anyhow::Result<()> {
                         kernel.f_copy_(&kernel_init)?;
                         Ok(())
                     })?;
@@ -307,20 +307,20 @@ impl ThoCosineConv2d {
     }
 
     /// Accept [B,H,W] or [B,1,H,W].
-    pub fn ensure_4d_1ch(x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn ensure_4d_1ch(x: &Tensor) -> anyhow::Result<Tensor> {
         match x.size().as_slice() {
             [b, h, w] => Ok(x.f_view([*b, 1, *h, *w])?),
             [_, 1, _, _] => Ok(x.shallow_clone()),
-            other => Err(ThoError::new(format!("input must have shape [B,H,W] or [B,1,H,W], got {other:?}"))),
+            other => Err(anyhow::anyhow!("input must have shape [B,H,W] or [B,1,H,W], got {other:?}")),
         }
     }
 
     /// Accept [N,KH,KW] or [N,1,KH,KW].
-    fn ensure_patches_4d(x: &Tensor) -> Result<Tensor, ThoError> {
+    fn ensure_patches_4d(x: &Tensor) -> anyhow::Result<Tensor> {
         match x.size().as_slice() {
             [n, h, w] => Ok(x.f_view([*n, 1, *h, *w])?),
             [_, 1, _, _] => Ok(x.shallow_clone()),
-            other => Err(ThoError::new(format!("motif patches must have shape [N,KH,KW] or [N,1,KH,KW], got {:?}", other))),
+            other => Err(anyhow::anyhow!("motif patches must have shape [N,KH,KW] or [N,1,KH,KW], got {:?}", other)),
         }
     }
 
@@ -330,13 +330,13 @@ impl ThoCosineConv2d {
         proto: &Tensor,
         zero_mean: bool,
         unit_l2: bool,
-    ) -> Result<Tensor, ThoError> {
+    ) -> anyhow::Result<Tensor> {
         let mut p = match proto.size().as_slice() {
             [h, w] => proto.f_view([1, *h, *w])?,
             [1, _, _] => proto.shallow_clone(),
             [1, 1, h, w] => proto.f_view([1, *h, *w])?,
             other => {
-                return Err(ThoError::new(format!("expected proto shape [H,W], [1,H,W], or [1,1,H,W], got {:?}", other)));
+                return Err(anyhow::anyhow!("expected proto shape [H,W], [1,H,W], or [1,1,H,W], got {:?}", other));
             }
         };
 
@@ -366,7 +366,7 @@ impl ThoCosineConv2d {
     ///
     /// output:
     ///     [B,1,H_out,W_out]
-    pub fn forward_map(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn forward_map(&self, x: &Tensor) -> anyhow::Result<Tensor> {
         let x = Self::ensure_4d_1ch(x)?; // [B,1,H,W]
 
         cosine_conv2d_bank_logits(
@@ -384,7 +384,7 @@ impl ThoCosineConv2d {
     ///
     /// Returns:
     ///     [B,1]
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn forward(&self, x: &Tensor) -> anyhow::Result<Tensor> {
         debug!("MyCosineConv2d::forward: x={x:?}");
         let y = self.forward_map(x)?; // [B,1,H_out,W_out]
         debug!("MyCosineConv2d::forward: y={y:?}");
@@ -392,7 +392,7 @@ impl ThoCosineConv2d {
         let sz = y.size();
 
         if sz[2] != 1 || sz[3] != 1 {
-            return Err(ThoError::new(format!("MyCosineConv2d::forward expects full-size match with output [B,1,1,1], got {sz:?}. Use forward_map or forward_anywhere instead.")));
+            return Err(anyhow::anyhow!("MyCosineConv2d::forward expects full-size match with output [B,1,1,1], got {sz:?}. Use forward_map or forward_anywhere instead."));
         }
 
         Ok(y.view((x.size()[0], -1))) // [B,1]
@@ -406,7 +406,7 @@ impl ThoCosineConv2d {
     ///
     /// Meaning:
     ///     strongest occurrence of this motif anywhere in the input.
-    pub fn forward_anywhere(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn forward_anywhere(&self, x: &Tensor) -> anyhow::Result<Tensor> {
         let y = self.forward_map(x)?; // [B,1,H_out,W_out]
 
         let (y, _idx_t) = y.f_max_dim(3, false)?; // [B,1,H_out]
@@ -420,7 +420,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
 
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
-    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyCosineConv2d::tho_forward: x_in={x_in:?}");
 
         let y = self.forward_anywhere(x_in.as_ref())?; // [B,1,1,1] if full match
@@ -445,7 +445,7 @@ mod tests {
     use thoosa_shared::{ThoError, debug_id};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_check_dims() -> Result<(), ThoError> {
+    async fn test_check_dims() -> anyhow::Result<()> {
         let slices = 3;
         let frequencies = 8000;
         let time = 4;

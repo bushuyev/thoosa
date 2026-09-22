@@ -63,7 +63,7 @@ where
 {
     fn all() -> &'static [Self];
     fn concrete(self) -> &'static [Self];
-    fn root(self, ws: &W) -> Result<PathBuf, ThoError>;
+    fn root(self, ws: &W) -> anyhow::Result<PathBuf>;
     fn run_config_id(self, weights_path: &Path) -> Option<RunConfigId>;
 }
 

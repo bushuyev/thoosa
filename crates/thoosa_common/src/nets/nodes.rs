@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
+use anyhow::Context as _;
 use crate::dims::{AnyDims, Dims};
 use crate::nets::batches::BatchLengths;
 // use crate::{data, utils};
@@ -53,7 +54,7 @@ impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn run_layers(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.tho_device_idx(), self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().into(), lengths.as_deref_mut(), train)?;
@@ -79,7 +80,7 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         if self.layers.is_empty() {
             Ok(t.shallow_clone())
         } else {
@@ -112,10 +113,10 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                                     //TODO ok skipping?
                                     debug!("MySequential::tho_forward skipping i={i} split.size={:?}",split.size());
 
-                                    Err(ThoError::new(format!("Unexpected split size: {:?} dim={dim}", split.size())))
+                                    Err(anyhow::anyhow!("Unexpected split size: {:?} dim={dim}", split.size()))
                                 }
                             })
-                            .collect::<Result<Vec<_>, ThoError>>()?
+                            .collect::<anyhow::Result<Vec<_>>>()?
                             .as_slice(),
                         1,
                     )?;
@@ -143,8 +144,8 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
 
 pub struct ThoParallel<DI: Dims, DO: Dims> {
     layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for ThoParallel<DI, DO> {
@@ -156,8 +157,8 @@ impl<DI: Dims, DO: Dims> Debug for ThoParallel<DI, DO> {
 impl<DI: Dims, DO: Dims> ThoParallel<DI, DO> {
     pub fn new(
         layers: Vec<Box<dyn ThoModule<DI, DO>>>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
     ) -> Self {
         assert!(layers.len() > 0, "layers len == 0");
 
@@ -176,7 +177,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<D
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let original_lengths = lengths.as_deref().cloned();
         let mut updated_lengths: Option<BatchLengths> = None;
@@ -192,7 +193,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<D
                     }
                     Ok(out)
                 })
-                .collect::<Result<Vec<Tensor>, ThoError>>()?,
+                .collect::<anyhow::Result<Vec<Tensor>>>()?,
         )?;
 
         if let (Some(updated), Some(lengths_out)) = (updated_lengths, lengths.as_deref_mut()) {
@@ -207,8 +208,8 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<D
 /////
 pub struct Split1<DI: Dims, DO: Dims> {
     layer: Box<dyn ThoModule<DI, DO>>,
-    split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-    join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
+    split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+    join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
 }
 
 impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
@@ -220,8 +221,8 @@ impl<DI: Dims, DO: Dims> Debug for Split1<DI, DO> {
 impl<DI: Dims, DO: Dims> Split1<DI, DO> {
     pub fn new(
         layer: Box<dyn ThoModule<DI, DO>>,
-        split: Arc<dyn Fn(&Tensor) -> Result<Vec<Tensor>, ThoError> + Send + Sync>,
-        join: Arc<dyn Fn(Vec<Tensor>) -> Result<Tensor, ThoError> + Send + Sync>,
+        split: Arc<dyn Fn(&Tensor) -> anyhow::Result<Vec<Tensor>> + Send + Sync>,
+        join: Arc<dyn Fn(Vec<Tensor>) -> anyhow::Result<Tensor> + Send + Sync>,
     ) -> Self {
 
         Self {
@@ -237,7 +238,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split1<DI, DO
        self.layer.debug()
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let original_lengths = lengths.as_deref().cloned();
         let mut updated_lengths: Option<BatchLengths> = None;
@@ -252,7 +253,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split1<DI, DO
                     }
                     Ok(out)
                 })
-                .collect::<Result<Vec<Tensor>, ThoError>>()?,
+                .collect::<anyhow::Result<Vec<Tensor>>>()?,
         )?;
 
         if let (Some(updated), Some(lengths_out)) = (updated_lengths, lengths.as_deref_mut()) {
@@ -299,11 +300,11 @@ impl ThoMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 if *len < 0 {
-                    return Err(ThoError::new(format!("MyMaxPool1d::tho_forward length must be >= 0, got {len}")));
+                    return Err(anyhow::anyhow!("MyMaxPool1d::tho_forward length must be >= 0, got {len}"));
                 }
                 *len = clc_max_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.dilation as u32, self.stride as u32)? as i64;
             }
@@ -332,7 +333,7 @@ impl AdaptiveMaxPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 *len = self.output_size as i64;
@@ -356,7 +357,7 @@ impl AdaptiveAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for AdaptiveAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 *len = self.output_size as i64;
@@ -376,10 +377,10 @@ pub struct ThoBatchNorm1d {
 /// Reuse a named tensor when rebuilding a module over an existing VarStore.
 /// `Path::f_var` creates a suffixed duplicate for an existing name, so every
 /// stateful module constructor must go through this helper.
-pub(crate) fn path_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> Result<Tensor, ThoError> {
+pub(crate) fn path_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> anyhow::Result<Tensor> {
     if let Some(tensor) = vs.get(name) {
         if tensor.size() != dims {
-            return Err(ThoError::new(format!("existing VarStore tensor {} has shape {:?}, expected {:?}", vs.path(name), tensor.size(), dims)));
+            return Err(anyhow::anyhow!("existing VarStore tensor {} has shape {:?}, expected {:?}", vs.path(name), tensor.size(), dims));
         }
         return Ok(tensor);
     }
@@ -387,10 +388,10 @@ pub(crate) fn path_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> Resul
     Ok(vs.f_var(name, dims, init)?)
 }
 
-fn path_no_train_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> Result<Tensor, ThoError> {
+fn path_no_train_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> anyhow::Result<Tensor> {
     if let Some(tensor) = vs.get(name) {
         if tensor.size() != dims {
-            return Err(ThoError::new(format!("existing VarStore tensor {} has shape {:?}, expected {:?}", vs.path(name), tensor.size(), dims)));
+            return Err(anyhow::anyhow!("existing VarStore tensor {} has shape {:?}, expected {:?}", vs.path(name), tensor.size(), dims));
         }
         return Ok(tensor);
     }
@@ -398,11 +399,11 @@ fn path_no_train_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> Result<
     match init {
         Init::Const(value) if value == 0.0 => Ok(vs.f_zeros_no_train(name, dims)?),
         Init::Const(value) if value == 1.0 => Ok(vs.f_ones_no_train(name, dims)?),
-        _ => Err(ThoError::new(format!("unsupported non-trainable initialization for {}", vs.path(name)))),
+        _ => Err(anyhow::anyhow!("unsupported non-trainable initialization for {}", vs.path(name))),
     }
 }
 
-pub(crate) fn linear_from_path(vs: &Path, in_dim: i64, out_dim: i64, config: LinearConfig) -> Result<nn::Linear, ThoError> {
+pub(crate) fn linear_from_path(vs: &Path, in_dim: i64, out_dim: i64, config: LinearConfig) -> anyhow::Result<nn::Linear> {
     let bs = if config.bias {
         let bs_init = config.bs_init.unwrap_or_else(|| {
             let bound = 1.0 / (in_dim as f64).sqrt();
@@ -416,7 +417,7 @@ pub(crate) fn linear_from_path(vs: &Path, in_dim: i64, out_dim: i64, config: Lin
     Ok(nn::Linear { ws: path_var(vs, "weight", &[out_dim, in_dim], config.ws_init)?, bs })
 }
 
-pub(crate) fn conv1d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> Result<nn::Conv1D, ThoError> {
+pub(crate) fn conv1d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> anyhow::Result<nn::Conv1D> {
     // tch keeps convolution metadata private, so construct only that metadata
     // in a temporary store and bind the returned layer to the requested path.
     let temporary_store = nn::VarStore::new(tch::Device::Cpu);
@@ -426,7 +427,7 @@ pub(crate) fn conv1d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64
     Ok(conv)
 }
 
-pub(crate) fn conv2d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> Result<nn::Conv2D, ThoError> {
+pub(crate) fn conv2d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> anyhow::Result<nn::Conv2D> {
     // Keep constructor-only tensors outside the provided VarStore; only the
     // path tensors below are retained by the module.
     let temporary_store = nn::VarStore::new(tch::Device::Cpu);
@@ -436,7 +437,7 @@ pub(crate) fn conv2d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64
     Ok(conv)
 }
 
-fn layer_norm_from_path(vs: &Path, normalized_shape: Vec<i64>, config: LayerNormConfig) -> Result<nn::LayerNorm, ThoError> {
+fn layer_norm_from_path(vs: &Path, normalized_shape: Vec<i64>, config: LayerNormConfig) -> anyhow::Result<nn::LayerNorm> {
     let temporary_store = nn::VarStore::new(tch::Device::Cpu);
     let mut layer_norm = nn::layer_norm(temporary_store.root(), normalized_shape.clone(), config);
     if config.elementwise_affine {
@@ -449,7 +450,7 @@ fn layer_norm_from_path(vs: &Path, normalized_shape: Vec<i64>, config: LayerNorm
     Ok(layer_norm)
 }
 
-fn batch_norm1d_from_path(vs: &Path, num_features: i64, config: BatchNormConfig) -> Result<BatchNorm, ThoError> {
+fn batch_norm1d_from_path(vs: &Path, num_features: i64, config: BatchNormConfig) -> anyhow::Result<BatchNorm> {
     let temporary_store = nn::VarStore::new(tch::Device::Cpu);
     let mut batch_norm = batch_norm1d(temporary_store.root(), num_features, config);
     if config.affine {
@@ -469,7 +470,7 @@ impl ThoBatchNorm1d {
         path: P,
         num_features: u32,
         config: BatchNormConfig,
-    ) -> Result<Self, ThoError> {
+    ) -> anyhow::Result<Self> {
         debug!("MyBatchNorm1d::tho_forward: path={:?} num_features={num_features}", path.borrow());
 
         Ok(Self {
@@ -479,7 +480,7 @@ impl ThoBatchNorm1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoBatchNorm1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyBatchNorm1d::tho_forward: t.size={:?}", t.size());
         Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
     }
@@ -502,23 +503,23 @@ impl<ND> ThoConv<ND> {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 1]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyConv::tho_forward: lengths={lengths:?}");
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 if *len < 0 {
-                    return Err(ThoError::new(format!("MyConv::tho_forward length must be >= 0, got {len}")));
+                    return Err(anyhow::anyhow!("MyConv::tho_forward length must be >= 0, got {len}"));
                 }
                 *len = clc_conv1d_out(*len as u32, self.kernel, self.config, "")? as i64;
             }
         }
         debug!("MyConv::tho_forward lengths={lengths:?}");
-        panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(t.as_ref(), train).into()))//TODO custom conv for errors
+        Ok(panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(t.as_ref(), train).into()))?)//TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 2]> {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
@@ -586,7 +587,7 @@ impl ThoCosineConv1d {
         init_mode: InitMode,
         a: f64,
         b: f64,
-    ) -> Result<Self, ThoError> {
+    ) -> anyhow::Result<Self> {
         debug!("MyCosineConv1d::new: l={l}, init_mode={init_mode:?} init={init:?}");
 
         // A copied VarStore already owns the initialized kernel; rebuilding
@@ -605,12 +606,12 @@ impl ThoCosineConv1d {
 
                     let sz = init_slices.size();
                     if sz.len() != 2 {
-                        return Err(ThoError::new(format!("init_slices must have shape [num_slices, motif_width], got {:?}", sz)));
+                        return Err(anyhow::anyhow!("init_slices must have shape [num_slices, motif_width], got {:?}", sz));
                     }
 
                     let init_len = sz[1];
                     if init_len != l {
-                        return Err(ThoError::new(format!("MyCosineConv1d::new: provided l={} but init_slices width={}", l, init_len)));
+                        return Err(anyhow::anyhow!("MyCosineConv1d::new: provided l={} but init_slices width={}", l, init_len));
                     }
 
                     let proto = Self::build_prototype(init_slices, init_mode)?;
@@ -645,18 +646,18 @@ impl ThoCosineConv1d {
     }
 
     /// Accept [B, L] or [B, 1, L].
-    pub fn ensure_3d(x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn ensure_3d(x: &Tensor) -> anyhow::Result<Tensor> {
         match x.size().as_slice() {
             [b, t] => Ok(x.f_unsqueeze(1)?.f_view([*b, 1, *t])?),
             [_, 1, _] => Ok(x.shallow_clone()),
-            other => Err(ThoError::new(format!("input must have shape [B,L] or [B,1,L], got {:?}", other))),
+            other => Err(anyhow::anyhow!("input must have shape [B,L] or [B,1,L], got {:?}", other)),
         }
     }
 
     /// Forward:
     /// x: [B, L] or [B,1,L]
     /// returns logits: [B, 1]
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn forward(&self, x: &Tensor) -> anyhow::Result<Tensor> {
         debug!("MyCosineConv1d::forward: x={x:?}");
         trace!("MyCosineConv1d::forward: x=\n{x}");
 
@@ -664,7 +665,7 @@ impl ThoCosineConv1d {
         let sz = x.size();
 
         if sz[2] != self.l {
-            return Err(ThoError::new(format!("MyCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2])));
+            return Err(anyhow::anyhow!("MyCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2]));
         }
 
         debug!("MyCosineConv1d::forward: self.kernel={:?} self.kernel.isnan={}", self.kernel,  self.kernel.isnan().any());
@@ -838,7 +839,7 @@ impl ThoCosineConv1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv1d {
-    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
        Ok(self.forward(x_in.as_ref())?.into())
     }
 }
@@ -858,35 +859,35 @@ pub struct BinaryHead {
 }
 
 impl BinaryHead {
-    pub fn new(vs: &nn::Path, pool: BinaryHeadPool) -> Result<Self, ThoError> {
+    pub fn new(vs: &nn::Path, pool: BinaryHeadPool) -> anyhow::Result<Self> {
         let alpha = path_var(vs, "alpha", &[], nn::Init::Const(5.0))?;
         let beta = path_var(vs, "beta", &[], nn::Init::Const(0.0))?;
         Ok(Self { alpha, beta, pool })
     }
 
-    pub fn forward_max(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
-        let pooled = pool_time_max(sims).map_err(|e| ThoError::from_error(format!("BinaryHead::forward_max failed, e={e:?}"), e))?;
+    pub fn forward_max(&self, sims: &Tensor) -> anyhow::Result<Tensor> {
+        let pooled = pool_time_max(sims).context("BinaryHead::forward_max failed")?;
         pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
     }
 
-    pub fn forward_lse(&self, sims: &Tensor, tau: f64) -> Result<Tensor, ThoError> {
+    pub fn forward_lse(&self, sims: &Tensor, tau: f64) -> anyhow::Result<Tensor> {
         debug!("BinaryHead::forward_lse: sims={sims:?}");
 
         if tau <= 0.0 {
-            return Err(ThoError::new(format!("BinaryHead::forward_lse tau must be > 0, got {tau}")));
+            return Err(anyhow::anyhow!("BinaryHead::forward_lse tau must be > 0, got {tau}"));
         }
-        let pooled = pool_time_lse(sims, tau).map_err(|e| ThoError::from_error(format!("BinaryHead::forward_lse failed, e={e:?}"), e))?;
+        let pooled = pool_time_lse(sims, tau).context("BinaryHead::forward_lse failed")?;
         pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
     }
 
-    pub fn forward_mean(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
-        let pooled = pool_time_mean(sims).map_err(|e| ThoError::from_error(format!("BinaryHead::forward_mean failed, e={e:?}"), e))?;
+    pub fn forward_mean(&self, sims: &Tensor) -> anyhow::Result<Tensor> {
+        let pooled = pool_time_mean(sims).context("BinaryHead::forward_mean failed")?;
         pooled.f_mul(&self.alpha)?.f_add(&self.beta).map_err(|e| e.into())
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for BinaryHead {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         let logits = match self.pool {
             BinaryHeadPool::Max => self.forward_max(t.as_ref())?,
             BinaryHeadPool::Mean => self.forward_mean(t.as_ref())?,
@@ -906,24 +907,24 @@ pub struct ThoSharpeningHead1d {
 }
 
 impl ThoSharpeningHead1d {
-    pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, k_mu: i64, k_hat: i64, p: f64, temperature: f64) -> Result<Self, ThoError> {
+    pub fn new(vs: &nn::Path, in_channels: i64, out_channels: i64, k_mu: i64, k_hat: i64, p: f64, temperature: f64) -> anyhow::Result<Self> {
         if in_channels <= 0 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::new in_channels must be > 0, got {in_channels}")));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::new in_channels must be > 0, got {in_channels}"));
         }
         if out_channels <= 0 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::new out_channels must be > 0, got {out_channels}")));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::new out_channels must be > 0, got {out_channels}"));
         }
         if k_mu <= 0 || k_mu % 2 == 0 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::new k_mu must be an odd positive number, got {k_mu}")));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::new k_mu must be an odd positive number, got {k_mu}"));
         }
         if k_hat <= 0 || k_hat % 2 == 0 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::new k_hat must be an odd positive number, got {k_hat}")));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::new k_hat must be an odd positive number, got {k_hat}"));
         }
         if p <= 0.0 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::new p must be > 0, got {p}")));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::new p must be > 0, got {p}"));
         }
         if temperature <= 0.0 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::new temperature must be > 0, got {temperature}")));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::new temperature must be > 0, got {temperature}"));
         }
 
         let cfg = ConvConfig { bias: true, ..ConvConfig::default() };
@@ -937,13 +938,13 @@ impl ThoSharpeningHead1d {
         (kernel / 2, kernel - 1 - kernel / 2)
     }
 
-    fn same_avgpool1d(x: &Tensor, kernel: i64) -> Result<Tensor, ThoError> {
+    fn same_avgpool1d(x: &Tensor, kernel: i64) -> anyhow::Result<Tensor> {
         let (pad_left, pad_right) = Self::same_pad(kernel);
         let padded = x.f_pad([pad_left, pad_right], "replicate", 0.0)?;
         padded.f_avg_pool1d(kernel, 1, 0, false, true).map_err(|e| e.into())
     }
 
-    fn morph_opening1d(x: &Tensor, kernel: i64) -> Result<Tensor, ThoError> {
+    fn morph_opening1d(x: &Tensor, kernel: i64) -> anyhow::Result<Tensor> {
         let (pad_left, pad_right) = Self::same_pad(kernel);
         let erode = x
             .f_neg()?
@@ -956,10 +957,10 @@ impl ThoSharpeningHead1d {
             .map_err(|e| e.into())
     }
 
-    pub fn forward_with_thp(&self, sims: &Tensor) -> Result<(Tensor, Tensor), ThoError> {
+    pub fn forward_with_thp(&self, sims: &Tensor) -> anyhow::Result<(Tensor, Tensor)> {
         let sims_shape = sims.size();
         if sims_shape.len() != 3 {
-            return Err(ThoError::new(format!("MySharpeningHead1d::forward_with_thp expected [B,C,T], got {:?}", sims_shape)));
+            return Err(anyhow::anyhow!("MySharpeningHead1d::forward_with_thp expected [B,C,T], got {:?}", sims_shape));
         }
 
         let mu = Self::same_avgpool1d(sims, self.k_mu)?;
@@ -980,7 +981,7 @@ impl ThoSharpeningHead1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoSharpeningHead1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         self.forward_with_thp(t.as_ref()).map(|(logits, _thp)| logits.into())
     }
 }
@@ -1007,11 +1008,11 @@ impl ThoAvgPool1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAvgPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         if let Some(lengths) = lengths.as_deref_mut() {
             for len in lengths.as_mut_slice().iter_mut() {
                 if *len < 0 {
-                    return Err(ThoError::new(format!("MyAvgPool1d::tho_forward length must be >= 0, got {len}")));
+                    return Err(anyhow::anyhow!("MyAvgPool1d::tho_forward length must be >= 0, got {len}"));
                 }
                 *len = clc_avg_pool1d_out(*len as u32, self.kernel_size as u32, self.padding as u32, self.stride as u32) as i64;
             }
@@ -1040,7 +1041,7 @@ impl ThoDropout {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoDropout {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         Ok(t.as_ref().f_dropout(self.p, train)?.into())
     }
 }
@@ -1073,15 +1074,15 @@ impl<T: Any> ThoModuleDowncast for T {
 pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send + ThoModuleDowncast {
     fn debug(&self) {}
 
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError>;
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>>;
 
     fn quantize(&mut self) {
 
     }
 }
 
-pub type Fp = fn(&Tensor) -> Result<Tensor, ThoError>;
-pub type LossFp = fn(&Tensor, &Tensor) -> Result<Tensor, ThoError>;//TODO add RC as param and make loss function net-specific
+pub type Fp = fn(&Tensor) -> anyhow::Result<Tensor>;
+pub type LossFp = fn(&Tensor, &Tensor) -> anyhow::Result<Tensor>;//TODO add RC as param and make loss function net-specific
 
 pub struct ThoFuncModule {
     func: Fp,
@@ -1100,21 +1101,21 @@ impl ThoFuncModule {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoFuncModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         (self.func)(t.as_ref()).map(|t|t.into())
     }
 }
 
 pub struct ThoClosureModule {
     //TODO Tensor->ThoTensor
-    func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>,
+    func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>,
 }
 
 unsafe impl Send for ThoClosureModule {}
 unsafe impl Sync for ThoClosureModule {}
 
 impl ThoClosureModule {
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> Result<Tensor, ThoError>>>) -> Self {
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>) -> Self {
         Self { func }
     }
 }
@@ -1126,7 +1127,7 @@ impl Debug for ThoClosureModule {
 }
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for ThoClosureModule {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         (self.func)(
             t.as_ref(),
             lengths.as_deref()
@@ -1183,7 +1184,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MyLinear::tho_forward"))]
-    fn tho_forward(&self, in_t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, in_t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         #[cfg(any(debug_assertions, tho_debug))]
         {
             debug!("Module for MyLinear::forward: descr={} in_t={in_t:?} self.ws={:?} self.bs={:?}", self.descr, self.ws, self.bs);
@@ -1241,7 +1242,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static
     c: LinearConfig,
     #[cfg(any(debug_assertions, tho_debug))]
     descr: String,
-) -> Result<ThoLinear<DI, DO>, ThoError> {
+) -> anyhow::Result<ThoLinear<DI, DO>> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
@@ -1263,10 +1264,10 @@ pub fn configure_dense(
     num_layers_in_block: usize,
     kernel: u32,
     channels: u32,
-) -> Result<Node, ThoError> {
+) -> anyhow::Result<Node> {
     let mut builder = SeqBuilder::new(num_features, None)?;
 
-    let dense_block = |b: &mut SeqBuilder| -> Result<(), ThoError> {
+    let dense_block = |b: &mut SeqBuilder| -> anyhow::Result<()> {
         b.n_blocks(
             |b: &mut SeqBuilder, _i| {
                 b.func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
@@ -1316,7 +1317,7 @@ pub struct ThoAttnPool1d {
 }
 
 impl ThoAttnPool1d {
-    pub fn new(vs: &nn::Path, c: i64, attn_hidden: i64) -> Result<Self, ThoError> {
+    pub fn new(vs: &nn::Path, c: i64, attn_hidden: i64) -> anyhow::Result<Self> {
         let mut cfg = nn::ConvConfig { ..Default::default() };
         cfg.bias = true;
         let proj = conv1d_from_path(&(vs / "proj"), c, attn_hidden, 1, cfg)?;
@@ -1335,7 +1336,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
     /// mask: Option<[B, T] bool> where true=valid
     /// returns: (pooled [B,C], attn [B,T])
 
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         let mask = lengths.and_then(|lengths| mask_from_lengths(lengths.as_slice(), *lengths.as_slice().iter().max().unwrap(), t.as_ref().device()).ok());
 
         let h = t.as_ref();
@@ -1368,9 +1369,9 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
     }
 }
 
-fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device) -> Result<Tensor, ThoError> {
+fn valid_time_mask(lengths: &[i64], batch: i64, max_l: i64, device: tch::Device) -> anyhow::Result<Tensor> {
     if lengths.len() != batch as usize {
-        return Err(ThoError::new(format!(
+        return Err(anyhow::anyhow!(format!(
             "SelfAttention::tho_forward lengths mismatch: batch={batch} lengths.len={}",
             lengths.len()
         )));
@@ -1391,7 +1392,7 @@ fn self_attention_forward_t(
     head_dim: i64,
     dropout: f64,
     train: bool,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let (b, l, _d) = {
         let s = x.size();
         (s[0], s[1], s[2])
@@ -1483,7 +1484,7 @@ fn attn_block_forward_t(
     head_dim: i64,
     dropout: f64,
     train: bool,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
 
     debug!("attn_block_forward_t: x.kind={:?} ln1.ws.kind={:?}", x.kind(), ln1.ws.as_ref().map(|ws|ws.kind()));
 
@@ -1540,23 +1541,23 @@ pub struct SelfAttention {
 }
 
 impl SelfAttention {
-    pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, dropout: f64) -> Result<Self, ThoError> {
+    pub fn new(vs: &nn::Path, d_model: i64, n_heads: i64, ff_mult: i64, dropout: f64) -> anyhow::Result<Self> {
         debug!("SelfAttention::new: d_model={d_model}, n_heads={n_heads}, ff_mult={ff_mult}, dropout={dropout} ");
 
         if d_model <= 0 {
-            return Err(ThoError::new(format!("SelfAttention::new d_model must be > 0, got {d_model}")));
+            return Err(anyhow::anyhow!("SelfAttention::new d_model must be > 0, got {d_model}"));
         }
         if n_heads <= 0 {
-            return Err(ThoError::new(format!("SelfAttention::new n_heads must be > 0, got {n_heads}")));
+            return Err(anyhow::anyhow!("SelfAttention::new n_heads must be > 0, got {n_heads}"));
         }
         if d_model % n_heads != 0 {
-            return Err(ThoError::new(format!("SelfAttention::new d_model must be divisible by n_heads, got d_model={d_model} n_heads={n_heads}")));
+            return Err(anyhow::anyhow!("SelfAttention::new d_model must be divisible by n_heads, got d_model={d_model} n_heads={n_heads}"));
         }
         if ff_mult <= 0 {
-            return Err(ThoError::new(format!("SelfAttention::new ff_mult must be > 0, got {ff_mult}")));
+            return Err(anyhow::anyhow!("SelfAttention::new ff_mult must be > 0, got {ff_mult}"));
         }
         if !(0.0..1.0).contains(&dropout) {
-            return Err(ThoError::new(format!("SelfAttention::new dropout must be in [0,1), got {dropout}")));
+            return Err(anyhow::anyhow!("SelfAttention::new dropout must be in [0,1), got {dropout}"));
         }
 
         let head_size = d_model / n_heads;
@@ -1579,7 +1580,7 @@ impl SelfAttention {
     }
 }
 
-fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device, kind: Kind) -> Result<Tensor, ThoError> {
+fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device, kind: Kind) -> anyhow::Result<Tensor> {
     let half = (d_model + 1) / 2;
     let pos = Tensor::f_arange(length, (Kind::Float, device))?.f_unsqueeze(1)?;
     let exponent = Tensor::f_arange(half, (Kind::Float, device))?.f_mul_scalar(-2.0 * 10000_f64.ln() / d_model as f64)?;
@@ -1593,19 +1594,19 @@ fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
-    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, DebugId>, ThoError> {
+    fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("SelfAttention::tho_forward:  t.id={:?} t.size={:?} t.kind={:?} lengths={lengths:?}", t.id(), t.size(), t.as_ref().kind());
 
         let s = t.size();
         if s.len() != 3 {
-            return Err(ThoError::new(format!("SelfAttention::tho_forward expected [B,L,D], got {:?}", s)));
+            return Err(anyhow::anyhow!("SelfAttention::tho_forward expected [B,L,D], got {:?}", s));
         }
 
         let b = s[0];
         let l = s[1];
         let d = s[2];
         if d != self.n_heads * self.head_size {
-            return Err(ThoError::new(format!("SelfAttention::tho_forward d_model mismatch, expected {}, got {d}", self.n_heads * self.head_size)));
+            return Err(anyhow::anyhow!("SelfAttention::tho_forward d_model mismatch, expected {}, got {d}", self.n_heads * self.head_size));
         }
 
         let x = t.as_ref();
@@ -1671,7 +1672,7 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_seq_linear_same_size() -> Result<(), ThoError> {
+    pub fn test_seq_linear_same_size() -> anyhow::Result<()> {
         let seq = SeqBuilder::new(2, None)?
             .linear("todo")?
             .end_seq()?;
@@ -1687,7 +1688,7 @@ mod tch_tests {
     }
 
     #[test]
-    fn test_build_tch_module_reuses_existing_tensor() -> Result<(), ThoError> {
+    fn test_build_tch_module_reuses_existing_tensor() -> anyhow::Result<()> {
         let node = Node::Linear {
             path: "linear".to_string(),
             in_feats: 2,
@@ -1696,13 +1697,13 @@ mod tch_tests {
         };
         let vs = VarStore::new(Cpu);
         let _first: Box<dyn ThoModule<AnyDims, AnyDims>> = node.clone().build_tch_module(&vs.root())?;
-        let existing_weight = (vs.root() / "linear").get("weight").ok_or_else(|| ThoError::new("missing linear.weight after initial module build"))?;
+        let existing_weight = (vs.root() / "linear").get("weight").ok_or_else(|| anyhow::anyhow!("missing linear.weight after initial module build"))?;
         let variable_count = vs.variables().len();
 
         // Rebuilding over the same path must point at the existing tensor and
         // must not add a suffixed duplicate to the VarStore.
         let rebuilt: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs.root())?;
-        let rebuilt_linear = rebuilt.as_any().downcast_ref::<ThoLinear<AnyDims, AnyDims>>().ok_or_else(|| ThoError::new("rebuilt module is not MyLinear"))?;
+        let rebuilt_linear = rebuilt.as_any().downcast_ref::<ThoLinear<AnyDims, AnyDims>>().ok_or_else(|| anyhow::anyhow!("rebuilt module is not MyLinear"))?;
 
         assert!(rebuilt_linear.ws.is_set_to(&existing_weight));
         assert_eq!(variable_count, vs.variables().len());
@@ -1710,7 +1711,7 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_adaptive_avg_pool_1d_builder() -> Result<(), ThoError> {
+    pub fn test_adaptive_avg_pool_1d_builder() -> anyhow::Result<()> {
         let seq = SeqBuilder::new(20, None)?
             .adaptive_avg_pool(5, 5)?
             .end_seq()?;
@@ -1728,7 +1729,7 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_split_seq() -> Result<(), ThoError> {
+    pub fn test_split_seq() -> anyhow::Result<()> {
 
         let res_seq = SeqBuilder::new(10, None)?
             .linear_s(
@@ -1780,7 +1781,7 @@ mod tch_tests {
 
 
     #[test]
-    pub fn test_sharpening_head_1d_shapes() -> Result<(), ThoError> {
+    pub fn test_sharpening_head_1d_shapes() -> anyhow::Result<()> {
         let vs = nn::VarStore::new(Cpu);
         let head = super::ThoSharpeningHead1d::new(&vs.root(), 4, 2, 5, 5, 1.7, 0.5)?;
         let sims = Tensor::randn([3, 4, 16], (Kind::Float, Device::Cpu));
@@ -1799,7 +1800,7 @@ mod tch_tests {
     fn test_net(
         vs: &VarStore,
         num_features: u32,
-    ) -> Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>, ThoError> {
+    ) -> anyhow::Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>> {
         SeqBuilder::new(num_features, None)?
             .batch_norm(BatchNormConfig::default(), None)?
             .closure(
@@ -1897,7 +1898,7 @@ mod tch_tests {
 
     #[allow(dead_code)]
     #[test]
-    pub fn test_save_load() -> Result<(), ThoError> {
+    pub fn test_save_load() -> anyhow::Result<()> {
         let vs_0 = VarStore::new(Cpu);
 
         let node = test_node()?;
@@ -1923,7 +1924,7 @@ mod tch_tests {
 
         assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
 
-        fn test_node() -> Result<Node, ThoError> {
+        fn test_node() -> anyhow::Result<Node> {
             SeqBuilder::new(123, None)?
                 .split(
                     vec![
@@ -1969,7 +1970,7 @@ mod tch_tests {
     }
 
     #[test]
-    fn test_valid_time_mask() -> Result<(), ThoError>{
+    fn test_valid_time_mask() -> anyhow::Result<()>{
 
         let mask =valid_time_mask(
             &[5, 11,3,7],
@@ -1991,7 +1992,7 @@ mod tch_tests {
         Ok(())
     }
 
-    fn call_generated_1<F>(f: F) -> Result<Tensor, ThoError>
+    fn call_generated_1<F>(f: F) -> anyhow::Result<Tensor>
     where
         F: FnOnce(*mut *mut C_tensor),
     {
@@ -2002,7 +2003,7 @@ mod tch_tests {
         // check_torch_err()?;
 
         if out.is_null() {
-            Err(ThoError::new("generated libtorch op returned a null Tensor pointer"))
+            Err(anyhow::anyhow!("generated libtorch op returned a null Tensor pointer"))
         } else {
             // Takes ownership of the returned libtorch Tensor pointer.
             Ok(unsafe { Tensor::from_ptr(out) })
@@ -2038,7 +2039,7 @@ mod tch_tests {
 
     //TODO https://chatgpt.com/g/g-p-6802177ab924819193b7de5c74c7014c-rust/c/6a0308a4-c734-83eb-9983-9d324d9cda56
     #[test]
-    fn test_quantized_linear() -> Result<(), ThoError>{
+    fn test_quantized_linear() -> anyhow::Result<()>{
         let weight = Tensor::rand(&[3, 100], FLOAT_CPU);
         let bias = Tensor::rand(&[3], FLOAT_CPU);
 
@@ -2060,7 +2061,7 @@ mod tch_tests {
     }
 
     #[test]
-    fn test_quantized() -> Result<(), ThoError>{
+    fn test_quantized() -> anyhow::Result<()>{
         let vs = nn::VarStore::new(Device::Cpu);
 
         let linear = nn::linear(

@@ -362,14 +362,13 @@ for SingleFieldRangeOrValue<SingleFieldFields> {
     type P = SingleFieldFields;
     fn opt_run_configs(
         &self,
-    ) -> Result<
+    ) -> thoosa_shared::anyhow::Result<
         thoosa_shared::run_configs::OptRunConfigs<
             Vec<thoosa_shared::val::NamedVal<SingleFieldFields>>,
             Vec<thoosa_shared::val::NamedRange<SingleFieldFields>>,
             Vec<thoosa_shared::hyperparameter::Hyperparameter<SingleFieldFields>>,
             SingleFieldFields,
         >,
-        thoosa_shared::ThoError,
     > {
         let mut const_params = Vec::new();
         let mut grid_params = Vec::new();
@@ -397,7 +396,14 @@ for SingleFieldRangeOrValue<SingleFieldFields> {
                     .any(|value_set| !value_set.pending_fields().is_empty())
             });
         if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
-            return Err(thoosa_shared::ThoError::new("no opt params in run config"));
+            return Err(
+                ::anyhow::__private::must_use({
+                    let error = ::anyhow::__private::format_err(
+                        format_args!("no opt params in run config"),
+                    );
+                    error
+                }),
+            );
         }
         Ok(
             thoosa_shared::run_configs::OptRunConfigs::new(

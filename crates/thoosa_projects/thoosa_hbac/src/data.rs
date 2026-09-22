@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
@@ -44,7 +45,7 @@ impl Splitter for ByPatientIdSplitter {
         if eeg.set == 1 { Set::Valid } else { Set::Train }
     }
 
-    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoError> {
+    fn init(&self, df: LazyFrame) -> anyhow::Result<LazyFrame> {
         let mut df_sorted = df
             .clone()
             .group_by(["patient_id"])
@@ -101,7 +102,7 @@ pub fn parquet_to_tensor(
     base_path: &str,
     resource_id: &str,
     device: Device,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let path = format!("{}/train_eegs/{}.parquet", base_path, resource_id);
 
     parquet_to_tensor_by_path(path, device)
@@ -110,7 +111,7 @@ pub fn parquet_to_tensor(
 pub fn labeled_resourses(
     base: impl AsRef<Path>,
     file: impl AsRef<Path>,
-) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
+) -> anyhow::Result<HashMap<String, Vec<(String, f32)>>> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
     let df = LazyCsvReader::new(PlRefPath::new(path.display().to_string())).finish()?.with_streaming(true);
@@ -207,7 +208,7 @@ pub fn labeled_resourses(
 
 // #[test] TODO
 #[allow(dead_code)]
-pub fn eegs_to_tensors() -> Result<(), ThoError> {
+pub fn eegs_to_tensors() -> anyhow::Result<()> {
     // for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
     //     let entry = f?;
     //
@@ -444,7 +445,7 @@ pub struct EEGs {
 
 #[allow(dead_code)]
 impl EEGs {
-    pub fn good_eegs(base_path: &str) -> Result<Series, ThoError> {
+    pub fn good_eegs(base_path: &str) -> anyhow::Result<Series> {
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         Ok(good_eegs_filter
@@ -459,7 +460,7 @@ impl EEGs {
         base_path: &str,
         kind: &str,
         limit: Option<usize>,
-    ) -> Result<Series, ThoError> {
+    ) -> anyhow::Result<Series> {
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         let eeg_id_series = good_eegs_filter
@@ -488,7 +489,7 @@ impl EEGs {
         })
     }
 
-    fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, ThoError> {
+    fn good_eegs_filter(base_path: &str) -> anyhow::Result<LazyFrame> {
         Ok(LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path)))
             .finish()?
             .with_streaming(true)
@@ -522,14 +523,14 @@ impl EEGs {
             ))
     }
 
-    pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, ThoError> {
+    pub fn load_all_eegs(base_path: &str) -> anyhow::Result<Box<EEGs>> {
         EEGs::load_eegs::<_>(base_path, None, None::<AllTrainSplitter<EEG>>)
     }
     pub fn load_eegs<S>(
         base_path: &str,
         filter: Option<Expr>,
         splitter: Option<S>,
-    ) -> Result<Box<EEGs>, ThoError>
+    ) -> anyhow::Result<Box<EEGs>>
     where
         S: Splitter<Type = EEG>,
     {
@@ -701,7 +702,7 @@ impl EEGs {
         }))
     }
 
-    pub fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> Result<DataFrame, ThoError> {
+    pub fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> anyhow::Result<DataFrame> {
         Ok(df
             .clone()
             // .collect()?
@@ -788,6 +789,7 @@ impl EEGs {
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
+    use anyhow::Context as _;
     use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
     use crate::data::EEGs;
     use log::LevelFilter::Trace;
@@ -854,7 +856,7 @@ mod tests {
 
 
     // #[test]
-    pub fn test_fetch_similarities() -> Result<(), ThoError> {
+    pub fn test_fetch_similarities() -> anyhow::Result<()> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
         let df = LazyCsvReader::new("../../../data/train.csv".into())
             .finish()?
@@ -929,7 +931,7 @@ mod tests {
 
     #[allow(dead_code)]
     // #[test] TODO to utils
-    pub fn test_load_eegs() -> Result<(), ThoError> {
+    pub fn test_load_eegs() -> anyhow::Result<()> {
         debug!("test_load_eegs");
         std::io::stdout().flush()?;
 
@@ -1002,7 +1004,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_import_resources() -> Result<(), ThoError> {
+    async fn test_import_resources() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(thoosa_motifs::motifs_ws::mock_motifs_ws_simp(None, 3, 1000, 1000)));
 
@@ -1108,7 +1110,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn heavy_test_train_motif_nets_cosine_with_filtered_real_eeg() -> Result<(), ThoError> {
+    async fn heavy_test_train_motif_nets_cosine_with_filtered_real_eeg() -> anyhow::Result<()> {
         if !tch::Cuda::is_available() {
             return Ok(());
         }
@@ -1124,9 +1126,9 @@ mod tests {
         let target_eeg_file = "1014985354.pt";
         let target_resource_id = target_eeg_file
             .strip_suffix(".pt")
-            .ok_or_else(|| ThoError::new(format!("invalid target file name: {target_eeg_file}")))?
+            .ok_or_else(|| anyhow::anyhow!("invalid target file name: {target_eeg_file}"))?
             .parse::<u32>()
-            .map_err(|e| ThoError::new(format!("invalid target resource id in {target_eeg_file}: {e}")))?;
+            .with_context(|| format!("invalid target resource id in {target_eeg_file}"))?;
 
         let freq_filters = vec![
             InputFilter::SavGolFilter(SavGolFilterParams {
@@ -1141,7 +1143,7 @@ mod tests {
             }),
         ];
 
-        let load_eeg_tensor = |path: &Path| -> Result<Tensor, ThoError> {
+        let load_eeg_tensor = |path: &Path| -> anyhow::Result<Tensor> {
             let mut raw_loaded = Tensor::load(path)?;
             if matches!(raw_loaded.size().as_slice(), [1, _, _]) {
                 raw_loaded = raw_loaded.f_squeeze_dim(0)?;
@@ -1149,7 +1151,7 @@ mod tests {
             let raw_loaded = match raw_loaded.size().as_slice() {
                 [c, t] if c <= t => raw_loaded,
                 [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
-                dims => return Err(ThoError::new(format!("unexpected eeg shape in {}: {dims:?}", path.display()))),
+                dims => return Err(anyhow::anyhow!("unexpected eeg shape in {}: {dims:?}", path.display())),
             };
             raw_loaded.f_to_kind(Float).map_err(Into::into)
         };
@@ -1180,7 +1182,7 @@ mod tests {
 
         let input_len = raw_tensor.size()[1];
         if input_len < motif_width as i64 {
-            return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
+            return Err(anyhow::anyhow!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}"));
         }
         let find_motifs_config = FindMotifsRunConfig::new_with_running_mean(
             Some(find_motifs_run_config_id),
@@ -1249,7 +1251,7 @@ mod tests {
                 let t = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(loader_tensors))
                     .get(input_resource)
                     .map(|v| v.as_ref().shallow_clone())
-                    .ok_or_else(|| ThoError::new(format!("missing resource tensor for resource_id={}", input_resource.id())))?;
+                    .ok_or_else(|| anyhow::anyhow!("missing resource tensor for resource_id={}", input_resource.id()))?;
 
                 debug!("input_resource={input_resource:?} t.device={:?}", t.device());
                 ThoTensor::new(
@@ -1335,14 +1337,14 @@ mod tests {
         Ok(())
     }
 
-    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> Result<Tensor, ThoError>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData, SynKey>>) -> Result<Vec<Resource>, ThoError> {
+    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> anyhow::Result<Tensor>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData, SynKey>>) -> anyhow::Result<Vec<Resource>> {
         let eeg_dir = Path::new("test_data/eeg");
         let mut random_resources = Vec::new();
         let mut eeg_files = std::fs::read_dir(eeg_dir)
-            .map_err(|e| ThoError::new(format!("failed to read {}: {e}", eeg_dir.display())))?
+            .with_context(|| format!("failed to read {}", eeg_dir.display()))?
             .map(|entry| entry.map(|e| e.path()))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ThoError::new(format!("failed to read entry in {}: {e}", eeg_dir.display())))?;
+            .with_context(|| format!("failed to read entry in {}", eeg_dir.display()))?;
         eeg_files.sort();
 
         for path in eeg_files {
@@ -1352,7 +1354,7 @@ mod tests {
             let file_name = path
                 .file_name()
                 .and_then(|v| v.to_str())
-                .ok_or_else(|| ThoError::new(format!("invalid file name: {}", path.display())))?
+                .ok_or_else(|| anyhow::anyhow!("invalid file name: {}", path.display()))?
                 .to_string();
             if file_name == target_eeg_file {
                 continue;
@@ -1361,9 +1363,9 @@ mod tests {
             let resource_id = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
-                .ok_or_else(|| ThoError::new(format!("invalid file stem for {}", path.display())))?
+                .ok_or_else(|| anyhow::anyhow!("invalid file stem for {}", path.display()))?
                 .parse::<u32>()
-                .map_err(|e| ThoError::new(format!("invalid resource id in {}: {e}", path.display())))?;
+                .with_context(|| format!("invalid resource id in {}", path.display()))?;
 
             let tensor = load_eeg_tensor(path.as_path())?;
             if tensor.size()[0] as u32 != channels {

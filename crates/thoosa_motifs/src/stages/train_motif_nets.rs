@@ -97,8 +97,8 @@ fn train_motif_x_f(batch: ThoBatch<Slice>) -> ThoBatch<Slice> {
     batch
 }
 
-fn train_motif_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
-    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean).map_err(ThoError::from)
+fn train_motif_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
+    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean).map_err(anyhow::Error::from)
 }
 
 type SyncTrainMotifStep<C> = TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, C>;
@@ -1699,13 +1699,13 @@ mod tests {
         fn test_train_net(params: &TestNetParams) -> Result<Node, ThoError> {
             let mut builder = SeqBuilder::new(params.in_features, None)?;
             let mut net = builder
-                .closure(Arc::new(Box::new(|t: &Tensor, _lengths: Option<&BatchLengths>| t.f_alias().map_err(ThoError::from))), None)?
+                .closure(Arc::new(Box::new(|t: &Tensor, _lengths: Option<&BatchLengths>| t.f_alias().map_err(anyhow::Error::from))), None)?
                 .linear_s(2 * params.in_features, "final_net_first_layer".to_string())?
-                .func(|t| Tensor::f_relu(t).map_err(ThoError::from))?;
+                .func(|t| Tensor::f_relu(t).map_err(anyhow::Error::from))?;
             for i in 0..params.layers {
-                net = net.linear_s(params.in_features, format!("final_net_{i}th_layer"))?.func(|t| Tensor::f_relu(t).map_err(ThoError::from))?;
+                net = net.linear_s(params.in_features, format!("final_net_{i}th_layer"))?.func(|t| Tensor::f_relu(t).map_err(anyhow::Error::from))?;
             }
-            net.linear_s(1, "final_net_last_layer")?.end_seq()
+            Ok(net.linear_s(1, "final_net_last_layer")?.end_seq()?)
         }
 
         fn train_test_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
@@ -1725,7 +1725,7 @@ mod tests {
                         Ok((ThoTrainModule::new_on_device(config, device)?, ()))
                     },
                     x_f,
-                    |predicted, expected| predicted.f_binary_cross_entropy_with_logits::<Tensor>(&expected.f_totype(Float)?, None, None, Reduction::Mean).map_err(ThoError::from),
+                    |predicted, expected| predicted.f_binary_cross_entropy_with_logits::<Tensor>(&expected.f_totype(Float)?, None, None, Reduction::Mean).map_err(anyhow::Error::from),
                     (),
                     init.vs_path,
                 ).await?;
@@ -1851,7 +1851,7 @@ impl SavableResult for TrainMotifNetsResult {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
 
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
@@ -1920,7 +1920,7 @@ impl SavableResult for TrainMotifNetResult {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
 
         debug!("TrainMotifNetResult::save: self={:?}", self);
 

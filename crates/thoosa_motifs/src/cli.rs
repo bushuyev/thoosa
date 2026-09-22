@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::dims::{ChannelsMotifsDists, MotifSlices};
@@ -147,7 +148,7 @@ impl StageCommand for MotifCommands {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             MotifCommands::FindMotifs(find_motifs_args) => {
                 debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
@@ -347,7 +348,7 @@ impl StageCommand for MotifCommands {
                             false,
                         )).await?);
 
-                        track_await(new_train_label_nets(
+                        Ok(Arc::new(track_await(new_train_label_nets(
                             train_label_nets_args.train_motif_nets_run_config_ids.clone(),
                             loader,
                             apply_motif_nets,
@@ -356,7 +357,7 @@ impl StageCommand for MotifCommands {
                             &store,
                             opt_config,
                             labels_filter.clone(),
-                        )).await.map(|v|Arc::new(v))
+                        )).await?))
                     },
                     ||ctx.branch(true),
                 )).await?;
@@ -382,7 +383,7 @@ impl StageCommand for MotifCommands {
                     &store,
                     async |run_configs| {
 
-                        track_await(new_train_final_net(
+                        Ok(Arc::new(track_await(new_train_final_net(
                             train_final_net_args.train_label_nets_run_config_ids.clone(),
                             loader,
                             run_configs,
@@ -392,7 +393,7 @@ impl StageCommand for MotifCommands {
                             opt_config,
                             train_final_net_args.motif_slices_step,
                             train_final_net_args.selected_motif_nets_limit,
-                        )).await.map(|v|Arc::new(v))
+                        )).await?))
 
                     },
                     || ctx.branch(true),
@@ -486,7 +487,7 @@ impl StageCommand for MotifAppCommands {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             MotifAppCommands::CommonCommands(c) => {
                 c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
@@ -511,7 +512,7 @@ impl StageCommand for CommonCommands {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             CommonCommands::SayHello(args) => {
                 debug!("CommonCommands::SayHello:run: args={args:?}");
@@ -566,17 +567,17 @@ pub struct RunAllArgs {
 
 impl RunAllArgs {
 
-    pub fn find_resource_config(&self) -> Result<Simple, ThoError> {
+    pub fn find_resource_config(&self) -> anyhow::Result<Simple> {
         Ok(Simple::new(
             parse_resources(&self.find_resources)
-                .map_err(|e| ThoError::from_boxed_error("parse find_resources", e))?,
+                .map_err(anyhow::Error::from_boxed).context("parse find_resources")?,
         ))
     }
 
-    pub fn select_resource_config(&self) -> Result<Simple, ThoError> {
+    pub fn select_resource_config(&self) -> anyhow::Result<Simple> {
         Ok(Simple::new(
             parse_resources(&self.select_resources)
-                .map_err(|e| ThoError::from_boxed_error("parse select_resources", e))?,
+                .map_err(anyhow::Error::from_boxed).context("parse select_resources")?,
         ))
     }
 
@@ -874,7 +875,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     store: &Arc<dyn MotifsStore>,
     run_configs: &mut Vec<R>,
     descr: &str,
-) -> Result<Vec<RunConfigId>, ThoError> {
+) -> anyhow::Result<Vec<RunConfigId>> {
     let mut run_config_ids = Vec::with_capacity(run_configs.len());
     for run_config in run_configs.iter_mut() {
         let run_config_id = track_await(store
@@ -899,11 +900,11 @@ pub async fn import_resources<F, R, S>(
     freq_filter: Option<Arc<SyncFreqFilter<RunCtxImpl>>>,
     insert_label: bool,
     init_data:S,
-) -> Result<Vec<ResourceId>, ThoError>
+) -> anyhow::Result<Vec<ResourceId>>
 where
-    F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
-    R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
-    S: FnOnce(&Transaction) -> Result<(), ThoError>
+    F: Fn() -> anyhow::Result<HashMap<String, Vec<(String, f32)>>>,
+    R: Fn(String) -> anyhow::Result<Tensor> + Sync + Send,
+    S: FnOnce(&Transaction) -> anyhow::Result<()>
 {
     // import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, freq_filter, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
     let mut conn = store.open_external_writer_conn()?;
@@ -993,7 +994,7 @@ fn apply_import_freq_filter(
     freq_filter: Option<&SyncFreqFilter<RunCtxImpl>>,
     resource_key: &str,
     tensor: Tensor,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     match freq_filter {
         Some(freq_filter) => Ok(freq_filter
             .apply_tho_tensor(
@@ -1017,7 +1018,7 @@ pub async fn run_plot<C>(
     resolution: Resolution,
     _device: &Device,
     mut ctx:C
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable {
 
@@ -1152,7 +1153,7 @@ fn print_plot_data_to_stdout<S>(
     size: (u32, u32),
     path: &impl AsRef<Path>,
     sidebar: Option<(&str, &[(String, f32)])>,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     let dump = StdoutPlotDump {
         format: "thoosa_plot_data_v1",
         caption: caption.to_string(),
@@ -1181,8 +1182,8 @@ fn print_plot_data_to_stdout<S>(
     };
 
     let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &dump).map_err(|e| ThoError::from_error("print plot data to stdout", e))?;
-    writeln!(&mut stdout).map_err(|e| ThoError::from_error("finish plot data stdout line", e))?;
+    serde_json::to_writer(&mut stdout, &dump).with_context(|| "print plot data to stdout")?;
+    writeln!(&mut stdout).with_context(|| "finish plot data stdout line")?;
     Ok(())
 }
 
@@ -1192,7 +1193,7 @@ fn emit_or_plot_series<S>(
     caption: &str,
     size: (u32, u32),
     path: &impl AsRef<Path>,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -1211,7 +1212,7 @@ fn emit_or_plot_series_with_sidebar_values<S>(
     path: &impl AsRef<Path>,
     sidebar_title: &str,
     sidebar_rows: &[(String, f32)],
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -1232,7 +1233,7 @@ async fn plot_found_motifs<C>(
     resolution: Resolution,
     print_to_stdout: bool,
     mut ctx: C,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
@@ -1286,7 +1287,7 @@ async fn plot_selected_motifs<C>(
     resolution: Resolution,
     print_to_stdout: bool,
     mut ctx: C,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
@@ -1351,7 +1352,7 @@ async fn load_resource_tensor_for_plot<C>(
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     mut ctx: C,
-) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, ThoError>
+) -> anyhow::Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>
 where
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
@@ -1359,13 +1360,13 @@ where
         .list_resources_by_ids(&vec![resource_id])).await?
         .into_iter()
         .next()
-        .ok_or_else(|| ThoError::new(format!("resource_id={resource_id} not found")))?;
+        .ok_or_else(|| anyhow::anyhow!("resource_id={resource_id} not found"))?;
 
-    track_await(Arc::clone(loader)
+    Ok(track_await(Arc::clone(loader)
         .run_cached(
             Arc::new(resource),
             ctx.branch(false),
-        )).await
+        )).await?)
 }
 
 fn sanitize_plot_path_segment(v: &str) -> String {
@@ -1389,18 +1390,18 @@ fn plot_resource_channels<C>(
     channels: Option<&Vec<u32>>,
     resolution: Resolution,
     print_to_stdout: bool,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let total_channels = tensor.size()[0] as u32;
     let channels_to_plot = channels.cloned().unwrap_or_else(|| (0..total_channels).collect());
     if channels_to_plot.is_empty() {
-        return Err(ThoError::new(format!("plot_resource_channels: no channels requested for resource_id={resource_id}")));
+        return Err(anyhow::anyhow!("plot_resource_channels: no channels requested for resource_id={resource_id}"));
     }
     for channel in &channels_to_plot {
         if *channel >= total_channels {
-            return Err(ThoError::new(format!("plot_resource_channels: channel {channel} out of range [0,{total_channels}) for resource_id={resource_id}")));
+            return Err(anyhow::anyhow!("plot_resource_channels: channel {channel} out of range [0,{total_channels}) for resource_id={resource_id}"));
         }
     }
 
@@ -1409,13 +1410,13 @@ where
         .into_iter()
         .map(|channel| {
             let channel_t = tensor.t_ref().f_i((channel as i64, ..))?;
-            Ok::<_, ThoError>((
+            Ok::<_, anyhow::Error>((
                 format!("channel_{channel}"),
                 color_iter.next().unwrap_or(BLACK),
                 channel_t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
             ))
         })
-        .collect::<Result<Vec<_>, ThoError>>()?;
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     emit_or_plot_series(
         print_to_stdout,
@@ -1435,7 +1436,7 @@ fn plot_single_line_tensor(
     line_t: &Tensor,
     resolution: Resolution,
     print_to_stdout: bool,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     let line_t = line_t.f_view([-1])?;
     let points = line_t
         .iter::<f64>()?
@@ -1465,7 +1466,7 @@ pub async fn plot_resource<C>(
     print_to_stdout: bool,
     mut ctx: C,
     prefix: &str,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
@@ -1508,7 +1509,7 @@ async fn plot_motif_net_applied<C>(
     resolution: Resolution,
     print_to_stdout: bool,
     mut ctx: C,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable,
 {
@@ -1586,7 +1587,7 @@ where
                     print_to_stdout,
                 )?;
 
-                Ok::<_, ThoError>(())
+                Ok::<_, anyhow::Error>(())
             })();
 
 
@@ -1602,7 +1603,7 @@ pub async fn plot_motif<C>(
     select_motif_run_config_ids: Option<Vec<RunConfigId>>,
     resolution: Resolution,
     print_to_stdout: bool,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     C: RunCtx + MaxParallelCtx + Adjustable {
     let select_motif_run_config_ids_sfx = select_motif_run_config_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
@@ -1620,7 +1621,7 @@ where
     let metrics_for_plot: Vec<(String, f32)> = metrics
         .iter()
         .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
-        .collect::<Result<Vec<_>, ThoError>>()
+        .collect::<anyhow::Result<Vec<_>>>()
         .unwrap_or(vec![]);
 
     let metrics_for_plot = Arc::new(metrics_for_plot);
@@ -1684,13 +1685,13 @@ where
             .into_iter()
             .enumerate()
             .map(|(i, t)| {
-                Ok::<_, ThoError>((
+                Ok::<_, anyhow::Error>((
                     format!("{i}"),
                     color_iter.next().unwrap_or(BLACK),
                     t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
                 ))
             })
-            .collect::<Result<Vec<_>, ThoError>>()?;
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         emit_or_plot_series_with_sidebar_values(
             print_to_stdout,
@@ -1703,7 +1704,7 @@ where
         )?;
 
 
-        Ok::<_, ThoError>(true)
+        Ok::<_, anyhow::Error>(true)
     })();
 
     Ok(())
@@ -1719,9 +1720,9 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     f: F,
     ctx_f: CtxF,
     descr: &str,
-) -> Result<Vec<RunConfigId>, ThoError>
+) -> anyhow::Result<Vec<RunConfigId>>
 where
-    F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
+    F: AsyncFnOnce(Vec<RC>) -> anyhow::Result<Arc<ST>>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, Arc<dyn MotifsStore>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
@@ -1769,14 +1770,14 @@ pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     store: &Arc<dyn MotifsStore>,
     init_stage: F,
     ctx_f: CtxF,
-) -> Result<Vec<RunConfigId>, ThoError>
+) -> anyhow::Result<Vec<RunConfigId>>
 where
     F: AsyncFnOnce(OptRunConfigs<
         Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
         Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>,
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
-    >) -> Result<Arc<ST>, ThoError>,
+    >) -> anyhow::Result<Arc<ST>>,
     ST: Stage + AsyncStage + Send + Sync, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
@@ -1798,8 +1799,8 @@ where
     Ok(run_config_id)
 }
 
-async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
-    async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> Result<u128, ThoError> {
+async fn perf_unfold_concat_cuda_vs_cpu() -> anyhow::Result<()>{
+    async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> anyhow::Result<u128> {
         let mut tensors = Vec::with_capacity(num_tensors);
 
         let ctx = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(Cuda(0));
@@ -1832,7 +1833,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         Ok(t_0.elapsed().as_millis())
     }
 
-    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &dyn CudaActorHandle, cuda_first:bool) -> Result<Tensor, ThoError> {
+    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &dyn CudaActorHandle, cuda_first:bool) -> anyhow::Result<Tensor> {
         let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
 
         if cuda_first {
@@ -1868,7 +1869,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 }
 
 //to check if there are no `#field_ident field value Real(87.0) is not valid: ThoosaError { msg: "can't convert Real(87.0)", frame_0
-fn check_opt_run_config<RCRV, RC>(find_and_select_run_config: &RCRV) -> Result<(), ThoError>
+fn check_opt_run_config<RCRV, RC>(find_and_select_run_config: &RCRV) -> anyhow::Result<()>
 where
     RCRV: OptRunConfigSource,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
@@ -2198,7 +2199,7 @@ mod cli_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_import_resources() -> Result<(), ThoError> {
+    async fn test_import_resources() -> anyhow::Result<()> {
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(
@@ -2251,7 +2252,7 @@ mod cli_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_import_resources_applies_freq_filter() -> Result<(), ThoError> {
+    async fn test_import_resources_applies_freq_filter() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(
             test_dir,
@@ -2302,7 +2303,7 @@ mod cli_tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
+    async fn test_resource_tensor_two_easy_motifs() -> anyhow::Result<()>{
 
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -2365,7 +2366,7 @@ mod cli_tests {
                 debug_plot!(pulse_triangle_t.as_ref().as_ref(), "pulse_triangle_{freq}_filtered_t")?;
                 debug_plot!(pulse_sin_t.as_ref().as_ref(), "pulse_sin_{freq}_filtered_t")?;
 
-                Ok::<_, ThoError>(())
+                Ok::<_, anyhow::Error>(())
             }?;
         }
 

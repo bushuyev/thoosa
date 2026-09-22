@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use std::backtrace::Backtrace;
 use std::cmp::max;
 use std::fmt::Debug;
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use console_subscriber::ServerAddr;
 use dashmap::DashMap;
 use log::{debug, LevelFilter};
-use tracing::{error, Level};
+use tracing::Level;
 use tracing_log::LogTracer;
 use tracing_subscriber::{
     filter::FilterFn,
@@ -25,7 +26,6 @@ use tracing_subscriber::{
 };
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use crate::ThoError;
 use file_rotate::{
     compression::Compression,
     suffix::AppendCount,
@@ -196,13 +196,13 @@ pub(crate) fn perf_log_level() -> LevelFilter {
     level_filter_from_u8(PERF_LOG_LEVEL.load(Relaxed))
 }
 
-pub fn set_perf_log_level(perf_filter: &str) -> Result<LevelFilter, ThoError> {
+pub fn set_perf_log_level(perf_filter: &str) -> anyhow::Result<LevelFilter> {
     let perf_filter = perf_filter.trim();
     let level = if perf_filter.is_empty() {
         LevelFilter::Off
     } else {
         LevelFilter::from_str(perf_filter)
-            .map_err(|e| ThoError::from_error("parse perf log level", e))?
+            .context("parse perf log level")?
     };
     PERF_LOG_LEVEL.store(level_filter_to_u8(level), Relaxed);
     Ok(level)
@@ -230,12 +230,11 @@ pub(crate) fn init_log_tracer(max_level: LevelFilter) {
 #[allow(dead_code)]
 fn init_perf_writer(
     perf_file: Option<PathBuf>,
-) -> Result<
+) -> anyhow::Result<
     (
         tracing_appender::non_blocking::NonBlocking,
         tracing_appender::non_blocking::WorkerGuard,
     ),
-    ThoError,
 > {
     match perf_file {
         Some(perf_file) => {
@@ -337,17 +336,12 @@ where
 static TRACING_INIT: OnceLock<()> = OnceLock::new();
 
 
-fn open_new_log_file(path: &Path) -> Result<File, ThoError> {
+fn open_new_log_file(path: &Path) -> anyhow::Result<File> {
     OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|e| {
-            ThoError::from_error(
-                format!("refusing to open existing log file: {}", path.display()),
-                e,
-            )
-        })
+        .with_context(|| format!("refusing to open existing log file: {}", path.display()))
 }
 
 pub fn init_tracing(
@@ -359,7 +353,7 @@ pub fn init_tracing(
     perf_filter: &str,
     perf_file: Option<PathBuf>,
     console_addr: Option<ServerAddr>,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     if TRACING_INIT.get().is_some() {
         panic!("init_tracing() called more than once in the same process");
     }
@@ -417,10 +411,7 @@ pub fn init_tracing(
         .with(perf_layer)
         .with(PerfLayer::new());
 
-    tracing::subscriber::set_global_default(subscriber).map_err(|e| {
-        error!("Init tracing logging failed: {e:?}");
-        ThoError::from_error("set global tracing subscriber", e)
-    })?;
+    tracing::subscriber::set_global_default(subscriber).context("set global tracing subscriber")?;
 
 
     init_log_tracer(max_level);
@@ -726,7 +717,7 @@ mod tests {
     use std::time::Duration;
     use log::info;
     use tracing::Instrument;
-    use crate::{cdt_for_dir, ThoError};
+    use crate::cdt_for_dir;
     use crate::perf_logging::{format_perf_map, init_perf_writer, PERF};
 
     const NS_IN_MLS:u64 = 1_000_000;
@@ -747,7 +738,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_in_spawned() -> Result<(), ThoError>{
+    async fn test_in_spawned() -> anyhow::Result<()>{
 
         let h = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(3)).await;

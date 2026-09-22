@@ -144,7 +144,7 @@ impl SavableResult for FindMotifsSavableResult {
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
         //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
         Ok(0)
     }
@@ -210,8 +210,8 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn take_dumper(&mut self) -> Result<Box<dyn MotifTrackerStore + 'a>, ThoError> {
-        self.dumper.take().ok_or_else(|| ThoError::new("SimpleMotifTracker::take_dumper: dumper is already taken"))
+    pub fn take_dumper(&mut self) -> anyhow::Result<Box<dyn MotifTrackerStore + 'a>> {
+        self.dumper.take().ok_or_else(|| anyhow::anyhow!("SimpleMotifTracker::take_dumper: dumper is already taken"))
     }
 
     pub fn max_slices_counts(&self) -> Option<u32> {
@@ -311,7 +311,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_z_norm()  -> Result<(), ThoError>{
+    fn test_z_norm()  -> anyhow::Result<()>{
         assert_eq!(
             vec![-1.2247449, 0.0, 1.2247449],
             to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)
@@ -321,7 +321,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_norm() -> Result<(), ThoError> {
+    fn test_norm() -> anyhow::Result<()> {
         let t = Tensor::from_slice(&[1., 2., 3.]);
         let norm = norm(&t, &[-1]);
 
@@ -343,7 +343,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_self_dot() -> Result<(), ThoError> {
+    fn test_self_dot() -> anyhow::Result<()> {
         let t1 = Tensor::from_slice2(&[
             &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
@@ -374,7 +374,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_self_dot_norm() -> Result<(), ThoError> {
+    fn test_self_dot_norm() -> anyhow::Result<()> {
         let t1 = Tensor::from_slice2(&[
             &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
@@ -410,7 +410,7 @@ mod motif_find_tests {
             i_1: i64,
             m: i64,
             dim: i64,
-        ) -> Result<(Tensor, Tensor), ThoError> {
+        ) -> anyhow::Result<(Tensor, Tensor)> {
             Ok((
                 self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?,
                 self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?,
@@ -433,7 +433,7 @@ mod motif_find_tests {
 
     #[async_trait]
     impl<'a> MotifTrackerStore for DummyDumper<'a> {
-        fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> Result<(), ThoError> {
+        fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> anyhow::Result<()> {
             self.motifs
                 .extend(motifs.into_iter().collect::<Vec<SlicesMatch>>());
 
@@ -444,7 +444,7 @@ mod motif_find_tests {
             &mut self,
             _store: &dyn MotifsStore,
             max_slices_counts: Option<u32>,
-        ) -> Result<usize, ThoError> {
+        ) -> anyhow::Result<usize> {
             todo!()
         }
 
@@ -458,7 +458,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_simple_motif_tracker() -> Result<(), ThoError> {
+    pub fn test_simple_motif_tracker() -> anyhow::Result<()> {
         let mut motifs = vec![];
         {
             DummyDumper::new(&mut motifs);
@@ -492,7 +492,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_simple_motif_tracker_with_tensorssource() -> Result<(), ThoError> {
+    pub fn test_simple_motif_tracker_with_tensorssource() -> anyhow::Result<()> {
         let n = 1_000i64;
 
         let (sig_0_1, sig_0_2) = two_sigs(1_000);
@@ -645,14 +645,14 @@ pub async fn plot_resource(
     resource_config: Simple,
     ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO
 
     let resources = resource_config.to_resources(store).await?;
     let all_tensors: Vec<Tensor> = resources
         .iter()
-        .map(|r| -> Result<Tensor, ThoError> {
+        .map(|r| -> anyhow::Result<Tensor> {
             let t = Tensor::load(
                 // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
                 FsWorkspace::resource_tensor_path(&tensors_path, r),

@@ -671,7 +671,7 @@ fn metric_from_ipc(properties: HashMap<String, MotifStatsIpcVal>) -> Result<Metr
         };
         (key, value)
     }).collect();
-    Metrics::from_properties_map(None, &properties)
+    Ok(Metrics::from_properties_map(None, &properties)?)
 }
 
 impl MotifStatsOutput {

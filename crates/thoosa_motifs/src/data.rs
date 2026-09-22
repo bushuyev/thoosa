@@ -31,7 +31,7 @@ pub trait Splitter {
 
     fn split_to(&self, v: &Self::Type) -> Set;
 
-    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoError> {
+    fn init(&self, df: LazyFrame) -> anyhow::Result<LazyFrame> {
         Ok(df.clone())
     }
 }
@@ -48,7 +48,7 @@ impl<E> Splitter for AllTrainSplitter<E> {
     }
 }
 
-pub fn series_to_tensor(s: &Series) -> Result<Tensor, ThoError> {
+pub fn series_to_tensor(s: &Series) -> anyhow::Result<Tensor> {
     Ok(match s.dtype() {
         // DataType::UInt8 => {}
         // DataType::UInt16 => {}
@@ -154,19 +154,19 @@ pub async fn load_to_logits_tensors(
 pub fn parquet_to_tensor_by_path(
     path: impl AsRef<Path>,
     device: Device,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let df = read_parquet_to_df(path)?;
 
     let tensor = Tensor::f_vstack(
         &df.columns()
             .into_iter()
             .map(|s| series_to_tensor(s.as_series().unwrap()))
-            .collect::<Result<Vec<Tensor>, ThoError>>()?,
+            .collect::<anyhow::Result<Vec<Tensor>>>()?,
     )?;
     Ok(tensor.f_set_requires_grad(false)?.f_to_device(device)?)
 }
 
-pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoError> {
+pub fn read_parquet_to_df(path: impl AsRef<Path>) -> anyhow::Result<DataFrame> {
     let scan_conf = ScanArgsParquet::default();
 
     let df = LazyFrame::scan_parquet(
@@ -177,7 +177,7 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoError>
     Ok(df.collect()?)
 }
 
-pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, ThoError> {
+pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> anyhow::Result<usize> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
@@ -277,7 +277,7 @@ mod data_tests {
 
 
     #[test]
-    pub fn test_split_frame_by_offsets() -> Result<(), ThoError> {
+    pub fn test_split_frame_by_offsets() -> anyhow::Result<()> {
         let df = df!(
             "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
             "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
@@ -315,7 +315,7 @@ mod data_tests {
     }
 
     #[test]
-    fn test_save_tensor() -> Result<(), ThoError> {
+    fn test_save_tensor() -> anyhow::Result<()> {
         let t = Tensor::randn([3, 6], (Float, Cpu));
 
         let path = "/tmp/sub.csv";

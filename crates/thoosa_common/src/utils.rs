@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+use anyhow::Context as _;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display};
@@ -40,7 +41,7 @@ use thoosa_properties_map::FromHashmap;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
-pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId, run_config_type: &str) -> Result<FH, ThoError>
+pub async fn load_run_config<FH, S>(store: &Arc<S>, run_config_id: RunConfigId, run_config_type: &str) -> anyhow::Result<FH>
 where
     FH: FromHashmap + RunConfig + Debug,
     S: Store + ?Sized,
@@ -49,7 +50,7 @@ where
         run_config_id
     } else {
         let run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some(run_config_type))).await?;
-        *run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no {run_config_type} input for find_motifs_run_config_id={run_config_id}")))?
+        *run_config_ids.first().ok_or_else(|| anyhow::anyhow!("load_run_config: no {run_config_type} input for find_motifs_run_config_id={run_config_id}"))?
     };
 
 
@@ -71,10 +72,10 @@ macro_rules! debug_plot {
             if $crate::utils::debug_plot_label_allowed(&__label) {
                 $crate::utils::debug_plot_impl($tensor, &__label, $plot_repeats)
             } else {
-                Ok::<(), thoosa_shared::ThoError>(())
+                Ok::<(), thoosa_shared::anyhow::Error>(())
             }
         } else {
-            Ok::<(), thoosa_shared::ThoError>(())
+            Ok::<(), thoosa_shared::anyhow::Error>(())
         }
     }};
     ($tensor:expr, $fmt:literal, plot_repeats = $plot_repeats:expr $(,)?) => {{
@@ -83,10 +84,10 @@ macro_rules! debug_plot {
             if $crate::utils::debug_plot_label_allowed(&__label) {
                 $crate::utils::debug_plot_impl($tensor, &__label, $plot_repeats)
             } else {
-                Ok::<(), thoosa_shared::ThoError>(())
+                Ok::<(), thoosa_shared::anyhow::Error>(())
             }
         } else {
-            Ok::<(), thoosa_shared::ThoError>(())
+            Ok::<(), thoosa_shared::anyhow::Error>(())
         }
     }};
     ($tensor:expr, $label:expr, plot_repeats = $plot_repeats:expr $(,)?) => {{
@@ -95,10 +96,10 @@ macro_rules! debug_plot {
             if $crate::utils::debug_plot_label_allowed(&__label) {
                 $crate::utils::debug_plot_impl($tensor, &__label, $plot_repeats)
             } else {
-                Ok::<(), thoosa_shared::ThoError>(())
+                Ok::<(), thoosa_shared::anyhow::Error>(())
             }
         } else {
-            Ok::<(), thoosa_shared::ThoError>(())
+            Ok::<(), thoosa_shared::anyhow::Error>(())
         }
     }};
     ($tensor:expr, $fmt:literal, $($arg:expr),+ $(,)?) => {{
@@ -107,10 +108,10 @@ macro_rules! debug_plot {
             if $crate::utils::debug_plot_label_allowed(&__label) {
                 $crate::utils::debug_plot_impl($tensor, &__label, 0)
             } else {
-                Ok::<(), thoosa_shared::ThoError>(())
+                Ok::<(), thoosa_shared::anyhow::Error>(())
             }
         } else {
-            Ok::<(), thoosa_shared::ThoError>(())
+            Ok::<(), thoosa_shared::anyhow::Error>(())
         }
     }};
     ($tensor:expr, $fmt:literal $(,)?) => {{
@@ -119,10 +120,10 @@ macro_rules! debug_plot {
             if $crate::utils::debug_plot_label_allowed(&__label) {
                 $crate::utils::debug_plot_impl($tensor, &__label, 0)
             } else {
-                Ok::<(), thoosa_shared::ThoError>(())
+                Ok::<(), thoosa_shared::anyhow::Error>(())
             }
         } else {
-            Ok::<(), thoosa_shared::ThoError>(())
+            Ok::<(), thoosa_shared::anyhow::Error>(())
         }
     }};
     ($tensor:expr, $label:expr $(,)?) => {{
@@ -131,10 +132,10 @@ macro_rules! debug_plot {
             if $crate::utils::debug_plot_label_allowed(&__label) {
                 $crate::utils::debug_plot_impl($tensor, &__label, 0)
             } else {
-                Ok::<(), thoosa_shared::ThoError>(())
+                Ok::<(), thoosa_shared::anyhow::Error>(())
             }
         } else {
-            Ok::<(), thoosa_shared::ThoError>(())
+            Ok::<(), thoosa_shared::anyhow::Error>(())
         }
     }};
 }
@@ -258,7 +259,7 @@ const DEFAULT_MAX_PATH_COMPONENT_BYTES: usize = 255;
 const DEFAULT_MAX_PATH_BYTES: usize = 4096;
 const MIN_SHORTENED_COMPONENT_BYTES: usize = 24;
 
-fn debug_plot_dir() -> Result<&'static PathBuf, ThoError> {
+fn debug_plot_dir() -> anyhow::Result<&'static PathBuf> {
     let path = DEBUG_PLOT_DIR.get_or_init(|| {
         let path = std::env::temp_dir().join("plots").join(cdt_for_dir());
         fs::create_dir_all(&path).map_err(|e| format!("debug_plot: create_dir_all({path:?}) failed: {e}"))?;
@@ -266,7 +267,7 @@ fn debug_plot_dir() -> Result<&'static PathBuf, ThoError> {
     });
     match path {
         Ok(path) => Ok(path),
-        Err(e) => Err(ThoError::new(e.clone())),
+        Err(e) => Err(anyhow::anyhow!(e.clone())),
     }
 }
 
@@ -414,17 +415,17 @@ fn shorten_path_for_fs_limits(path: &Path) -> PathBuf {
 
 
 #[doc(hidden)]
-pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(), ThoError> {
+pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> anyhow::Result<()> {
     debug_plot_impl_wh(t_0, label, plot_repeats, (2000, 1000))
 }
 
 #[doc(hidden)]
-pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32),) -> Result<(), ThoError> {
+pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32),) -> anyhow::Result<()> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
         let mut counts = DEBUG_PLOT_LABEL_COUNTS
             .lock()
-            .map_err(|e| ThoError::new(format!("debug_plot: lock failed: {e}")))?;
+            .map_err(|e| anyhow::anyhow!("debug_plot: lock failed: {e}"))?;
         let seen = counts.entry(file_stem.clone()).or_insert(0);
         *seen += 1;
 
@@ -471,7 +472,7 @@ pub fn plot_series<S>(
     caption: &str,
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -484,7 +485,7 @@ pub fn plot_series_with_points<S>(
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
     points: &Vec<(f32, f32)>,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -497,7 +498,7 @@ pub fn plot_series_with_lanes<S>(
     w_h: (u32, u32),
     path: &impl AsRef<std::path::Path>,
     lanes: &[(i32, i32)],
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -511,7 +512,7 @@ pub fn plot_series_with_sidebar_values<S>(
     path: &impl AsRef<std::path::Path>,
     sidebar_title: &str,
     sidebar_rows: &[(String, f32)],
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -616,7 +617,7 @@ fn _plot_series<S>(
     path: &impl AsRef<std::path::Path>,
     points: Option<&Vec<(f32, f32)>>,
     _lanes: Option<&[(i32, i32)]>,
-) -> Result<(), ThoError>
+) -> anyhow::Result<()>
 where
     S: Into<ShapeStyle> + Clone,
 {
@@ -700,7 +701,7 @@ pub fn draw_function_plot(
     xy: &[(f32, f32)],
     bands: &[(f32, f32)],
     title: &str,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     let (width, height) = w_h;
     let output_path = shorten_path_for_fs_limits(output_path.as_ref());
 
@@ -781,19 +782,19 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
     path: P,
     width: u32,
     height: u32,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     let spectrogram = spectrogram.transpose(0,1);
     let size = spectrogram.size();
 
     if size.len() != 2 {
-        return Err(ThoError::new(format!("expected tensor shape [T, F], got {:?}", size)));
+        return Err(anyhow::anyhow!("expected tensor shape [T, F], got {:?}", size));
     }
 
     let t_bins = size[0];
     let f_bins = size[1];
 
     if t_bins <= 0 || f_bins <= 0 {
-        return Err(ThoError::new(format!("empty spectrogram shape {:?}", size)));
+        return Err(anyhow::anyhow!("empty spectrogram shape {:?}", size));
     }
 
     // Move to CPU and convert to double for easy scalar reading.
@@ -816,7 +817,7 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
     }
 
     if !min_v.is_finite() || !max_v.is_finite() {
-        return Err(ThoError::new("spectrogram contains no finite values"));
+        return Err(anyhow::anyhow!("spectrogram contains no finite values"));
     }
 
     let range = (max_v - min_v).max(1e-12);
@@ -931,11 +932,11 @@ pub fn to_vec_i64(t: &Tensor) -> Vec<i64> {
     from::<Vec<i64>>(&t.reshape(-1))
 }
 
-pub fn pad_to(input: &Tensor, to_size: &[i64], pad_with: f64) -> Result<Tensor, ThoError> {
+pub fn pad_to(input: &Tensor, to_size: &[i64], pad_with: f64) -> anyhow::Result<Tensor> {
     debug!("pad_to: input.size={:?}, to_size{:?}",input.size(),to_size);
 
     if input.size().len() != to_size.len() {
-        ThoError::new(format!(
+        anyhow::bail!(format!(
             "dimensions don't match: {:?} {:?}",
             input.size(),
             to_size
@@ -964,14 +965,14 @@ pub fn pad_to(input: &Tensor, to_size: &[i64], pad_with: f64) -> Result<Tensor, 
 
     input
         .f_pad(pad_idx.as_slice(), "constant", pad_with)
-        .map_err(ThoError::from)
+        .map_err(anyhow::Error::from)
 }
 
-pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool) -> Result<(Tensor, Option<Tensor>), ThoError> {
+pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool) -> anyhow::Result<(Tensor, Option<Tensor>)> {
     debug!("pad_to: input.size={:?}, to_size={:?}", input.size(), to_size);
 
     if input.size().len() != to_size.len() {
-        return Err(ThoError::new(format!(
+        return Err(anyhow::anyhow!(format!(
             "dimensions don't match: {:?} vs {:?}",
             input.size(),
             to_size
@@ -994,7 +995,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
         // in pure pad mode treat from > to as an error.
         for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
             if from > to {
-                return Err(ThoError::new(format!(
+                return Err(anyhow::anyhow!(format!(
                     "from {from} > to {to} at dim {dim}"
                 )));
             }
@@ -1011,7 +1012,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
     for (i, (&from, &to)) in from_rev.iter().zip(to_rev.iter()).enumerate() {
         if from > to {
             // should not happen if truncate == true and the above logic ran.
-            return Err(ThoError::new(format!(
+            return Err(anyhow::anyhow!(format!(
                 "after truncation: from {from} > to {to} at reversed dim {i}"
             )));
         }
@@ -1093,7 +1094,7 @@ impl TrainListener for DummyListener {
 /// x:    [B, C, T] float
 /// mask: [B, 1, T] bool (true = keep, false = padding)
 /// out:  [B, C]
-pub fn masked_mean(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
+pub fn masked_mean(x: &Tensor, mask: &Tensor) -> anyhow::Result<Tensor> {
     // float mask in {0,1}
     let mask_f = mask.f_to_kind(Kind::Float)?; // [B,1,T]
 
@@ -1116,7 +1117,7 @@ pub fn masked_mean(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
 /// out:  [B, C]
 ///
 /// Uses a large negative fill for masked timesteps (good if x is e.g. probabilities).
-pub fn masked_max(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
+pub fn masked_max(x: &Tensor, mask: &Tensor) -> anyhow::Result<Tensor> {
     let mask_f = mask.f_to_kind(Kind::Float)?; // [B,1,T]
     let neg: f64 = -1e9;
 
@@ -1135,12 +1136,12 @@ pub fn masked_max(x: &Tensor, mask: &Tensor) -> Result<Tensor, ThoError> {
     Ok(mx)
 }
 
-pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> Result<Tensor, ThoError> {
+pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> anyhow::Result<Tensor> {
     if lengths.is_empty() {
-        return Err(ThoError::new("mask_from_lengths: empty lengths"));
+        return Err(anyhow::anyhow!("mask_from_lengths: empty lengths"));
     }
     if max_len < 0 {
-        return Err(ThoError::new(format!("mask_from_lengths: max_len must be >= 0, got {max_len}")));
+        return Err(anyhow::anyhow!("mask_from_lengths: max_len must be >= 0, got {max_len}"));
     }
     let lengths_t = Tensor::f_from_slice(lengths)?.f_to_device(device)?.f_view([lengths.len() as i64, 1, 1])?;
     let range = Tensor::f_arange(max_len, (Kind::Int64, device))?.f_view([1, 1, max_len])?;
@@ -1148,13 +1149,13 @@ pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> Resul
 }
 
 
-pub fn z_norm(t_0: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+pub fn z_norm(t_0: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     let std = t_0.f_std_dim(dim, false, true)?.f_add_scalar_(f64::EPSILON)?;
 
     Ok(t_0.f_sub(&t_0.f_mean_dim(dim, true, t_0.kind())?)?.f_div(&std)?)
 }
 
-pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
+pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> anyhow::Result<Tensor> {
     // Mean over dims (keepdim=true so it broadcasts back)
     let mean = x.f_mean_dim(dims, /*keepdim=*/true, Kind::Float)?;
 
@@ -1189,7 +1190,7 @@ pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
     (skewness, kurtosis)
 }
 
-pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoError> {
+pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> anyhow::Result<Tensor> {
     let norm_01 = norm_2(slice_01, dim)?;
     let norm_02 = norm_2(slice_02, dim)?;
     Ok(norm_01.f_tensordot(&norm_02, [dim], [dim])?.f_diag(0)?)
@@ -1202,7 +1203,7 @@ pub fn self_dot(
     dim: i64,
     step: i64,
     d_i: i64,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
     let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
 
@@ -1213,7 +1214,7 @@ pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
     t.view(dim) / t.dot(&t).sqrt()
 }
 
-pub fn norm_2(t: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+pub fn norm_2(t: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     let denom = t
         .f_tensordot(&t, dim, dim)?
         .f_diag(0)?
@@ -1228,7 +1229,7 @@ pub fn lin_t(n: u32) -> Tensor {
     Tensor::arange(n as i64, FLOAT_CPU)
 }
 
-pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Result<Tensor, ThoError> {
+pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> anyhow::Result<Tensor> {
     let end = size.iter().fold(1, |a, v| a * *v);
 
     debug!("lin_for_size: end={end}");
@@ -1447,7 +1448,7 @@ pub fn mix_x_binary_with_labels(
     lengths_1: Option<&BatchLengths>,
     x_0: &Tensor,
     lengths_0: Option<&BatchLengths>,
-) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError> {
+) -> anyhow::Result<(Tensor, Option<BatchLengths>, Tensor)> {
     let [ma, _na, ..] = x_1.size()[0..2] else {
         panic!("x_1 {:?} must be 2D [m, n]", x_1.size())
     };
@@ -1479,7 +1480,7 @@ pub fn mix_x_binary_with_labels(
     let perm_cpu = Tensor::f_randperm(total, (Kind::Int64, Device::Cpu))?;
     let perm_vec: Vec<i64> = (&perm_cpu)
         .try_into()
-        .map_err(|e| ThoError::from_error("mix_x_binary_with_labels: perm to vec", e))?;
+        .with_context(|| "mix_x_binary_with_labels: perm to vec")?;
 
     // Copy permutation to target device once for tensor indexing.
     let perm = perm_cpu.f_to_device(device)?;
@@ -1491,13 +1492,13 @@ pub fn mix_x_binary_with_labels(
         (None, None) => None,
         (Some(lengths_1), Some(lengths_0)) => {
             if lengths_1.as_slice().len() != ma as usize {
-                return Err(ThoError::new(format!(
+                return Err(anyhow::anyhow!(format!(
                     "lengths_1 len mismatch: expected={ma} got={}",
                     lengths_1.as_slice().len()
                 )));
             }
             if lengths_0.as_slice().len() != mb as usize {
-                return Err(ThoError::new(format!(
+                return Err(anyhow::anyhow!(format!(
                     "lengths_0 len mismatch: expected={mb} got={}",
                     lengths_0.as_slice().len()
                 )));
@@ -1515,7 +1516,7 @@ pub fn mix_x_binary_with_labels(
             Some(BatchLengths::new(lengths_perm))
         }
         _ => {
-            return Err(ThoError::new(
+            return Err(anyhow::anyhow!(
                 "lengths_1 and lengths_0 must both be Some or None",
             ))
         }
@@ -1530,10 +1531,10 @@ pub fn test_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
     k: f64,
     device: Device,
     _descr: &str,
-) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
+) -> anyhow::Result<Box<ThoModuleWithStore<DI, DO>>> {
     let vs = VarStore::new(device);
 
-    let builder = Arc::new(move |path: &nn::Path| -> Result<Box<dyn crate::nets::nodes::ThoModule<DI, DO>>, ThoError> {
+    let builder = Arc::new(move |path: &nn::Path| -> anyhow::Result<Box<dyn crate::nets::nodes::ThoModule<DI, DO>>> {
         SeqBuilder::new(num_features, None)?
             .linear_s_with_conf(
                 "todo",
@@ -1575,7 +1576,7 @@ fn assert_tensor_eq(a: &Tensor, b: &Tensor) {
     assert!(ok, "tensor values differ:\nleft: {a:?}\nright: {b:?}");
 }
 
-pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_input: i64) -> Result<(Tensor, Vec<i64>), ThoError> {
+pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_input: i64) -> anyhow::Result<(Tensor, Vec<i64>)> {
     let mut stack = Vec::with_capacity(tensors.len());
     let mut lengths = Vec::with_capacity(tensors.len());
 
@@ -1583,10 +1584,10 @@ pub fn pad_stack_with_mask<T:AsRef<Tensor>>(tensors: &[&T], dim_0: i64, max_inpu
         let t = v.as_ref();
         let size = t.size();
         if size.len() != 2 {
-            return Err(ThoError::new(format!("pad_stack_with_mask expects 2D tensors, got size={size:?}")));
+            return Err(anyhow::anyhow!("pad_stack_with_mask expects 2D tensors, got size={size:?}"));
         }
         if size[0] != dim_0 {
-            return Err(ThoError::new(format!("pad_stack_with_mask dim_0 mismatch: expected={dim_0} got={}", size[0])));
+            return Err(anyhow::anyhow!("pad_stack_with_mask dim_0 mismatch: expected={dim_0} got={}", size[0]));
         }
 
         let mut t = t.shallow_clone();
@@ -1726,7 +1727,7 @@ pub fn stretch<T: AsRef<Tensor>>(
     t: T,
     stretch_to: usize,
     dim: u32,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let t = t.as_ref();
     let sizes = t.size();
 
@@ -2096,7 +2097,16 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to() -> Result<(), ThoError> {
+    fn test_pad_to_rejects_rank_mismatch() -> anyhow::Result<()> {
+        // Rank mismatches must return before dimension indexing or tensor operations.
+        let input = Tensor::f_from_slice(&[1f32, 2.])?;
+        let error = super::pad_to(&input, &[2, 2], 0.).unwrap_err();
+        assert!(error.to_string().contains("dimensions don't match"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to() -> anyhow::Result<()> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
         let expected = Tensor::vstack(&[
             Tensor::from_slice(&[1., 2., 0.]),
@@ -2117,7 +2127,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to_truncate_and_pad() -> Result<(), ThoError> {
+    fn test_pad_to_truncate_and_pad() -> anyhow::Result<()> {
         let t = Tensor::vstack(&[
             Tensor::from_slice(&[1., 2., 3.]),
             Tensor::from_slice(&[4., 5., 6.]),
@@ -2139,7 +2149,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to_same() -> Result<(), ThoError> {
+    fn test_pad_to_same() -> anyhow::Result<()> {
         let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
 
         assert_eq!(
@@ -2151,7 +2161,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pad_to_one_dim() -> Result<(), ThoError> {
+    fn test_pad_to_one_dim() -> anyhow::Result<()> {
         let t = Tensor::ones([1, 3], (Float, Cpu));
 
         assert_eq!(
@@ -2790,7 +2800,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_mix_basic_shapes_and_labels() -> Result<(), ThoError> {
+    fn test_mix_basic_shapes_and_labels() -> anyhow::Result<()> {
         let m = 4i64;
         let n = 3i64;
 
@@ -2834,7 +2844,7 @@ pub mod tests {
 
 
     #[test]
-    fn test_mix_masks_align_with_rows() -> Result<(), ThoError> {
+    fn test_mix_masks_align_with_rows() -> anyhow::Result<()> {
         let a = Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]).reshape(&[2, 3]);
         let b = Tensor::from_slice(&[101., 102., 103., 104., 105., 106.]).reshape(&[2, 3]);
         let lengths_a = vec![2, 3];
@@ -2923,7 +2933,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_debug_plot_macro_accepts_plot_repeats() -> Result<(), ThoError> {
+    fn test_debug_plot_macro_accepts_plot_repeats() -> anyhow::Result<()> {
         let t = Tensor::zeros([1i64, 8], FLOAT_CPU);
         crate::debug_plot!(&t, "debug_plot_macro_accepts_plot_repeats", plot_repeats = 0)?;
         let suffix = 1;
@@ -2966,7 +2976,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch() -> Result<(), ThoError>{
+    fn test_stretch() -> anyhow::Result<()>{
         let stretched = stretch(Tensor::from_slice(&[0., 1., 1., 2.]), 8, 0)?;
 
         assert_eq!(
@@ -2978,7 +2988,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_exact_double() -> Result<(), ThoError> {
+    fn test_stretch_exact_double() -> anyhow::Result<()> {
         let stretched = stretch(Tensor::from_slice(&[0., 1., 1., 2.]), 8, 0)?;
 
         let expected = Tensor::from_slice(&[0., 0., 1., 1., 1., 1., 2., 2.]);
@@ -2987,7 +2997,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_non_multiple() -> Result<(), ThoError> {
+    fn test_stretch_non_multiple() -> anyhow::Result<()> {
         let stretched = stretch(Tensor::from_slice(&[0., 1., 2., 3.]), 6, 0)?;
 
         // floor(j * 4 / 6) => [0,0,1,2,2,3]
@@ -2997,7 +3007,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_to_plus_one() -> Result<(), ThoError> {
+    fn test_stretch_to_plus_one() -> anyhow::Result<()> {
         let stretched = stretch(Tensor::from_slice(&[10., 20., 30., 40.]), 5, 0)?;
 
         // floor(j * 4 / 5) => [0,0,1,2,3]
@@ -3007,7 +3017,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_shrink() -> Result<(), ThoError> {
+    fn test_shrink() -> anyhow::Result<()> {
         let stretched = stretch(Tensor::from_slice(&[0., 1., 2., 3., 4.]), 3, 0)?;
 
         // floor(j * 5 / 3) => [0,1,3]
@@ -3017,7 +3027,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_dim_1() -> Result<(), ThoError> {
+    fn test_stretch_dim_1() -> anyhow::Result<()> {
         let t = Tensor::from_slice(&[
             1., 2., 3.,
             10., 20., 30.,
@@ -3035,7 +3045,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_singleton() -> Result<(), ThoError> {
+    fn test_stretch_singleton() -> anyhow::Result<()> {
         let t = Tensor::from_slice(&[7.]);
         let stretched = stretch(&t, 5, 0)?;
         let expected = Tensor::from_slice(&[7., 7., 7., 7., 7.]);
@@ -3044,7 +3054,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_preserves_kind() -> Result<(), ThoError> {
+    fn test_stretch_preserves_kind() -> anyhow::Result<()> {
         let t = Tensor::from_slice(&[1i64, 2, 3]).to_kind(Kind::Int64);
         let stretched = stretch(&t, 5, 0)?;
         assert_eq!(stretched.kind(), Kind::Int64);
@@ -3052,7 +3062,7 @@ pub mod tests {
     }
 
     // #[test]
-    fn test_spectrogram() -> Result<(), ThoError> {
+    fn test_spectrogram() -> anyhow::Result<()> {
 
 
         let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1,-1));

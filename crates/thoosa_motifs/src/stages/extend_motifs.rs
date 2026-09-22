@@ -99,7 +99,7 @@ impl SavableResult for ExtendMotifsSavableResult {
         _store: &Arc<dyn MotifsStore>,
         _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         _p: Self::P<'_>,
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
         Ok(0)
     }
 }

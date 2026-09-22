@@ -1134,7 +1134,7 @@ mod tests {
         }
 
         #[test]
-        fn test_interesting_turning_points_ratio() -> Result<(), ThoError>{
+        fn test_interesting_turning_points_ratio() -> anyhow::Result<()>{
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
@@ -1149,7 +1149,7 @@ mod tests {
         }
 
         #[test]
-        fn test_interesting_turning_points_ratio_peaked() -> Result<(), ThoError>{
+        fn test_interesting_turning_points_ratio_peaked() -> anyhow::Result<()>{
             let t = Tensor::arange(1000, (Kind::Float, Device::Cpu)) / 200;
             let t_sin = sin_t(&t, 1.).view((1, -1));
 
@@ -1201,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interesting_entropy_gauss_01_matches_spectral_entropy_gaussian() -> Result<(), ThoError> {
+    fn test_interesting_entropy_gauss_01_matches_spectral_entropy_gaussian() -> anyhow::Result<()> {
         for i in 1..=8 {
             let signal = make_entropy_signal(2048, i);//3 frequencies
             // thoosa_common::utils::debug_plot_impl(&signal, &format!("entropy_gauss_signal_{i}"), 0)?;
@@ -1227,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interesting_entropy_band_01_uses_spectral_entropy_and_sorts_bounds() -> Result<(), ThoError> {
+    fn test_interesting_entropy_band_01_uses_spectral_entropy_and_sorts_bounds() -> anyhow::Result<()> {
         for i in 1..=8 {
             let signal = make_entropy_signal(2048, i);
             // thoosa_common::utils::debug_plot_impl(&signal, "entropy_band_signal.png", 0)?;
@@ -1252,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interesting_turning_points_ratio_trapezoid_01() -> Result<(), ThoError> {
+    fn test_interesting_turning_points_ratio_trapezoid_01() -> anyhow::Result<()> {
         let (a, b, c, d) = (2, 3, 5, 7);
 
         // Case 1: T=2 turns => score 0 (T <= a)
@@ -1278,7 +1278,7 @@ mod tests {
 
 
     #[test]
-    fn test_periodicity_acf_01_varies_with_periods_and_penalizes_noise() -> Result<(), ThoError> {
+    fn test_periodicity_acf_01_varies_with_periods_and_penalizes_noise() -> anyhow::Result<()> {
         let width: i64 = 2048;
 
         // Parameters: tuned for "reject repeating sub-patterns" but keep single global structure.

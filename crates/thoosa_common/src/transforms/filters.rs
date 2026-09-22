@@ -171,13 +171,13 @@ pub fn band_pass_filter(
     kernel_size: i64,
     sample_rate: f64,
     eps: f64,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
     let n = Tensor::f_arange(kernel_size, (Kind::Float, Device::Cpu))?.f_sub_scalar((kernel_size - 1) as f64 / 2.0)?;
 
     let low = std::f64::consts::TAU * low_hz / sample_rate;
     let high = std::f64::consts::TAU * high_hz / sample_rate;
 
-    let sinc = |x: &Tensor| -> Result<Tensor, ThoError> {
+    let sinc = |x: &Tensor| -> anyhow::Result<Tensor> {
         let x_eps = x.f_add_scalar(eps)?;
         Ok(x.f_sin()?.f_div(&x_eps)?)
     };
@@ -194,9 +194,9 @@ pub fn band_pass_filter(
     Ok(band_pass.f_div(&sum)?)
 }
 
-pub fn hann_window(length: i64) -> Result<Tensor, ThoError> {
+pub fn hann_window(length: i64) -> anyhow::Result<Tensor> {
     if length <= 1 {
-        return Err(ThoError::new(format!("hann_window length must be > 1, got {length}")));
+        return Err(anyhow::anyhow!("hann_window length must be > 1, got {length}"));
     }
 
     // w[n] = 0.5 * (1 - cos(2πn / (N-1)))
@@ -207,7 +207,7 @@ pub fn hann_window(length: i64) -> Result<Tensor, ThoError> {
     Ok(cos.f_neg()?.f_add_scalar(1.0)?.f_mul_scalar(0.5)?)
 }
 
-pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) -> Result<Vec<(f64, f64)>, ThoError> {
+pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) -> anyhow::Result<Vec<(f64, f64)>> {
     let input_signal_rfft = input_signal_0.f_fft_rfft(Some(n), 0, "forward")?;
 
     let absolutes = input_signal_rfft.f_abs()?;
@@ -229,17 +229,17 @@ pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) 
     .collect())
 }
 
-pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor, ThoError> {
+pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> anyhow::Result<Tensor> {
     // Sanity
     if x.dim() != 2 {
-        return Err(ThoError::new(format!("expected [C, T], got shape {:?}", x.size())));
+        return Err(anyhow::anyhow!("expected [C, T], got shape {:?}", x.size()));
     }
     let t = x.size()[1];
     if t <= 1 {
-        return Err(ThoError::new(format!("sequence length must be > 1, got {t}")));
+        return Err(anyhow::anyhow!("sequence length must be > 1, got {t}"));
     }
     if fs <= 0.0 {
-        return Err(ThoError::new(format!("fs must be positive, got {fs}")));
+        return Err(anyhow::anyhow!("fs must be positive, got {fs}"));
     }
 
     // Map Hz -> rfft bin indices.
@@ -311,7 +311,7 @@ pub struct ReplicatePadding {}
 
 
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.
-pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
+pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> anyhow::Result<Tensor> {
     if pad == 0 {
         return Ok(x.shallow_clone());
     }
@@ -336,7 +336,7 @@ pub fn pad_1d(x: &Tensor, pad: i64, mode: Padding) -> Result<Tensor, ThoError> {
         Padding::Reflect(_) => {
             // PyTorch reflect requires pad <= T-1
             if pad >= t {
-                return Err(ThoError::new(format!(
+                return Err(anyhow::anyhow!(format!(
                     "reflect padding requires pad < T, got pad={} T={}",
                     pad, t
                 )));
@@ -357,7 +357,7 @@ pub fn savgol_smooth_1d_channels(
     window_len: i64,
     poly_order: i64,
     padding: Padding,
-) -> Result<Tensor, ThoError> {
+) -> anyhow::Result<Tensor> {
 
     assert_eq!(x.dim(), 2,  "expected x to have shape [C, T], got dim={} size={:?}", x.dim(), x.size());
 
@@ -366,13 +366,13 @@ pub fn savgol_smooth_1d_channels(
     let t = sz[1];
 
     if window_len < 3 || window_len % 2 == 0 {
-        return Err(ThoError::new("window_len must be odd and >= 3"));
+        return Err(anyhow::anyhow!("window_len must be odd and >= 3"));
     }
     if poly_order < 0 || poly_order >= window_len {
-        return Err(ThoError::new("poly_order must be >= 0 and < window_len"));
+        return Err(anyhow::anyhow!("poly_order must be >= 0 and < window_len"));
     }
     if t < window_len {
-        return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
+        return Err(anyhow::anyhow!("time length T={} must be >= window_len={}", t, window_len));
     }
 
     let pad = window_len / 2;
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn test_band_pass_filter() -> Result<(), ThoError> {
+    fn test_band_pass_filter() -> anyhow::Result<()> {
         let samples = 16000;
         let sample_rate = 16000.0;
         let kernel_size = 101;
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn test_band_pass_filter_mult_channels() -> Result<(), ThoError> {
+    fn test_band_pass_filter_mult_channels() -> anyhow::Result<()> {
         let samples = 16000;
         let sample_rate = 16000.0;
         let kernel_size = 101;

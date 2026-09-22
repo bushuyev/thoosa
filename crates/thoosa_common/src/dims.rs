@@ -87,8 +87,8 @@ impl LocalSelect<u32, RangeSelector> for ThoTensor<AnyDims, u32> {
     type Output = ThoTensor<AnyDims, u32>;
 
     fn local_subview(id: &u32, t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
-        let start = i64::try_from(selector.start[0]).map_err(|_| ThoError::new("range selector start does not fit i64"))?;
-        let end = i64::try_from(selector.end[0]).map_err(|_| ThoError::new("range selector end does not fit i64"))?;
+        let start = i64::try_from(selector.start[0]).map_err(|_| anyhow::anyhow!("range selector start does not fit i64"))?;
+        let end = i64::try_from(selector.end[0]).map_err(|_| anyhow::anyhow!("range selector end does not fit i64"))?;
         ThoTensor::new(*id, t.f_i(start..end)?)
     }
 }
@@ -102,7 +102,7 @@ impl Dims for ChannelsData {
 }
 impl ChannelsData {
 
-    pub fn sub_single(t: &Tensor, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Result<Tensor, ThoError> {
+    pub fn sub_single(t: &Tensor, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> anyhow::Result<Tensor> {
         let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
         let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 

@@ -5,6 +5,7 @@
 mod data;
 mod run_all;
 
+use anyhow::Context as _;
 use crate::run_all::{run_all, run_all_config_0, run_all_config_1, RunAllSettings};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
@@ -69,7 +70,7 @@ impl StageCommand for HbacAppCommands {
     type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             HbacAppCommands::CommonCommands(c) => {
                 c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
@@ -107,7 +108,7 @@ impl StageCommand for HbacCommands {
     type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> Result<(), ThoError> {
+    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             HbacCommands::ImportResources(import_resources_args) => {
                 debug!("ImportResources2: import_resources_params={:?}",import_resources_args);
@@ -189,7 +190,7 @@ impl StageCommand for HbacCommands {
 }
 
 
-fn main() -> Result<(), ThoError> {
+fn main() -> anyhow::Result<()> {
     let cdt = cdt_for_dir();
     let app_configs = WsConfigs::new(20, 684400, 200);
 
@@ -228,10 +229,7 @@ fn main() -> Result<(), ThoError> {
         .max_blocking_threads(cpu_num)
         .enable_all()
         .build()
-        .map_err(|err| {
-            error!("main: {err:?}");
-            ThoError::from_error("tokio runtime build failed", err)
-        })?;
+        .context("tokio runtime build failed")?;
 
 
     let run_result = rt.block_on(async move {

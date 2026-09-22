@@ -43,38 +43,38 @@ pub trait MotifsStore: Store {
     async fn list_label_nets_run_config_ids(
         &self,
         label: &str,
-    ) -> Result<Vec<RunConfigId>, ThoError>;
+    ) -> anyhow::Result<Vec<RunConfigId>>;
 
-    async fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32) -> Result<Vec<ResourceId>, ThoError>;
-    async fn save_pure_sets(&self, max_len: usize, only_unused: bool) -> Result<(), ThoError>;
-    async fn save_leaky_data_sets(&self, prefix: &str, limit: LimitBy, train_coeff: f32, valid_coeff: f32, min_p: f32, allow_leaky_split: bool) -> Result<(), ThoError>;
-    async fn save_set_by_labels(&self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> Result<(), ThoError>;
-    async fn save_groups_by_label_cnt(&self, max_resources_in_set: usize) -> Result<(), ThoError>;
-    async fn export_apply_label_nets_records(&self, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> Result<(), ThoError>;
-    async fn resources_by_label(&self, min_p: f32) -> Result<HashMap<String, Vec<Resource>>, ThoError>;
-    async fn list_resource_random_not_labeled(&self, label: &str, limit: u32) -> Result<Vec<Resource>, ThoError>;
-    async fn save_label(&self, label: &str) -> Result<u32, ThoError>;
-    async fn list_labels(&self, only_with_resources: bool) -> Result<Vec<String>, ThoError>;
-    async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> Result<(), ThoError>;
-    async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
-    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
-    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError>;
-    async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
-    async fn list_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<u32>, ThoError>;
-    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunConfigId), ThoError>;
-    async fn list_motifs_slices(&self, run_config_id: RunConfigId, select_motifs_run_config_id: Option<Vec<RunConfigId>>) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
-    async fn list_motif_slices(&self, motif_id: u32, select_motifs_run_config_id: Option<Vec<RunConfigId>>, limit: Option<u32>, all_but_in_run_config_id: Option<(RunConfigId, u32)>) -> Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-    async fn list_random_slices_out_of_motif(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-    async fn list_random_slices_out_of_resources(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-    async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError>;
-    async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> Result<RunConfigId, ThoError>;
-    async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
+    async fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32) -> anyhow::Result<Vec<ResourceId>>;
+    async fn save_pure_sets(&self, max_len: usize, only_unused: bool) -> anyhow::Result<()>;
+    async fn save_leaky_data_sets(&self, prefix: &str, limit: LimitBy, train_coeff: f32, valid_coeff: f32, min_p: f32, allow_leaky_split: bool) -> anyhow::Result<()>;
+    async fn save_set_by_labels(&self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> anyhow::Result<()>;
+    async fn save_groups_by_label_cnt(&self, max_resources_in_set: usize) -> anyhow::Result<()>;
+    async fn export_apply_label_nets_records(&self, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> anyhow::Result<()>;
+    async fn resources_by_label(&self, min_p: f32) -> anyhow::Result<HashMap<String, Vec<Resource>>>;
+    async fn list_resource_random_not_labeled(&self, label: &str, limit: u32) -> anyhow::Result<Vec<Resource>>;
+    async fn save_label(&self, label: &str) -> anyhow::Result<u32>;
+    async fn list_labels(&self, only_with_resources: bool) -> anyhow::Result<Vec<String>>;
+    async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> anyhow::Result<()>;
+    async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> anyhow::Result<()>;
+    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> anyhow::Result<()>;
+    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> anyhow::Result<Vec<u32>>;
+    async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> anyhow::Result<()>;
+    async fn list_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<u32>>;
+    async fn get_motif_meta(&self, motif_id: u32) -> anyhow::Result<(usize, RunConfigId)>;
+    async fn list_motifs_slices(&self, run_config_id: RunConfigId, select_motifs_run_config_id: Option<Vec<RunConfigId>>) -> anyhow::Result<HashMap<Resource, Vec<MotifSlice>>>;
+    async fn list_motif_slices(&self, motif_id: u32, select_motifs_run_config_id: Option<Vec<RunConfigId>>, limit: Option<u32>, all_but_in_run_config_id: Option<(RunConfigId, u32)>) -> anyhow::Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>)>;
+    async fn list_random_slices_out_of_motif(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> anyhow::Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>)>;
+    async fn list_random_slices_out_of_resources(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> anyhow::Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>)>;
+    async fn list_run_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<RunMotifEntry>>;
+    async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> anyhow::Result<RunConfigId>;
+    async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>>;
     async fn list_selected_motifs(
         &self,
         motif_selection_ids: &[RunConfigId],
         channels: u32,
         limit: Option<u32>,
-    ) -> Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>, ThoError>;
+    ) -> anyhow::Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>>;
 }
 
 // These helpers write motif-owned tables, so they live with MotifsStore instead of the common SqlStore API.
@@ -84,7 +84,7 @@ fn insert_slices(
     channel: i64,
     motif_id: i64,
     chunk: IntoIter<IdSlice, 500>,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     let sql = "INSERT INTO slices (run_config_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
 
     let (mut q, params) = chunk.into_iter().fold(
@@ -127,7 +127,7 @@ fn insert_slices_matches_chunk_from_tmp(
     channel: i64,
     motif_id: i64,
     chunk: IntoIter<IdSlice, 500>,
-) -> Result<(), ThoError> {
+) -> anyhow::Result<()> {
     insert_slices(t, run_config_id, channel, motif_id, chunk.clone())?;
 
     // let mut stmt = t.prepare("SELECT * FROM slices")?;
@@ -166,7 +166,7 @@ impl MotifsStore for SqlStore {
         params: HashMap<String, Val>,
         run_config_id: RunConfigId,
         label: Option<&'a str>,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         let label = label.map(|v| v.to_string());
         self.with_writer_conn("save_params_value", move |conn| {
             let t = conn.transaction()?;
@@ -182,7 +182,7 @@ impl MotifsStore for SqlStore {
         .await
     }
 
-    async fn save_label(&self, label: &str) -> Result<u32, ThoError> {
+    async fn save_label(&self, label: &str) -> anyhow::Result<u32> {
         let label = label.to_string();
         self.with_writer_conn("save_label", move |conn| {
             let t = conn.transaction()?;
@@ -193,7 +193,7 @@ impl MotifsStore for SqlStore {
         .await
     }
 
-    async fn list_labels(&self, only_with_resources: bool) -> Result<Vec<String>, ThoError> {
+    async fn list_labels(&self, only_with_resources: bool) -> anyhow::Result<Vec<String>> {
         self.with_reader_conn("list_labels", move |conn| {
             let labels = Self::list_labels(conn, only_with_resources).map(|v| v.into_iter().map(|id_label| id_label.1).collect())?;
             Ok(labels)
@@ -206,7 +206,7 @@ impl MotifsStore for SqlStore {
         &self,
         resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
         import_id: u32,
-    ) -> Result<Vec<ResourceId>, ThoError> {
+    ) -> anyhow::Result<Vec<ResourceId>> {
         let resource_stats_labels_probs = resource_stats_labels_probs
             .iter()
             .map(|(resource_key, (stats, labels))| (resource_key.clone(), stats.length(), labels.clone()))
@@ -223,7 +223,7 @@ impl MotifsStore for SqlStore {
     async fn save_groups_by_label_cnt(
         &self,
         max_resources_in_set: usize,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("save_groups_by_label_cnt", move |conn| {
             let t = conn.transaction()?;
             Self::save_groups_by_label_cnt(max_resources_in_set, &t)?;
@@ -237,7 +237,7 @@ impl MotifsStore for SqlStore {
         &self,
         max_len: usize,
         only_unused: bool,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("save_pure_sets", move |conn| {
             let t = conn.transaction()?;
             Self::save_pure_sets(max_len, only_unused, &t)?;
@@ -255,7 +255,7 @@ impl MotifsStore for SqlStore {
         valid_coeff: f32,
         min_p: f32,
         allow_leaky_split: bool,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_data_sets", move |conn| {
             let t = conn.transaction()?;
@@ -270,7 +270,7 @@ impl MotifsStore for SqlStore {
         &self,
         label: &str,
         limit: u32,
-    ) -> Result<Vec<Resource>, ThoError> {
+    ) -> anyhow::Result<Vec<Resource>> {
         let label = label.to_string();
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
             let r = conn.prepare(
@@ -293,7 +293,7 @@ impl MotifsStore for SqlStore {
         &self,
         target_db_path: PathBuf,
         label_net_run_config_ids: Vec<RunConfigId>,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("export_apply_label_nets_records", move |conn| {
             Self::export_apply_label_nets_records(conn, target_db_path, label_net_run_config_ids)
         }).await
@@ -302,7 +302,7 @@ impl MotifsStore for SqlStore {
     async fn resources_by_label(
         &self,
         min_p: f32,
-    ) -> Result<HashMap<String, Vec<Resource>>, ThoError> {
+    ) -> anyhow::Result<HashMap<String, Vec<Resource>>> {
         Self::validate_min_probability(min_p)?;
         self.with_reader_conn("resources_by_label", move |conn| {
             let labels = Self::list_labels(conn, true)?;
@@ -339,7 +339,7 @@ impl MotifsStore for SqlStore {
         conds: Vec<(String, SetCond)>,
         _only_unused: bool,
         limit: usize,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("save_set_by_labels", move |conn| {
         let t = conn.transaction()?;
 
@@ -375,7 +375,8 @@ impl MotifsStore for SqlStore {
                 .execute(rusqlite::params_from_iter(params.into_iter()))?
                 == 0
             {
-                ThoError::new(format!("no resources for set on {:?}", conds));
+                // Empty sets are allowed; report the condition without discarding an error.
+                warn!("no resources for set on {:?}", conds);
             }
         }
         Ok(t.commit()?)
@@ -388,7 +389,7 @@ impl MotifsStore for SqlStore {
         run_config_id: RunConfigId,
         channel: i64,
         slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("save_slices", move |conn| {
         let t = conn.transaction()?;
 
@@ -429,7 +430,7 @@ impl MotifsStore for SqlStore {
         run_config_id: RunConfigId,
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
-    ) -> Result<Vec<u32>, ThoError> {
+    ) -> anyhow::Result<Vec<u32>> {
         self.with_writer_conn("save_groups_as_motifs", move |conn| {
         let t = conn.transaction()?;
         let mut motif_ids = Vec::new();
@@ -450,7 +451,7 @@ impl MotifsStore for SqlStore {
 
                 let motif_id: i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                let motif_id_u32 = u32::try_from(motif_id).map_err(|_| ThoError::new(format!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32")))?;
+                let motif_id_u32 = u32::try_from(motif_id).map_err(|_| anyhow::anyhow!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32"))?;
                 motif_ids.push(motif_id_u32);
 
                 debug!("save_groups_as_motifs: group={group:?}, run_config_id={run_config_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());
@@ -481,7 +482,7 @@ impl MotifsStore for SqlStore {
         motif_id: u32,
         channel: i64,
         slices: HashSet<IdSlice>,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("add_slices_to_motif", move |conn| {
         let t = conn.transaction()?;
 
@@ -510,7 +511,7 @@ impl MotifsStore for SqlStore {
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
         path: PathBuf,
-    ) -> Result<(), ThoError> {
+    ) -> anyhow::Result<()> {
         self.with_writer_conn("save_groups_as_motifs_with_slices_matches", move |conn| {
         let t = conn.transaction()?;
 
@@ -577,16 +578,16 @@ impl MotifsStore for SqlStore {
         .await
     }
 
-    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunConfigId), ThoError> {
+    async fn get_motif_meta(&self, motif_id: u32) -> anyhow::Result<(usize, RunConfigId)> {
         self.with_reader_conn("get_motif_meta", move |conn| {
                 let (channel, run_config_id) = Self::_motif_meta(motif_id, conn)?;
                 debug!("get_motif_meta: motif_id={motif_id} channel={channel} run_config_id={run_config_id}");
-                Ok::<_, ThoError>((channel as usize, run_config_id))
+                Ok::<_, anyhow::Error>((channel as usize, run_config_id))
             })
             .await
     }
 
-    async fn list_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<u32>, ThoError> {
+    async fn list_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<u32>> {
         self.with_reader_conn("list_motifs", move |conn| {
             let motif_ids = {
                 let mut stmt = conn.prepare("SELECT id FROM motifs WHERE run_config_id=?")?;
@@ -605,7 +606,7 @@ impl MotifsStore for SqlStore {
         &self,
         run_config_id: RunConfigId,
         select_motifs_run_config_id: Option<Vec<RunConfigId>>,
-    ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError> {
+    ) -> anyhow::Result<HashMap<Resource, Vec<MotifSlice>>> {
         self.with_reader_conn("list_motifs_slices", move |conn| {
             let slice_run_config_ids = select_motifs_run_config_id.map(|mut ids| {
                 ids.push(run_config_id);
@@ -683,15 +684,13 @@ impl MotifsStore for SqlStore {
         select_motifs_run_config_ids: Option<Vec<RunConfigId>>, //None - all slices, empty - only slices from find_motifs, Some -  find_motifs + select_motif runs
         limit: Option<u32>,
         all_but_in_run_config_id: Option<(RunConfigId, u32/*channel*/)>, //TODO remove - load random slices from same channel/resources
-    ) -> Result<
+    ) -> anyhow::Result<
         (
             i64,
             RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
-        ),
-        ThoError,
-    > {
+        )> {
         debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_config_id={select_motifs_run_config_ids:?} limit={limit:?} all_but_in_run_config_id={all_but_in_run_config_id:?}");
         self.with_reader_conn("list_motif_slices", move |conn| {
 
@@ -758,7 +757,7 @@ impl MotifsStore for SqlStore {
                     })?
                     .fold(
                         Ok((HashSet::new(), HashSet::new(), None, HashMap::new())),
-                        |a: Result<(HashSet<TensorIdSliceIdx>, HashSet<i64>, Option<RunConfigId>, HashMap<ResourceId, Resource>), ThoError>,
+                        |a: anyhow::Result<(HashSet<TensorIdSliceIdx>, HashSet<i64>, Option<RunConfigId>, HashMap<ResourceId, Resource>)>,
                          v: Result<(i64, RunConfigId, RunConfigId, u32, u32, String, u32), Error>| {
                             let (channel_id, motif_run_config_id, _slice_run_config_id, resource_id, import_id, key, slice_idx) = v?;
                             let (mut a, mut channel_set, mut run_config_id, mut resources_map) = a?;
@@ -801,15 +800,13 @@ impl MotifsStore for SqlStore {
         min_distance: Option<u32>,
         input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
         desired_count: Option<usize>,
-    ) -> Result<
+    ) -> anyhow::Result<
         (
             i64,
             RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
-        ),
-        ThoError,
-    > {
+        )> {
         debug!("list_random_slices_out_of_motif: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}");
 
         assert!(motif_width > 0, "motif_width must be greater than zero");
@@ -827,7 +824,7 @@ impl MotifsStore for SqlStore {
                 Self::load_motif_resource_contexts(motif_id, input_len_adjuster_in_motif.as_ref(), conn, target_positions_by_res)?;
 
             if contexts.is_empty() {
-                return Err(ThoError::new(format!("no resources found for channel {channel}, run_config_id={run_config_id}")));
+                return Err(anyhow::anyhow!("no resources found for channel {channel}, run_config_id={run_config_id}"));
             }
 
             let (all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
@@ -867,15 +864,13 @@ impl MotifsStore for SqlStore {
         min_distance: Option<u32>,
         input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
         desired_count: Option<usize>,
-    ) -> Result<
+    ) -> anyhow::Result<
         (
             i64,
             RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
-        ),
-        ThoError,
-    > {
+        )> {
         debug!("list_random_slices_out_of_resources: motif_id={motif_id} motif_width={motif_width} min_distance={min_distance:?}");
 
         assert!(motif_width > 0, "motif_width must be greater than zero");
@@ -904,7 +899,7 @@ impl MotifsStore for SqlStore {
         }).await
     }
 
-    async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError> {
+    async fn list_run_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<RunMotifEntry>> {
         self.with_reader_conn("list_run_motifs", move |conn| {
             let selected_motifs = {
                 let mut stmt = conn.prepare(
@@ -957,7 +952,7 @@ impl MotifsStore for SqlStore {
         &self,
         run_config_id: RunConfigId,
         selected_motifs: Vec<(u32, f64)>,
-    ) -> Result<RunConfigId, ThoError> {
+    ) -> anyhow::Result<RunConfigId> {
         debug!("save_selected_motifs: selected_motifs={:?}",selected_motifs);
         self.with_writer_conn("save_selected_motifs", move |conn| {
             let t = conn.transaction()?;
@@ -986,7 +981,7 @@ impl MotifsStore for SqlStore {
         .await
     }
 
-    async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError> {
+    async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>> {
         let run_config_ids = run_config_ids.to_vec();
         debug!("select_all_motifs: run_config_ids={run_config_ids:?}");
         self.with_writer_conn("select_all_motifs", move |conn| {
@@ -1019,7 +1014,7 @@ impl MotifsStore for SqlStore {
         motif_selection_ids: &[RunConfigId],
         channels: u32,
         limit: Option<u32>,
-    ) -> Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>, ThoError> {
+    ) -> anyhow::Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>> {
         assert!(
             !motif_selection_ids.is_empty(),
             "motif_selection_ids is empty"
@@ -1091,7 +1086,7 @@ impl MotifsStore for SqlStore {
     }    async fn list_label_nets_run_config_ids(
         &self,
         label: &str,
-    ) -> Result<Vec<RunConfigId>, ThoError> {
+    ) -> anyhow::Result<Vec<RunConfigId>> {
         let label = label.to_string();
 
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
@@ -1117,7 +1112,7 @@ impl MotifsStore for SqlStore {
 
 }
 
-pub fn create_motif_tables( conn: &mut Connection) -> Result<(), ThoError> {
+pub fn create_motif_tables( conn: &mut Connection) -> anyhow::Result<()> {
     let t = conn.transaction()?;
 
     t.execute(
@@ -1215,94 +1210,94 @@ mock! {
         async fn list_label_nets_run_config_ids(
             &self,
             label: &str,
-        ) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32) -> Result<Vec<ResourceId>, ThoError>;
-        async fn save_pure_sets(&self, max_len: usize, only_unused: bool) -> Result<(), ThoError>;
-        async fn save_leaky_data_sets(&self, prefix: &str, limit: LimitBy, train_coeff: f32, valid_coeff: f32, min_p: f32, allow_leaky_split: bool) -> Result<(), ThoError>;
-        async fn save_set_by_labels(&self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> Result<(), ThoError>;
-        async fn save_groups_by_label_cnt(&self, max_resources_in_set: usize) -> Result<(), ThoError>;
-        async fn export_apply_label_nets_records(&self, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> Result<(), ThoError>;
-        async fn resources_by_label(&self, min_p: f32) -> Result<HashMap<String, Vec<Resource>>, ThoError>;
-        async fn list_resource_random_not_labeled(&self, label: &str, limit: u32) -> Result<Vec<Resource>, ThoError>;
-        async fn save_label(&self, label: &str) -> Result<u32, ThoError>;
-        async fn list_labels(&self, only_with_resources: bool) -> Result<Vec<String>, ThoError>;
-        async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> Result<(), ThoError>;
-        async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
-        async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
-        async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError>;
-        async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
-        async fn list_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<u32>, ThoError>;
-        async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunConfigId), ThoError>;
-        async fn list_motifs_slices(&self, run_config_id: RunConfigId, select_motifs_run_config_id: Option<Vec<RunConfigId>>) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
-        async fn list_motif_slices(&self, motif_id: u32, select_motifs_run_config_id: Option<Vec<RunConfigId>>, limit: Option<u32>, all_but_in_run_config_id: Option<(RunConfigId, u32)>) -> Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-        async fn list_random_slices_out_of_motif(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-        async fn list_random_slices_out_of_resources(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>;
-        async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError>;
-        async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> Result<RunConfigId, ThoError>;
-        async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn list_selected_motifs(&self,motif_selection_ids: &[RunConfigId],channels: u32,limit: Option<u32>) -> Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>, ThoError>;
+        ) -> anyhow::Result<Vec<RunConfigId>>;
+        async fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32) -> anyhow::Result<Vec<ResourceId>>;
+        async fn save_pure_sets(&self, max_len: usize, only_unused: bool) -> anyhow::Result<()>;
+        async fn save_leaky_data_sets(&self, prefix: &str, limit: LimitBy, train_coeff: f32, valid_coeff: f32, min_p: f32, allow_leaky_split: bool) -> anyhow::Result<()>;
+        async fn save_set_by_labels(&self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> anyhow::Result<()>;
+        async fn save_groups_by_label_cnt(&self, max_resources_in_set: usize) -> anyhow::Result<()>;
+        async fn export_apply_label_nets_records(&self, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> anyhow::Result<()>;
+        async fn resources_by_label(&self, min_p: f32) -> anyhow::Result<HashMap<String, Vec<Resource>>>;
+        async fn list_resource_random_not_labeled(&self, label: &str, limit: u32) -> anyhow::Result<Vec<Resource>>;
+        async fn save_label(&self, label: &str) -> anyhow::Result<u32>;
+        async fn list_labels(&self, only_with_resources: bool) -> anyhow::Result<Vec<String>>;
+        async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> anyhow::Result<()>;
+        async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> anyhow::Result<()>;
+        async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> anyhow::Result<()>;
+        async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> anyhow::Result<Vec<u32>>;
+        async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> anyhow::Result<()>;
+        async fn list_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<u32>>;
+        async fn get_motif_meta(&self, motif_id: u32) -> anyhow::Result<(usize, RunConfigId)>;
+        async fn list_motifs_slices(&self, run_config_id: RunConfigId, select_motifs_run_config_id: Option<Vec<RunConfigId>>) -> anyhow::Result<HashMap<Resource, Vec<MotifSlice>>>;
+        async fn list_motif_slices(&self, motif_id: u32, select_motifs_run_config_id: Option<Vec<RunConfigId>>, limit: Option<u32>, all_but_in_run_config_id: Option<(RunConfigId, u32)>) -> anyhow::Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>)>;
+        async fn list_random_slices_out_of_motif(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> anyhow::Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>)>;
+        async fn list_random_slices_out_of_resources(&self, motif_id: u32, motif_width: u32, min_distance: Option<u32>, input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>, desired_count: Option<usize>) -> anyhow::Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>)>;
+        async fn list_run_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<RunMotifEntry>>;
+        async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> anyhow::Result<RunConfigId>;
+        async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>>;
+        async fn list_selected_motifs(&self,motif_selection_ids: &[RunConfigId],channels: u32,limit: Option<u32>) -> anyhow::Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>>;
     }
 
     #[async_trait]
     impl Store for MotifsStore{
-      fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
-        async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
-        async fn save_run(&self, descr: String) -> Result<RunId, ThoError>;
+      fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
+        async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
+        async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
         async fn save_run_config<'a, 'b, 'c>(
             &self,
             input_run_config_id: Option<&'a [RunConfigId]>,
             run_config_type: &'b str,
             descr: &'c str,
             properties_vals: HashMap<String, Val>,
-        ) -> Result<RunConfigId, ThoError>;
+        ) -> anyhow::Result<RunConfigId>;
 
-        async fn get_input_run_config_ids<'a>(&self, run_config_id: RunConfigId, input_type: Option<&'a str>) -> Result<Vec<RunConfigId>, ThoError>;
+        async fn get_input_run_config_ids<'a>(&self, run_config_id: RunConfigId, input_type: Option<&'a str>) -> anyhow::Result<Vec<RunConfigId>>;
 
-        async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError>; //corr_run_config_id, run_config_id, label
+        async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<(RunConfigId, RunConfigId)>>; //corr_run_config_id, run_config_id, label
 
-        async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
+        async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>>;
 
-        async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError>; //corr_run_config_id, run_config_id, label
+        async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> anyhow::Result<Vec<RunConfigId>>; //corr_run_config_id, run_config_id, label
 
         async fn save_resources_set(
             &self,
             set: String,
             resource_keys: Vec<String>,
             group_id: Option<usize>,
-        ) -> Result<usize, ThoError>;
-        async fn save_resource_set_group(&self, descr: String) -> Result<usize, ThoError>;
+        ) -> anyhow::Result<usize>;
+        async fn save_resource_set_group(&self, descr: String) -> anyhow::Result<usize>;
         async fn list_resources_by_ids(
             &self,
             file_stem: &Vec<ResourceId>,
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
 
 
-        async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError>;
+        async fn list_run_resources(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<String>>;
 
-        async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_configs(&self) -> anyhow::Result<Vec<RunConfigEntry>>;
 
-        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError>;
-        async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> anyhow::Result<Vec<RunConfigId>>;
+        async fn list_run_configs_page(&self, limit: usize, offset: usize) -> anyhow::Result<Vec<RunConfigEntry>>;
+        async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigEntry>>;
 
-        async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
+        async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> anyhow::Result<Vec<RunConfigEntry>>;
+        async fn list_run_config_types(&self) -> anyhow::Result<Vec<String>>;
 
-        async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError>;
+        async fn list_run_config_values(&self, run_config_id: RunConfigId) -> anyhow::Result<HashMap<String, Val>>;
 
-        async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<u32, ThoError>;
+        async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> anyhow::Result<u32>;
 
-        async fn list_trained_nets(&self, run_config_ids: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
-        async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
-        async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
-        async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
-        async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError>;
+        async fn list_trained_nets(&self, run_config_ids: TrainedNetsBy, loss: Option<f32>, limit: Option<usize>) -> anyhow::Result<Vec<TrainedNet>>;
+        async fn list_trained_net_entries(&self) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn list_label_trained_nets_before(&self, run_on_before: String) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn list_unused_motif_trained_nets(&self) -> anyhow::Result<Vec<TrainedNetEntry>>;
+        async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> anyhow::Result<usize>;
+        async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> anyhow::Result<()>;
+        async fn list_input_nets(&self, net_id: u32) -> anyhow::Result<Vec<u32>>;
 
-        async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError>;
+        async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> anyhow::Result<RunConfigRow>;
         // #[cfg(test)]
         // fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
     }
@@ -1312,40 +1307,40 @@ mock! {
         async fn list_resources_by_file_stems<'a>(
             &self,
             file_stems: &'a [&'a str],
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_resource_set_resources_by_descr(
             &self,
             descr: &str,
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_resource_set_group_sets(
             &self,
             group_descr: &str,
-        ) -> Result<Vec<(usize, String)>, ThoError>;
+        ) -> anyhow::Result<Vec<(usize, String)>>;
 
         async fn list_group_labeled_resources_sets(
             &self,
             group_decr: &str,
-        ) -> Result<Vec<(String, String)>, ThoError>;
+        ) -> anyhow::Result<Vec<(String, String)>>;
 
-        async fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoError>;
+        async fn list_resource_set_resources(&self, set_id: usize) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_resource_random_in_group(
             &self,
             group_descr: &str,
-        ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError>;
+        ) -> anyhow::Result<Vec<(Resource, Vec<f32>)>>;
 
         async fn list_resources_not_in_group(
             &self,
             group_descr: &str,
             limit: u32,
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
 
         async fn list_random_resources(
             &self,
             limit: Option<u32>,
-        ) -> Result<Vec<Resource>, ThoError>;
+        ) -> anyhow::Result<Vec<Resource>>;
     }
 
 }
@@ -1373,14 +1368,14 @@ impl MockMotifsStoreBuilder {
     pub fn with_add_slices_to_motif(mut self, inputs: impl IntoIterator<Item = (RunConfigId, u32, i64, HashSet<IdSlice>)> + Debug) -> Self {
         debug!("with_add_slices_to_motif: inputs={inputs:?}");
         for inps in inputs {
-            self.store.expect_add_slices_to_motif().with(eq(inps.0), eq(inps.1), eq(inps.2), eq(inps.3)).times(1).return_const(Ok(()));
+            self.store.expect_add_slices_to_motif().with(eq(inps.0), eq(inps.1), eq(inps.2), eq(inps.3)).times(1).returning(|_, _, _, _| Ok(()));
         }
 
         self
     }
 
     pub fn with_add_slices_to_motif_at_least_once(mut self) -> Self {
-        self.store.expect_add_slices_to_motif().times(1..).return_const(Ok(()));
+        self.store.expect_add_slices_to_motif().times(1..).returning(|_, _, _, _| Ok(()));
 
         self
     }
@@ -1388,7 +1383,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_get_motif_meta<R: Into<HashMap<u32, Result<(usize, RunConfigId), ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_get_motif_meta().returning(move |motif_id| {
-            map.get(&motif_id).cloned().expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))
+            map.get(&motif_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))
         });
         self
     }
@@ -1396,7 +1391,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_get_input_run_config_ids<R: Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_get_input_run_config_ids().returning(move |run_config_id, _input_type| {
-            map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
+            map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
         });
         self
     }
@@ -1404,7 +1399,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_run_config_descr<R: Into<HashMap<RunConfigId, Result<RunConfigRow, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_run_config_descr().returning(move |run_config_id| {
-            map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
+            map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
         });
         self
     }
@@ -1421,9 +1416,9 @@ impl MockMotifsStoreBuilder {
         self.store.expect_save_run_config().returning(move |p_input_run_config_id, p_run_config_type, p_descr, p_properties_vals| {
             let p_input_run_config_id = p_input_run_config_id.map(|ids| ids.to_vec());
             if p_input_run_config_id == input_run_config_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
-                result.clone()
+                result.clone().map_err(Into::into)
             } else {
-                Err(ThoError::new(format!("mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}")))
+                Err(anyhow::anyhow!(format!("mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}")))
             }
         });
         self
@@ -1432,7 +1427,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_motifs<R: Into<HashMap<RunConfigId, Result<Vec<u32>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(move |run_config_id| {
-            map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return motifs for run id {run_config_id}"))
+            map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return motifs for run id {run_config_id}"))
         });
 
         self
@@ -1446,7 +1441,7 @@ impl MockMotifsStoreBuilder {
         _all_but_in_run_config_id: Option<(RunConfigId, u32)>,
         r: Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>,
     ) -> Self {
-        self.store.expect_list_motif_slices().withf(move |p_motif_id, p_select_motifs_run_config_id, _limit, _all_but_in_run_config_id| *p_motif_id == motif_id && *p_select_motifs_run_config_id == select_motifs_run_config_id).times(1).return_const(r);
+        self.store.expect_list_motif_slices().withf(move |p_motif_id, p_select_motifs_run_config_id, _limit, _all_but_in_run_config_id| *p_motif_id == motif_id && *p_select_motifs_run_config_id == select_motifs_run_config_id).times(1).returning(move |_, _, _, _| r.clone().map_err(Into::into));
 
         self
     }
@@ -1460,9 +1455,9 @@ impl MockMotifsStoreBuilder {
     ) -> Self {
         self.store.expect_list_random_slices_out_of_motif().returning(move |p_motif_id, p_width, p_min_distance, _input_len_adjuster, _desired_count| {
             if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
-                r.clone()
+                r.clone().map_err(Into::into)
             } else {
-                Err(ThoError::new("Not found"))
+                Err(anyhow::anyhow!("Not found"))
             }
         });
 
@@ -1473,7 +1468,7 @@ impl MockMotifsStoreBuilder {
         let map = results.into();
 
         self.store.expect_list_selected_motifs().returning(move |run_config_id, _channels, _limit| {
-            map.get(&run_config_id.to_vec()).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_config_id:?}"))
+            map.get(&run_config_id.to_vec()).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return selected motifs for run id {run_config_id:?}"))
         });
         self
     }
@@ -1481,7 +1476,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_save_trained_net(mut self, inputs: impl IntoIterator<Item = (RunConfigId, PathBuf, f32)> + Debug) -> Self {
         debug!("with_save_trained_net: inputs={inputs:?}");
         for (run_config_id, path, loss) in inputs {
-            self.store.expect_save_trained_net().with(eq(run_config_id), eq(path), eq(loss), eq(None)).times(1).return_const(Ok(run_config_id));
+            self.store.expect_save_trained_net().with(eq(run_config_id), eq(path), eq(loss), eq(None)).times(1).returning(move |_, _, _, _| Ok(run_config_id));
         }
         self
     }
@@ -1496,8 +1491,8 @@ impl MockMotifsStoreBuilder {
         self.store.expect_list_trained_nets().returning(move |run_config_ids, loss, limit| {
             data.iter()
                 .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_ref().as_slice() && *expected_loss == loss && *expected_limit == limit)
-                .map(|(_, _, _, result)| result.clone())
-                .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
+                .map(|(_, _, _, result)| result.clone().map_err(Into::into))
+                .unwrap_or_else(|| Err(anyhow::anyhow!(format!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
         });
         self
     }
@@ -1512,8 +1507,8 @@ impl MockMotifsStoreBuilder {
         self.store.expect_list_input_nets().returning(move |run_config_id| {
             data.iter()
                 .find(|(expected_run_config_id, _)| expected_run_config_id == &run_config_id)
-                .map(|(_, result)| result.clone())
-                .unwrap_or_else(|| Err(ThoError::new(format!("with_list_input_nets is not configured to return nets for run_config_id={run_config_id:?}"))))
+                .map(|(_, result)| result.clone().map_err(Into::into))
+                .unwrap_or_else(|| Err(anyhow::anyhow!(format!("with_list_input_nets is not configured to return nets for run_config_id={run_config_id:?}"))))
         });
         self
     }
@@ -1521,7 +1516,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_run_config_values<R: Into<HashMap<RunConfigId, Result<HashMap<String, Val>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_run_config_values().returning(move |p_run_config_id| {
-            map.get(&p_run_config_id).cloned().expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
+            map.get(&p_run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
         });
 
         self
@@ -1530,7 +1525,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_output_run_config_ids<R: Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_output_run_config_ids().returning(move |input_run_config_id| {
-            map.get(&input_run_config_id).cloned().expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
+            map.get(&input_run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
         });
         self
     }
@@ -1538,7 +1533,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_run_config_ids_with_outputs<R: Into<HashMap<Vec<RunConfigId>, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_run_config_ids_with_outputs().returning(move |input_run_config_ids| {
-            map.get(&input_run_config_ids.to_vec()).cloned().expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
+            map.get(&input_run_config_ids.to_vec()).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
         });
         self
     }
@@ -1547,9 +1542,9 @@ impl MockMotifsStoreBuilder {
         self.store.expect_list_resources_by_file_stems().returning(move |requested| {
             let stems = requested.iter().map(|stem| stem.to_string()).collect::<Vec<_>>();
             if stems == expected_stems {
-                result.clone()
+                result.clone().map_err(Into::into)
             } else {
-                Err(ThoError::new("Not found"))
+                Err(anyhow::anyhow!("Not found"))
             }
         });
 
@@ -1559,7 +1554,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_set_group_sets<D: IntoIterator<Item = (&'static str, Result<Vec<(usize, String)>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<(usize, String)>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_set_group_sets().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
         });
         self
     }
@@ -1567,7 +1562,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_group_labeled_resources_sets<D: IntoIterator<Item = (&'static str, Result<Vec<(String, String)>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<(String, String)>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_group_labeled_resources_sets().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
         });
         self
     }
@@ -1575,7 +1570,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resources_not_in_group<D: IntoIterator<Item = (&'static str, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resources_not_in_group().returning(move |group, _limit| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
         });
         self
     }
@@ -1583,7 +1578,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_random_resources<D: IntoIterator<Item = (Option<u32>, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<Option<u32>, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_random_resources().returning(move |limit| {
-            map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone()
+            map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone().map_err(Into::into)
         });
         self
     }
@@ -1591,7 +1586,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_random_not_labeled<D: IntoIterator<Item = (&'static str, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_random_not_labeled().returning(move |label, _limit| {
-            map.get(label).expect(&format!("no mock data for {label} configured in list_resources_not_labled")).clone()
+            map.get(label).expect(&format!("no mock data for {label} configured in list_resources_not_labled")).clone().map_err(Into::into)
         });
         self
     }
@@ -1599,7 +1594,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_random_in_group<D: IntoIterator<Item = (&'static str, Result<Vec<(Resource, Vec<f32>)>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<(Resource, Vec<f32>)>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_random_in_group().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone().map_err(Into::into)
         });
         self
     }
@@ -1607,7 +1602,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_set_resources_by_descr<D: IntoIterator<Item = (&'static str, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_set_resources_by_descr().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()
+            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
         });
         self
     }
@@ -1634,14 +1629,14 @@ impl MockMotifsStoreBuilder {
 
     pub fn with_save_groups_as_motifs_inputs(mut self, inputs: impl IntoIterator<Item = (RunConfigId, i64, HashMap<u16, HashSet<IdSlice>>, Vec<u32>)> + Debug) -> Self {
         for (run_config_id, channel, groups, motif_ids) in inputs {
-            self.store.expect_save_groups_as_motifs().with(eq(run_config_id), eq(channel), eq(groups)).times(1).return_const(Ok(motif_ids));
+            self.store.expect_save_groups_as_motifs().with(eq(run_config_id), eq(channel), eq(groups)).times(1).returning(move |_, _, _| Ok(motif_ids.clone()));
         }
         self
     }
 
     pub fn with_save_selected_motifs(mut self, inputs: impl IntoIterator<Item = (RunConfigId, Vec<(u32, f64)>, Result<RunConfigId, ThoError>)> + Debug) -> Self {
         for (run_config_id, selected_motifs, result) in inputs {
-            self.store.expect_save_selected_motifs().with(eq(run_config_id), eq(selected_motifs)).times(1).return_const(result);
+            self.store.expect_save_selected_motifs().with(eq(run_config_id), eq(selected_motifs)).times(1).returning(move |_, _| result.clone().map_err(Into::into));
         }
         self
     }
@@ -1675,11 +1670,11 @@ mod store_tests {
     use std::path::PathBuf;
 
     // These legacy database tests now exercise the motif extension trait and schema explicitly.
-    async fn test_store() -> Result<Arc<dyn MotifsStore>, ThoError> {
+    async fn test_store() -> anyhow::Result<Arc<dyn MotifsStore>> {
         Ok(Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?))
     }
 
-    pub(crate) async fn test_store_from_path<P: AsRef<Path>>(path: P) -> Result<Arc<dyn MotifsStore>, ThoError> {
+    pub(crate) async fn test_store_from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Arc<dyn MotifsStore>> {
         Ok(Arc::new(SqlStore::from_path_with_tables(path, vec![thoosa_store::create_tables, create_motif_tables]).await?))
     }
 
@@ -1689,7 +1684,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_group_resources() -> Result<(), ThoError> {
+    async fn test_group_resources() -> anyhow::Result<()> {
         // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         // let mut store = test_store_from_path("/tmp/test_db.db3"))?;
 
@@ -1834,7 +1829,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_resources_not_labled() -> Result<(), ThoError> {
+    async fn test_list_resources_not_labled() -> anyhow::Result<()> {
         let mut store = test_store().await?;
 
         let import_id = store.save_import("test".to_string()).await?;
@@ -1874,7 +1869,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_data_sets_group_created() -> Result<(), ThoError> {
+    async fn test_save_data_sets_group_created() -> anyhow::Result<()> {
         let mut store = test_store().await?;
 
         init_test_store(&store).await?;
@@ -1895,7 +1890,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_data_sets_allow_leaky_split_reuses_resources() -> Result<(), ThoError> {
+    async fn test_save_data_sets_allow_leaky_split_reuses_resources() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
@@ -1991,7 +1986,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_data_sets_limit_by_length_keeps_resources_within_total_length() -> Result<(), ThoError> {
+    async fn test_save_data_sets_limit_by_length_keeps_resources_within_total_length() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
@@ -2074,7 +2069,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_slices() -> Result<(), ThoError> {
+    async fn test_save_slices() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let mut store = test_store_from_path(
@@ -2344,7 +2339,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_select_all_motifs_creates_bypass_selection_runs() -> Result<(), ThoError> {
+    async fn test_select_all_motifs_creates_bypass_selection_runs() -> anyhow::Result<()> {
         let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2354,7 +2349,7 @@ mod store_tests {
         let (first_motif_ids, second_motif_ids) = {
             let mut guard = store.open_external_writer_conn()?;
             let t = guard.transaction()?;
-            let insert_motif = |run_config_id: RunConfigId, channel_id: i64, group_ord: i64| -> Result<u32, ThoError> {
+            let insert_motif = |run_config_id: RunConfigId, channel_id: i64, group_ord: i64| -> anyhow::Result<u32> {
                 t.execute("INSERT INTO motifs (group_ord, run_config_id, channel_id) VALUES (?, ?, ?)", params![group_ord, run_config_id as i64, channel_id])?;
                 let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
                     row.get::<usize, u32>(0)
@@ -2393,7 +2388,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_list_trained_nets() -> Result<(), ThoError> {
+    async fn test_save_list_trained_nets() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2454,7 +2449,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_motifs_slices_filters_slice_run_config_ids() -> Result<(), ThoError> {
+    async fn test_list_motifs_slices_filters_slice_run_config_ids() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2527,7 +2522,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_motif_slices_filters_slice_run_config_ids() -> Result<(), ThoError> {
+    async fn test_list_motif_slices_filters_slice_run_config_ids() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2596,7 +2591,7 @@ mod store_tests {
     //TODO merge with init_test_store in cli::main_tests
     pub async fn init_test_store(
         store: &Arc<dyn MotifsStore>,
-    ) -> Result<Vec<ResourceId>, ThoError> {
+    ) -> anyhow::Result<Vec<ResourceId>> {
         let store_guard = store;
         let import_id = store_guard.save_import("test".to_string()).await?;
 
@@ -2636,7 +2631,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_run_config() -> Result<(), ThoError> {
+    async fn test_save_run_config() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let mut store = test_store_from_path(
@@ -2703,7 +2698,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_run_configs_page_and_by_ids() -> Result<(), ThoError> {
+    async fn test_list_run_configs_page_and_by_ids() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2724,7 +2719,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> Result<(), ThoError> {
+    async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2766,7 +2761,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_get_prev_run_config_id() -> Result<(), ThoError> {
+    async fn test_get_prev_run_config_id() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2799,7 +2794,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_input_run_config_ids_reads_large_sets_in_chunks() -> Result<(), ThoError> {
+    async fn test_list_input_run_config_ids_reads_large_sets_in_chunks() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2833,7 +2828,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_run_config_ids_with_outputs_reads_large_sets_in_chunks() -> Result<(), ThoError> {
+    async fn test_list_run_config_ids_with_outputs_reads_large_sets_in_chunks() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -2862,7 +2857,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_resources_by_file_stem() -> Result<(), ThoError> {
+    async fn test_list_resources_by_file_stem() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         {
             let import_id = store.save_import("test".to_string()).await?;
@@ -2912,7 +2907,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_resources_by_label_filters_by_min_probability() -> Result<(), ThoError> {
+    async fn test_resources_by_label_filters_by_min_probability() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
@@ -2975,7 +2970,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_random_slices_respects_constraints() -> Result<(), ThoError> {
+    async fn test_list_random_slices_respects_constraints() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -3039,7 +3034,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_random_slices_respects_min_distance() -> Result<(), ThoError> {
+    async fn test_list_random_slices_respects_min_distance() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -3086,7 +3081,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_random_slices_uses_input_len_adjuster() -> Result<(), ThoError> {
+    async fn test_list_random_slices_uses_input_len_adjuster() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -3123,7 +3118,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn heavy_list_random_slices() -> Result<(), ThoError> {
+    async fn heavy_list_random_slices() -> anyhow::Result<()> {
         let mut store = test_store().await?;
 
         create_resources(&store, (0..100).map(|i| (&*format!("res_{i}").leak(), 2000u32)).collect::<Vec<_>>().as_slice()).await?;
@@ -3156,7 +3151,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_random_slices_falls_back_to_other_resources() -> Result<(), ThoError> {
+    async fn test_list_random_slices_falls_back_to_other_resources() -> anyhow::Result<()> {
         let mut store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
@@ -3205,7 +3200,7 @@ mod store_tests {
         Ok(())
     }
 
-    async fn create_resources(store: &Arc<dyn MotifsStore>, specs: &[(&str, u32)]) -> Result<(), ThoError> {
+    async fn create_resources(store: &Arc<dyn MotifsStore>, specs: &[(&str, u32)]) -> anyhow::Result<()> {
         let import_id = store.save_import("test resources".into()).await?;
 
         let resources = specs.iter().fold(
@@ -3224,7 +3219,7 @@ mod store_tests {
         Ok(())
     }
 
-    fn fetch_resource_id(store: &Arc<dyn MotifsStore>, key: &str) -> Result<ResourceId, ThoError> {
+    fn fetch_resource_id(store: &Arc<dyn MotifsStore>, key: &str) -> anyhow::Result<ResourceId> {
         let guard = store.open_external_writer_conn()?;
         let id = guard.query_row("SELECT id FROM resources WHERE key=?", [key], |row| {
             row.get::<usize, ResourceId>(0)
@@ -3238,7 +3233,7 @@ mod store_tests {
         channel_id: i64,
         group_ord: i64,
         slices: &[(ResourceId, i64)],
-    ) -> Result<u32, ThoError> {
+    ) -> anyhow::Result<u32> {
         assert!(slices.len() > 0, "insert_motif_with_slices: no slices");
 
         let mut guard = store.open_external_writer_conn()?;
@@ -3286,7 +3281,7 @@ mod fs_store_tests {
     use super::MotifsStore;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_single_part() -> Result<(), ThoError> {
+    async fn test_single_part() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -3322,7 +3317,7 @@ mod fs_store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_two_motifs() -> Result<(), ThoError> {
+    async fn test_two_motifs() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -3368,7 +3363,7 @@ mod fs_store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_single_part_with_resources() -> Result<(), ThoError> {
+    async fn test_single_part_with_resources() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -3410,7 +3405,7 @@ mod fs_store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_two_parts() -> Result<(), ThoError> {
+    async fn test_two_parts() -> anyhow::Result<()> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
@@ -3450,7 +3445,7 @@ mod fs_store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_no_matches() -> Result<(), ThoError> {
+    async fn test_no_matches() -> anyhow::Result<()> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");

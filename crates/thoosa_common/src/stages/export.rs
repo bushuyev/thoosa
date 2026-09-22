@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use async_trait::async_trait;
 use clap::Args;
 use log::{info, warn};
@@ -24,7 +25,7 @@ use crate::ws::{Workspace, WsConfigs};
 pub trait ExportWorkspace: Workspace {
     type ModelType: PrecisionModelType<Self>;
 
-    fn create_export_workspace(target_dir: &Path, configs: WsConfigs) -> Result<Box<Self>, ThoError>;
+    fn create_export_workspace(target_dir: &Path, configs: WsConfigs) -> anyhow::Result<Box<Self>>;
     fn exported_model_type() -> Self::ModelType;
     fn dependency_model_type() -> Self::ModelType;
     fn all_model_type() -> Self::ModelType;
@@ -33,9 +34,9 @@ pub trait ExportWorkspace: Workspace {
 #[async_trait]
 /// Supplies the application-owned record operations while common code handles export orchestration.
 pub trait ExportStore: Store {
-    async fn list_export_groups(&self) -> Result<Vec<String>, ThoError>;
-    async fn list_exported_model_run_config_ids(&self, group: &str) -> Result<Vec<RunConfigId>, ThoError>;
-    async fn export_model_records(&self, target_db_path: PathBuf, run_config_ids: Vec<RunConfigId>) -> Result<(), ThoError>;
+    async fn list_export_groups(&self) -> anyhow::Result<Vec<String>>;
+    async fn list_exported_model_run_config_ids(&self, group: &str) -> anyhow::Result<Vec<RunConfigId>>;
+    async fn export_model_records(&self, target_db_path: PathBuf, run_config_ids: Vec<RunConfigId>) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Args, Clone)]
@@ -210,7 +211,7 @@ where
     W: ExportWorkspace + ?Sized + 'static,
     S: ExportStore + ?Sized + 'static,
 {
-    fn create_target_workspace(&self) -> Result<Arc<RwLock<Box<W>>>, ThoError> {
+    fn create_target_workspace(&self) -> anyhow::Result<Arc<RwLock<Box<W>>>> {
         let configs = {
             let ws = self.ws.read();
             WsConfigs::new(ws.channels(), ws.max_input(), ws.sample_rate())
@@ -218,7 +219,7 @@ where
         Ok(Arc::new(RwLock::new(W::create_export_workspace(&self.args.target_dir, configs)?)))
     }
 
-    async fn exported_model_run_config_ids(&self) -> Result<Vec<RunConfigId>, ThoError> {
+    async fn exported_model_run_config_ids(&self) -> anyhow::Result<Vec<RunConfigId>> {
         let groups = track_await(self.store.list_export_groups()).await?;
         let mut ids = Vec::new();
         for group in groups {
@@ -229,7 +230,7 @@ where
         Ok(ids)
     }
 
-    async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<W>>>, exported_model_run_config_ids: &[RunConfigId]) -> Result<(Vec<RunConfigId>, Vec<PathBuf>), ThoError> {
+    async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<W>>>, exported_model_run_config_ids: &[RunConfigId]) -> anyhow::Result<(Vec<RunConfigId>, Vec<PathBuf>)> {
         let exported_models = track_await(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(exported_model_run_config_ids.to_vec()), None, None)).await?;
         let mut dependency_model_run_config_ids = Vec::new();
         for model in &exported_models {
@@ -266,7 +267,7 @@ where
     }
 }
 
-fn copy_net_path(source_root: &Path, target_root: &Path, net_path: &Path) -> Result<PathBuf, ThoError> {
+fn copy_net_path(source_root: &Path, target_root: &Path, net_path: &Path) -> anyhow::Result<PathBuf> {
     let source = if net_path.is_absolute() { net_path.to_path_buf() } else { source_root.join(net_path) };
     let target = if net_path.is_absolute() {
         let relative = net_path.strip_prefix(source_root).unwrap_or(net_path);
@@ -278,17 +279,17 @@ fn copy_net_path(source_root: &Path, target_root: &Path, net_path: &Path) -> Res
     if source.is_dir() {
         copy_dir_all(&source, &target)?;
     } else if source.is_file() {
-        let parent = target.parent().ok_or_else(|| ThoError::new(format!("copy_net_path: target {target:?} has no parent")))?;
+        let parent = target.parent().ok_or_else(|| anyhow::anyhow!(format!("copy_net_path: target {target:?} has no parent")))?;
         std::fs::create_dir_all(parent)?;
-        std::fs::copy(&source, &target).map_err(|e| ThoError::from_error(format!("copy model file {source:?} to {target:?}"), e))?;
+        std::fs::copy(&source, &target).with_context(|| format!("copy model file {source:?} to {target:?}"))?;
     } else {
-        return Err(ThoError::new(format!("copy_net_path: source model path {source:?} does not exist")));
+        return Err(anyhow::anyhow!(format!("copy_net_path: source model path {source:?} does not exist")));
     }
 
     Ok(target)
 }
 
-fn copy_dir_all(source: &Path, target: &Path) -> Result<(), ThoError> {
+fn copy_dir_all(source: &Path, target: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
@@ -297,7 +298,7 @@ fn copy_dir_all(source: &Path, target: &Path) -> Result<(), ThoError> {
         if source_path.is_dir() {
             copy_dir_all(&source_path, &target_path)?;
         } else {
-            std::fs::copy(&source_path, &target_path).map_err(|e| ThoError::from_error(format!("copy model file {source_path:?} to {target_path:?}"), e))?;
+            std::fs::copy(&source_path, &target_path).with_context(|| format!("copy model file {source_path:?} to {target_path:?}"))?;
         }
     }
     Ok(())
@@ -310,7 +311,7 @@ mod tests {
     use thoosa_shared::ThoError;
 
     #[test]
-    fn test_copy_net_path_copies_model_file() -> Result<(), ThoError> {
+    fn test_copy_net_path_copies_model_file() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let source_root = tmp.path().join("source");
         let target_root = tmp.path().join("target");
@@ -326,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_copy_net_path_copies_model_directory_recursively() -> Result<(), ThoError> {
+    fn test_copy_net_path_copies_model_directory_recursively() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let source_root = tmp.path().join("source");
         let target_root = tmp.path().join("target");

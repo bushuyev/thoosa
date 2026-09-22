@@ -1046,7 +1046,7 @@ mod tests {
                 let builder = Arc::new(move |_path: &nn::Path| {
                     let weights = weights.clone();
                     let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                        weighted_label_t(&weights, t)
+                        Ok(weighted_label_t(&weights, t)?)
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
