@@ -105,7 +105,7 @@ impl<'a> MaskMaker<'a> {
                     Some(prev) => prev,
                     None => Tensor::f_ones(dists.size(), (Bool, dists.device()))?,
                 };
-                prev.f_triu(1).map_err(|e|e.into())
+                Ok(prev.f_triu(1)?)
             }
             MaskMaker::Le { v } => {
                 let le = match dists.f_le_tensor(v) {
@@ -334,17 +334,8 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     let distances_size = distances.size();
 
     let first_min = distances
-        .f_narrow(dim, 0, 1)
-        .map_err(|e| {
-            debug!("local_min_mask: f_narrow e={e:?}");
-            error!("local_min_mask: f_narrow e={e:?}");
-            e
-        })?
-        .f_lt_tensor(&distances.f_narrow(dim, 1, 1)?).map_err(|e| {
-            debug!("local_min_mask: f_lt_tensor e={e:?}");
-            error!("local_min_mask: f_lt_tensor e={e:?}");
-            e
-        })?;
+        .f_narrow(dim, 0, 1)?
+        .f_lt_tensor(&distances.f_narrow(dim, 1, 1)?)?;
 
     trace!("local_min_mask: first_min=\n{first_min}");
 
@@ -709,11 +700,7 @@ fn accumulating_mean_mask(
     debug!("new_total_means: distances.dev={:?} tensor_1.device={:?}",distances.device(),tensor_1.device());
 
     let le = distances
-        .f_le_tensor(&tensor_2)
-        .map_err(|e| {
-            error!("distances.f_le_tensor: e={e:?}");
-            e
-        })?; //channels x motifs x num_slices
+        .f_le_tensor(&tensor_2)?; //channels x motifs x num_slices
 
     trace!("mean_mask:  le=\n{le}");
 
@@ -805,11 +792,7 @@ fn accumulating_quantile_mask(
     debug!("running_quantile_mask: distances.dev={:?} quantiles_threshold.device={:?}", distances.device(), quantiles_threshold.device());
 
     let le = distances
-        .f_le_tensor(&quantiles_threshold)
-        .map_err(|e| {
-            error!("running_quantile_mask: distances.f_le_tensor e={e:?}");
-            e
-        })?;
+        .f_le_tensor(&quantiles_threshold)?;
 
     trace!("running_quantile_mask: le=\n{le}");
 

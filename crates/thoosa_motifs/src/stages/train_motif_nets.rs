@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
 use async_trait::async_trait;
@@ -98,7 +99,7 @@ fn train_motif_x_f(batch: ThoBatch<Slice>) -> ThoBatch<Slice> {
 }
 
 fn train_motif_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
-    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean).map_err(anyhow::Error::from)
+    Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?)
 }
 
 type SyncTrainMotifStep<C> = TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, C>;
@@ -116,9 +117,9 @@ fn train_motif_step_params(run_config: &TrainMotifNetRunConfig, motif_width: u32
             if hop_length <= 0 || motif_width_i64 < n_fft {
                 return Err(ThoError::new(format!("TrainMotifStepFactory invalid STFT dimensions: motif_width={motif_width} n_fft={n_fft} hop_length={hop_length}")));
             }
-            let kw = u32::try_from((motif_width_i64 - n_fft) / hop_length + 1).map_err(|error| ThoError::new(format!("TrainMotifStepFactory invalid STFT time dimension: {error}")))?;
+            let kw = u32::try_from((motif_width_i64 - n_fft) / hop_length + 1).context("TrainMotifStepFactory invalid STFT time dimension")?;
             let kh_i64 = if args.stft_config.onesided { n_fft / 2 + 1 } else { n_fft };
-            let kh = u32::try_from(kh_i64).map_err(|error| ThoError::new(format!("TrainMotifStepFactory invalid STFT frequency dimension: {error}")))?;
+            let kh = u32::try_from(kh_i64).context("TrainMotifStepFactory invalid STFT frequency dimension")?;
             Ok((MotifNetParams::new_cosine_2d(kw, kh, args.a, args.b, args.init_mode.clone(), motif_width), Some(args.stft_config.clone())))
         }
     }
@@ -1232,7 +1233,7 @@ where
             id: input.id.clone(),
             train_motifs: ThoTensor::new(SynKey::new([mono_key!("train_motifs", "split")]), train_motifs)?,
             valid_motifs: ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?,
-            num_motif_slices: u32::try_from(num_motif_slices).map_err(|error| ThoError::new(format!("SplitMotifIntoTrainValid: invalid motif slice count: {error}")))?,
+            num_motif_slices: u32::try_from(num_motif_slices).context("SplitMotifIntoTrainValid: invalid motif slice count")?,
         })
     }
 }
@@ -1699,11 +1700,11 @@ mod tests {
         fn test_train_net(params: &TestNetParams) -> Result<Node, ThoError> {
             let mut builder = SeqBuilder::new(params.in_features, None)?;
             let mut net = builder
-                .closure(Arc::new(Box::new(|t: &Tensor, _lengths: Option<&BatchLengths>| t.f_alias().map_err(anyhow::Error::from))), None)?
+                .closure(Arc::new(Box::new(|t: &Tensor, _lengths: Option<&BatchLengths>| Ok(t.f_alias()?))), None)?
                 .linear_s(2 * params.in_features, "final_net_first_layer".to_string())?
-                .func(|t| Tensor::f_relu(t).map_err(anyhow::Error::from))?;
+                .func(|t| Ok(Tensor::f_relu(t)?))?;
             for i in 0..params.layers {
-                net = net.linear_s(params.in_features, format!("final_net_{i}th_layer"))?.func(|t| Tensor::f_relu(t).map_err(anyhow::Error::from))?;
+                net = net.linear_s(params.in_features, format!("final_net_{i}th_layer"))?.func(|t| Ok(Tensor::f_relu(t)?))?;
             }
             Ok(net.linear_s(1, "final_net_last_layer")?.end_seq()?)
         }
@@ -1725,7 +1726,7 @@ mod tests {
                         Ok((ThoTrainModule::new_on_device(config, device)?, ()))
                     },
                     x_f,
-                    |predicted, expected| predicted.f_binary_cross_entropy_with_logits::<Tensor>(&expected.f_totype(Float)?, None, None, Reduction::Mean).map_err(anyhow::Error::from),
+                    |predicted, expected| Ok(predicted.f_binary_cross_entropy_with_logits::<Tensor>(&expected.f_totype(Float)?, None, None, Reduction::Mean)?),
                     (),
                     init.vs_path,
                 ).await?;

@@ -1,5 +1,6 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
+use anyhow::Context as _;
 use crate::transforms::filters::InputFilterLengthAdjuster;
 use crate::transforms::filters::{InputFilter, InputFilterBuilder, InputFilterFields, InputFilterRangeOrValue};
 use log::debug;
@@ -87,10 +88,10 @@ impl Default for SeqScanMetric {
 }
 
 impl FromStr for SeqScanMetric {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json5::from_str(s).map_err(|e| format!("parse SeqScanMetric from `{s}`: {e}"))
+        Ok(serde_json5::from_str(s).with_context(|| format!("parse SeqScanMetric from `{s}`"))?)
     }
 }
 

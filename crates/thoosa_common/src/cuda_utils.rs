@@ -1,6 +1,7 @@
 use crate as thoosa_common;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
+use anyhow::Context as _;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use log::debug;
 use std::ffi::c_void;
@@ -57,9 +58,9 @@ pub(crate) fn make_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) 
         .collect())
 }
 
-// Keep JoinError available to callers inspecting task cancellation or panic.
-fn join_error_to_tho_error(e: JoinError) -> ThoError {
-    ThoError::from(e).context("join blocking CUDA copy task")
+// Preserve both task failures and CUDA errors for the caller's recovery decision.
+fn joined_copy_result<T>(joined: Result<Result<T, ThoError>, JoinError>) -> Result<T, ThoError> {
+    Ok(joined.context("join blocking CUDA copy task")??)
 }
 
 pub struct PinnedHostBuffer {
@@ -288,7 +289,8 @@ async fn copy_d2h_to_ptr_admitted(
                     }
                     drop(buf_stream);
                     Ok::<(), ThoError>(())
-                })).await.map_err(join_error_to_tho_error).and_then(|result| result);
+                })).await;
+                let result = joined_copy_result(result);
                 Ok::<_, ThoError>(result)
             }
         }),
@@ -432,7 +434,8 @@ async fn copy_h2d_from_ptr_admitted(
                             Ok::<(), ThoError>(())
 
 
-                    })).await.map_err(join_error_to_tho_error).and_then(|result| result);
+                    })).await;
+                    let result = joined_copy_result(result);
 
                     Ok::<_, ThoError>(result)
                 }

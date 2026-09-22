@@ -4,6 +4,7 @@ use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use futures_util::future::BoxFuture;
@@ -362,7 +363,7 @@ impl CudaLocalActorHandle {
         })
     }
 
-    async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
+    async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice) -> anyhow::Result<Tensor> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaLocalActorMessage::Copy {
@@ -370,32 +371,32 @@ impl CudaLocalActorHandle {
                 dst_device,
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+        ).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+        Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    async fn reset_inner(&self) -> Result<(), ThoError> {
+    async fn reset_inner(&self) -> anyhow::Result<()> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaLocalActorMessage::Reset {
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+        ).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+        Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
     //TODO these are 'exec' streams, not for copy
-    async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
+    async fn acquire_exec_stream(&self) -> anyhow::Result<Guard<ThoCudaStream>> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaLocalActorMessage::GetExecStream {
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+        ).await.context("CUDA actor channel closed")?;
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+        Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
 }
@@ -429,7 +430,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 
     async fn reset(&self) -> Result<(), ThoError> {
-        self.reset_inner().await
+        Ok(self.reset_inner().await?)
     }
 
 

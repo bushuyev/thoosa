@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
@@ -451,7 +452,7 @@ impl MotifsStore for SqlStore {
 
                 let motif_id: i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                let motif_id_u32 = u32::try_from(motif_id).map_err(|_| anyhow::anyhow!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32"))?;
+                let motif_id_u32 = u32::try_from(motif_id).with_context(|| format!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32"))?;
                 motif_ids.push(motif_id_u32);
 
                 debug!("save_groups_as_motifs: group={group:?}, run_config_id={run_config_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());
@@ -1383,7 +1384,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_get_motif_meta<R: Into<HashMap<u32, Result<(usize, RunConfigId), ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_get_motif_meta().returning(move |motif_id| {
-            map.get(&motif_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))
+            Ok(map.get(&motif_id).cloned().expect(&format!("mock is not configured to return motif meta for motif_id {motif_id}"))?)
         });
         self
     }
@@ -1391,7 +1392,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_get_input_run_config_ids<R: Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_get_input_run_config_ids().returning(move |run_config_id, _input_type| {
-            map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
+            Ok(map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))?)
         });
         self
     }
@@ -1399,7 +1400,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_run_config_descr<R: Into<HashMap<RunConfigId, Result<RunConfigRow, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_run_config_descr().returning(move |run_config_id| {
-            map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
+            Ok(map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))?)
         });
         self
     }
@@ -1416,7 +1417,7 @@ impl MockMotifsStoreBuilder {
         self.store.expect_save_run_config().returning(move |p_input_run_config_id, p_run_config_type, p_descr, p_properties_vals| {
             let p_input_run_config_id = p_input_run_config_id.map(|ids| ids.to_vec());
             if p_input_run_config_id == input_run_config_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
-                result.clone().map_err(Into::into)
+                Ok(result.clone()?)
             } else {
                 Err(anyhow::anyhow!(format!("mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}")))
             }
@@ -1427,7 +1428,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_motifs<R: Into<HashMap<RunConfigId, Result<Vec<u32>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(move |run_config_id| {
-            map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return motifs for run id {run_config_id}"))
+            Ok(map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return motifs for run id {run_config_id}"))?)
         });
 
         self
@@ -1441,7 +1442,7 @@ impl MockMotifsStoreBuilder {
         _all_but_in_run_config_id: Option<(RunConfigId, u32)>,
         r: Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>,
     ) -> Self {
-        self.store.expect_list_motif_slices().withf(move |p_motif_id, p_select_motifs_run_config_id, _limit, _all_but_in_run_config_id| *p_motif_id == motif_id && *p_select_motifs_run_config_id == select_motifs_run_config_id).times(1).returning(move |_, _, _, _| r.clone().map_err(Into::into));
+        self.store.expect_list_motif_slices().withf(move |p_motif_id, p_select_motifs_run_config_id, _limit, _all_but_in_run_config_id| *p_motif_id == motif_id && *p_select_motifs_run_config_id == select_motifs_run_config_id).times(1).returning(move |_, _, _, _| Ok(r.clone()?));
 
         self
     }
@@ -1455,7 +1456,7 @@ impl MockMotifsStoreBuilder {
     ) -> Self {
         self.store.expect_list_random_slices_out_of_motif().returning(move |p_motif_id, p_width, p_min_distance, _input_len_adjuster, _desired_count| {
             if p_motif_id == motif_id && p_width == motif_width && p_min_distance == min_distance {
-                r.clone().map_err(Into::into)
+                Ok(r.clone()?)
             } else {
                 Err(anyhow::anyhow!("Not found"))
             }
@@ -1468,7 +1469,7 @@ impl MockMotifsStoreBuilder {
         let map = results.into();
 
         self.store.expect_list_selected_motifs().returning(move |run_config_id, _channels, _limit| {
-            map.get(&run_config_id.to_vec()).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return selected motifs for run id {run_config_id:?}"))
+            Ok(map.get(&run_config_id.to_vec()).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_config_id:?}"))?)
         });
         self
     }
@@ -1491,7 +1492,7 @@ impl MockMotifsStoreBuilder {
         self.store.expect_list_trained_nets().returning(move |run_config_ids, loss, limit| {
             data.iter()
                 .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_ref().as_slice() && *expected_loss == loss && *expected_limit == limit)
-                .map(|(_, _, _, result)| result.clone().map_err(Into::into))
+                .map(|(_, _, _, result)| Ok(result.clone()?))
                 .unwrap_or_else(|| Err(anyhow::anyhow!(format!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
         });
         self
@@ -1507,7 +1508,7 @@ impl MockMotifsStoreBuilder {
         self.store.expect_list_input_nets().returning(move |run_config_id| {
             data.iter()
                 .find(|(expected_run_config_id, _)| expected_run_config_id == &run_config_id)
-                .map(|(_, result)| result.clone().map_err(Into::into))
+                .map(|(_, result)| Ok(result.clone()?))
                 .unwrap_or_else(|| Err(anyhow::anyhow!(format!("with_list_input_nets is not configured to return nets for run_config_id={run_config_id:?}"))))
         });
         self
@@ -1516,7 +1517,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_run_config_values<R: Into<HashMap<RunConfigId, Result<HashMap<String, Val>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_run_config_values().returning(move |p_run_config_id| {
-            map.get(&p_run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
+            Ok(map.get(&p_run_config_id).cloned().expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))?)
         });
 
         self
@@ -1525,7 +1526,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_output_run_config_ids<R: Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_output_run_config_ids().returning(move |input_run_config_id| {
-            map.get(&input_run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
+            Ok(map.get(&input_run_config_id).cloned().expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))?)
         });
         self
     }
@@ -1533,7 +1534,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_run_config_ids_with_outputs<R: Into<HashMap<Vec<RunConfigId>, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_run_config_ids_with_outputs().returning(move |input_run_config_ids| {
-            map.get(&input_run_config_ids.to_vec()).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
+            Ok(map.get(&input_run_config_ids.to_vec()).cloned().expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))?)
         });
         self
     }
@@ -1542,7 +1543,7 @@ impl MockMotifsStoreBuilder {
         self.store.expect_list_resources_by_file_stems().returning(move |requested| {
             let stems = requested.iter().map(|stem| stem.to_string()).collect::<Vec<_>>();
             if stems == expected_stems {
-                result.clone().map_err(Into::into)
+                Ok(result.clone()?)
             } else {
                 Err(anyhow::anyhow!("Not found"))
             }
@@ -1554,7 +1555,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_set_group_sets<D: IntoIterator<Item = (&'static str, Result<Vec<(usize, String)>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<(usize, String)>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_set_group_sets().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()?)
         });
         self
     }
@@ -1562,7 +1563,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_group_labeled_resources_sets<D: IntoIterator<Item = (&'static str, Result<Vec<(String, String)>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<(String, String)>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_group_labeled_resources_sets().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()?)
         });
         self
     }
@@ -1570,7 +1571,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resources_not_in_group<D: IntoIterator<Item = (&'static str, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resources_not_in_group().returning(move |group, _limit| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()?)
         });
         self
     }
@@ -1578,7 +1579,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_random_resources<D: IntoIterator<Item = (Option<u32>, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<Option<u32>, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_random_resources().returning(move |limit| {
-            map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone().map_err(Into::into)
+            Ok(map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone()?)
         });
         self
     }
@@ -1586,7 +1587,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_random_not_labeled<D: IntoIterator<Item = (&'static str, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_random_not_labeled().returning(move |label, _limit| {
-            map.get(label).expect(&format!("no mock data for {label} configured in list_resources_not_labled")).clone().map_err(Into::into)
+            Ok(map.get(label).expect(&format!("no mock data for {label} configured in list_resources_not_labled")).clone()?)
         });
         self
     }
@@ -1594,7 +1595,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_random_in_group<D: IntoIterator<Item = (&'static str, Result<Vec<(Resource, Vec<f32>)>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<(Resource, Vec<f32>)>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_random_in_group().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone()?)
         });
         self
     }
@@ -1602,7 +1603,7 @@ impl MockMotifsStoreBuilder {
     pub fn with_list_resource_set_resources_by_descr<D: IntoIterator<Item = (&'static str, Result<Vec<Resource>, ThoError>)>>(mut self, data: D) -> Self {
         let map: HashMap<&'static str, Result<Vec<Resource>, ThoError>> = HashMap::from_iter(data);
         self.store.expect_list_resource_set_resources_by_descr().returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()?)
         });
         self
     }
@@ -1636,7 +1637,7 @@ impl MockMotifsStoreBuilder {
 
     pub fn with_save_selected_motifs(mut self, inputs: impl IntoIterator<Item = (RunConfigId, Vec<(u32, f64)>, Result<RunConfigId, ThoError>)> + Debug) -> Self {
         for (run_config_id, selected_motifs, result) in inputs {
-            self.store.expect_save_selected_motifs().with(eq(run_config_id), eq(selected_motifs)).times(1).returning(move |_, _| result.clone().map_err(Into::into));
+            self.store.expect_save_selected_motifs().with(eq(run_config_id), eq(selected_motifs)).times(1).returning(move |_, _| Ok(result.clone()?));
         }
         self
     }

@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use crate::debug_plot;
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -276,7 +277,7 @@ where
     }
 
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData, SynKey>) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
-        let filters = self.filters.try_lock().map_err(|error| ThoError::new(format!("SyncFreqFilter::apply_tho_tensor could not lock prepared filters: {error}")))?;
+        let filters = self.filters.try_lock().context("SyncFreqFilter::apply_tho_tensor could not lock prepared filters")?;
         self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
     }
 

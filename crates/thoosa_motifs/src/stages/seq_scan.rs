@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
@@ -335,7 +336,7 @@ fn assign_resource_to_buckets_chunked(
         .map(|(_, _, score_values)| score_values.len())
         .unwrap_or(0);
     ensure_channel_buckets(buckets, channels_count, run_config.buckets_count)?;
-    let buckets_count = usize::try_from(run_config.buckets_count).map_err(|_| ThoError::new(format!("assign_resource_to_buckets_chunked: invalid buckets_count={}", run_config.buckets_count)))?;
+    let buckets_count = usize::try_from(run_config.buckets_count).with_context(|| format!("assign_resource_to_buckets_chunked: invalid buckets_count={}", run_config.buckets_count))?;
     let channel_ranges = (0..channels_count)
         .map(|channel_idx| {
             let mut min_score = f32::INFINITY;
@@ -376,7 +377,7 @@ fn assign_resource_to_buckets_chunked(
             for (local_slice_idx, score) in channel_scores.into_iter().enumerate() {
                 let bucket_idx = bucket_idx(score, min_score, max_score, buckets_count);
                 let slice_start_offset = u32::try_from(local_slice_idx)
-                    .map_err(|_| ThoError::new(format!("assign_resource_to_buckets_chunked: local_slice_idx={local_slice_idx} does not fit into u32")))?
+                    .with_context(|| format!("assign_resource_to_buckets_chunked: local_slice_idx={local_slice_idx} does not fit into u32"))?
                     .saturating_mul(run_config.step);
 
                 buckets
@@ -466,7 +467,7 @@ fn score_resource_in_chunks(
 
         chunk_scores.push((
             first_slice_idx,
-            u32::try_from(next_slice_start).map_err(|_| ThoError::new(format!("score_resource_in_chunks: next_slice_start={next_slice_start} does not fit into u32")))?,
+            u32::try_from(next_slice_start).with_context(|| format!("score_resource_in_chunks: next_slice_start={next_slice_start} does not fit into u32"))?,
             score_values,
         ));
 
@@ -500,9 +501,9 @@ fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<SeqSca
     let scores_cpu = scores.f_to_device(Cpu)?;
     let size = scores_cpu.size();
     let channels_count = usize::try_from(*size.first().ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
-        .map_err(|_| ThoError::new(format!("score_slices_to_vec: invalid channels_count in size={size:?}")))?;
+        .with_context(|| format!("score_slices_to_vec: invalid channels_count in size={size:?}"))?;
     let slices_count = usize::try_from(*size.get(1).ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
-        .map_err(|_| ThoError::new(format!("score_slices_to_vec: invalid slices_count in size={size:?}")))?;
+        .with_context(|| format!("score_slices_to_vec: invalid slices_count in size={size:?}"))?;
     let mut per_channel_scores = Vec::with_capacity(channels_count);
 
     for channel_idx in 0..channels_count {

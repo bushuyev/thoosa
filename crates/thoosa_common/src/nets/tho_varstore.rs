@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use crate::dims::{AnyDims, Batch, Dims};
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
@@ -223,7 +224,7 @@ where
 
     pub fn save_var_store_to_stream(&self, output: &mut dyn std::io::Write) -> anyhow::Result<()> {
         match &self.opt_state {
-            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => vs.save_to_stream(output).map_err(anyhow::Error::from),
+            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => Ok(vs.save_to_stream(output)?),
         }
     }
 
@@ -628,12 +629,8 @@ pub async fn clone_var_store_to(
     let mut copied_specs = Vec::with_capacity(spec_count);
 
     while let Some(joined) = copies.join_next().await {
-        let copied = joined
-            .map_err(|error| {
-                tch::TchError::Torch(format!(
-                    "VarStore tensor copy task failed: {error}"
-                ))
-            })??;
+        // Keep task failure separate from a CUDA failure returned by the copy itself.
+        let copied = joined.context("join VarStore tensor copy task")??;
 
         copied_specs.push(copied);
     }
@@ -740,7 +737,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
                 HIDDEN_NODES as u32,
                 "layer1",
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .func(|t|Ok(Tensor::f_relu(t)?))?
             .linear_s(
                 LABELS as u32,
                 "layer2",

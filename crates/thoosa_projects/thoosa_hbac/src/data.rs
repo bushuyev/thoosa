@@ -1023,8 +1023,7 @@ mod tests {
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
 
-                parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)
-                    .map_err(|e| e.into())
+                Ok(parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)?)
             },
             None,
             true,
@@ -1153,7 +1152,7 @@ mod tests {
                 [t, c] if t > c => raw_loaded.f_transpose(0, 1)?,
                 dims => return Err(anyhow::anyhow!("unexpected eeg shape in {}: {dims:?}", path.display())),
             };
-            raw_loaded.f_to_kind(Float).map_err(Into::into)
+            Ok(raw_loaded.f_to_kind(Float)?)
         };
         let raw_loaded = load_eeg_tensor(Path::new("test_data/eeg").join(target_eeg_file).as_path())?.f_to_device(Cuda(0))?;
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: raw_loaded.size={:?}", raw_loaded.size());

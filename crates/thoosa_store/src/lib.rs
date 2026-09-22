@@ -350,7 +350,7 @@ impl ResourceStore for SqlStore {
         descr: &str,
     ) -> anyhow::Result<Vec<Resource>> {
         let descr = descr.to_string();
-        let descr_for_err = descr.to_string();
+        let descr_for_err = descr.clone();
         self.with_reader_conn("list_resource_set_resources_by_descr",  move|conn| {
             let r = Self::list_resource_set_resources(
                 conn.query_row("SELECT id FROM resource_set WHERE descr=?", [descr.as_str()], |row| row.get(0))?,
@@ -359,10 +359,7 @@ impl ResourceStore for SqlStore {
             debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
             Ok(r)
         })
-        .await.map_err(|e|{
-            error!("list_resource_set_resources_by_descr: descr={descr_for_err} got error {e:?}");
-            e
-        })
+        .await.with_context(|| format!("list resource set with description {descr_for_err:?}"))
     }
     async fn list_resources_by_file_stems<'a>(
         &self,
@@ -847,12 +844,9 @@ impl Store for SqlStore {
                 stmt.query_map([run_config_id], |row| Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?)))?
                     .enumerate()
                     .map(|(i, ord_key)| {
-                        ord_key
-                            .map(|(ord, key)| {
-                                assert!(ord == i as i64);
-                                key
-                            })
-                            .map_err(anyhow::Error::from)
+                        let (ord, key) = ord_key?;
+                        assert!(ord == i as i64);
+                        Ok(key)
                     })
                     .collect::<anyhow::Result<Vec<String>>>()
             };
@@ -875,8 +869,7 @@ impl Store for SqlStore {
                         run_on: row.get::<usize, String>(3)?,
                     })
                 })?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?
+                .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?
             };
 
             Ok(run_configs)
@@ -895,8 +888,7 @@ impl Store for SqlStore {
                ], |row| {
                     row.get::<usize, RunConfigId>(0)
                 })?
-                    .map(|v| v.map_err(anyhow::Error::from))
-                    .collect::<anyhow::Result<Vec<RunConfigId>>>()?
+                    .collect::<rusqlite::Result<Vec<RunConfigId>>>()?
             };
 
             Ok(run_configs)
@@ -917,8 +909,7 @@ impl Store for SqlStore {
                         run_on: row.get::<usize, String>(3)?,
                     })
                 })?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?
+                .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?
             };
 
             Ok(run_configs)
@@ -958,8 +949,7 @@ impl Store for SqlStore {
                             run_on: row.get::<usize, String>(3)?,
                         })
                     })?
-                    .map(|v| v.map_err(anyhow::Error::from))
-                    .collect::<anyhow::Result<Vec<RunConfigEntry>>>()?;
+                    .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?;
                 run_configs.extend(chunk_rows);
             }
 
@@ -1006,7 +996,7 @@ impl Store for SqlStore {
             );
 
             let mut stmt = conn.prepare(query.as_str())?;
-            stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+            Ok(stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                 Ok(RunConfigEntry {
                     id: row.get::<usize, RunConfigId>(0)?,
                     run_config_type: row.get::<usize, String>(1)?,
@@ -1014,8 +1004,7 @@ impl Store for SqlStore {
                     run_on: row.get::<usize, String>(3)?,
                 })
             })?
-            .map(|value| value.map_err(anyhow::Error::from))
-            .collect::<anyhow::Result<Vec<RunConfigEntry>>>()
+            .collect::<rusqlite::Result<Vec<RunConfigEntry>>>()?)
         })
         .await
     }
@@ -1025,8 +1014,7 @@ impl Store for SqlStore {
             let run_config_types = {
                 let mut stmt = conn.prepare("SELECT DISTINCT type FROM run_configs ORDER BY type ASC")?;
                 stmt.query_map([], |row| row.get::<usize, String>(0))?
-                    .map(|v| v.map_err(anyhow::Error::from))
-                    .collect::<anyhow::Result<Vec<String>>>()?
+                    .collect::<rusqlite::Result<Vec<String>>>()?
             };
 
             Ok(run_config_types)
@@ -1078,7 +1066,7 @@ impl Store for SqlStore {
             let id_input_id = {
                 let mut stmt = conn.prepare(q)?;
                 stmt.query_map([input_run_config_id], |row| row.get::<usize, usize>(0))?
-                    .map(|v| v.map(|v| v as RunConfigId).map_err(|e| e.into()))
+                    .map(|v| Ok::<_, anyhow::Error>(v? as RunConfigId))
                     .collect::<anyhow::Result<Vec<_>>>()
             };
             id_input_id
@@ -1172,36 +1160,32 @@ impl Store for SqlStore {
     async fn list_trained_net_entries(&self) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_trained_net_entries", move |conn| {
             let mut stmt = conn.prepare("SELECT id, net_path FROM trained_nets")?;
-            stmt.query_map([], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map([], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_label_trained_nets_before", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND rc.run_on < ?")?;
-            stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
     async fn list_trained_nets_loss_gt(&self, loss: f32, net_type: &'static str) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
-            stmt.query_map(params![net_type, loss], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map(params![net_type, loss], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
     async fn list_unused_motif_trained_nets(&self) -> anyhow::Result<Vec<TrainedNetEntry>> {
         self.with_reader_conn("list_unused_motif_trained_nets", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND NOT EXISTS (SELECT 1 FROM trained_nets_input nti WHERE nti.input_id=tn.id)")?;
-            stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
-                .map(|v| v.map_err(anyhow::Error::from))
-                .collect::<anyhow::Result<Vec<_>>>()
+            Ok(stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
@@ -1233,11 +1217,10 @@ impl Store for SqlStore {
         self.with_reader_conn("list_input_nets", move |conn| {
             let mut stmt = conn.prepare("SELECT tn.run_config_id FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
 
-            stmt.query_map(params![net_id], |row| {
+            Ok(stmt.query_map(params![net_id], |row| {
                 row.get::<usize, u32>(0)
             })?
-                .map(|v| v.map_err(|e|e.into()))
-                .collect::<anyhow::Result<Vec<_>>>()
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
 
@@ -1348,7 +1331,7 @@ impl SqlStore {
             row.get::<usize, i64>(0)
         })?;
 
-        usize::try_from(count).map_err(|_| anyhow::anyhow!("count_motif_slices: invalid count={count} for motif_id={motif_id}"))
+        Ok(usize::try_from(count).with_context(|| format!("count_motif_slices: invalid count={count} for motif_id={motif_id}"))?)
     }
 
     pub fn load_motif_target_positions(
@@ -1429,7 +1412,7 @@ impl SqlStore {
             "SELECT r.id, r.import_id, r.key, r.length FROM main.resources r WHERE r.id NOT IN (SELECT resource_id FROM slices s WHERE s.motif_id=?)",
         )?;
 
-        stmt.query_map(params![motif_id as i64], |row| {
+        Ok(stmt.query_map(params![motif_id as i64], |row| {
             Ok(RandomSliceResourceCtx {
                 resource: Resource::new(
                     row.get::<usize, ResourceId>(0)?,
@@ -1441,8 +1424,7 @@ impl SqlStore {
                 target_positions: vec![],
             })
         })?
-        .map(|row| row.map_err(anyhow::Error::from))
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     fn merge_intervals(mut xs: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
@@ -2871,7 +2853,7 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_get_input_run_config_ids().returning(
             move |run_config_id, input_type|{
-                map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
+                map.get(&run_config_id).cloned().map(|result| Ok(result?)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
             }
         );
         self
@@ -2881,7 +2863,7 @@ impl MockStoreBuilder {
         let map = results.into();
         self.store.expect_run_config_descr().returning(
             move |run_config_id| {
-                map.get(&run_config_id).cloned().map(|result| result.map_err(Into::into)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
+                map.get(&run_config_id).cloned().map(|result| Ok(result?)).expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
             }
         );
         self
@@ -2899,7 +2881,7 @@ impl MockStoreBuilder {
         self.store.expect_save_run_config().returning(move |p_input_run_config_id, p_run_config_type, p_descr, p_properties_vals| {
             let p_input_run_config_id = p_input_run_config_id.map(|ids| ids.to_vec());
             if p_input_run_config_id == input_run_config_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
-                result.clone().map_err(Into::into)
+                Ok(result.clone()?)
             } else {
                 Err(anyhow::anyhow!(format!(
                     "mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}"
@@ -2938,7 +2920,7 @@ impl MockStoreBuilder {
             move |run_config_ids, loss, limit| {
                 data.iter()
                     .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_ref().as_slice() && *expected_loss == loss && *expected_limit == limit)
-                    .map(|(_, _, _, result)| result.clone().map_err(Into::into))
+                    .map(|(_, _, _, result)| Ok(result.clone()?))
                     .unwrap_or_else(|| Err(anyhow::anyhow!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}")))
             }
         );
@@ -2959,7 +2941,7 @@ impl MockStoreBuilder {
             move |run_config_id| {
                 data.iter()
                     .find(|(expected_run_config_id, _)| expected_run_config_id == &run_config_id)
-                    .map(|(_, result)| result.clone().map_err(Into::into))
+                    .map(|(_, result)| Ok(result.clone()?))
                     .unwrap_or_else(|| Err(anyhow::anyhow!("with_list_input_nets is not configured to return  nets for run_config_id={run_config_id:?}")))
             }
         );
@@ -2974,7 +2956,7 @@ impl MockStoreBuilder {
         self.store.expect_list_run_config_values()
             .returning(move |p_run_config_id| {
                 map.get(&p_run_config_id)
-                    .cloned().map(|result| result.map_err(Into::into))
+                    .cloned().map(|result| Ok(result?))
                     .expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
             });
 
@@ -2989,7 +2971,7 @@ impl MockStoreBuilder {
         self.store.expect_list_output_run_config_ids().returning(
             move |input_run_config_id| {
                 map.get(&input_run_config_id)
-                    .cloned().map(|result| result.map_err(Into::into))
+                    .cloned().map(|result| Ok(result?))
                     .expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
             },
         );
@@ -3004,7 +2986,7 @@ impl MockStoreBuilder {
         self.store.expect_list_run_config_ids_with_outputs().returning(
             move |input_run_config_ids| {
                 map.get(&input_run_config_ids.to_vec())
-                    .cloned().map(|result| result.map_err(Into::into))
+                    .cloned().map(|result| Ok(result?))
                     .expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
             },
         );
@@ -3021,7 +3003,7 @@ impl MockStoreBuilder {
             .returning(move |requested| {
                 let stems = requested.iter().map(|stem| stem.to_string()).collect::<Vec<_>>();
                 if stems == expected_stems {
-                    result.clone().map_err(Into::into)
+                    Ok(result.clone()?)
                 } else {
                     Err(anyhow::anyhow!("Not found"))
                 }
@@ -3035,7 +3017,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_set_group_sets()
             .returning(move |group| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
+                Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()?)
             });
 
         self
@@ -3046,7 +3028,7 @@ impl MockStoreBuilder {
 
     self.store.expect_list_group_labeled_resources_sets()
         .returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_group_labeled_resources_sets")).clone()?)
         });
 
         self
@@ -3057,7 +3039,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resources_not_in_group()
             .returning(move |group, _limit| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
+                Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()?)
             });
 
 
@@ -3069,7 +3051,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_random_resources()
             .returning(move |limit| {
-                map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone().map_err(Into::into)
+                Ok(map.get(&limit).expect(&format!("no mock data for limit={limit:?} configured in list_random_resources")).clone()?)
             });
 
 
@@ -3081,7 +3063,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_random_in_group()
             .returning(move |group| {
-                map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone().map_err(Into::into)
+                Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_random_in_group")).clone()?)
             });
 
         self
@@ -3092,7 +3074,7 @@ impl MockStoreBuilder {
 
         self.store.expect_list_resource_set_resources_by_descr()
         .returning(move |group| {
-            map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone().map_err(Into::into)
+            Ok(map.get(group).expect(&format!("no mock data for {group} configured in list_resource_set_resources_by_descr")).clone()?)
         });
 
 

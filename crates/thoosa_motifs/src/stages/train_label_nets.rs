@@ -985,7 +985,7 @@ fn train_label_step_params(run_config: &TrainLabelNetRunConfig, num_nets: u32) -
 }
 
 fn train_label_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
-    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).map_err(anyhow::Error::from)
+    Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean)?)
 }
 
 impl WorkerStageInput for TrainLabelStepIpcInit {

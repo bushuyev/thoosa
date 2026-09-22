@@ -334,7 +334,7 @@ where
 
     fn size(&self) -> Self::Metrics {
         match &self.inner {
-            ThoTensorInner::Val { t } => t.size().try_into().map_err(|_| ThoError::new("tensor size metrics conversion failed")).unwrap_or(Self::Metrics::default()),
+            ThoTensorInner::Val { t } => t.size().try_into().unwrap_or_default(),
             ThoTensorInner::Ref { size, .. } => Self::Metrics::try_from(size.clone()).unwrap_or_else(|e| panic!("Tho tensor size metrics conversion failed")),
         }
     }
