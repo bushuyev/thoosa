@@ -163,6 +163,7 @@ fn get_test_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context as _;
     use super::run_ipc_test;
     use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
     use crate::ipc::worker_msg::{DebugOutput, OpResult, WorkerInput};
@@ -462,7 +463,7 @@ mod tests {
 
         let result = async {
             while let Some(joined) = tasks.join_next().await {
-                joined.map_err(|e| ThoError::new(format!("IPC load/mul task join failed: {e:?}")))??;
+                joined.context("join IPC load/mul task")??;
             }
 
             Ok::<(), ThoError>(())

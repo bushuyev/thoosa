@@ -979,10 +979,7 @@ mod tests {
                             &HashMap::from([("", &HashSet::new())]),
                             size,
                         )
-                        .await.map_err(|e|{
-                            error!("DLoadAndMulTask::run: e={e:?}");
-                            e
-                         })?
+                        .await?
                 )))
             }
             .await

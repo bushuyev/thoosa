@@ -634,11 +634,10 @@ fn train_final_loss(pred_y: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> 
 
     let log_probs = pred_y.f_log_softmax(-1, Kind::Float)?;
 
-    (target * log_probs)
+    Ok((target * log_probs)
         .f_sum_dim_intlist(&[-1i64][..], false, Kind::Float)?
         .f_mean(Kind::Float)?
-        .f_multiply_scalar(-1.)
-        .map_err(anyhow::Error::from)
+        .f_multiply_scalar(-1.)?)
 }
 
 impl WorkerStageInput for TrainFinalStepIpcInit {

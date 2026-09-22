@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use crate::dims::{ChannelsMotifsDists, MotifSlices};
 use crate::motif_tracker_store::IdSlice;
 use crate::motifs_store::MotifsStore;
@@ -779,7 +780,7 @@ impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
                     let channels = batch_wrappers[0].size().dim_0();
                     let tensor_selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
                     batch.push(track_await(SelectRef::select_ref(&batch_wrappers[0], to_device_idx, Some(tensor_selector))).await?);
-                    let range_offset = u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch slice start: {}", range.start)))?;
+                    let range_offset = u32::try_from(range.start).with_context(|| format!("invalid batch slice start: {}", range.start))?;
                     let resource_offsets = vec![resource_offsets[0] + range_offset];
                     let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
                     let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;

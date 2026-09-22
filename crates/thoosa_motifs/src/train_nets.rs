@@ -481,7 +481,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> anyhow::Result<Node> {
 
     net = net
         .conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
-        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+        .func(|t| Ok(Tensor::f_relu(t)?))?;
 
     let mut net = builder
         .batch_norm(BatchNormConfig::default(), None)?
@@ -511,7 +511,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> anyhow::Result<Node> {
                 None,
             )?
             // .batch_norm(BatchNormConfig::default(), Some(params.channels))?
-            .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?
+            .func(|t| Ok(Tensor::f_gelu(t, "none")?))?
             // .dropout(0.1)?
         ;
     }
@@ -546,7 +546,7 @@ net.closure(
         2,1
     )?
 
-    .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+    .func(|t| Ok(Tensor::f_relu(t)?))?;
 
     for i in 0..params.head_layers as usize {
         net = net
@@ -558,11 +558,11 @@ net.closure(
                     0.5
                 },
             )?
-            .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
+            .func(|t| Ok(Tensor::f_gelu(t, "none")?))?;
     }
 
     net
-        // .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
+        // .func(|t| Ok(Tensor::f_relu(t)?))?
         .linear_s(
             1,
             "motif_last_head",
@@ -650,7 +650,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> anyhow::Result<Node> {
             params.num_features * 2,
             "todo",
         )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+        .func(|t|Ok(Tensor::f_relu(t)?))?;
 
     for i in 0..params.num_layers as usize {
         net = net
@@ -658,17 +658,17 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> anyhow::Result<Node> {
                 params.num_features * 2,
                 "todo",
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+            .func(|t|Ok(Tensor::f_relu(t)?))?;
     }
 
     net
         // .linear_s(180)
-        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+        // .func(|t|Ok(Tensor::f_relu(t)?))
         .linear_s(
             1,
             "todo",
         )?
-        .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
+        .func(|t|Ok(Tensor::f_sigmoid(t)?))?
         .end_seq()
 
 }
@@ -825,7 +825,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
                     let mean = masked_mean(t, &mask)?;
                     let max = masked_max(t, &mask)?;
 
-                    Tensor::f_cat(&[mean, max], 1).map_err(|e|e.into())
+                    Ok(Tensor::f_cat(&[mean, max], 1)?)
 
                 })),
                 None,
@@ -863,7 +863,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
             })),
             None,
         )?
-        .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
+        .func(|t| Ok(Tensor::f_relu(t)?))?;
     }
 
     builder.linear_s(
@@ -877,7 +877,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
         })),
         None,
     )?
-    // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+    // .func(|t|Ok(Tensor::f_sigmoid(t)?))
     .end_seq()
 }
 
@@ -963,7 +963,7 @@ pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
                 lin_params.features,
                 lin_params.features,
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+            .func(|t|Ok(Tensor::f_relu(t)?))?;
         }
 
 
@@ -1030,7 +1030,7 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
             params.mid_features * params.in_features,
             "final_net_first_layer".to_string(),
         )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+        .func(|t|Ok(Tensor::f_relu(t)?))?;
 
     for i in 0..params.num_layers {
         net = net
@@ -1038,16 +1038,16 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
                 params.mid_features * params.in_features,
                 format!("final_net_{i}th_layer"),
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+            .func(|t|Ok(Tensor::f_relu(t)?))?;
     }
 
 net
-    // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+    // .func(|t|Ok(Tensor::f_relu(t)?))
     .linear_s(
         params.out_features,
         "final_net_last_layer",
     )?
-    // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+    // .func(|t|Ok(Tensor::f_relu(t)?))?
     .end_seq()
 }
 

@@ -2157,6 +2157,7 @@ impl From<f64> for F64BitsKey {
 #[cfg(test)]
 mod shared_tests {
     #![allow(unused_imports, redundant_semicolons, dead_code)]
+    use anyhow::Context as _;
     /*
        a - b
        a - c
@@ -2422,7 +2423,7 @@ mod shared_tests {
 
 
     #[test]
-    fn test_resources_param() -> Result<(), ThoError> {
+    fn test_resources_param() -> anyhow::Result<()> {
         use crate::parse_resources;
 
         #[derive(Debug, Parser, Clone, PartialEq)]
@@ -2433,33 +2434,18 @@ mod shared_tests {
 
         let params =
             TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter())
-                .map_err(|e| {
-                    ThoError::new_with_cause(
-                        "parse resources args (list)",
-                        e.into(),
-                    )
-                })?;
+                .context("parse resources args (list)")?;
 
         assert_eq!(
             ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
             params.resources
         );
         let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter())
-            .map_err(|e| {
-                ThoError::new_with_cause(
-                    "parse resources args (set)",
-                    e.into(),
-                )
-            })?;
+            .context("parse resources args (set)")?;
         assert_eq!(ResourceType::Set("aaa".into()), params.resources);
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
-            .map_err(|e| {
-                ThoError::new_with_cause(
-                    "parse resources args (group)",
-                    e.into(),
-                )
-            })?;
+            .context("parse resources args (group)")?;
         assert_eq!(ResourceType::Group("bbb".into()), params.resources);
 
         Ok(())

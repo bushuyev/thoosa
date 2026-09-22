@@ -95,11 +95,11 @@ where
         track_await(GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu")).await;
 
 
-        track_await(GlobalCtx::global()
-            .dump_all_to_cpu(ids_to_exclude, device_idx, &self.descr)).await.map_err(|e|{
-            warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {e:?}");
-            AdjusterError::<A>::SomethingElse
-        })?;
+        if let Err(error) = track_await(GlobalCtx::global()
+            .dump_all_to_cpu(ids_to_exclude, device_idx, &self.descr)).await {
+            warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {error:?}");
+            return Err(AdjusterError::SomethingElse(error));
+        }
 
         #[cfg(tho_debug)]
         track_await(GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu")).await;

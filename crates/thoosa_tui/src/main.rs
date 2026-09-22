@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use interprocess::local_socket::{
     tokio::{prelude::*, Stream},
     GenericFilePath, GenericNamespaced, Name, ToFsName, ToNsName,
@@ -146,7 +147,7 @@ impl RunConfigSearch {
             && self.run_on_to.trim().is_empty()
     }
 
-    fn normalized(&self) -> Result<NormalizedRunConfigSearch, String> {
+    fn normalized(&self) -> anyhow::Result<NormalizedRunConfigSearch> {
         let id = parse_run_config_id_filter(&self.id)?;
         let descr = self.descr.trim().to_string();
         let run_on_from = normalize_run_on_filter(&self.run_on_from, false)?;
@@ -154,7 +155,7 @@ impl RunConfigSearch {
 
         if let (Some(from), Some(to)) = (&run_on_from, &run_on_to) {
             if from > to {
-                return Err("run_on from must be <= run_on to".to_string());
+                anyhow::bail!("run_on from must be <= run_on to");
             }
         }
 
@@ -1973,7 +1974,7 @@ impl App {
     }
 
     async fn load_filtered_run_configs(&mut self, keep_run_config_id: Option<u32>) -> anyhow::Result<()> {
-        let normalized = self.search_filters.normalized().map_err(anyhow::Error::msg)?;
+        let normalized = self.search_filters.normalized()?;
         let run_configs = track_await(self
             .store
             .list_run_configs_filtered(RunConfigFilter {
@@ -2158,7 +2159,7 @@ impl App {
 struct TerminalGuard;
 
 impl TerminalGuard {
-    fn enter() -> Result<Self, Box<dyn std::error::Error>> {
+    fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen)?;
         Ok(Self)
@@ -2179,12 +2180,12 @@ enum ProgressClientEvent {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     init_logger();
     let args = Args::parse();
     let db_path = args.ws_path.join("main_db.db3");
     info!("starting thoosa_tui: ws_path={} db_path={}", args.ws_path.display(), db_path.display());
-    let store = track_await(SqlStore::from_path_(&db_path)).await.map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let store = track_await(SqlStore::from_path_(&db_path)).await.with_context(|| format!("open database {}", db_path.display()))?;
 
     let mut app = App::new(Arc::new(store), args.ws_path.clone(), db_path);
     track_await(app.refresh_run_configs()).await;
@@ -2198,7 +2199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     track_await(run_ui(&mut app)).await
 }
 
-async fn run_ui(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_ui(app: &mut App) -> anyhow::Result<()> {
     let _terminal_guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -3312,27 +3313,27 @@ fn append_run_on_char(target: &mut String, ch: char) -> bool {
     }
 }
 
-fn parse_run_config_id_filter(value: &str) -> Result<Option<u32>, String> {
+fn parse_run_config_id_filter(value: &str) -> anyhow::Result<Option<u32>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
 
     if !trimmed.chars().all(|ch| ch.is_ascii_digit()) {
-        return Err("id must contain digits only".to_string());
+        anyhow::bail!("id must contain digits only");
     }
 
-    trimmed
+    Ok(trimmed
         .parse::<u32>()
-        .map(Some)
-        .map_err(|err| format!("invalid id: {err}"))
+        .context("invalid id")
+        .map(Some)?)
 }
 
 fn run_on_date_label(run_on: &str) -> String {
     run_on.split_once(' ').map(|(date, _)| date).unwrap_or(run_on).to_string()
 }
 
-fn normalize_run_on_filter(value: &str, end_of_day: bool) -> Result<Option<String>, String> {
+fn normalize_run_on_filter(value: &str, end_of_day: bool) -> anyhow::Result<Option<String>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -3348,12 +3349,12 @@ fn normalize_run_on_filter(value: &str, end_of_day: bool) -> Result<Option<Strin
             if end_of_day { 59 } else { 0 },
             if end_of_day { 59 } else { 0 },
         ) else {
-            return Err("invalid run_on date".to_string());
+            anyhow::bail!("invalid run_on date");
         };
         return Ok(Some(date_time.format(RUN_ON_DATETIME_FORMAT).to_string()));
     }
 
-    Err("run_on must be YYYY-MM-DD or YYYY-MM-DD HH:MM:SS".to_string())
+    anyhow::bail!("run_on must be YYYY-MM-DD or YYYY-MM-DD HH:MM:SS")
 }
 
 fn move_down(selected: &mut usize, len: usize, step: usize) -> bool {
@@ -3588,24 +3589,24 @@ fn plot_command(ws_path: &Path, motif_id: u32, print_to_stdout: bool) -> Command
     command
 }
 
-async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> Result<PathBuf, String> {
+async fn resolve_motif_plot_target(ws_path: &Path, motif_id: u32) -> anyhow::Result<PathBuf> {
     let output = track_await(plot_command(ws_path, motif_id, true)
         .output()).await
-        .map_err(|err| format!("spawn failed: {err}"))?;
+        .context("run motif plot command")?;
     if !output.status.success() {
-        return Err(command_output_error(&output.stdout, &output.stderr));
+        anyhow::bail!("{}", command_output_error(&output.stdout, &output.stderr));
     }
     parse_plot_target_path(&output.stdout)
 }
 
-async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> Result<(), String> {
+async fn generate_motif_plot(ws_path: &Path, motif_id: u32) -> anyhow::Result<()> {
     let output = track_await(plot_command(ws_path, motif_id, false)
         .output()).await
-        .map_err(|err| format!("spawn failed: {err}"))?;
+        .context("run motif plot command")?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(command_output_error(&output.stdout, &output.stderr))
+        anyhow::bail!("{}", command_output_error(&output.stdout, &output.stderr))
     }
 }
 
@@ -3628,7 +3629,7 @@ async fn open_motif_plot_task(ws_path: PathBuf, motif_id: u32) -> String {
     }
 }
 
-fn parse_plot_target_path(stdout: &[u8]) -> Result<PathBuf, String> {
+fn parse_plot_target_path(stdout: &[u8]) -> anyhow::Result<PathBuf> {
     let stdout = String::from_utf8_lossy(stdout);
     for line in stdout.lines() {
         let trimmed = line.trim();
@@ -3643,7 +3644,7 @@ fn parse_plot_target_path(stdout: &[u8]) -> Result<PathBuf, String> {
         }
     }
 
-    Err("plot command did not emit a target_path".to_string())
+    anyhow::bail!("plot command did not emit a target_path")
 }
 
 fn command_output_error(stdout: &[u8], stderr: &[u8]) -> String {
@@ -3660,7 +3661,7 @@ fn command_output_error(stdout: &[u8], stderr: &[u8]) -> String {
     "command failed without output".to_string()
 }
 
-fn open_path_in_system_viewer(path: &Path) -> Result<(), String> {
+fn open_path_in_system_viewer(path: &Path) -> anyhow::Result<()> {
     let mut command = if cfg!(target_os = "macos") {
         let mut command = std::process::Command::new("open");
         command.arg(path);
@@ -3676,7 +3677,8 @@ fn open_path_in_system_viewer(path: &Path) -> Result<(), String> {
         command
     };
 
-    command.spawn().map(|_| ()).map_err(|err| err.to_string())
+    command.spawn().with_context(|| format!("open {} in system viewer", path.display()))?;
+    Ok(())
 }
 
 fn value_to_string(value: &Val) -> String {
@@ -3693,7 +3695,7 @@ fn init_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("thoosa_tui=debug")).try_init();
 }
 
-fn run_non_interactive(app: &App) -> Result<(), Box<dyn std::error::Error>> {
+fn run_non_interactive(app: &App) -> anyhow::Result<()> {
     println!("thoosa_tui non-interactive mode");
     println!("db: {}", app.db_path.display());
     println!("run_configs: {}", app.run_configs.len());

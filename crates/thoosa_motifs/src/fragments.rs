@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::str::FromStr;
 
 use crate::distance::{average_euclidean_distance, clc_dist_d2};
+use anyhow::Context as _;
 use clap::{Args, ValueEnum};
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
@@ -62,40 +63,40 @@ pub enum DataBy {
 
 impl DataBy {
 
-    fn parse_motif_ids(payload: &str) -> Result<Vec<usize>, String> {
+    fn parse_motif_ids(payload: &str) -> anyhow::Result<Vec<usize>> {
         let motif_ids = payload
             .trim()
             .trim_matches(|ch| ch == '\'' || ch == '"')
             .split(',')
             .filter(|part| !part.is_empty())
             .map(|part| {
-                part
+                Ok(part
                     .trim()
                     .trim_matches(|ch| ch == '\'' || ch == '"')
                     .replace(" ", "")
                     .parse::<usize>()
-                    .map_err(|e| format!("can't parse {part:?} to motif_id: {e}"))
+                    .with_context(|| format!("can't parse {part:?} to motif_id"))?)
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<anyhow::Result<Vec<_>>>()?;
         if motif_ids.is_empty() {
-            return Err("motif_id payload is empty".to_string());
+            anyhow::bail!("motif_id payload is empty");
         }
         Ok(motif_ids)
     }
 
-    fn parse_select_motifs_run_config_ids(payload: &str) -> Result<Vec<RunConfigId>, String> {
+    fn parse_select_motifs_run_config_ids(payload: &str) -> anyhow::Result<Vec<RunConfigId>> {
         parse_run_config_ids_vec(payload)
     }
 
-    fn parse_find_motifs_run_config_ids(payload: &str) -> Result<Vec<RunConfigId>, String> {
+    fn parse_find_motifs_run_config_ids(payload: &str) -> anyhow::Result<Vec<RunConfigId>> {
         let find_motifs_run_config_ids = parse_run_config_ids_vec(payload)?;
         if find_motifs_run_config_ids.is_empty() {
-            return Err("find_motifs_run_config_id payload is empty".to_string());
+            anyhow::bail!("find_motifs_run_config_id payload is empty");
         }
         Ok(find_motifs_run_config_ids)
     }
 
-    fn parse_run_config_id_payload(payload: &str) -> Result<Self, String> {
+    fn parse_run_config_id_payload(payload: &str) -> anyhow::Result<Self> {
         let payload = payload
             .trim()
             .trim_matches(|ch| ch == '\'' || ch == '"');
@@ -104,7 +105,7 @@ impl DataBy {
             let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
             let find_part = segments
                 .next()
-                .ok_or_else(|| "find_motifs_run_config_id payload is empty".to_string())?;
+                .context("find_motifs_run_config_id payload is empty")?;
 
             let find_motifs_run_config_ids = Self::parse_find_motifs_run_config_ids(find_part)?;
 
@@ -113,7 +114,7 @@ impl DataBy {
                 let (raw_key, raw_value) = segment
                     .split_once('=')
                     .or_else(|| segment.split_once(':'))
-                    .ok_or_else(|| format!("run_config_id payload segment {segment:?} should be key=value or key:value"))?;
+                    .with_context(|| format!("run_config_id payload segment {segment:?} should be key=value or key:value"))?;
                 let key = raw_key
                     .trim()
                     .trim_matches(|ch| ch == '\'' || ch == '"');
@@ -124,7 +125,7 @@ impl DataBy {
                     "select_motifs_run_config_ids" | "select_motifs_run_config_id" => {
                         select_motifs_run_config_ids = Some(Self::parse_select_motifs_run_config_ids(value)?);
                     }
-                    _ => return Err(format!("unexpected run_config_id payload key {key:?}; expected select_motifs_run_config_ids")),
+                    _ => anyhow::bail!("unexpected run_config_id payload key {key:?}; expected select_motifs_run_config_ids"),
                 }
             }
 
@@ -154,7 +155,7 @@ impl DataBy {
         })
     }
 
-    fn parse_channels(payload: &str) -> Result<Vec<u32>, String> {
+    fn parse_channels(payload: &str) -> anyhow::Result<Vec<u32>> {
         payload
             .split(',')
             .filter(|segment| !segment.is_empty())
@@ -163,24 +164,24 @@ impl DataBy {
                 #[cfg(any(debug_assertions, tho_debug))] //logging is set up after cli args are parsed
                 println!("parse_channels: segment={segment:?}");
 
-                segment
+                Ok(segment
                     .replace(" ", "")
                     .parse::<u32>()
-                    .map_err(|e| format!("can't parse {segment:?} to channel: {e}"))
+                    .with_context(|| format!("can't parse {segment:?} to channel"))?)
             })
             .collect()
     }
 
-    fn parse_resource_payload(payload: &str) -> Result<Self, String> {
+    fn parse_resource_payload(payload: &str) -> anyhow::Result<Self> {
         #[cfg(any(debug_assertions, tho_debug))]
         println!("parse_resource_payload: payload={payload}");
 
         let mut segments = payload.split(';').filter(|segment| !segment.is_empty());
         let resource_id = segments
             .next()
-            .ok_or_else(|| "resource payload is empty".to_string())?
+            .context("resource payload is empty")?
             .parse::<ResourceId>()
-            .map_err(|e| format!("can't parse resource_id in {payload:?}: {e}"))?;
+            .with_context(|| format!("can't parse resource_id in {payload:?}"))?;
 
         let mut channels = None;
         let mut freq_filters = None;
@@ -191,7 +192,7 @@ impl DataBy {
         for segment in segments {
             let (key, value) = segment
                 .split_once('=')
-                .ok_or_else(|| format!("resource payload segment {segment:?} should be key=value"))?;
+                .with_context(|| format!("resource payload segment {segment:?} should be key=value"))?;
 
             #[cfg(any(debug_assertions, tho_debug))]
             println!("parse_resource_payload: key={key:?} value={value:?}");
@@ -202,11 +203,11 @@ impl DataBy {
                 }
                 "freq_filters" => {
                     let parsed = serde_json5::from_str::<Vec<InputFilter>>(value)
-                        .map_err(|e| format!("can't parse freq_filters JSON5 {value:?}: {e}"))?;
+                        .with_context(|| format!("can't parse freq_filters JSON5 {value:?}"))?;
                     freq_filters = Some(parsed);
                 }
                 _ => {
-                    return Err(format!("unexpected resource payload key {key:?}; expected channels or freq_filters"));
+                    anyhow::bail!("unexpected resource payload key {key:?}; expected channels or freq_filters");
                 }
             }
         }
@@ -218,7 +219,7 @@ impl DataBy {
         })
     }
 
-    fn parse_motif_net_applied_payload(payload: &str) -> Result<Self, String> {
+    fn parse_motif_net_applied_payload(payload: &str) -> anyhow::Result<Self> {
         let segments = payload
             .split(';')
             .filter(|segment| !segment.is_empty())
@@ -228,7 +229,7 @@ impl DataBy {
             return Ok(DataBy::MotifNetApplied {
                 resource_id: segments[0]
                     .parse::<ResourceId>()
-                    .map_err(|e| format!("can't parse resource_id in {payload:?}: {e}"))?,
+                    .with_context(|| format!("can't parse resource_id in {payload:?}"))?,
                 net_path: PathBuf::from(segments[1]),
             });
         }
@@ -238,27 +239,27 @@ impl DataBy {
         for segment in segments {
             let (key, value) = segment
                 .split_once('=')
-                .ok_or_else(|| format!("motif_net_applied payload segment {segment:?} should be key=value"))?;
+                .with_context(|| format!("motif_net_applied payload segment {segment:?} should be key=value"))?;
             match key {
                 "resource_id" => {
                     resource_id = Some(
                         value
                             .parse::<ResourceId>()
-                            .map_err(|e| format!("can't parse resource_id {value:?}: {e}"))?,
+                            .with_context(|| format!("can't parse resource_id {value:?}"))?,
                     );
                 }
                 "net_path" => {
                     net_path = Some(PathBuf::from(value));
                 }
                 _ => {
-                    return Err(format!("unexpected motif_net_applied payload key {key:?}; expected resource_id or net_path"));
+                    anyhow::bail!("unexpected motif_net_applied payload key {key:?}; expected resource_id or net_path");
                 }
             }
         }
 
         Ok(DataBy::MotifNetApplied {
-            resource_id: resource_id.ok_or_else(|| "motif_net_applied payload missing resource_id".to_string())?,
-            net_path: net_path.ok_or_else(|| "motif_net_applied payload missing net_path".to_string())?,
+            resource_id: resource_id.context("motif_net_applied payload missing resource_id")?,
+            net_path: net_path.context("motif_net_applied payload missing net_path")?,
         })
     }
 }
@@ -281,7 +282,7 @@ impl Resolution {
 }
 
 impl FromStr for DataBy {
-    type Err = String;
+    type Err = anyhow::Error;
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         if let Some(rest) = v.strip_prefix("motif_id:") {
@@ -303,9 +304,9 @@ impl FromStr for DataBy {
         } else if let Some(rest) = v.strip_prefix("motif_net_applied:") {
             DataBy::parse_motif_net_applied_payload(rest)
         } else {
-            Err(format!(
+            anyhow::bail!(
                 "unexpected parameter {v}, should be motif_id:nnn[,mmm], find_motifs_run_config_ids:nnn[,mmm][;select_motifs_run_config_ids[:=]...], select_motifs_run_config_ids:nnn[,mmm], resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
-            ))
+            )
         }
     }
 }
