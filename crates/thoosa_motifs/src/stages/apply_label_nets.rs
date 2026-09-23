@@ -286,8 +286,17 @@ where
 
                     //Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
-                    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-                    let result = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?.into_inner();
+                    let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+
+                    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
+                        Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                        Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_label_net_init"))),
+                    ], None);
+                    let result = track_await(oom_handler.run(
+                        &apply_label_net,
+                        input, ctx.branch(false),
+                         WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),)
+                    ).await?.into_inner();
 
                     debug!("ApplyLabelNets::run: result={result:?}");
 
@@ -813,7 +822,7 @@ pub fn apply_label_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwL
 
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
                &init.label_net_path,
-               &Cuda(0),//TODO
+               &tho_device,
                init.quantize,
                 true
         )?;
