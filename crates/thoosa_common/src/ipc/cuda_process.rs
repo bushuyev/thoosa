@@ -482,9 +482,10 @@ impl CudaIPCActor {
             OpResult::Ok(Some(output)) => {
                 // The copy protocol has exactly one typed success payload; reject unrelated worker outputs explicitly.
                 let output: Box<dyn Any> = output;
-                output.downcast::<WorkerCopyDonePayload>()
-                    .map(|output| *output)
-                    .map_err(|_| ThoError::new(format!("worker copy request {} returned an unexpected output type", response.request_id)))
+                let Ok(output) = output.downcast::<WorkerCopyDonePayload>() else {
+                    return Err(ThoError::new(format!("worker copy request {} returned an unexpected output type", response.request_id)));
+                };
+                Ok(*output)
             }
             OpResult::Ok(None) => Err(ThoError::new(format!("worker copy request {} returned no output", response.request_id))),
             OpResult::Failed(error) => Err(error.into()),
@@ -645,9 +646,10 @@ fn worker_tensor_info(response: CudaWorkerMsgOut) -> Result<WorkerTensorInfoPayl
     match response.status {
         OpResult::Ok(Some(output)) => {
             let output: Box<dyn Any> = output;
-            output.downcast::<WorkerTensorInfoPayload>()
-                .map(|output| *output)
-                .map_err(|_| ThoError::new(format!("worker describe request {request_id} returned an unexpected output type")))
+            let Ok(output) = output.downcast::<WorkerTensorInfoPayload>() else {
+                return Err(ThoError::new(format!("worker describe request {request_id} returned an unexpected output type")));
+            };
+            Ok(*output)
         }
         OpResult::Ok(None) => Err(ThoError::new(format!("worker describe request {request_id} returned no tensor metadata"))),
         OpResult::Failed(error) => Err(error.into()),

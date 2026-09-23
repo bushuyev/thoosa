@@ -140,7 +140,9 @@ where
 fn simp_stage_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
-        let _init = init.downcast::<()>().map_err(|_| ThoError::new("SimpStage expected unit initialization data"))?;
+        let Ok(_init) = init.downcast::<()>() else {
+            return Err(ThoError::new("SimpStage expected unit initialization data"));
+        };
 
         Ok(Box::new(WorkerWrapper::new(Arc::new(SimpStage::<WokerRunCtx>::new_local()), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()

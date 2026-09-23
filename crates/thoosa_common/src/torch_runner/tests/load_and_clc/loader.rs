@@ -97,7 +97,7 @@ impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
     type Output = ThoTensor<LoadedTensor, SynKey>;
 
     fn local_subview(id:&SynKey, t:&Tensor, selector: LoadedRange) -> Result<Self::Output, ThoError> {
-        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end)?;//TODO unwrap
+        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end);
 
         let sub_tensor = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
 
@@ -124,7 +124,7 @@ impl ThoSelector for LoadedRange {
     }
 
     fn tensor_ranges(&self) -> Result<Vec<std::ops::Range<i64>>, ThoError> {
-        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.range.start, &self.range.end)?.into())
+        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.range.start, &self.range.end).into())
     }
 }
 

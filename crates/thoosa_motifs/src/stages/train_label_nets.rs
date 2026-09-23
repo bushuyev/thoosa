@@ -1011,7 +1011,10 @@ impl std::borrow::Borrow<TrainStepInput<MotifProbability, LabelProbability>> for
 
 fn train_label_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>().map_err(|_| ThoError::new("TrainLabelStep endpoint received invalid initializer"))?;
+        let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainLabelStepIpcInit>() else {
+            return Err(ThoError::new("TrainLabelStep endpoint received invalid initializer"));
+        };
+        let init = *init;
         let params = init.params.clone();
         let params_for_module = params.clone();
         let training_config = init.training_config.clone();

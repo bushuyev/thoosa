@@ -418,9 +418,10 @@ pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> anyhow::
 pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32),) -> anyhow::Result<()> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
-        let mut counts = DEBUG_PLOT_LABEL_COUNTS
-            .lock()
-            .map_err(|e| anyhow::anyhow!("debug_plot: lock failed: {e}"))?;
+        let mut counts = match DEBUG_PLOT_LABEL_COUNTS.lock() {
+            Ok(counts) => counts,
+            Err(error) => anyhow::bail!("debug_plot: lock failed: {error}"),
+        };
         let seen = counts.entry(file_stem.clone()).or_insert(0);
         *seen += 1;
 

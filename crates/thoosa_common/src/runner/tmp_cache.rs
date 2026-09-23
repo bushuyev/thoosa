@@ -99,8 +99,11 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
-    pub async fn take_all(self, device:usize) -> Result<Vec<D>, ThoError> {//TODO it can have only one device set when created
-        track_await(self.take_all_recovering(device)).await.map_err(|err| err.error)
+    pub async fn take_all(self, device:usize) -> anyhow::Result<Vec<D>> {//TODO it can have only one device set when created
+        match track_await(self.take_all_recovering(device)).await {
+            Ok(data) => Ok(data),
+            Err(error) => Err(error.error.into()),
+        }
     }
 
     //if data has been dumped to cpu and error happens when loading it back

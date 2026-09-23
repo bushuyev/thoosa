@@ -659,12 +659,13 @@ where
     }
 }
 
-pub fn insert_worker_tensor(all_cuda_tensors: &AllTensors, tensor: Tensor) -> Result<u64, ThoError> {
+pub fn insert_worker_tensor(all_cuda_tensors: &AllTensors, tensor: Tensor) -> anyhow::Result<u64> {
     let mut tensors = all_cuda_tensors.tensors.write();
     loop {
-        let key = NEXT_WORKER_TENSOR_KEY
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))
-            .map_err(|_| ThoError::new("worker tensor key space exhausted"))?;
+        let key = match NEXT_WORKER_TENSOR_KEY.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1)) {
+            Ok(key) => key,
+            Err(_) => anyhow::bail!("worker tensor key space exhausted"),
+        };
 
 
         if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {

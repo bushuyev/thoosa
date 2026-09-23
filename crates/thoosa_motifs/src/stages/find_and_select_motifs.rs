@@ -1,4 +1,5 @@
 #![allow(unused_assignments)]
+use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
 use crate::cli::run_plot;
@@ -342,10 +343,10 @@ impl AsyncStage for FindAndSelectMotifsStage {
         mut ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
         let find_resources = parse_resources(&input.find_resources)
-            .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse find_resources", e))?;
+            .context("FindAndSelectMotifsStage::run parse find_resources")?;
 
         let select_resources = parse_resources(&input.select_resources)
-            .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse select_resources", e))?;
+            .context("FindAndSelectMotifsStage::run parse select_resources")?;
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
         let grid_runs = self.run_configs.grid_to_vals_and_opt_params();

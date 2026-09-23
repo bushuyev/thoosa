@@ -570,14 +570,14 @@ impl RunAllArgs {
     pub fn find_resource_config(&self) -> anyhow::Result<Simple> {
         Ok(Simple::new(
             parse_resources(&self.find_resources)
-                .map_err(anyhow::Error::from_boxed).context("parse find_resources")?,
+                .context("parse find_resources")?,
         ))
     }
 
     pub fn select_resource_config(&self) -> anyhow::Result<Simple> {
         Ok(Simple::new(
             parse_resources(&self.select_resources)
-                .map_err(anyhow::Error::from_boxed).context("parse select_resources")?,
+                .context("parse select_resources")?,
         ))
     }
 
@@ -694,7 +694,10 @@ fn set_oom_score_adj(score: i32) {
 pub fn sync_freq_filter_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
-        let init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"))?;
+        let Ok(init) = init.downcast::<SyncFreqFilterIpcInit>() else {
+            return Err(ThoError::new("SyncFreqFilter endpoint received an unexpected initializer type"));
+        };
+        let init = *init;
         let stage = SyncFreqFilter::<WokerRunCtx>::new_local(SyncFreqFilterIpcInit::new(
             init.filter_configs.clone(),
             init.num_channels,
