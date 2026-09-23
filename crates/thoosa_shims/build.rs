@@ -16,10 +16,21 @@ fn main() {
             "Torch_DIR",
             format!("{libtorch}/share/cmake/Torch"),
         )
-        .define("CMAKE_CUDA_ARCHITECTURES", "89")
+
+        // CUDA
         .define("CUDAToolkit_ROOT", cuda_root)
-        .define("CMAKE_CUDA_COMPILER", format!("{cuda_root}/bin/nvcc"))
+        .define(
+            "CMAKE_CUDA_COMPILER",
+            format!("{cuda_root}/bin/nvcc"),
+        )
+        .define("CMAKE_CUDA_ARCHITECTURES", "89")
+        .define("CMAKE_CUDA_STANDARD", "17")
+        .define("CMAKE_CUDA_STANDARD_REQUIRED", "ON")
+
+        // Build
         .define("CMAKE_BUILD_TYPE", "Debug")
+
+        // CUDA libraries
         .define(
             "CUDA_CUDART_LIBRARY",
             format!("{cuda_root}/lib64/libcudart.so"),
@@ -32,15 +43,19 @@ fn main() {
             "CUDA_driver_LIBRARY",
             "/usr/lib/x86_64-linux-gnu/libcuda.so",
         )
+
         .generator("Ninja")
         .build_target("thoosa_shims")
         .build();
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(
+        env::var("OUT_DIR").expect("OUT_DIR is not set")
+    );
 
     // Example OUT_DIR:
     //
-    // target/x86_64-unknown-linux-gnu/release-opt1/build/thoosa_shims-HASH/out
+    // target/x86_64-unknown-linux-gnu/release-opt1/
+    //     build/thoosa_shims-HASH/out
     //
     // ancestors:
     // 0: .../out
@@ -67,31 +82,37 @@ fn main() {
         cargo_profile_dir.join("compile_commands.json"),
     );
 
+    // Our C++/CUDA shim.
     println!(
         "cargo:rustc-link-search=native={}",
         cmake_build_dir.display()
     );
-
     println!("cargo:rustc-link-lib=dylib=thoosa_shims");
 
+    // LibTorch.
     println!("cargo:rustc-link-search=native={libtorch}/lib");
+
     println!("cargo:rustc-link-lib=dylib=torch_cuda");
     println!("cargo:rustc-link-lib=dylib=torch_cpu");
     println!("cargo:rustc-link-lib=dylib=torch");
     println!("cargo:rustc-link-lib=dylib=c10_cuda");
+    println!("cargo:rustc-link-lib=dylib=c10");
 
     // Let the final binary find libthoosa_shims.so in its own directory.
-    //
-    // This is important when running directly:
-    //
-    // target/x86_64-unknown-linux-gnu/release-opt1/your_binary
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
 
-    // Let the binary find libtorch libs.
+    // Let the binary find LibTorch libraries.
     println!("cargo:rustc-link-arg=-Wl,-rpath,{libtorch}/lib");
+
+    // Usually CUDA is already visible through the system loader / LibTorch,
+    // but this makes direct CUDA runtime dependencies explicit.
+    println!(
+        "cargo:rustc-link-arg=-Wl,-rpath,{cuda_root}/lib64"
+    );
 
     println!("cargo:rerun-if-env-changed=LIBTORCH");
 
+    // CMake / C++ shim
     rerun_if_changed("src-cpp/CMakeLists.txt");
     rerun_if_changed("src-cpp/stream.cpp");
     rerun_if_changed("src-cpp/memcpy.cpp");
@@ -102,6 +123,11 @@ fn main() {
     rerun_if_changed("src-cpp/optimizers.cpp");
     rerun_if_changed("src-cpp/optimizers.h");
     rerun_if_changed("src-cpp/shared_arena_allocator.cpp");
+
+    // CUDA operators
+    rerun_if_changed("src-cpp/cu/z_norm_cuda.cu");
+    rerun_if_changed("src-cpp/cu/z_norm_op.cpp");
+    rerun_if_changed("src-cpp/cu/z_norm_op.h");
 }
 
 fn copy_file(src: impl AsRef<Path>, dst: impl AsRef<Path>) {

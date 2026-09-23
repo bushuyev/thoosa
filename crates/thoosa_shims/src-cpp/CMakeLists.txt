@@ -1,27 +1,25 @@
 cmake_minimum_required(VERSION 3.25)
+
 project(thoosa_shims LANGUAGES CXX CUDA)
 
-# Give CLion a compilation database
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_STANDARD 11)
+
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CUDA_ARCHITECTURES 89)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Tell CMake where LibTorch lives (passed from build.rs)
-set(Torch_DIR "${TORCH_DIR}" CACHE PATH "")
-
-find_package(Torch REQUIRED)          # brings torch, torch_cpu, torch_cuda…
+find_package(Torch REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
 add_library(
         thoosa_shims SHARED
+
         stream.cpp
         memcpy.cpp
         context.cpp
@@ -29,17 +27,52 @@ add_library(
         errors.cpp
         inference_mode.cpp
         quantized_linear.cpp
-        logging.h
         logging.cpp
-        optimizers.h
         optimizers.cpp
         shared_arena_allocator.cpp
-) #add file to build.rs / cargo:rerun-if-changed
-target_include_directories(thoosa_shims PUBLIC ..)
-target_link_libraries(thoosa_shims PUBLIC ${TORCH_LIBRARIES} CUDA::cuda_driver CUDA::cudart)
 
+        cu/z_norm_op.cpp
+        cu/z_norm_cuda.cu
+)
 
-install(TARGETS thoosa_shims
-        LIBRARY DESTINATION lib          # .so / .dylib
-        ARCHIVE DESTINATION lib          # static libs if you ever add them
-        RUNTIME DESTINATION bin)         # .dll on Windows
+target_include_directories(
+        thoosa_shims
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_definitions(
+        thoosa_shims
+        PRIVATE
+        _GLIBCXX_USE_CXX11_ABI=1
+)
+
+set_target_properties(
+        thoosa_shims
+        PROPERTIES
+        CUDA_ARCHITECTURES 89
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON
+)
+
+target_compile_options(
+        thoosa_shims
+        PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+)
+
+target_link_libraries(
+        thoosa_shims
+        PUBLIC
+        ${TORCH_LIBRARIES}
+        CUDA::cuda_driver
+        CUDA::cudart
+)
+
+install(
+        TARGETS thoosa_shims
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+)

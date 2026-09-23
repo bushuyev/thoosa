@@ -928,6 +928,7 @@ mod distance_tests {
         ThoError,
         comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v,
     };
+    use thoosa_shims::z_norm::z_norm_dims_cuda;
 
     #[ctor::ctor]
     fn init() {
@@ -1348,6 +1349,57 @@ mod distance_tests {
             0,
         )?;
         assert!(distances.allclose(&expected, 1e-6, 1e-6, false));
+        Ok(())
+    }
+
+    #[test]
+    fn test_z_norm_dims_cuda() -> anyhow::Result<()>{
+        let inp = Tensor::rand(&[10, 20, 30], FLOAT_CUDA);
+        let v_cuda = z_norm_dims_cuda(&inp, &[1,2], 1e-8 )?;
+        let v_torch = z_norm_dims(&inp, &[1,2], 1e-8 )?;
+
+        assert!(v_cuda.allclose(&v_torch, 0.01, 0.01, false));
+
+        Ok(())
+    }
+
+    #[test]
+    fn perf_z_norm_dims_cuda() -> anyhow::Result<()>{
+
+        for k in [1, 10, 30, 100, 300, 1000, 10_000, 30_000, 100_000] {
+            debug!("k={k}");
+            run_z_norm_dims(z_norm_dims_cuda, &[1, 2, 3 * k ])?;
+            run_z_norm_dims(z_norm_dims, &[1, 2, 3 * k ])?;
+            debug!("----------------------");
+        }
+        Ok(())
+    }
+    fn run_z_norm_dims(f: fn(&Tensor, &[i64], f64) -> anyhow::Result<Tensor>, size: &[i64; 3]) -> anyhow::Result<()>{
+        let x = Tensor::rand(size, FLOAT_CUDA);
+        let dims = &[1,2];
+        // warmup
+        for _ in 0..20 {
+            let _ =
+                f(&x, dims, 1e-8)?;
+        }
+
+        tch::Cuda::synchronize(0);
+
+        let start = std::time::Instant::now();
+
+        for _ in 0..1000 {
+            let _ =
+                f(&x, dims, 1e-8)?;
+        }
+
+        tch::Cuda::synchronize(0);
+
+        debug!(
+            "{} us/op",
+            start.elapsed().as_secs_f64()
+                * 1e6
+                / 1000.0
+        );
         Ok(())
     }
 

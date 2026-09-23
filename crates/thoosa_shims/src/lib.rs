@@ -9,3 +9,4 @@ pub mod cpp_log;
 pub mod optimizers;
 pub mod arena;
 mod talc_alloca;
+pub mod z_norm;
