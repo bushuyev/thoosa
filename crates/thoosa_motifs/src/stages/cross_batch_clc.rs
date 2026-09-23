@@ -20,7 +20,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{TchError, Tensor};
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
@@ -406,61 +406,7 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct CrossUnfoldClcDynSyncStage<R, C>
-where
-    R: Debug + Output + Input + Send + 'static,
-    C: RunCtx + 'static,
-{
-    inner: Arc<dyn DynCrossUnfoldClcStage<R, C>>,
-}
 
-impl<R, C> CrossUnfoldClcDynSyncStage<R, C>
-where
-    R: Debug + Output + Input + Send + 'static,
-    C: RunCtx + 'static,
-{
-    pub fn new(inner: Arc<dyn DynCrossUnfoldClcStage<R, C>>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<R, C> Stage for CrossUnfoldClcDynSyncStage<R, C>
-where
-    R: Debug + Output + Input + Send + 'static,
-    C: RunCtx + 'static,
-{
-    type In<'a> = CrossInput<'a, Arc<Resource>>;
-    type Out = CrossUnfoldClcOutput<R>;
-    type Ctx = C;
-}
-
-impl<R, C> SyncStage for CrossUnfoldClcDynSyncStage<R, C>
-where
-    R: Debug + Output + Input + Send + 'static,
-    C: RunCtx + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        Arc::clone(&self.inner).do_run_dyn(input, ctx)
-    }
-}
-
-impl<R, C> OutId for CrossUnfoldClcDynSyncStage<R, C>
-where
-    R: Debug + Output + Input + Send + 'static,
-    C: RunCtx + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        self.inner.out_id_dyn(input_id)
-    }
-}
-
-impl<R, C> Adjustable for CrossUnfoldClcDynSyncStage<R, C>
-where
-    R: Debug + Output + Input + Send + 'static,
-    C: RunCtx + 'static,
-{
-}
 
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where
@@ -489,15 +435,7 @@ where
     F: CrossBatchFn<R, CUC, C>,
     C: RunCtx + 'static,
 {
-    pub fn new<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> CrossUnfoldClcDynSyncStage<R, C>
-    where
-        CrossBatchCtxFn: Fn(&C) -> Result<CUC, ThoError> + Send + Sync + 'static,
-        F: Send + Sync + 'static,
-        CUC: Send + Sync + 'static,
-        R: Debug + Output + Input + Send + 'static,
-    {
-        CrossUnfoldClcDynSyncStage::new(Arc::new(Self::new_local(batch_clc_fn, cross_batch_ctx, unfold_params)))
-    }
+
 
     pub fn new_local<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> Self
     where
@@ -555,33 +493,26 @@ where
     }
 }
 
-impl<C> CrossUnfoldClc<crate::stages::find_motifs::CrossUnfoldMaskFn<C>, DistsMask, crate::stages::find_motifs::MasksCtx, C>
+impl<C> CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>
 where
     C: RunCtx + 'static,
 {
-    pub async fn new_dyn_for_find_motifs(init: crate::stages::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize) -> Result<CrossUnfoldClcDynSyncStage<DistsMask, C>, ThoError> {
+    pub async fn new_dyn_for_find_motifs(init: crate::stages::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             static STAGE_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Install the configured find-motifs stage once, then use shared typed proxy dispatch.
-            Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(CrossUnfoldClcProxyCtx::<C> {
-                proxy: Arc::new(DynSyncStageEnum::Proxy {
+
+            Ok(
+                Arc::new(DynSyncStageEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
                     init: (),
-                }),
-                _pd: PhantomData,
-            })))
-            //TODO try to avoid extra wrappers:
-            // Ok(
-            //     DynSyncStageEnum::Proxy {
-            //         stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
-            //         init: (),
-            //     }
-            // )
+                })
+            )
         } else {
-            Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(Self::new_for_find_motifs(init)?)))
+            Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_for_find_motifs(init)?))))
         }
     }
+
 }
 
 #[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
@@ -916,7 +847,7 @@ mod tests {
                 Ok(DistsMask::new(mask, Some(dists), mask_type)?)
             },
         );
-        let cross_batch_clc = Arc::new(CrossUnfoldClc::new(
+        let cross_batch_clc = Arc::new(CrossUnfoldClc::new_local(
             cross_batch_fn,
             |_| Ok(MasksCtx::AccumulatedMeanDist {k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))?}),
             UnfoldParams::new(1, 2, 1),
