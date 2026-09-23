@@ -88,7 +88,7 @@ impl RegisteredCacheHandle {
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
 
-    fn new(num_devices: usize) -> Result<Self, ThoError> {
+    fn new(num_devices: usize) -> anyhow::Result<Self> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
@@ -121,7 +121,7 @@ impl GlobalCtx {
         })
     }
 
-    async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> Result<Self, ThoError> {
+    async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> anyhow::Result<Self> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
@@ -135,7 +135,7 @@ impl GlobalCtx {
         };
 
         if rc != 0 {
-            return Err(ThoError::new("shared_arena_init failed"));
+            anyhow::bail!("shared_arena_init failed");
         }
 
         let raw_fd = unsafe {
@@ -143,7 +143,7 @@ impl GlobalCtx {
         };
 
         if raw_fd < 0 {
-            return Err(ThoError::new("shared_arena_dup_fd failed"));
+            anyhow::bail!("shared_arena_dup_fd failed");
         }
 
 
@@ -211,23 +211,23 @@ impl GlobalCtx {
     }
 
     ///num_devices: number of devices - CPU + GPU count
-    pub fn init_devices(num_devices: usize) -> Result<&'static GlobalCtx, ThoError> {
+    pub fn init_devices(num_devices: usize) -> anyhow::Result<&'static GlobalCtx> {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
-        GLOBAL_CTX
-            .set(GlobalCtx::new(num_devices)?)
-            .map_err(|_| ThoError::new("`init_devices` must only be called once at program start"))?;
+        if GLOBAL_CTX.set(GlobalCtx::new(num_devices)?).is_err() {
+            anyhow::bail!("`init_devices` must only be called once at program start");
+        }
 
         Ok(Self::global())
     }
 
     ///num_devices: number of devices - CPU + GPU count
-    pub async fn init_devices_ipc(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<String>/*TODO move to device init struct*/) -> Result<&'static GlobalCtx, ThoError> {
+    pub async fn init_devices_ipc(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<String>/*TODO move to device init struct*/) -> anyhow::Result<&'static GlobalCtx> {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
-        GLOBAL_CTX
-            .set(GlobalCtx::new_ipc(num_devices, cuda_worker_args).await?)
-            .map_err(|_| ThoError::new("`init_devices` must only be called once at program start"))?;
+        if GLOBAL_CTX.set(GlobalCtx::new_ipc(num_devices, cuda_worker_args).await?).is_err() {
+            anyhow::bail!("`init_devices` must only be called once at program start");
+        }
 
         Ok(Self::global())
     }

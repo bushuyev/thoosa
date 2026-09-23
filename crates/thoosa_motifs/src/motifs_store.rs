@@ -443,12 +443,13 @@ impl MotifsStore for SqlStore {
                 if slices.is_empty() {
                     continue
                 }
-                let motifs_inserted = t
-                    .execute(
+                let motifs_inserted = match t.execute(
                         "INSERT INTO motifs (group_ord, run_config_id, channel_id) VALUES (?, ?, ?)",
                         [group as usize, run_config_id as usize, channel as usize],
-                    )
-                    .map_err(|e| Self::log_error((group, run_config_id, channel), &t, e))?;
+                    ) {
+                    Ok(inserted) => inserted,
+                    Err(error) => return Err(Self::log_error((group, run_config_id, channel), &t, error).into()),
+                };
 
                 let motif_id: i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 

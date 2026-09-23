@@ -251,6 +251,10 @@ struct ParentSuspendGuard {
     suspended: bool,
 }
 
+fn executor_closed_error(msg: impl Into<String>) -> ThoError {
+    ThoError::new_with_cause(msg, ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed))
+}
+
 impl ParentSuspendGuard {
     fn new(parent: Option<CurrentJob>) -> Self {
         Self {
@@ -265,18 +269,22 @@ impl ParentSuspendGuard {
         };
 
         let (ack_tx, ack_rx) = oneshot::channel();
-        parent
+        if parent
             .cmd_tx
             .send(ManagerCmd::Suspend {
                 job_id: parent.job_id,
                 reply: ack_tx,
             })
-            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
+            .is_err()
+        {
+            return Err(executor_closed_error("executor is closed"));
+        }
 
         // Sending is synchronous: arm compensation before the first cancellation point.
         self.suspended = true;
-        track_await(ack_rx).await
-            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
+        if track_await(ack_rx).await.is_err() {
+            return Err(executor_closed_error("executor is closed"));
+        }
 
         Ok(())
     }
@@ -292,19 +300,23 @@ impl ParentSuspendGuard {
         };
 
         let (ack_tx, ack_rx) = oneshot::channel();
-        parent
+        if parent
             .cmd_tx
             .send(ManagerCmd::Resume {
                 job_id: parent.job_id,
                 reply: ack_tx,
             })
-            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
+            .is_err()
+        {
+            return Err(executor_closed_error("executor is closed"));
+        }
 
         // The manager now owns the resume. Drop must not enqueue a second one while
         // we await capacity, since that could release another nested submission's slot.
         self.suspended = false;
-        track_await(ack_rx).await
-            .map_err(|_| ThoError::new_with_cause("executor is closed", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed)))?;
+        if track_await(ack_rx).await.is_err() {
+            return Err(executor_closed_error("executor is closed"));
+        }
 
         Ok(())
     }
@@ -437,7 +449,7 @@ impl SyncStageRunner {
     }
 
     fn closed_error(msg: impl Into<String>) -> ThoError {
-        ThoError::new_with_cause(msg, ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed))
+        executor_closed_error(msg)
     }
 
     fn resetting_submit_error() -> ThoError {
@@ -545,7 +557,10 @@ impl SyncStageRunner {
             let result = if is_oom && max_other_parallel == 0 {
                 retry.reserve_exclusive();
 
-                result.map_err(|inner| SyncStageRunnerError::JobError { job_id, inner: Box::new(inner) }.into())
+                match result {
+                    Ok(output) => Ok(output),
+                    Err(inner) => Err(SyncStageRunnerError::JobError { job_id, inner: Box::new(inner) }.into()),
+                }
             } else {
                 retry.clear_exclusive();
                 result
@@ -635,12 +650,13 @@ impl SyncStageRunner {
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
-            let result = track_await(result_rx).await.map_err(|_| {
-                ThoError::new_with_cause(
+            let result = match track_await(result_rx).await {
+                Ok(result) => result,
+                Err(_) => return Err(ThoError::new_with_cause(
                     "job was cancelled before producing a result",
                     ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled),
-                )
-            })?;
+                )),
+            };
             track_await(suspend_guard.resume()).await?;
 
             return result;

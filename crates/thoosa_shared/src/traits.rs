@@ -418,23 +418,15 @@ impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
     {
         self.dims[DIM]
     }
-    pub fn map_to_ranges(start:&Self, end:&Self) ->Result<[Range<i64>; SIZE], ThoError> {
-
-        start.dims
-            .iter()
-            .zip(end.dims.iter())
-            .enumerate()
-            .map(|(i, (start, end))| {
-                if i == IDX {
-                    *start..*end
-                } else {
-                    0..*end
-                }
-
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .map_err(|_| ThoError::new("can't map metrics to ranges: length mismatch"))
+    pub fn map_to_ranges(start:&Self, end:&Self) -> [Range<i64>; SIZE] {
+        // Both metrics have exactly SIZE entries, so constructing the array directly avoids an impossible length error.
+        std::array::from_fn(|i| {
+            if i == IDX {
+                start.dims[i]..end.dims[i]
+            } else {
+                0..end.dims[i]
+            }
+        })
     }
 
 }

@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn test_degrade_once() -> Result<(), ThoError>{
+    async fn test_degrade_once() -> anyhow::Result<()>{
         let ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
 
         let _from_ctx = MockTestSelectorBuilder::finish_with_from_ranges(Arc::clone(&ranges));
@@ -393,15 +393,24 @@ mod tests {
         let mut selector = MockTestSelector::new();
 
 
-        let adjusted_selector = splits_adjuster.adjust(selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 0", ThoError::AdjusterFailed))?;
+        let adjusted_selector = match splits_adjuster.adjust(selector, &mut context_impl).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("initial adjust failed: {error:?}"),
+        };
 
         assert!(splits_adjuster.degrade(&mut context_impl));//returns true, can degrade further
 
-        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 1", ThoError::AdjusterFailed))?;
+        let adjusted_selector = match splits_adjuster.adjust(adjusted_selector, &mut context_impl).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust after degrade failed: {error:?}"),
+        };
 
         context_impl.add_partial_output(MockTestOutput::new()).await;
 
-        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_cause("msg 2", ThoError::AdjusterFailed))?;
+        let adjusted_selector = match splits_adjuster.adjust(adjusted_selector, &mut context_impl).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust after partial output failed: {error:?}"),
+        };
 
         context_impl.add_partial_output(MockTestOutput::new()).await;
 
