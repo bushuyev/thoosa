@@ -9,8 +9,8 @@ use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
-use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter};
+use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -37,6 +37,7 @@ use thoosa_shared::traits::RunCtx;
 use thoosa_shared::val::NamedVal;
 use thoosa_shared::{RangeOrValue, ThoError};
 use tracing::Instrument;
+
 
 #[derive(Debug)]
 pub enum FindAndSelect {
@@ -430,7 +431,7 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
         //     num_layers:  RangeOrValue::Value(4),
         //     features:  RangeOrValue::Value(100),
         // })
-        validation_step: RangeOrValue::Value(2),
+        validation_step: RangeOrValue::Value(1),
     };
     //////////////////////train final
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
@@ -618,21 +619,24 @@ where
 {
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10),
+        step: RangeOrValue::Value(100),
         // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 170 }, step: Some((20, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 170 }, step: Some((40, 0)) },
         freq_filter: Some(vec![
             // AverageFilter(AverageFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window),
             //     step: RangeOrValue::Value(10),
             // }),
-            InputFilterRangeOrValue::SavGolFilter(SavGolFilterParamsRangeOrValue {
-                    window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-                    poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
-                    stride: RangeOrValue::Value(10),
-                    padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            })
+            MedianFilter(MedianFilterParamsRangeOrValue {
+                window: RangeOrValue::dynamic(median_window),
+            }),
+            // InputFilterRangeOrValue::SavGolFilter(SavGolFilterParamsRangeOrValue {
+            //         window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+            //         poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
+            //         stride: RangeOrValue::Value(10),
+            //         padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            // })
         ]),
         finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
@@ -756,20 +760,20 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
                 }),
-                min: RangeOrValue::Value(0.9),
+                min: RangeOrValue::Value(0.7),
             },
-            MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1. / 64.),
-                    lag_min: RangeOrValue::Value(1. / 32.),
-                    lag_max: RangeOrValue::Value(0.5),
-                    struct0: RangeOrValue::Value(0.2),
-                    peak_good: RangeOrValue::Value(0.25),
-                    peak_bad: RangeOrValue::Value(0.65),
-                    eps: RangeOrValue::Value(1e-8),
-                }),
-                min: RangeOrValue::Value(0.70),
-            },
+            // MotifCriterionConstraintRangeOrValue {
+            //     metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
+            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
+            //         lag_min: RangeOrValue::Value(1. / 32.),
+            //         lag_max: RangeOrValue::Value(0.5),
+            //         struct0: RangeOrValue::Value(0.2),
+            //         peak_good: RangeOrValue::Value(0.25),
+            //         peak_bad: RangeOrValue::Value(0.65),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     }),
+            //     min: RangeOrValue::Value(0.70),
+            // },
         ],
     }
 }
@@ -1185,8 +1189,8 @@ mod tests {
             train_resource_group: settings.train_resource_group.to_string(),
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
-            motifs_limit: Some(23),
-            max_motif_net_loss: 0.01,
+            motifs_limit: None, //Some(23),
+            max_motif_net_loss: 0.1,
             selected_motif_nets_limit: Some(10),
             motif_slices_step: 10,
             with_plots: false,
@@ -1194,8 +1198,8 @@ mod tests {
             labels: None,
         };
 
-        // let all_configs = run_all_config_1(&run_all_args, &settings);
-        let all_configs = run_all_config_0(&run_all_args);
+        let all_configs = run_all_config_1(&run_all_args, &settings);
+        // let all_configs = run_all_config_0(&run_all_args);
 
         let r = panic_to_err_async!({run_all(
             &ws,
