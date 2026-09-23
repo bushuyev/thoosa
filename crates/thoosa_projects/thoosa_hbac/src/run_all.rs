@@ -216,6 +216,9 @@ pub(crate) async fn run_all(
     }
 
     info!("find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
+    assert!(!select_motifs_run_config_ids.is_empty(), "No selected motifs");
+
+
 
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
     let input_wrapper = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config), run_all_args.motifs_limit);
@@ -240,6 +243,8 @@ pub(crate) async fn run_all(
     )).await?;
 
     info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
+
+    assert!(!train_motif_nets_run_config_ids.is_empty(), "No trained motif nets");
     
     let mut init_ctx_train_labels = root_ctx.branch(true);
     let store_in_train_labels = Arc::clone(&store);
@@ -280,7 +285,7 @@ pub(crate) async fn run_all(
     )).await?;
 
     info!("train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
-
+    assert!(!train_label_nets_run_config_ids.is_empty(), "No trained label nets");
 
     ////////////////////////
     let map = HashMap::new();
@@ -465,22 +470,22 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
 
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    let find_and_select =  FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
-        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
-        select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
-    };
-
-    // let find_and_select =  FindAndSelect::WithOpt {
-    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-    //         id: None,
-    //         find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
-    //         select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
-    //     },
+    // let find_and_select =  FindAndSelect::GridOnly {
+    //     find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
     //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-    //     find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    //     extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
+    //     select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     // };
+
+    let find_and_select =  FindAndSelect::WithOpt {
+        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
+            id: None,
+            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
+            select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
+        },
+        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
