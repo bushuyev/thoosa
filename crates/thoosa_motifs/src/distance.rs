@@ -159,6 +159,7 @@ impl<'a> MaskMaker<'a> {
     t_0, t_1 - channels x slices x slice_len
 */
 /// returns bool mask and, if with_distances is true, distances
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="clc_d2_similarity"))]
 pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> anyhow::Result<Tensor> {
     match similarity_metric {
         SimilarityMetric::EucDist(config) => {
@@ -955,8 +956,6 @@ mod distance_tests {
 
         Ok(())
     }
-
-
 
     fn _dist_2(p_0: &[f32], p_1: &[f32]) -> f32 {
         ((p_0[0] - p_1[0]).powi(2) + (p_0[1] - p_1[1]).powi(2)).sqrt()
