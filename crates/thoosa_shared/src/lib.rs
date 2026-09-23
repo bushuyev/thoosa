@@ -1898,21 +1898,23 @@ pub enum ResourceType {
     NotInGroup(String),
 }
 
-pub fn parse_resources(s: &str) -> Result<ResourceType, Box<dyn Error + Send + Sync + 'static>> {
-    let value_pos = s.find(":").expect("resource specifier should contain ':'") + 1;
+pub fn parse_resources(s: &str) -> anyhow::Result<ResourceType> {
+    let Some((kind, value)) = s.split_once(':') else {
+        anyhow::bail!("resource specifier {s:?} should contain ':'");
+    };
 
-    if s.starts_with("list") {
+    if kind == "list" {
         Ok(ResourceType::List(
-            s[value_pos..].split(",").map(|v| v.to_string()).collect(),
+            value.split(",").map(|v| v.to_string()).collect(),
         ))
-    } else if s.starts_with("set") {
-        Ok(ResourceType::Set(s[value_pos..].to_string()))
-    } else if s.starts_with("group") {
-        Ok(ResourceType::Group(s[value_pos..].to_string()))
-    } else if s.starts_with("not_group") {
-        Ok(ResourceType::NotInGroup(s[value_pos..].to_string()))
+    } else if kind == "set" {
+        Ok(ResourceType::Set(value.to_string()))
+    } else if kind == "group" {
+        Ok(ResourceType::Group(value.to_string()))
+    } else if kind == "not_group" {
+        Ok(ResourceType::NotInGroup(value.to_string()))
     } else {
-        panic!("unknown resource type {s}, expecting list, set or group")
+        anyhow::bail!("unknown resource type {kind:?}, expecting list, set, group, or not_group")
     }
 }
 

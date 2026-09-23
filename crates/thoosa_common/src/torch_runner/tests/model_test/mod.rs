@@ -36,9 +36,12 @@ fn init() {
 fn init_devices_once() -> Result<(), ThoError> {
     // Cache initialization failures too so concurrent tests observe the same fallible outcome.
     static INIT: std::sync::OnceLock<Result<(), ThoError>> = std::sync::OnceLock::new();
-    match INIT.get_or_init(|| RealGlobalCtx::init_devices(2).map(|_| ())) {
+    match INIT.get_or_init(|| match RealGlobalCtx::init_devices(2) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(error.into()),
+    }) {
         Ok(()) => Ok(()),
-        Err(error) => Err(ThoError::new(format!("failed to initialize devices once: {error:?}"))),
+        Err(error) => Err(error.clone().context("failed to initialize devices once")),
     }
 }
 

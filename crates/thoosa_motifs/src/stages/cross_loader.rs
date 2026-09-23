@@ -1229,6 +1229,7 @@ pub mod mock_cross_loader_receiver {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context as _;
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
     use super::*;
@@ -1413,7 +1414,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_loader_adjuster_degrades_to_slice() -> Result<(), ThoError> {
+    async fn test_cross_loader_adjuster_degrades_to_slice() -> anyhow::Result<()> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1449,10 +1450,10 @@ mod tests {
         assert!(cross_loader_adjuster.degrade(&mut context));
         assert_eq!(context.batch_1_mode, Batch1SplitMode::Slice);
 
-        selector = cross_loader_adjuster
-            .adjust(selector, &mut context)
-            .await
-            .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
+        selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust failed: {error:?}"),
+        };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 4));
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
@@ -1464,10 +1465,10 @@ mod tests {
         let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output).await;
 
-        selector = cross_loader_adjuster
-            .adjust(selector, &mut context)
-            .await
-            .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
+        selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust failed: {error:?}"),
+        };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
@@ -1479,7 +1480,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_loader_adjuster_slice_advances_resources() -> Result<(), ThoError> {
+    async fn test_cross_loader_adjuster_slice_advances_resources() -> anyhow::Result<()> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -1523,10 +1524,10 @@ mod tests {
         assert!(cross_loader_adjuster.degrade(&mut context));
         assert!(cross_loader_adjuster.degrade(&mut context));
 
-        selector = cross_loader_adjuster
-            .adjust(selector, &mut context)
-            .await
-            .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
+        selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust failed: {error:?}"),
+        };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 3));
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
@@ -1538,10 +1539,10 @@ mod tests {
         let dummy_output_0 = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_0).await;
 
-        selector = cross_loader_adjuster
-            .adjust(selector, &mut context)
-            .await
-            .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
+        selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust failed: {error:?}"),
+        };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
@@ -1553,10 +1554,10 @@ mod tests {
         let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_1).await;
 
-        selector = cross_loader_adjuster
-            .adjust(selector, &mut context)
-            .await
-            .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
+        selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
+            Ok(selector) => selector,
+            Err(error) => anyhow::bail!("adjust failed: {error:?}"),
+        };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
         let data = SelectRef::select_ref(&input, 1, Some(selector)).await?;
@@ -1569,26 +1570,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_with_indexes_mask_without_oom() -> Result<(), ThoError> {
+    async fn test_cross_clc_with_indexes_mask_without_oom() -> anyhow::Result<()> {
         test_cross_clc(None, 20, |(mask_size, _dist_size)|DistsMaskType::MaskIndexes(mask_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_with_indexes_mask_with_oom() -> Result<(), ThoError> {
+    async fn test_cross_clc_with_indexes_mask_with_oom() -> anyhow::Result<()> {
         test_cross_clc(Some(20), 40, |(mask_size, _dist_size)|DistsMaskType::MaskIndexes(mask_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_with_packed_mask_without_oom() -> Result<(), ThoError> {
+    async fn test_cross_clc_with_packed_mask_without_oom() -> anyhow::Result<()> {
         test_cross_clc(None, 20, |(mask_size, dist_size)|DistsMaskType::MaskPacked(mask_size, dist_size)).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_cross_clc_with_packed_mask_with_oom() -> Result<(), ThoError> {
+    async fn test_cross_clc_with_packed_mask_with_oom() -> anyhow::Result<()> {
         test_cross_clc(Some(20), 40, |(mask_size, dist_size)|DistsMaskType::MaskPacked(mask_size, dist_size)).await
     }
 
-    async fn test_cross_clc<F>(oom_limit: Option<i64>, chunk_size: usize, mask_type:F) -> Result<(), ThoError>
+    async fn test_cross_clc<F>(oom_limit: Option<i64>, chunk_size: usize, mask_type:F) -> anyhow::Result<()>
     where
         F:Fn((Vec<i64>, Option<Vec<i64>>))->DistsMaskType + Send + Sync + 'static
     {
@@ -1754,12 +1755,12 @@ mod tests {
 
         let slices_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).tmp_path().join(format!("{run_config_id}_0_slices.zstd")));
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
-            .map_err(|e| ThoError::from_error(format!("read slices file {slices_path:?}"), e))?;
+            .with_context(|| format!("read slices file {slices_path:?}"))?;
 
         let mut remaining = expected;
         let mut actual_count = 0usize;
         for chunk in reader {
-            let chunk = chunk.map_err(|e| ThoError::from_error("read slices chunk", e))?;
+            let chunk = chunk.context("read slices chunk")?;
             for entry in chunk {
                 debug!("entry={entry:?}");
                 actual_count += 1;

@@ -843,7 +843,7 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
     fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
         let size: MonoMetrics<1, 2> = t.size().try_into()?;
 
-        let mut ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
+        let ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end);
         debug!("ChannelsData2Selector::subview 1. ranges={ranges:?}, size={:?}", t.size());
 
 
@@ -958,7 +958,7 @@ impl ThoSelector for ChannelsDataSelector {
     }
 
     fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
-        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.0.start, &self.0.end)?.into())
+        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.0.start, &self.0.end).into())
     }
 }
 

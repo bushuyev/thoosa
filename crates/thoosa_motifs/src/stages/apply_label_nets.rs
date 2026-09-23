@@ -534,7 +534,10 @@ where
 
 pub fn stack_applied_label_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>().map_err(|_| ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"))?;
+        let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>() else {
+            return Err(ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"));
+        };
+        let init = *init;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
@@ -802,7 +805,10 @@ where
 
 pub fn apply_label_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init as Box<dyn std::any::Any>).downcast::<ApplyLabelNetInit>().map_err(|_| ThoError::new("ApplyLabelNet endpoint received invalid initializer"))?;
+        let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<ApplyLabelNetInit>() else {
+            return Err(ThoError::new("ApplyLabelNet endpoint received invalid initializer"));
+        };
+        let init = *init;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
         let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module

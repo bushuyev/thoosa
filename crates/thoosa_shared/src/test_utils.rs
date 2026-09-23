@@ -6,7 +6,6 @@ use crate::perf_logging::{
 use log::{trace, LevelFilter};
 use num_traits::{Num, Signed, ToPrimitive};
 use std::env;
-use std::env::VarError;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
@@ -50,14 +49,16 @@ pub fn init_test_logging() {
     if LOG_INIT.swap(true, Ordering::Relaxed) {
         return;
     }
-    let log_level = env::var("RUST_LOG")
-        .and_then(|v| {
-            LevelFilter::from_str(v.as_str()).map_err(|e| {
-                println!("Can't find loglevel: {}", e);
-                VarError::NotPresent
-            })
-        })
-        .unwrap_or(LevelFilter::Debug);
+    let log_level = match env::var("RUST_LOG") {
+        Ok(value) => match LevelFilter::from_str(value.as_str()) {
+            Ok(level) => level,
+            Err(error) => {
+                println!("Can't find loglevel: {error}");
+                LevelFilter::Debug
+            }
+        },
+        Err(_) => LevelFilter::Debug,
+    };
 
     if perf_log_level() == LevelFilter::Off {
         if let Ok(val) = env::var("RUST_LOG_PERF") {

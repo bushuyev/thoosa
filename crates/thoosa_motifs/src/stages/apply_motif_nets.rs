@@ -796,7 +796,10 @@ where
 
 pub fn stack_applied_motif_nets_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput>().map_err(|_| ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"))?;
+        let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedMotifNetsInput>() else {
+            return Err(ThoError::new("StackAppliedMotifNets endpoint received invalid initializer"));
+        };
+        let init = *init;
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedMotifNets::<WokerRunCtx>::new_local(init.id).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
@@ -1214,7 +1217,10 @@ where
 
 pub fn apply_motif_net_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let init = *(init as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>().map_err(|_| ThoError::new("ApplyMotifNet endpoint received invalid initializer"))?;
+        let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<ApplyMotifNetInit>() else {
+            return Err(ThoError::new("ApplyMotifNet endpoint received invalid initializer"));
+        };
+        let init = *init;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
         let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(

@@ -55,7 +55,7 @@ impl ThoSelector for WelchChannelsSelector {
     }
 
     fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
-        Ok(MonoMetrics::<0, 2>::map_to_ranges(&self.0.start, &self.0.end)?.into())
+        Ok(MonoMetrics::<0, 2>::map_to_ranges(&self.0.start, &self.0.end).into())
     }
 }
 
@@ -76,7 +76,7 @@ impl LocalSelect<SynKey, WelchChannelsSelector> for ThoTensor<WelchInputChannels
 
     fn local_subview(id:&SynKey, t:&Tensor, selector: WelchChannelsSelector) -> Result<Self::Output, ThoError> {
         let size: MonoMetrics<0, 2> = t.size().try_into()?;
-        let ranges = MonoMetrics::<0, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
+        let ranges = MonoMetrics::<0, 2>::map_to_ranges(&selector.0.start, &selector.0.end);
         debug!("WelchChannelsSelector::subview: ranges={ranges:?} size={size:?}");
         let sub_t = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
         ThoTensor::new(id.clone(), sub_t)
