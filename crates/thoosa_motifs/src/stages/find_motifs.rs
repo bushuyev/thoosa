@@ -1,6 +1,6 @@
 use crate::motifs_store::MotifsStore;
 use crate::stages::bucketing::{BucketingInput, BucketingStage};
-use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcDynSyncStage, CrossUnfoldClcOutput, UnfoldParams};
+use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::stages::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
@@ -56,11 +56,12 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Handle;
 use tokio::task::{JoinError, JoinSet};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum};
 
 pub type FilteredLoaderStage<L, C> = PairStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = SingleOrPair<L, FilteredLoaderStage<L, C>>;
 pub type CrossUnfoldMaskFn<C> = Box<dyn CrossBatchFn<DistsMask, MasksCtx, C> + 'static>;
-type CrossUnfoldMaskStage<C> = CrossUnfoldClcDynSyncStage<DistsMask, C>;
+type CrossUnfoldMaskStage<C> = DynSyncStageEnum<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>;
 type DistsTrackerStage<C> = DistsTracker<C>;
 
 
@@ -275,7 +276,6 @@ where
                 MasksCtx::AccumulatedMeanDist { k, ctx } => {
                     vec![
                         LocalMin { dim: 1, radius },
-                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                         LeAccumulatedMean {
                             k: *k,
                             avg: &ctx.means_acc,
@@ -286,7 +286,6 @@ where
                 MasksCtx::AccumulatedQuantileDist { q, ctx } => {
                     vec![
                         LocalMin { dim: 1, radius },
-                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                         LeAccumulatedQuantile {
                             q: *q,
                             quantiles: &ctx.quantiles_acc,
@@ -297,7 +296,6 @@ where
                 MasksCtx::PrecalculatedDist { dists } => {
                     vec![
                         LocalMin { dim: 1, radius },
-                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                         Le {
                             v: dists.t_ref(),
                         }
@@ -456,7 +454,7 @@ where
 
                             let unfold_params = UnfoldParams::new(1, run_config.window as i64, run_config.step as i64);
                             let step = unfold_params.step();
-                            let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new_dyn_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(cross_loader_run_config.similarity_metric, fixed_config.keep_slice_matches, radius, masks_ctx, unfold_params), ctx.tho_device_idx()).await?);
+                            let cross_unfold_clc: Arc<DynSyncStageEnum<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>> = CrossUnfoldClc::new_dyn_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(cross_loader_run_config.similarity_metric, fixed_config.keep_slice_matches, radius, masks_ctx, unfold_params), ctx.tho_device_idx()).await?;
                             debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
 
                             let run_config_clone = run_config.clone();

@@ -157,11 +157,7 @@ where
     > + OutId + 'static,
 
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<
-        In<'i> = CrossInput<'i, Arc<Resource>>,
-        Out = CrossUnfoldClcOutput<R>,
-        Ctx=C
-    > + Adjustable + OutId + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
 
     RSV: for<'i> SyncStage<
         In<'i> = CrossUnfoldClcOutput<R>,
@@ -189,7 +185,7 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -203,7 +199,7 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
@@ -432,7 +428,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
@@ -453,7 +449,7 @@ where
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
+    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
@@ -1680,7 +1676,7 @@ mod tests {
                 Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)))?)
             },
         );
-        let batch_clc = Arc::new(CrossUnfoldClc::new(
+        let batch_clc = Arc::new(CrossUnfoldClc::new_local(
             batch_clc_fn,
             |_| Ok(()),
             UnfoldParams::new(1, unfold_size, unfold_step),

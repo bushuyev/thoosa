@@ -9,7 +9,7 @@ use thoosa_common::nets::nodes::{InitDummyRangeOrValue, InitModeRangeOrValue};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
@@ -581,7 +581,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(10),
+            batch_size: RangeOrValue::Value(2),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -616,7 +616,6 @@ where
     F: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
     F1: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
 {
-
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
@@ -624,19 +623,16 @@ where
         // window: RangeOrValue::Value(200),
         window: RangeOrValue::Range { range: Range { start: 10, end: 170 }, step: Some((20, 0)) },
         freq_filter: Some(vec![
-            // MedianFilter(MedianFilterParamsRangeOrValue {
-            //     window: RangeOrValue::dynamic(median_window.clone()),
+            // AverageFilter(AverageFilterParamsRangeOrValue {
+            //     window: RangeOrValue::dynamic(median_window),
+            //     step: RangeOrValue::Value(10),
             // }),
-            AverageFilter(AverageFilterParamsRangeOrValue {
-                window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(10),
-            }),
-            // SavGolFilter(SavGolFilterParamsRangeOrValue {
-            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
-            //     stride: RangeOrValue::Value(10),
-            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            // }),
+            InputFilterRangeOrValue::SavGolFilter(SavGolFilterParamsRangeOrValue {
+                    window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+                    poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
+                    stride: RangeOrValue::Value(10),
+                    padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            })
         ]),
         finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
