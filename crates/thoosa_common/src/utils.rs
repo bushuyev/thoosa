@@ -1149,6 +1149,7 @@ pub fn z_norm(t_0: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     Ok(t_0.f_sub(&t_0.f_mean_dim(dim, true, t_0.kind())?)?.f_div(&std)?)
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="z_norm_dims"))]
 pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> anyhow::Result<Tensor> {
     // Compute variance and mean together.
     // unbiased=false => population variance
