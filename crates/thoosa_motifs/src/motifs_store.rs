@@ -1047,9 +1047,7 @@ impl MotifsStore for SqlStore {
         }
 
         self.with_reader_conn("list_selected_motifs", move |conn| {
-            info!(
-            "list_selected_motifs: stmt={sql} channels={channels} params={params:?} limit={limit:?}"
-        );
+            debug!("list_selected_motifs: stmt={sql} channels={channels} params={params:?} limit={limit:?}");
 
             let mut stmt = conn.prepare(&sql)?;
 
