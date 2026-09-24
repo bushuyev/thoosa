@@ -70,6 +70,12 @@ target_link_libraries(
         CUDA::cudart
 )
 
+#target_link_options(
+#        thoosa_shims
+#        PRIVATE
+#        "-Wl,--no-undefined"
+#)
+
 install(
         TARGETS thoosa_shims
         LIBRARY DESTINATION lib
