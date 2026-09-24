@@ -161,7 +161,6 @@ async fn do_test_simp() -> Result<(), ThoError> {
         assert_eq!(output, SimpOutput { value: 420 });
     }
 
-
     Ok(())
 }
 

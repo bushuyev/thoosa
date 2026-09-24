@@ -122,7 +122,7 @@ use thoosa_shared::perf_logging::{PERF, SyncMakeWriter, format_perf_map, init_tr
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use thoosa_shared::tracked_await::snapshot_not_ready;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shims::context::tho_cu_reset;
+use thoosa_shims::context::tho_cu_restart;
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 

@@ -43,7 +43,7 @@ pub enum CudaLocalActorMessage {
     GetExecStream {
         respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
     },
-    Reset {
+    Restart {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     }
 
@@ -71,7 +71,7 @@ pub trait HandleCtx:Send {
 pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + Debug + Send + Sync {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
 
-    async fn reset(&self) -> Result<(), ThoError>;
+    async fn restart(&self) -> Result<(), ThoError>;
 
     async fn shutdown(&self) -> Result<(), ThoError> {
         Ok(())
@@ -216,7 +216,7 @@ struct CudaLocalActor {
     tho_device_idx:usize,
     receiver: mpsc::Receiver<CudaLocalActorMessage>,
     copy_ctx:Arc<RwLock<CopyCtx>>,
-    is_resetting:Arc<AtomicBool>,
+    is_restarting:Arc<AtomicBool>,
 }
 
 impl CudaLocalActor {
@@ -228,7 +228,7 @@ impl CudaLocalActor {
             tho_device_idx,
             receiver,
             copy_ctx: Arc::new(RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 32)?)),
-            is_resetting: Arc::new(AtomicBool::new(false)),
+            is_restarting: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -244,7 +244,7 @@ impl CudaLocalActor {
                 }
 
                 let copy_ctx = Arc::clone(&self.copy_ctx);
-                let is_resetting = Arc::clone(&self.is_resetting);
+                let is_resetting = Arc::clone(&self.is_restarting);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
@@ -261,7 +261,7 @@ impl CudaLocalActor {
                     ).await;
 
                     if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
-                        if let Err(e) = Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "Copy").await {
+                        if let Err(e) = Self::do_restart(copy_ctx, is_resetting, tho_device_idx, "Copy").await {
                             error!("CudaActor::handle_message, Copy:, e={e:?}");
                         }
                     }
@@ -271,8 +271,9 @@ impl CudaLocalActor {
                      );
                  });
             }
-            CudaLocalActorMessage::Reset { respond_to } => {
-                if self.is_resetting.load(Relaxed) {
+
+            CudaLocalActorMessage::Restart { respond_to } => {
+                if self.is_restarting.load(Relaxed) {//TODO should not be needed, pause is controlled by thoosa_shared::CudaActivityGate::request_pause
                     let _ = respond_to.send(
                         Err(ThoError::new("CudaActor is resetting"))
                     );
@@ -280,10 +281,10 @@ impl CudaLocalActor {
                 }
 
                 let copy_ctx = Arc::clone(&self.copy_ctx);
-                let is_resetting = Arc::clone(&self.is_resetting);
+                let is_resetting = Arc::clone(&self.is_restarting);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
-                    Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "Reset").await.unwrap();
+                    Self::do_restart(copy_ctx, is_resetting, tho_device_idx, "Reset").await.unwrap();
 
                     let _ = respond_to.send(Ok(()));
                 });
@@ -303,7 +304,7 @@ impl CudaLocalActor {
         }
     }
 
-    async fn do_reset(copy_ctx: Arc<RwLock<CopyCtx>>, is_resetting:Arc<AtomicBool>,  tho_device_idx:usize, from:&str) -> Result<(), ThoError> {
+    async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, is_resetting:Arc<AtomicBool>, tho_device_idx:usize, from:&str) -> Result<(), ThoError> {
         if is_resetting.load(Relaxed) {
             return Ok(());
         }
@@ -311,15 +312,20 @@ impl CudaLocalActor {
         is_resetting.store(true, Relaxed);
         let ticket = cuda_activity_gate().request_pause();
 
-
         match {
             track_await(GlobalCtx::global()
-                .drop_device(tho_device_idx, "drop"))
+                .drop_data_on_device(tho_device_idx, "drop"))
                 .await?;
+            let device:ThoDevice = tho_device_idx.into();
 
-            info!("CudaActor::handle_message/{from}, Reset: drop_device done");
+            debug!("CudaActor::do_reset: drop_device done");
 
-            timeout(Duration::from_millis(1000), copy_ctx.write()).await?.reset()
+            let mut cu_ctx = ThoCudaContext::new(device.gpu_ordinal() as i32)?;
+            cu_ctx.restart()?;
+
+            info!("CudaActor::do_reset: drop_device done");
+
+            timeout(Duration::from_millis(1000), copy_ctx.write()).await?.restart()
         } {
             Ok(_) => {
                 is_resetting.store(false, Relaxed);
@@ -327,11 +333,11 @@ impl CudaLocalActor {
 
                 cuda_activity_gate().finish_pause(ticket);//TODO can be done only here so
 
-                info!("CudaActor::handle_message/{from}: is_owner={is_owner} Reset ok");
+                info!("CudaActor::do_reset: is_owner={is_owner} Reset ok");
                 Ok(())
             }
             Err(e) => {
-                info!("CudaActor::handle_message/{from}, Reset: failed: e={e:?}");
+                info!("CudaActor::do_reset Reset: failed: e={e:?}");
                 panic!("reset failed");//TODO shutdown
             }
         }
@@ -376,10 +382,10 @@ impl CudaLocalActorHandle {
         Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    async fn reset_inner(&self) -> anyhow::Result<()> {
+    async fn restart_inner(&self) -> anyhow::Result<()> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaLocalActorMessage::Reset {
+            CudaLocalActorMessage::Restart {
                 respond_to,
             }
         ).await.context("CUDA actor channel closed")?;
@@ -429,8 +435,8 @@ impl CudaActorHandle for CudaLocalActorHandle {
         Ok(thoosa_shared::CudaActivityScope::for_operation()?.run(self.copy_tensor(src, dst_device)).await?.into())
     }
 
-    async fn reset(&self) -> Result<(), ThoError> {
-        Ok(self.reset_inner().await?)
+    async fn restart(&self) -> Result<(), ThoError> {
+        Ok(self.restart_inner().await?)
     }
 
 
@@ -540,13 +546,12 @@ impl CopyCtx {
             .await
     }
 
-    pub fn reset(&mut self) -> Result<(), ThoError> {
+    pub fn restart(&mut self) -> Result<(), ThoError> {
         info!("CopyCtx::reset_cuda_context: about to reset cu_ctx.reset");
 
         let cuda_context = ThoCudaContext::new(self.cuda_device as i32)?;
         cuda_context.bind_to_thread()?;
-        // let mut cu_ctx = ThoCudaContext::new(self.cuda_device as i32)?;
-        // cu_ctx.reset()?;
+
 
         info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 

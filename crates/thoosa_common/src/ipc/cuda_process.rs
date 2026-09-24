@@ -118,7 +118,7 @@ pub enum CudaIPCActorMessage {
         key:u64,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
-    Reset {
+    Restart {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
     Shutdown {
@@ -384,12 +384,8 @@ impl CudaIPCActor {
 
                 });
             }
-            CudaIPCActorMessage::Reset { respond_to } => {
-                debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
-
-                let mut cu_ctx = ThoCudaContext::new(self.tho_device_idx as i32 - 1)?;
-                cu_ctx.reset()?;
-                // timeout(Duration::from_millis(1000), copy_ctx.write()).await?.reset()
+            CudaIPCActorMessage::Restart { respond_to } => {
+                info!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
 
                 let replacement = match Self::spawn_worker_and_loops(self.tho_device_idx, &self.cuda_worker_args, self.arena_fd.as_fd()).await {
                     Ok(replacement) => replacement,
@@ -971,10 +967,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
         r
     }
 
-    async fn reset(&self) -> Result<(), ThoError> {
+    async fn restart(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaIPCActorMessage::Reset {
+            CudaIPCActorMessage::Restart {
                 respond_to,
             }
         ).await.context("CUDA actor channel closed")?;
