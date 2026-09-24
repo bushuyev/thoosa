@@ -185,13 +185,13 @@ impl GlobalCtx {
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
             track_await(GlobalCtx::global()
-                .drop_device(tho_device_idx, "drop"))
+                .drop_data_on_device(tho_device_idx, "drop"))
                 .await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
             GlobalCtx::global()
                 .cuda_actor(tho_device_idx)
-                .reset()
+                .restart()
                 .await?;
 
 
@@ -401,27 +401,27 @@ impl GlobalCtx {
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
-    pub async fn drop_device<'a>(
+    pub async fn drop_data_on_device<'a>(
         &'a self,
         tho_device_idx: usize,
         descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
-        info!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr}");
-        let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
+        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr}");
+        let maps = self.caches_snapshot("GlobalCtx::drop_data_on_device: timed out waiting for caches read lock");
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {
-            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::drop_device: timed out waiting for cache gate read lock")).await;
-            debug!("GlobalCtx::drop_device: type_name={type_name}");
+            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
+            debug!("GlobalCtx::drop_data_on_device: type_name={type_name}");
             track_await(entry.purger.drop_gpu(tho_device_idx, type_name)).await?;
-            debug!("GlobalCtx::drop_device: type_name={type_name} descr={descr} done");
+            debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        info!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr} done");
+        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
 
         Ok(())
     }
@@ -878,15 +878,16 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
     use futures_util::{StreamExt, TryStreamExt};
     use log::debug;
-    use parking_lot::{Condvar, Mutex};
+    use parking_lot::{Condvar, Mutex, RwLock};
     use rand::{RngExt, rng};
     use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::future;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
-    use tch::Tensor;
+    use tch::{Device, Tensor};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::RangeSelector;
@@ -894,10 +895,13 @@ mod tests {
     use thoosa_shims::context::ThoCudaContext;
     use tokio::task::spawn_blocking;
     use tracing::Instrument;
-
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::tests::run_ipc_test;
+    use crate::tho_device::ThoDevice;
+    use crate::ws::mock_ws_simp;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn heavy_device_reset() -> Result<(), ThoError>{//it's not heavy, but it does real device reset
+    async fn test_device_reset_local() -> Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -906,40 +910,73 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let tmp_cache:TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;
 
-        tmp_cache.insert(ThoTensor::new(777u32, Tensor::rand(&[100000], FLOAT_CUDA))?);
+        do_test_device_reset().await?;
+
+        Ok(())
+    }
+
+    async fn do_test_device_reset() -> Result<(), ThoError> {
+        let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+        let t_cpu = Tensor::rand(&[10000], FLOAT_CPU);
+        let t_cuda = cuda_actor.copy(t_cpu.into(), 1.into()).await?;
+        debug!("test_device_reset: t_cuda={t_cuda:?}");
+
+        let tmp_cache: TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;
+
+        tmp_cache.insert(t_cuda.to_types(777u32)?);
+
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
         let sum_0 = {
             let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
-            Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+            let t_0_cpu = cuda_actor.copy(t_0.shallow_clone::<AnyDims>().strip_types(), 0.into()).await?;
+            Ok::<_, ThoError>(t_0_cpu.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
         debug!("test_device_reset: sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
 
 
-        let cuda_actor = GlobalCtx::global().cuda_actor(1);
-        cuda_actor.reset().await?;
+        cuda_actor.restart().await?;
         debug!("test_device_reset: reset done");
-
-        let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
-        let t_cuda = cuda_actor.copy(t_cpu.into(), 1.into()).await?;
-        debug!("test_device_reset: t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = {
             let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
-            Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+            let t_0_cpu = cuda_actor.copy(t_0.shallow_clone::<AnyDims>().strip_types(), 0.into()).await?;
+            Ok::<_, ThoError>(t_0_cpu.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
 
         debug!("test_device_reset: sum_1={sum_1}");
 
         assert_eq!(sum_0, sum_1);
-
         Ok(())
+    }
+
+    #[test]
+    fn test_device_reset_ipc() -> Result<(), ThoError> {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+
+        run_ipc_test(
+            module_path!(),
+            async {
+
+                do_test_device_reset().await?;
+
+                Ok(())
+            },
+            async |sock_path: OsString| {
+                CudaWorker::run_worker(
+                    sock_path,
+                    &ws,
+                    HashMap::new(),
+                    ThoDevice::from(Device::Cuda(0)),
+                ).await
+            },
+        )
     }
 
 }

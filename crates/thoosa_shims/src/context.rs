@@ -14,7 +14,7 @@ const CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED: i32 = 115;
 unsafe extern "C" {
     pub fn tho_cu_init(flags: u32) -> CuResult;
 
-    pub fn tho_cu_reset(device: CuDevice) -> CuResult;
+    pub fn tho_cu_restart(device: CuDevice) -> CuResult;
     pub fn tho_cu_device_get(device: *mut CuDevice, ordinal: i32) -> CuResult;
     pub fn tho_cu_device_primary_ctx_retain(ctx: *mut CuContext, device: CuDevice) -> CuResult;
     pub fn tho_cu_device_primary_ctx_release(device: CuDevice) -> CuResult;
@@ -101,9 +101,9 @@ impl ThoCudaContext {
         unsafe { check_cuda_status(tho_cu_ctx_synchronize(), "cuCtxSynchronize") }
     }
 
-    pub fn reset(&mut self) -> Result<(), ThoError> {
+    pub fn restart(&mut self) -> Result<(), ThoError> {
         unsafe {
-            check_cuda_status(tho_cu_reset(self.cu_device), "tho_cu_reset")?;
+            check_cuda_status(tho_cu_restart(self.cu_device), "tho_cu_restart")?;
 
             let cu_device: CuDevice = 0;
             check_cuda_status(
