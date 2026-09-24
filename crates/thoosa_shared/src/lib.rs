@@ -191,9 +191,25 @@ pub enum FuturesOrdering {
     Ordered,
 }
 
+/// A process-wide admission cycle, independent of any device's worker lifetime.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CudaRecoveryCycle(pub u64);
+
+/// Advances only when recovery of this particular device succeeds.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CudaDeviceGeneration(pub u64);
+
+#[derive(Debug, Default, Clone)]
+pub enum CudaRecoveryState {
+    #[default]
+    Running,
+    Recovering { cause: ThoError },
+    Failed(Arc<CudaRecoveryFailure>),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CudaActivityPauseTicket {
-    generation: u64,
+    cycle: CudaRecoveryCycle,
     owner: bool,
 }
 
@@ -201,12 +217,17 @@ impl CudaActivityPauseTicket {
     pub fn is_owner(self) -> bool {
         self.owner
     }
+
+    pub fn cycle(self) -> CudaRecoveryCycle {
+        self.cycle
+    }
 }
 
 #[derive(Debug, Default)]
 struct CudaActivityGateState {
-    paused: bool,
-    generation: u64,
+    recovery: CudaRecoveryState,
+    cycle: CudaRecoveryCycle,
+    device_generations: HashMap<usize, CudaDeviceGeneration>,
     active: usize,
 }
 
@@ -222,60 +243,111 @@ impl CudaActivityGate {
     }
 
     pub fn is_paused(&self) -> bool {
-        self.state.lock().paused
+        // Failed admission stays closed, but is no longer a pause to wait out.
+        !matches!(self.state.lock().recovery, CudaRecoveryState::Running)
+    }
+
+    pub fn recovery_state(&self) -> CudaRecoveryState {
+        self.state.lock().recovery.clone()
+    }
+
+    pub fn is_recovering(&self) -> bool {
+        matches!(self.state.lock().recovery, CudaRecoveryState::Recovering { .. })
+    }
+
+    pub fn device_generation(&self, device_idx: usize) -> CudaDeviceGeneration {
+        self.state.lock().device_generations.get(&device_idx).copied().unwrap_or_default()
+    }
+
+    pub fn failure(&self) -> Option<ThoError> {
+        match &self.state.lock().recovery {
+            CudaRecoveryState::Failed(failure) => Some(ThoError::CudaRecoveryFailed(Arc::clone(failure))),
+            _ => None,
+        }
+    }
+
+    /// Nested submissions must unwind instead of waiting for their own activity.
+    pub fn check_admission(&self) -> Result<(), ThoError> {
+        Self::check_state_admission(&self.state.lock().recovery)
+    }
+
+    fn check_state_admission(recovery: &CudaRecoveryState) -> Result<(), ThoError> {
+        match recovery {
+            CudaRecoveryState::Running => Ok(()),
+            CudaRecoveryState::Recovering { .. } => Err(ThoError::ContextReset),
+            CudaRecoveryState::Failed(failure) => Err(ThoError::CudaRecoveryFailed(Arc::clone(failure))),
+        }
     }
 
     /// Publish with already-reserved channel capacity under the same lock that
     /// closes admission. Once request_pause returns, reset can purge the queue
     /// without a submitter slipping a job in afterward. No await occurs here.
-    pub fn try_enqueue<T>(&self, permit: tokio::sync::mpsc::Permit<'_, T>, job: T) -> Result<(), T> {
+    pub fn try_enqueue<T>(&self, permit: tokio::sync::mpsc::Permit<'_, T>, job: T) -> Result<(), (T, ThoError)> {
         let state = self.state.lock();
-        if state.paused {
+        if let Err(error) = Self::check_state_admission(&state.recovery) {
             // Return the job unchanged so an external submitter can retry after
             // reset without reconstructing or dropping its computation.
-            return Err(job);
+            return Err((job, error));
         }
         permit.send(job);
         Ok(())
     }
 
-    pub fn request_pause(&self) -> CudaActivityPauseTicket {
+    pub fn request_pause(&self, cause: ThoError) -> Result<CudaActivityPauseTicket, ThoError> {
         debug!("CudaActivityGate::request_pause: self={self:?}");
         let mut state = self.state.lock();
-        let ticket = CudaActivityPauseTicket {
-            generation: state.generation,
-            owner: !state.paused,
-        };
-
-        if !state.paused {
-            state.paused = true;
+        if let CudaRecoveryState::Failed(failure) = &state.recovery {
+            return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
+        }
+        let owner = matches!(state.recovery, CudaRecoveryState::Running);
+        if owner {
+            state.cycle.0 = state.cycle.0.checked_add(1).expect("CUDA recovery cycle overflow");
+            state.recovery = CudaRecoveryState::Recovering { cause };
             self.notify.notify_waiters();
         }
 
-        ticket
+        Ok(CudaActivityPauseTicket { cycle: state.cycle, owner })
     }
 
-    pub fn finish_pause(&self, ticket: CudaActivityPauseTicket) {
+    pub fn finish_pause(&self, ticket: CudaActivityPauseTicket, recovered_devices: &[usize]) {
         info!("CudaActivityGate::finish_pause: self={self:?} ticket={ticket:?}");
         if !ticket.owner {
             return;
         }
 
         let mut state = self.state.lock();
-        if state.paused && state.generation == ticket.generation {
-            state.paused = false;
-            state.generation += 1;
+        if matches!(state.recovery, CudaRecoveryState::Recovering { .. }) && state.cycle == ticket.cycle {
+            // Explicit successes keep an unrelated device's generation unchanged.
+            for device_idx in recovered_devices.iter().copied().collect::<HashSet<_>>() {
+                let generation = state.device_generations.entry(device_idx).or_default();
+                generation.0 = generation.0.checked_add(1).expect("CUDA device generation overflow");
+            }
+            state.recovery = CudaRecoveryState::Running;
             self.notify.notify_waiters();
         }
     }
 
-    pub async fn wait_if_paused(&self) {
+    /// A failed cycle is terminal; stale success/drop handlers cannot reopen it.
+    pub fn fail_pause(&self, ticket: CudaActivityPauseTicket, recovery_error: Option<ThoError>) {
+        let mut state = self.state.lock();
+        if !ticket.owner || state.cycle != ticket.cycle {
+            return;
+        }
+        if let CudaRecoveryState::Recovering { cause } = &state.recovery {
+            state.recovery = CudaRecoveryState::Failed(Arc::new(CudaRecoveryFailure { original: cause.clone(), recovery: recovery_error }));
+            self.notify.notify_waiters();
+        }
+    }
+
+    pub async fn wait_if_paused(&self) -> Result<(), ThoError> {
         debug!("CudaActivityGate::wait_if_paused: self={self:?}");
         loop {
             let notified = {
                 let state = self.state.lock();
-                if !state.paused {
-                    return;
+                match &state.recovery {
+                    CudaRecoveryState::Running => return Ok(()),
+                    CudaRecoveryState::Failed(failure) => return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure))),
+                    CudaRecoveryState::Recovering { .. } => {}
                 }
                 self.notify.notified()
             };
@@ -297,13 +369,17 @@ impl CudaActivityGate {
         }
     }
 
-    pub async fn wait_for_pause_to_finish(&self, ticket: CudaActivityPauseTicket) {
+    pub async fn wait_for_pause_to_finish(&self, ticket: CudaActivityPauseTicket) -> Result<(), ThoError> {
         debug!("CudaActivityGate::wait_for_pause_to_finish: self={self:?}");
         loop {
             let notified = {
                 let state = self.state.lock();
-                if !state.paused || state.generation != ticket.generation {
-                    return;
+                // Terminal failure takes precedence even for a waiter on an older cycle.
+                if let CudaRecoveryState::Failed(failure) = &state.recovery {
+                    return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
+                }
+                if matches!(state.recovery, CudaRecoveryState::Running) || state.cycle != ticket.cycle {
+                    return Ok(());
                 }
                 self.notify.notified()
             };
@@ -311,13 +387,15 @@ impl CudaActivityGate {
         }
     }
 
-    pub async fn wait_until_paused(&self) {
+    pub async fn wait_until_paused(&self) -> Result<(), ThoError> {
         debug!("CudaActivityGate::wait_until_paused: self={self:?}");
         loop {
             let notified = {
                 let state = self.state.lock();
-                if state.paused {
-                    return;
+                match &state.recovery {
+                    CudaRecoveryState::Recovering { .. } => return Ok(()),
+                    CudaRecoveryState::Failed(failure) => return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure))),
+                    CudaRecoveryState::Running => {}
                 }
                 self.notify.notified()
             };
@@ -395,12 +473,21 @@ pub enum SyncStageRunnerError {
 #[derive(Debug, Clone)]
 pub enum ThoError {
     Cuda { action: CudaAction, msg: String },
+    CudaRecoveryFailed(Arc<CudaRecoveryFailure>),
     AdjusterFailed,
     // Shared futures require Clone; sharing keeps the original source and backtrace intact.
     Anyhow(Arc<anyhow::Error>),
     NotFound,
     SyncStageRunner(SyncStageRunnerError),
     ContextReset,
+}
+
+/// Keep both failures typed: terminal recovery must not be classified as another
+/// restart request or an OOM just because its original cause was one.
+#[derive(Debug, Clone)]
+pub struct CudaRecoveryFailure {
+    pub original: ThoError,
+    pub recovery: Option<ThoError>,
 }
 
 // Generated configuration implementations use anyhow without requiring a downstream dependency.
@@ -437,6 +524,13 @@ impl Display for ThoError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cuda { action, msg } => write!(f, "CUDA {action:?}: {msg}"),
+            Self::CudaRecoveryFailed(failure) => {
+                write!(f, "CUDA recovery failed; original error: {:#}", failure.original)?;
+                if let Some(error) = &failure.recovery {
+                    write!(f, "; recovery error: {error:#}")?;
+                }
+                Ok(())
+            }
             Self::AdjusterFailed => f.write_str("adjuster failed"),
             Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
             Self::NotFound => f.write_str("not found"),
@@ -451,6 +545,7 @@ impl Error for ThoError {
         match self {
             Self::Anyhow(error) => Some(error.as_ref().as_ref()),
             Self::SyncStageRunner(error) => Some(error),
+            Self::CudaRecoveryFailed(failure) => Some(&failure.original),
             _ => None,
         }
     }
@@ -510,6 +605,14 @@ impl ThoError {
         match self.what() {
             Self::Cuda { action: CudaAction::NeedsRestart, .. } => true,
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_ctx_reset(),
+            _ => false,
+        }
+    }
+
+    pub fn is_cuda_recovery_failed(&self) -> bool {
+        match self.what() {
+            Self::CudaRecoveryFailed(_) => true,
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_cuda_recovery_failed(),
             _ => false,
         }
     }
@@ -2197,7 +2300,7 @@ mod shared_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_collect_futures_with_progress_waits_for_cuda_activity_gate() {
         let started = Arc::new(AtomicUsize::new(0));
-        let pause_ticket = super::cuda_activity_gate().request_pause();
+        let pause_ticket = super::cuda_activity_gate().request_pause(ThoError::ContextReset).unwrap();
 
         let collect = {
             let started = Arc::clone(&started);
@@ -2221,7 +2324,7 @@ mod shared_tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(started.load(Ordering::SeqCst), 0);
 
-        super::cuda_activity_gate().finish_pause(pause_ticket);
+        super::cuda_activity_gate().finish_pause(pause_ticket, &[]);
 
         let results = tokio::time::timeout(Duration::from_secs(2), collect)
             .await
