@@ -236,9 +236,9 @@ impl CudaLocalActor {
 
         match msg {
             CudaLocalActorMessage::Copy{ src, dst_device, respond_to } => {
-                if cuda_activity_gate().is_paused() {
+                if let Err(error) = cuda_activity_gate().check_admission() {
                     let _ = respond_to.send(
-                        Err(ThoError::new("CudaActor is offline"))
+                        Err(error)
                     );
                     return;
                 }
@@ -261,7 +261,7 @@ impl CudaLocalActor {
                     ).await;
 
                     if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
-                        if let Err(e) = Self::do_restart(copy_ctx, is_resetting, tho_device_idx, "Copy").await {
+                        if let Err(e) = Self::do_restart(copy_ctx, is_resetting, tho_device_idx, e.clone()).await {
                             error!("CudaActor::handle_message, Copy:, e={e:?}");
                         }
                     }
@@ -284,15 +284,14 @@ impl CudaLocalActor {
                 let is_resetting = Arc::clone(&self.is_restarting);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
-                    Self::do_restart(copy_ctx, is_resetting, tho_device_idx, "Reset").await.unwrap();
-
-                    let _ = respond_to.send(Ok(()));
+                    let result = Self::do_restart(copy_ctx, is_resetting, tho_device_idx, ThoError::ContextReset).await;
+                    let _ = respond_to.send(result);
                 });
             }
             CudaLocalActorMessage::GetExecStream { respond_to } => {
-                if cuda_activity_gate().is_paused() {
+                if let Err(error) = cuda_activity_gate().check_admission() {
                     let _ = respond_to.send(
-                        Err(ThoError::new("CudaActor is offline"))
+                        Err(error)
                     );
                     return;
                 }
@@ -304,15 +303,19 @@ impl CudaLocalActor {
         }
     }
 
-    async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, is_resetting:Arc<AtomicBool>, tho_device_idx:usize, from:&str) -> Result<(), ThoError> {
+    async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, is_resetting:Arc<AtomicBool>, tho_device_idx:usize, cause: ThoError) -> Result<(), ThoError> {
+        if let Some(error) = cuda_activity_gate().failure() {
+            return Err(error);
+        }
         if is_resetting.load(Relaxed) {
             return Ok(());
         }
 
+        let ticket = cuda_activity_gate().request_pause(cause)?;
         is_resetting.store(true, Relaxed);
-        let ticket = cuda_activity_gate().request_pause();
 
-        match {
+        // Scope fallible cleanup so every returned error completes the owned cycle.
+        let result = async {
             track_await(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
                 .await?;
@@ -326,19 +329,21 @@ impl CudaLocalActor {
             info!("CudaActor::do_reset: drop_device done");
 
             timeout(Duration::from_millis(1000), copy_ctx.write()).await?.restart()
-        } {
+        }.await;
+        is_resetting.store(false, Relaxed);
+        match result {
             Ok(_) => {
-                is_resetting.store(false, Relaxed);
                 let is_owner = ticket.is_owner();
 
-                cuda_activity_gate().finish_pause(ticket);//TODO can be done only here so
+                cuda_activity_gate().finish_pause(ticket, &[tho_device_idx]);
 
                 info!("CudaActor::do_reset: is_owner={is_owner} Reset ok");
                 Ok(())
             }
             Err(e) => {
                 info!("CudaActor::do_reset Reset: failed: e={e:?}");
-                panic!("reset failed");//TODO shutdown
+                cuda_activity_gate().fail_pause(ticket, Some(e.clone()));
+                Err(cuda_activity_gate().failure().unwrap_or(e))
             }
         }
     }

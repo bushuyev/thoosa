@@ -127,8 +127,11 @@ where
         match activity {
             Some(activity) => activity.run(async move { (idx, fut.await) }).await,
             None => {
-                cuda_activity_gate().wait_if_paused().await;
-                (idx, fut.await)
+                // Report terminal admission failure without polling the computation.
+                match cuda_activity_gate().wait_if_paused().await {
+                    Ok(()) => (idx, fut.await),
+                    Err(error) => (idx, Err(error)),
+                }
             }
         }
     });

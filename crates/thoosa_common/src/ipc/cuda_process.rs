@@ -1265,6 +1265,30 @@ mod tests {
         assert!(received.to_string().contains("read model") && received.to_string().contains("CUDA out of memory"));
     }
 
+    #[test]
+    fn test_worker_error_round_trip_preserves_terminal_recovery_failure() {
+        use thoosa_shared::{CudaAction, CudaRecoveryFailure};
+
+        // Terminal errors must retain diagnostics without becoming retryable again
+        // when they pass through the same wire path as ordinary CUDA failures.
+        for recovery in [None, Some(ThoError::oom().context("replacement allocation"))] {
+            let has_recovery = recovery.is_some();
+            let original = ThoError::Cuda { action: CudaAction::NeedsRestart, msg: "illegal address".into() }.context("original stage");
+            let error = ThoError::CudaRecoveryFailed(Arc::new(CudaRecoveryFailure { original, recovery }));
+            let received = round_trip_worker_error(error.context("worker recovery"));
+            assert!(received.is_cuda_recovery_failed());
+            assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_ctx_reset());
+            let ThoError::CudaRecoveryFailed(failure) = received.what() else { panic!("terminal error was lost") };
+            assert!(failure.original.needs_cuda_ctx_reset());
+            assert_eq!(failure.recovery.is_some(), has_recovery);
+            assert!(received.to_string().contains("original stage") && received.to_string().contains("illegal address"));
+            if let Some(recovery) = &failure.recovery {
+                assert!(recovery.is_oom());
+                assert!(recovery.to_string().contains("replacement allocation"));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_cancelled_copy_caller_keeps_activity_with_request() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -1276,14 +1300,14 @@ mod tests {
         assert!(futures::poll!(copy.as_mut()).is_pending());
         let request = receiver.recv().await.unwrap();
         drop(copy);
-        let pause = thoosa_shared::cuda_activity_gate().request_pause();
+        let pause = thoosa_shared::cuda_activity_gate().request_pause(ThoError::ContextReset).unwrap();
         let mut idle = Box::pin(thoosa_shared::cuda_activity_gate().wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending());
         // The request retains the scope even though its caller has gone away.
         // Discarding it before dispatch is equivalent to completing that activity.
         drop(request);
         tokio::time::timeout(std::time::Duration::from_secs(2), idle).await.unwrap();
-        thoosa_shared::cuda_activity_gate().finish_pause(pause);
+        thoosa_shared::cuda_activity_gate().finish_pause(pause, &[]);
     }
 
     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
