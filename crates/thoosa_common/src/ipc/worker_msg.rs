@@ -107,12 +107,18 @@ enum WorkerErrorKind {
     SubmitErrorClosed,
     SubmitErrorCancelled,
     Other,
+    // Keep terminal recovery distinct from the restartable errors it contains.
+    CudaRecoveryFailed { original: Box<WorkerError>, recovery: Option<Box<WorkerError>> },
 }
 
 impl WorkerErrorKind {
     fn from_error(error: &ThoError) -> Self {
         match error.what() {
             ThoError::Cuda { action, .. } => Self::Cuda(*action),
+            ThoError::CudaRecoveryFailed(failure) => Self::CudaRecoveryFailed {
+                original: Box::new(failure.original.clone().into()),
+                recovery: failure.recovery.clone().map(|error| Box::new(error.into())),
+            },
             ThoError::AdjusterFailed => Self::AdjusterFailed,
             ThoError::NotFound => Self::NotFound,
             ThoError::ContextReset => Self::ContextReset,
@@ -142,6 +148,10 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
             WorkerErrorKind::Other => Self::new(message),
+            WorkerErrorKind::CudaRecoveryFailed { original, recovery } => Self::CudaRecoveryFailed(std::sync::Arc::new(thoosa_shared::CudaRecoveryFailure {
+                original: (*original).into(),
+                recovery: recovery.map(|error| (*error).into()),
+            })).context(message),
         }
     }
 }
