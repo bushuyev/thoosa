@@ -471,22 +471,22 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
 
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    // let find_and_select =  FindAndSelect::GridOnly {
-    //     find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
-    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-    //     extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
-    //     select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
-    // };
-
-    let find_and_select =  FindAndSelect::WithOpt {
-        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-            id: None,
-            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
-            select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
-        },
+    let find_and_select =  FindAndSelect::GridOnly {
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+        extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
+        select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
+
+    // let find_and_select =  FindAndSelect::WithOpt {
+    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
+    //         id: None,
+    //         find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
+    //         select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
+    //     },
+    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+    //     find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    // };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {

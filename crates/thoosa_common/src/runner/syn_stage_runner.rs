@@ -534,13 +534,7 @@ impl SyncStageRunner {
                     // that request. The failing job must return ContextReset immediately:
                     // it may be a child of a suspended parent that also has to unwind
                     // before reset_fn can run exclusively.
-                    let pause_ticket = cuda_activity_gate().request_pause();
-                    if pause_ticket.is_owner() {
-                        if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
-                            error!("SyncStageRunner::submit: manager is closed while requesting CUDA reset");
-                            cuda_activity_gate().finish_pause(pause_ticket);
-                        }
-                    }
+                    Self::request_cuda_reset(&cmd_tx);
 
                     result_sender.send(Err(Self::context_reset_error()));
                     return JobFeedback::Neutral;
@@ -719,13 +713,14 @@ impl SyncStageRunner {
         }
     }
 
-    pub fn request_cuda_reset(&self) {
+
+    pub fn request_cuda_reset<'f>(sender: &'f mpsc::UnboundedSender<ManagerCmd>) {
         // Only the owner of this pause generation queues a reset. Other executors
         // already observe the same closed gate and must not reopen it independently.
         let pause_ticket = cuda_activity_gate().request_pause();
         if pause_ticket.is_owner() {
             debug!("SyncStageRunner::request_cuda_reset: got pause_ticket");
-            if self.cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "request_cuda_reset" }).is_err() {
+            if sender.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "request_cuda_reset" }).is_err() {
                 error!("SyncStageRunner::request_cuda_reset: manager is closed");
                 cuda_activity_gate().finish_pause(pause_ticket);
             }
@@ -1682,7 +1677,7 @@ mod tests {
                 }
             });
             started_rx.await.unwrap();
-            exec.request_cuda_reset();
+            SyncStageRunner::request_cuda_reset(&exec.cmd_tx);
             collect_tx.send(()).unwrap();
             tokio::time::timeout(Duration::from_secs(2), caller).await.unwrap().unwrap().unwrap();
             tokio::time::timeout(Duration::from_secs(2), cuda_activity_gate().wait_if_paused()).await.unwrap();
@@ -1708,7 +1703,7 @@ mod tests {
         }));
         let activity = CudaActivityScope::for_operation().unwrap();
         let descendant = activity.clone();
-        exec.request_cuda_reset();
+        SyncStageRunner::request_cuda_reset(&exec.cmd_tx);
         assert!(CudaActivityScope::for_operation().is_err());
         drop(activity);
         let mut idle = Box::pin(cuda_activity_gate().wait_until_idle());
@@ -1774,7 +1769,7 @@ mod tests {
         };
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        exec.request_cuda_reset();
+        SyncStageRunner::request_cuda_reset(&exec.cmd_tx);
 
         let pending_result = tokio::time::timeout(Duration::from_secs(2), pending).await.expect("pending job must be purged")?;
         assert!(matches!(pending_result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {pending_result:?}");
@@ -2068,7 +2063,7 @@ mod tests {
         };
 
         let _ = child_started_rx.await;
-        exec.request_cuda_reset();
+        SyncStageRunner::request_cuda_reset(&exec.cmd_tx);
         let _ = release_child_tx.send(());
 
         tokio::time::timeout(Duration::from_secs(2), parent)
@@ -2204,7 +2199,7 @@ mod tests {
                 })
             }
         }));
-        exec.request_cuda_reset();
+        SyncStageRunner::request_cuda_reset(&exec.cmd_tx);
         // No subscriber owns admission state; completion persists in the shared gate.
         tokio::time::timeout(Duration::from_secs(2), exec.wait_until_accepting(None)).await.unwrap().unwrap();
         assert!(reset_invoked.load(Ordering::SeqCst));
@@ -2235,11 +2230,12 @@ mod tests {
             }
         }));
         let other = SyncStageRunner::new(8);
-        owner.request_cuda_reset();
+
+        SyncStageRunner::request_cuda_reset(&owner.cmd_tx);
         started.notified().await;
         // A coalesced reset from another executor must not introduce local state
         // that survives the owner's reopening of the shared gate.
-        other.request_cuda_reset();
+        SyncStageRunner::request_cuda_reset(&owner.cmd_tx);
         let ran = Arc::new(AtomicUsize::new(0));
         let mut submit = Box::pin(other.submit(0, {
             let ran = Arc::clone(&ran);
@@ -2277,7 +2273,7 @@ mod tests {
                 // Poll through capacity reservation and Suspend, but stop before
                 // its acknowledgement. Pause must then win the final enqueue check.
                 assert!(futures::poll!(child.as_mut()).is_pending());
-                exec.request_cuda_reset();
+                SyncStageRunner::request_cuda_reset(&exec.cmd_tx);
                 assert!(child.await.is_err());
                 parent_finished.store(true, Ordering::SeqCst);
                 Ok(())
