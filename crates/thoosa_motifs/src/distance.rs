@@ -1368,8 +1368,8 @@ mod distance_tests {
 
         for k in [1, 10, 30, 100, 300, 1000, 10_000, 30_000, 100_000] {
             debug!("k={k}");
-            run_z_norm_dims(z_norm_dims_cuda, &[1, 2, 3 * k ])?;
-            run_z_norm_dims(z_norm_dims, &[1, 2, 3 * k ])?;
+            run_z_norm_dims(z_norm_dims_cuda, &[10, 20, 3 * k ])?;
+            run_z_norm_dims(z_norm_dims, &[10, 20, 3 * k ])?;
             debug!("----------------------");
         }
         Ok(())
