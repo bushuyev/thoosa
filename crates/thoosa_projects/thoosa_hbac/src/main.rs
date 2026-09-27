@@ -156,23 +156,23 @@ impl StageCommand for HbacCommands {
             HbacCommands::RunAll(run_all_args) => {
                 let loader = init_loader(ws);
 
-                let all_configs = run_all_config_0(&run_all_args);
+                // let all_configs = run_all_config_0(&run_all_args);
 
 
-                // let all_configs = run_all_config_1(&run_all_args, &RunAllSettings {
-                //     resources_per_label: 90,
-                //     pure_sets_len: [(30, true), (60, true)],
-                //     train_resource_group: "pure group 60".to_string(),
-                //     valid_resource_group: "pure group 30".to_string(),
-                //
-                //     motifs_epochs : 30,
-                //     labels_epochs : 50,
-                //     final_epochs : 50,
-                //     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
-                //     train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
-                //     train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
-                //     max_batch_size : 20,
-                // });
+                let all_configs = run_all_config_1(&run_all_args, &RunAllSettings {
+                    resources_per_label: 0,
+                    pure_sets_len: [(0, true), (0, true)],
+                    train_resource_group: "".to_string(),
+                    valid_resource_group: "".to_string(),
+
+                    motifs_epochs : 30,
+                    labels_epochs : 150,
+                    final_epochs : 150,
+                    train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
+                    train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
+                    train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
+                    max_batch_size : 20,
+                });
 
                 track_await(run_all(
                     &ws,

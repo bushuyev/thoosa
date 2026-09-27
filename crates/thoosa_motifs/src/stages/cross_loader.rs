@@ -99,9 +99,10 @@ where
                 match track_await(clc_result.to_cpu()).await {
                     Ok(clc_result) => {
                         self.partials
-                            .push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));
+                            .push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));//TODO key
                     }
                     Err(err) => {
+                        warn!("CrossUnfoldClcOutputBuilder::add_partial_output: got error={err:?}");
                         self.error = Some(err);
                     }
                 }
