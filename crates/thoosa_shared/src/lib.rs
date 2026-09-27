@@ -270,6 +270,32 @@ impl CudaActivityGate {
         self.state.lock().generation
     }
 
+    /// Retry chains and queued dependent work cannot cross a recovery boundary.
+    pub fn check_generation(&self, generation: CudaDeviceGeneration) -> Result<(), ThoError> {
+        let state = self.state.lock();
+        Self::check_state_admission(&state.recovery)?;
+        if state.generation != generation {
+            return Err(ThoError::ContextReset);
+        }
+        Ok(())
+    }
+
+    pub async fn wait_for_generation_end(&self, generation: CudaDeviceGeneration) -> ThoError {
+        loop {
+            let notified = {
+                let state = self.state.lock();
+                if let Err(error) = Self::check_state_admission(&state.recovery) {
+                    return error;
+                }
+                if state.generation != generation {
+                    return ThoError::ContextReset;
+                }
+                self.notify.notified()
+            };
+            notified.await;
+        }
+    }
+
     pub fn failure(&self) -> Option<ThoError> {
         match &self.state.lock().recovery {
             CudaRecoveryState::Failed(failure) => Some(ThoError::CudaRecoveryFailed(Arc::clone(failure))),

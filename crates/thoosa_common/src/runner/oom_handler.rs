@@ -792,7 +792,7 @@ where
         return Ok(track_await(input.consume(0, run_ctx, None, |input, run_ctx| task.consume(input, run_ctx))).await);
     }
 
-    track_await(oom_executor(tho_device_idx).submit(
+    track_await(oom_executor(tho_device_idx).submit_consume(
         run_ctx.max_other_parallel().into(),
         async move {
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
@@ -1208,6 +1208,7 @@ where
     // Ownership starts before the first attempt and survives every adapter/adjuster
     // await, so cancellation never leaves a detached job owning an exclusive retry.
     let retry_scope = oom_executor(device_idx).retry_scope();
+    retry_scope.run(async {
     let mut task = Some(task);
     let mut run_context = Some(run_context);
 
@@ -1351,6 +1352,7 @@ where
             Ok(o)
         }
     }
+    }).await
 }
 
 async fn run_with_runner<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
@@ -1879,6 +1881,49 @@ mod tests {
             async move { Ok(&self.inner) }
         }
 
+    }
+
+    #[tokio::test]
+    async fn test_recovery_interrupts_oom_adapter_between_attempts() {
+        use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
+        use crate::runner::syn_stage_runner::SyncStageRunner;
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let global_context = MockGlobalCtx::global_context();
+            let mock = Box::leak(Box::new(mock_global_ctx::build().with_executor(
+                SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))
+            ).finish()));
+            global_context.expect().return_const(&*mock);
+            let (task, _) = mock_runnable([]);
+            let run_ctx = crate::runner::common::mock_run_ctx::build()
+                .with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
+            let (returned, received) = tokio::sync::oneshot::channel();
+            let returned = Arc::new(Mutex::new(Some(returned)));
+            let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster>> = Vec::new();
+            // Exercise the actual OOM runner while its adapter is waiting after
+            // a completed exclusive OOM attempt (like asynchronous input burping).
+            let mut run = Box::pin(super::run_with_runner(
+                &adjusters, Arc::new(task), Arc::new(()), run_ctx, NoContexts,
+                move |_, _, _: Option<()>, device_idx, _, retry| {
+                    let returned = Arc::clone(&returned);
+                    async move {
+                        let _ = super::oom_executor(device_idx).submit(0, async { Err::<TestOutput, _>(ThoError::oom()) }, retry).await;
+                        returned.lock().unwrap().take().unwrap().send(()).unwrap();
+                        std::future::pending::<Result<TestOutput, ThoError>>().await
+                    }
+                },
+            ));
+            assert!(futures::poll!(run.as_mut()).is_pending());
+            // Poll the adapter to its post-attempt await without a timing sleep.
+            tokio::select! {
+                _ = &mut run => panic!("adapter unexpectedly completed"),
+                _ = received => {}
+            }
+            let executor = super::oom_executor(1);
+            let ticket = executor.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
+            assert!(matches!(run.await.unwrap_err().what(), ThoError::ContextReset));
+            executor.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
+            executor.submit(0, async { Ok(()) }, None).await.unwrap();
+        }).await.expect("an old OOM chain must unwind instead of surviving recovery");
     }
 
     #[tokio::test]

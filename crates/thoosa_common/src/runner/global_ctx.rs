@@ -673,6 +673,13 @@ pub mod mock_global_ctx {
             self
         }
 
+        pub fn with_executor(mut self, executor: SyncStageRunner) -> Self {
+            // Recovery tests need a device-bound runner instead of the default
+            // CPU runner, while retaining the normal GlobalCtx injection path.
+            self.mock.expect_get_executor().times(0..).return_const(executor);
+            self
+        }
+
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({

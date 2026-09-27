@@ -1,30 +1,33 @@
 use std::{future::Future, sync::Arc};
 
-use crate::{CudaActivityGate, CudaActivityPauseTicket, CudaRecoveryState, ThoError};
+use crate::{CudaActivityGate, CudaActivityPauseTicket, CudaDeviceGeneration, CudaRecoveryState, ThoError};
 
 tokio::task_local! {
     static CURRENT_ACTIVITY: CudaActivityScope;
 }
 
-/// Admitted work and its children may drain while admission is paused. Clones
-/// share one registration, so reset also waits for detached children to finish.
+/// A child retains every device its ancestors admitted. Each lease records the
+/// actual gate and generation, so switching devices cannot transfer authority or
+/// release an ancestor's activity while detached descendants still use it.
 #[derive(Clone, Debug)]
 pub struct CudaActivityScope {
-    gate: Arc<CudaActivityGate>,
-    _lease: Option<Arc<ActivityLease>>,
+    leases: Vec<Arc<ActivityLease>>,
 }
 
 #[derive(Debug)]
 struct ActivityLease {
     gate: Arc<CudaActivityGate>,
+    generation: CudaDeviceGeneration,
+    reset: Option<CudaActivityPauseTicket>,
 }
 
 impl Drop for ActivityLease {
     fn drop(&mut self) {
-        let gate = &self.gate;
-        let mut state = gate.state.lock();
-        state.active -= 1;
-        gate.notify.notify_waiters();
+        if self.reset.is_none() {
+            let mut state = self.gate.state.lock();
+            state.active -= 1;
+            self.gate.notify.notify_waiters();
+        }
     }
 }
 
@@ -33,8 +36,7 @@ impl CudaActivityScope {
         CURRENT_ACTIVITY.try_with(Clone::clone).ok()
     }
 
-    /// A new root must atomically register before a reset can close admission.
-    /// Executors leave unadmitted jobs queued rather than awaiting inside a job.
+    /// Register dispatch atomically with closing admission, before spawning work.
     pub fn try_enter(gate: &Arc<CudaActivityGate>) -> Result<Option<Self>, ThoError> {
         let mut state = gate.state.lock();
         match &state.recovery {
@@ -43,22 +45,73 @@ impl CudaActivityScope {
             CudaRecoveryState::Running => {}
         }
         state.active += 1;
-        Ok(Some(Self { gate: Arc::clone(gate), _lease: Some(Arc::new(ActivityLease { gate: Arc::clone(gate) })) }))
+        Ok(Some(Self { leases: vec![Arc::new(ActivityLease { gate: Arc::clone(gate), generation: state.generation, reset: None })] }))
     }
 
-    /// Copy callers can already hold tensor/cache locks needed by reset. Reject
-    /// an unadmitted operation during pause rather than wait while holding them.
+    pub fn with_inherited(mut self, inherited: Option<Self>) -> Self {
+        if let Some(inherited) = inherited {
+            for lease in inherited.leases {
+                if !self.leases.iter().any(|own| Arc::ptr_eq(&own.gate, &lease.gate)) {
+                    self.leases.push(lease);
+                }
+            }
+        }
+        self
+    }
+
+    pub fn generation(&self, gate: &Arc<CudaActivityGate>) -> Option<CudaDeviceGeneration> {
+        self.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate)).map(|lease| lease.generation)
+    }
+
+    /// Admitted operations may drain during recovery, but never run against a
+    /// replacement generation or borrow another gate's cleanup authority.
+    pub fn check_operation(&self, gate: &Arc<CudaActivityGate>) -> Result<(), ThoError> {
+        let lease = self.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate))
+            .ok_or_else(|| ThoError::new("CUDA operation has no activity lease for its device"))?;
+        let state = gate.state.lock();
+        if let CudaRecoveryState::Failed(failure) = &state.recovery {
+            return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
+        }
+        if state.generation != lease.generation {
+            return Err(ThoError::ContextReset);
+        }
+        if let Some(ticket) = lease.reset {
+            if !matches!(state.recovery, CudaRecoveryState::Recovering { .. }) || state.cycle != ticket.cycle {
+                return Err(ThoError::ContextReset);
+            }
+        }
+        Ok(())
+    }
+
+    /// Queued jobs are dependencies, not yet executing operations. Interrupt them
+    /// when any admitted ancestor must unwind, including on a different device.
+    pub fn check_dependencies(&self) -> Result<(), ThoError> {
+        for lease in &self.leases {
+            if lease.reset.is_none() {
+                lease.gate.check_generation(lease.generation)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn wait_for_interruption(&self) -> ThoError {
+        let waits: Vec<_> = self.leases.iter().filter(|lease| lease.reset.is_none())
+            .map(|lease| Box::pin(lease.gate.wait_for_generation_end(lease.generation))).collect();
+        if waits.is_empty() {
+            return std::future::pending().await;
+        }
+        futures::future::select_all(waits).await.0
+    }
+
+    /// Copy callers can hold locks needed by recovery: reject a new root instead
+    /// of waiting, but preserve all existing leases when adding another device.
     pub fn for_operation(gate: &Arc<CudaActivityGate>) -> Result<Self, ThoError> {
-        // Existing scopes may drain during recovery, but terminal failure must
-        // never authorize another CUDA operation through an inherited scope.
-        if let Some(error) = gate.failure() {
-            return Err(error);
+        let inherited = Self::current();
+        if let Some(scope) = &inherited && scope.generation(gate).is_some() {
+            scope.check_operation(gate)?;
+            return Ok(scope.clone());
         }
-        // A scope from another device grants no admission on this gate.
-        if let Some(scope) = Self::current().filter(|scope| Arc::ptr_eq(&scope.gate, gate)) {
-            return Ok(scope);
-        }
-        Self::try_enter(gate)?.ok_or_else(|| {
+        Self::try_enter(gate)?.map(|scope| scope.with_inherited(inherited)).ok_or_else(|| {
             ThoError::new_with_cause("CUDA operation interrupted by context reset", ThoError::ContextReset)
         })
     }
@@ -67,10 +120,9 @@ impl CudaActivityScope {
         CURRENT_ACTIVITY.scope(self, future).await
     }
 
-    /// Reset cleanup runs only after admitted activity drained. It must not wait
-    /// for the admission gate that this same reset owns.
+    /// Cleanup is authorized only for this idle owned cycle, never another gate.
     pub async fn run_reset<T, F: Future<Output = Result<T, ThoError>>>(gate: &Arc<CudaActivityGate>, ticket: CudaActivityPauseTicket, future: F) -> Result<T, ThoError> {
-        {
+        let generation = {
             let state = gate.state.lock();
             if let CudaRecoveryState::Failed(failure) = &state.recovery {
                 return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
@@ -78,8 +130,9 @@ impl CudaActivityScope {
             if ticket.gate_id != gate.id || !ticket.owner || !matches!(state.recovery, CudaRecoveryState::Recovering { .. }) || ticket.cycle != state.cycle || state.active != 0 {
                 return Err(ThoError::new("reset scope requires an idle pause owned by this gate"));
             }
-        }
-        Self { gate: Arc::clone(gate), _lease: None }.run(future).await
+            state.generation
+        };
+        Self { leases: vec![Arc::new(ActivityLease { gate: Arc::clone(gate), generation, reset: Some(ticket) })] }.run(future).await
     }
 }
 
@@ -277,6 +330,45 @@ mod tests {
         second.fail_pause(pause, None);
         first.check_admission().unwrap();
         assert!(second.check_admission().unwrap_err().is_cuda_recovery_failed());
+    }
+
+    #[tokio::test]
+    async fn test_cross_device_descendants_retain_all_ancestor_leases() {
+        use super::CudaActivityScope;
+        let first = Arc::new(CudaActivityGate::new(1));
+        let second = Arc::new(CudaActivityGate::new(2));
+        let scope = CudaActivityScope::for_operation(&first).unwrap().run(async {
+            CudaActivityScope::for_operation(&second).unwrap()
+        }).await;
+        assert_eq!(scope.generation(&first), Some(CudaDeviceGeneration(0)));
+        assert_eq!(scope.generation(&second), Some(CudaDeviceGeneration(0)));
+        let first_pause = first.request_pause(original_failure()).unwrap();
+        let second_pause = second.request_pause(original_failure()).unwrap();
+        assert!(futures::poll!(Box::pin(first.wait_until_idle()).as_mut()).is_pending());
+        assert!(futures::poll!(Box::pin(second.wait_until_idle()).as_mut()).is_pending());
+        // Already-admitted descendants can finish on either ancestor's device.
+        scope.run(async {
+            CudaActivityScope::for_operation(&first).unwrap();
+            CudaActivityScope::for_operation(&second).unwrap();
+        }).await;
+        assert!(futures::poll!(Box::pin(first.wait_until_idle()).as_mut()).is_ready());
+        assert!(futures::poll!(Box::pin(second.wait_until_idle()).as_mut()).is_ready());
+        first.finish_pause(first_pause);
+        second.finish_pause(second_pause);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_scope_cannot_authorize_a_later_generation() {
+        use super::CudaActivityScope;
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let ticket = gate.request_pause(original_failure()).unwrap();
+        let escaped = CudaActivityScope::run_reset(&gate, ticket, async { Ok(CudaActivityScope::current().unwrap()) }).await.unwrap();
+        gate.finish_pause(ticket);
+        let next = gate.request_pause(original_failure()).unwrap();
+        escaped.run(async {
+            assert!(matches!(CudaActivityScope::for_operation(&gate).unwrap_err().what(), ThoError::ContextReset));
+        }).await;
+        gate.finish_pause(next);
     }
 
     #[test]

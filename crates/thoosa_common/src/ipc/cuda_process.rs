@@ -135,6 +135,7 @@ type PendingResponses = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<CudaWorker
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
+    gate: Arc<thoosa_shared::CudaActivityGate>,
     receiver: mpsc::Receiver<CudaIPCActorMessage>,
 
     spawned_state: SpawnedState,
@@ -223,7 +224,8 @@ impl SpawnedState {
 }
 
 impl CudaIPCActor {
-    pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
+    pub async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
+        let tho_device_idx = gate.device_idx();
         let cuda_worker_args = Arc::new(cuda_worker_args);
 
         let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args, arena_fd.as_fd()).await?;
@@ -232,6 +234,7 @@ impl CudaIPCActor {
         debug!("CudaIPCActor::new: worker device_info={:?}", spawned_state.device_info);
 
         Ok(Self {
+            gate,
             receiver,
             spawned_state,
             next_id: Arc::new(AtomicU64::new(1)),
@@ -339,6 +342,10 @@ impl CudaIPCActor {
     async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, activity, respond_to } => {
+                if let Err(error) = activity.check_operation(&self.gate) {
+                    let _ = respond_to.send(Err(error));
+                    return Ok(());
+                }
 
                 return if let Some(tensor_key) = src.ref_key() {
                     assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
@@ -500,6 +507,8 @@ impl CudaIPCActor {
             return Err(ThoError::new(format!("worker tensor ref copy currently supports only CPU destination, got dst_device={dst_device:?}")));
         }
 
+        let gate = Arc::clone(&self.gate);
+        let generation = activity.generation(&gate).expect("copy device lease");
         let describe_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
@@ -513,7 +522,7 @@ impl CudaIPCActor {
                 operation: Operation::DescribeRef { tensor_key },
             },
         ).await;
-        let info = match response.and_then(worker_tensor_info) {
+        let info = match crate::copy_ctx::report_cuda_copy_result(response.and_then(worker_tensor_info), &gate, generation) {
             Ok(info) => info,
             Err(error) => {
                 let _ = respond_to.send(Err(error));
@@ -547,10 +556,8 @@ impl CudaIPCActor {
         };
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
-        tokio::spawn(async move {
-            // The caller may have been cancelled. Keep reset blocked until the
-            // worker acknowledges that it finished accessing shared storage.
-            let _activity = activity;
+        tokio::spawn(activity.run(async move {
+            // Retain every ancestor lease until the worker finishes using storage.
             let result = async {
                 let response = send_request_and_wait_msg(
                     self_tx,
@@ -573,14 +580,16 @@ impl CudaIPCActor {
                 ThoTensor::new((), destination)
             }.await;
             debug!("CudaIPCActor::Copy D2H: done, result={result:?}");
-            let _ = respond_to.send(result);
-        });
+            let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
+        }));
 
         Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_h2d_copy"))]
     fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
+        let gate = Arc::clone(&self.gate);
+        let generation = activity.generation(&gate).expect("copy device lease");
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
@@ -592,9 +601,8 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::handle_h2d_copy: src_shape={src_shape:?} tensor_byte_len={tensor_byte_len}");
 
-        tokio::spawn(async move {
+        tokio::spawn(activity.run(async move {
             // Transfer ownership follows the request, not the awaiting caller.
-            let _activity = activity;
             let result = async {
                 // Older CPU tensors may predate allocator installation; copy only those tensors once into arena-owned storage before sharing their offset.
                 let (shared_source, arena_offset) = spawn_blocking(move || ensure_parent_shared_arena_tensor(src_tensor, tensor_byte_len))
@@ -622,8 +630,8 @@ impl CudaIPCActor {
                 drop(shared_source);
                 Ok(ThoTensor::new_ref((), done.tensor_ref, src_shape, src_kind, None, dst_device.tho_device_idx()))
             }.await;
-            let _ = respond_to.send(result);
-        });
+            let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
+        }));
 
         Ok(())
     }
@@ -863,7 +871,7 @@ impl CudaIPCActorHandle {
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);
-        let actor = CudaIPCActor::new(tho_device_id, cuda_worker_args, receiver, arena_fd).await?;
+        let actor = CudaIPCActor::new(Arc::clone(&gate), cuda_worker_args, receiver, arena_fd).await?;
         tokio::spawn(CudaIPCActor::run(actor));
 
         Ok(Self {

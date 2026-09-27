@@ -83,6 +83,8 @@ struct SyncExecutionLimiterState {
     active: usize,
     limit: usize,
     max_limit: usize,
+    next_waiter: u64,
+    waiters: VecDeque<u64>,
 }
 
 #[derive(Debug)]
@@ -100,6 +102,8 @@ impl SyncExecutionLimiter {
                 active: 0,
                 limit,
                 max_limit,
+                next_waiter: 0,
+                waiters: VecDeque::new(),
             }),
             capacity_changed,
         }
@@ -107,16 +111,11 @@ impl SyncExecutionLimiter {
 
     fn try_acquire(self: &Arc<Self>) -> Option<SyncExecutionPermit> {
         let mut state = self.state.lock();
-        if state.active >= state.limit {
+        if state.active >= state.limit || !state.waiters.is_empty() {
             return None;
         }
         state.active += 1;
         Some(SyncExecutionPermit { limiter: Arc::clone(self) })
-    }
-
-    fn force_acquire(self: &Arc<Self>) -> SyncExecutionPermit {
-        self.state.lock().active += 1;
-        SyncExecutionPermit { limiter: Arc::clone(self) }
     }
 
     fn increase_limit(&self) -> (usize, usize) {
@@ -166,6 +165,55 @@ impl Drop for SyncExecutionPermit {
     }
 }
 
+/// One FIFO request per executor. A busy manager must yield the next shared
+/// slot to an already-waiting device instead of repeatedly winning a wakeup race.
+#[derive(Debug)]
+pub struct SyncExecutionWaiter {
+    limiter: Arc<SyncExecutionLimiter>,
+    id: u64,
+    requested: bool,
+}
+
+impl SyncExecutionWaiter {
+    pub fn begin_turn(&mut self) {
+        self.requested = false;
+    }
+
+    pub fn try_acquire(&mut self) -> Option<SyncExecutionPermit> {
+        self.requested = true;
+        let mut state = self.limiter.state.lock();
+        if !state.waiters.contains(&self.id) {
+            state.waiters.push_back(self.id);
+        }
+        if state.waiters.front() != Some(&self.id) || state.active >= state.limit {
+            return None;
+        }
+        state.waiters.pop_front();
+        state.active += 1;
+        SyncExecutionLimiter::notify_capacity_changed(&state, &self.limiter.capacity_changed);
+        Some(SyncExecutionPermit { limiter: Arc::clone(&self.limiter) })
+    }
+
+    pub fn end_turn(&mut self) {
+        // Do not reserve capacity for a device with no locally runnable work,
+        // especially while recovery has closed its admission gate.
+        if !self.requested { self.cancel(); }
+    }
+
+    pub fn cancel(&mut self) {
+        self.requested = false;
+        let mut state = self.limiter.state.lock();
+        if state.waiters.contains(&self.id) {
+            state.waiters.retain(|id| *id != self.id);
+            SyncExecutionLimiter::notify_capacity_changed(&state, &self.limiter.capacity_changed);
+        }
+    }
+}
+
+impl Drop for SyncExecutionWaiter {
+    fn drop(&mut self) { self.cancel(); }
+}
+
 /// Coordinates asynchronous iterator fan-out with the shared synchronous executor limit.
 ///
 /// Active collectors share the current sync limit according to their weights. Registering a nested
@@ -205,8 +253,8 @@ impl FuturesLimits {
         Self::new_with_parallelism_and_progress(initial_limit, max_limit, true)
     }
 
-    #[cfg(test)]
-    fn new_with_parallelism(initial_limit: usize, max_limit: usize) -> Self {
+    /// Explicit shared budget, also used by deterministic scheduler tests.
+    pub fn new_with_parallelism(initial_limit: usize, max_limit: usize) -> Self {
         Self::new_with_parallelism_and_progress(initial_limit, max_limit, false)
     }
 
@@ -315,10 +363,11 @@ impl FuturesLimits {
         self.sync_execution_limiter.try_acquire()
     }
 
-    /// Reset draining must let already-running parents unwind even if this temporarily exceeds
-    /// the adaptive limit. No new queued jobs are started while the CUDA activity gate is paused.
-    pub fn force_acquire_sync_execution(&self) -> SyncExecutionPermit {
-        self.sync_execution_limiter.force_acquire()
+    pub fn sync_execution_waiter(&self) -> SyncExecutionWaiter {
+        let mut state = self.sync_execution_limiter.state.lock();
+        let id = state.next_waiter;
+        state.next_waiter = id.checked_add(1).expect("sync execution waiter identity overflow");
+        SyncExecutionWaiter { limiter: Arc::clone(&self.sync_execution_limiter), id, requested: false }
     }
 
     fn push_feedback(state: &mut FuturesLimitsState, oom: bool) {
@@ -501,6 +550,29 @@ mod tests {
             limits.on_ok();
         }
         assert_eq!(limits.max_parallel_jobs(), initial_limit.saturating_sub(1).max(1));
+    }
+
+    #[test]
+    fn test_execution_waiters_share_capacity_in_fifo_order() {
+        let limits = FuturesLimits::new_with_parallelism(1, 1);
+        let mut first = limits.sync_execution_waiter();
+        let mut second = limits.sync_execution_waiter();
+        let permit = first.try_acquire().unwrap();
+        assert!(second.try_acquire().is_none());
+        assert!(first.try_acquire().is_none());
+        drop(permit);
+        // Waking first again must not let it monopolize the shared slot.
+        assert!(first.try_acquire().is_none());
+        assert!(limits.try_acquire_sync_execution().is_none());
+        let permit = second.try_acquire().unwrap();
+        assert!(second.try_acquire().is_none());
+        drop(permit);
+        let permit = first.try_acquire().unwrap();
+        drop(permit);
+        // A recovering/locally blocked executor must relinquish its queued turn.
+        second.begin_turn();
+        second.end_turn();
+        assert!(first.try_acquire().is_some());
     }
 
     #[test]

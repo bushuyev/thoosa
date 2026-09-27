@@ -200,11 +200,13 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 ) -> Result<Tensor, ThoError> {
 
+    // The small-copy path also touches CUDA and must retain its device lease.
+    CudaActivityScope::for_operation(gate)?.run(async {
     assert!(src_t.as_ref().device().ne(&Cpu));
 
     let tensor_mem_size = tensor_mem_size(init_type, &src_t.as_ref().size());
     if tensor_mem_size < buf_size {
-        return Ok(src_t.as_ref().to(Cpu))
+        return Ok(src_t.as_ref().f_to(Cpu)?)
     }
 
 
@@ -212,6 +214,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     let src_size = src_t.as_ref().size();
 
     track_await(copy_d2h_from_ptr(gate, init_type, buf_size, &bufs_pool, src_ptr, &src_size)).await
+    }).await
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_from_ptr"))]
@@ -313,12 +316,13 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_tho_device_idx: usize,
 ) -> Result<Tensor, ThoError> {
+    CudaActivityScope::for_operation(gate)?.run(async {
     assert!(src_t.as_ref().device().eq(&Cpu));
     assert!(dst_tho_device_idx > 0);
 
     let tensor_mem_size = tensor_mem_size(init_type, &src_t.as_ref().size());
     if tensor_mem_size < buf_size {
-        return Ok(src_t.as_ref().to(ThoDevice::from(dst_tho_device_idx).into()))
+        return Ok(src_t.as_ref().f_to(ThoDevice::from(dst_tho_device_idx).into())?)
     }
 
 
@@ -333,6 +337,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
         src_ptr,
         &src_size,
     )).await
+    }).await
 }
 
 
