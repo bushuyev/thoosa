@@ -5,7 +5,7 @@ experimental = ["wrapper-scripts"]
 heavy = { max-threads = 1 }
 
 [profile.default]
-test-threads = 8
+test-threads = 4
 default-filter = 'not (test(/::heavy[^:]*$/) | test(/_ipc$/))'
 #retries = 3
 

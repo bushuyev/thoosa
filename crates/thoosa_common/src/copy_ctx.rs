@@ -71,6 +71,7 @@ pub trait HandleCtx:Send {
 pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + Debug + Send + Sync {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
 
+    #[cfg(test)]
     async fn restart(&self) -> Result<(), ThoError>;
 
     // Backend work is called by GlobalCtx's coordinator hook after draining.
@@ -402,6 +403,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
         Ok(thoosa_shared::CudaActivityScope::for_operation()?.run(self.copy_tensor(src, dst_device)).await?.into())
     }
 
+    #[cfg(test)]
     async fn restart(&self) -> Result<(), ThoError> {
         GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
     }

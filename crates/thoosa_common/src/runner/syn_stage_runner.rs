@@ -655,7 +655,7 @@ impl SyncStageRunner {
         }
     }
 
-
+    #[cfg(test)]
     pub(crate) fn request_cuda_reset(&self, cause: ThoError) -> Result<Option<CudaActivityPauseTicket>, ThoError> {
         self.request_cuda_reset_for_generation(cuda_activity_gate().device_generation(self.tho_device_idx), cause)
     }
