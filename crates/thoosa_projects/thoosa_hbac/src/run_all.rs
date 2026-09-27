@@ -346,11 +346,6 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
     let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1::<FindMotifsRunConfigFields>();
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
     let select_motifs_run_config = run_all_select_motifs_config_1::<SelectMotifsRunConfigFields>();
-    let find_and_select_run_config_range_or_value = FindAndSelectMotifsRunConfigRangeOrValue {
-        id: None,
-        find_motifs_run_config: run_all_find_motifs_config_1::<FindAndSelectMotifsRunConfigFields>(),
-        select_motifs_run_config: run_all_select_motifs_config_1::<FindAndSelectMotifsRunConfigFields>(),
-    };
 
     let find_and_select_grid =  FindAndSelect::GridOnly {
         find_motifs_run_config_range_or_value,
@@ -358,6 +353,12 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
         extend_motifs_run_config: None,
         select_motifs_run_config,
     };
+
+    // let find_and_select_run_config_range_or_value = FindAndSelectMotifsRunConfigRangeOrValue {
+    //     id: None,
+    //     find_motifs_run_config: run_all_find_motifs_config_1::<FindAndSelectMotifsRunConfigFields>(),
+    //     select_motifs_run_config: run_all_select_motifs_config_1::<FindAndSelectMotifsRunConfigFields>(),
+    // };
     // let find_and_select_opt =  FindAndSelect::WithOpt {
     //     find_and_select_run_config_range_or_value,
     //     fixed_find_motifs_config,
@@ -783,8 +784,8 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 fn run_all_find_motifs_config_1<P: FieldName + 'static>() -> FindMotifsRunConfigRangeOrValue<P> {
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10),
-        window: RangeOrValue::Value(100),
+        step: RangeOrValue::Value(100),
+        window: RangeOrValue::Value(1000),
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
             band_hz: RangeOrValue::Value(2.),
@@ -810,7 +811,7 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
         motif_criteria: vec![
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
-                min: RangeOrValue::Value(0.95),
+                min: RangeOrValue::Value(0.8),
             },
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
@@ -1059,34 +1060,34 @@ mod tests {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> anyhow::Result<()> {
 
-        let settings = RunAllSettings {
-            resources_per_label: 30,
-            pure_sets_len: [(10, true), (20, true)],
-            train_resource_group: "pure group 20".to_string(),
-            valid_resource_group: "pure group 10".to_string(),
-
-            motifs_epochs : 30,
-            labels_epochs : 30,
-            final_epochs : 30,
-            train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
-            train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
-            max_batch_size : 10,
-        };
         // let settings = RunAllSettings {
-        //     resources_per_label: 90,
-        //     pure_sets_len: [(30, true), (60, true)],
-        //     train_resource_group: "pure group 60".to_string(),
-        //     valid_resource_group: "pure group 30".to_string(),
+        //     resources_per_label: 30,
+        //     pure_sets_len: [(10, true), (20, true)],
+        //     train_resource_group: "pure group 20".to_string(),
+        //     valid_resource_group: "pure group 10".to_string(),
         //
         //     motifs_epochs : 30,
-        //     labels_epochs : 50,
-        //     final_epochs : 50,
-        //     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
-        //     train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
-        //     train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
-        //     max_batch_size : 20,
+        //     labels_epochs : 30,
+        //     final_epochs : 30,
+        //     train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
+        //     train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
+        //     train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
+        //     max_batch_size : 10,
         // };
+        let settings = RunAllSettings {
+            resources_per_label: 90,
+            pure_sets_len: [(30, true), (60, true)],
+            train_resource_group: "pure group 60".to_string(),
+            valid_resource_group: "pure group 30".to_string(),
+
+            motifs_epochs : 30,
+            labels_epochs : 50,
+            final_epochs : 50,
+            train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
+            train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
+            train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
+            max_batch_size : 20,
+        };
         // let settings = RunAllSettings {
         //     resources_per_label: 300,
         //     pure_sets_len: [(100, true), (200, true)],
@@ -1198,8 +1199,8 @@ mod tests {
             labels: None,
         };
 
-        let all_configs = run_all_config_1(&run_all_args, &settings);
-        // let all_configs = run_all_config_0(&run_all_args);
+        // let all_configs = run_all_config_1(&run_all_args, &settings);
+        let all_configs = run_all_config_0(&run_all_args);
 
         let r = panic_to_err_async!({run_all(
             &ws,

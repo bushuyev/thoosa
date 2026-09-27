@@ -194,7 +194,7 @@ impl<'a, C> InputContext<'a, DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNe
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn add_partial_output(&mut self, partial: MotifThoTensor<MotifProbability>) {//TODO move impl to ApplyMotifNetSplitsContext
+    async fn add_partial_output(&mut self, partial: MotifThoTensor<MotifProbability>) {
         let input_len = self.input_len.dim::<1>();
         let split_start = self.done_to.dim::<1>();
         let split_len = self.split_len.dim::<1>();
@@ -206,7 +206,9 @@ where
         if valid_len > 0 {
             self.output
                 .narrow(0, self.added_partial_output_len, valid_len)
-                .copy_(&partial.t_ref().narrow(0, 0, valid_len));
+                //TODO if fails in IPC mode  where partial is a ref. It's assumed that if it's being split it makes sense to keep partial results on CPU to save GPU mem which might not always be the case if partials are small.
+                //TODO add test verifying that partial is removed from Worker when partial ref is dropped
+                .copy_(&partial.copy_to_device(0).await.unwrap().as_ref().narrow(0, 0, valid_len));
             self.added_partial_output_len += valid_len;
         }
 
@@ -224,39 +226,6 @@ where
     }
 }
 
-impl<'a, C> InputContext<'a, ApplyMotifNet<C>> for ApplyMotifNetSplitsContext
-where
-    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
-{
-    async fn add_partial_output(&mut self, partial: MotifThoTensor<MotifProbability>) {//TODO move impl to ApplyMotifNetSplitsContext
-        let input_len = self.input_len.dim::<1>();
-        let split_start = self.done_to.dim::<1>();
-        let split_len = self.split_len.dim::<1>();
-        let valid_len = valid_partial_output_len(input_len, split_start, split_len, self.motif_width, self.slice_step);
-        let partial_len = partial.size()[0];
-
-        debug!("ApplyMotifNetSplitsContext::add_partial_output: input_len={input_len} split_start={split_start} split_len={split_len} motif_width={} slice_step={} partial_len={partial_len} valid_len={valid_len}", self.motif_width, self.slice_step);
-
-        if valid_len > 0 {
-            self.output
-                .narrow(0, self.added_partial_output_len, valid_len)
-                .copy_(&partial.t_ref().narrow(0, 0, valid_len));
-            self.added_partial_output_len += valid_len;
-        }
-
-        self.done_to += self.split_len.clone();
-
-        debug!("ApplyMotifNetSplitsContext::add_partial_output: done_to={:?} split_len={:?}", self.done_to, self.split_len);
-    }
-
-    fn all_done(&self) -> bool {
-        self.done_to >= self.input_len
-    }
-
-    async fn build_final_output(self) -> Result<MotifThoTensor<MotifProbability>, ThoError> {
-        ThoTensor::new(self.output_id, self.output).map(Into::into)
-    }
-}
 
 impl SplitsAdjusterContext for ApplyMotifNetSplitsContext {
     type Metrics = MonoMetrics<1, 2>;
@@ -531,7 +500,7 @@ where
                                 &apply_motif_net,
                                 Arc::clone(&apply_motif_net_input),
                                 apply_motif_net_ctx,
-                                Contexts::<ApplyMotifNet<C>, _, _, _>::new(
+                                Contexts::<DynSyncStageWithStateEnum<ApplyMotifNet<C>, MotifNetMeta>, _, _, _>::new(
                                     ApplyMotifNetSplitsContext::new(
                                         input.size().clone(),
                                         out_id.clone(),
