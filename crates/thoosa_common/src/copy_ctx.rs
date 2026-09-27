@@ -25,7 +25,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
-use thoosa_shared::{CudaActivityGate, ThoError};
+use thoosa_shared::{CudaActivityGate, CudaActivityScope, CudaDeviceGeneration, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::oneshot::Sender;
@@ -37,11 +37,12 @@ use crate::ipc::worker_msg::{CudaWorkerMsgOut, OpResult};
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
-pub enum CudaLocalActorMessage {
-    Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
+enum CudaLocalActorMessage {
+    Copy{ src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
 
     GetExecStream {
-        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
+        activity: CudaActivityScope,
+        respond_to: oneshot::Sender<Result<LocalHandleCtx, ThoError>>
     },
     Restart {
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -53,6 +54,7 @@ pub trait SyncCtx {}
 
 impl SyncCtx for (){}
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait HandleCtx:Send {
 
@@ -67,6 +69,7 @@ pub trait HandleCtx:Send {
 }
 
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + Debug + Send + Sync {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
@@ -162,9 +165,7 @@ impl dyn CudaActorHandle + '_ {
         };
 
 
-        handle_ctx.on_after_run()?;
-
-        out
+        finish_cuda_run(out, handle_ctx.on_after_run())
     }
 
     pub async fn run_stage_with_select<S, W, SL>(
@@ -212,9 +213,36 @@ impl dyn CudaActorHandle + '_ {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} sync_result={sync_result:?}");
 
 
-        out
+        finish_cuda_run(out, sync_result)
     }
 
+}
+
+// Both stage entry points must retain a fatal execution error even if stream
+// synchronization also fails, and must propagate a fatal synchronization error.
+fn finish_cuda_run<T>(result: Result<T, ThoError>, sync: Result<(), ThoError>) -> Result<T, ThoError> {
+    match (result, sync) {
+        (Err(original), Err(sync)) => {
+            if sync.is_cuda_recovery_failed() || (!original.is_cuda_recovery_failed() && sync.needs_cuda_ctx_reset() && !original.needs_cuda_ctx_reset()) {
+                Err(sync.context(format!("stage also failed: {original}")))
+            } else {
+                Err(original.context(format!("stream synchronization also failed: {sync}")))
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(output), Ok(())) => Ok(output),
+    }
+}
+
+// Report in the actor-owned task, including when the awaiting caller disappeared.
+// The captured lease generation prevents a late copy error restarting a successor.
+pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc<CudaActivityGate>, generation: CudaDeviceGeneration) -> Result<T, ThoError> {
+    result.map_err(|error| {
+        if error.needs_cuda_ctx_reset() {
+            GlobalCtx::global().get_executor(gate.device_idx()).request_cuda_reset_for_generation(generation, error)
+                .err().unwrap_or(ThoError::ContextReset)
+        } else { error }
+    })
 }
 
 struct CudaLocalActor {
@@ -241,8 +269,8 @@ impl CudaLocalActor {
      fn handle_message(&mut self, msg: CudaLocalActorMessage) {
 
         match msg {
-            CudaLocalActorMessage::Copy{ src, dst_device, respond_to } => {
-                if let Err(error) = self.gate.check_admission() {
+            CudaLocalActorMessage::Copy{ src, dst_device, activity, respond_to } => {
+                if let Err(error) = activity.check_operation(&self.gate) {
                     let _ = respond_to.send(
                         Err(error)
                     );
@@ -250,35 +278,25 @@ impl CudaLocalActor {
                 }
 
                 let copy_ctx = Arc::clone(&self.copy_ctx);
-                let tho_device_idx = self.tho_device_idx;
-                let generation = self.gate.device_generation();
-                tokio::spawn(async move {
+                let gate = Arc::clone(&self.gate);
+                let generation = activity.generation(&gate).expect("copy device lease");
+                tokio::spawn(activity.run(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
                     let src_ptr = src.t_ref().data_ptr() as usize;
                     let src_size = src.t_ref().size();
                     let src_kind = src.t_ref().kind();
                     let _src_keepalive = src;
 
-                    let mut result = copy_ctx.read().await.copy_from_ptr(
+                    let result = copy_ctx.read().await.copy_from_ptr(
                         src_ptr,
                         &src_size,
                         dst_device.tho_device_idx(),
                         src_kind,
                     ).await;
 
-                    if let Err(error) = &result && error.needs_cuda_ctx_reset() {
-                        // Report synchronously and release the caller. Recovery is
-                        // independent and may need cache locks held by that caller.
-                        if let Err(error) = GlobalCtx::global().get_executor(tho_device_idx)
-                            .request_cuda_reset_for_generation(generation, error.clone()) {
-                            result = Err(error);
-                        }
-                    }
-
-                    let _ = respond_to.send(
-                        result
-                     );
-                 });
+                    let result = report_cuda_copy_result(result, &gate, generation);
+                    let _ = respond_to.send(result);
+                 }));
             }
 
             CudaLocalActorMessage::Restart { respond_to } => {
@@ -289,8 +307,8 @@ impl CudaLocalActor {
                     let _ = respond_to.send(result);
                 });
             }
-            CudaLocalActorMessage::GetExecStream { respond_to } => {
-                if let Err(error) = self.gate.check_admission() {
+            CudaLocalActorMessage::GetExecStream { activity, respond_to } => {
+                if let Err(error) = activity.check_operation(&self.gate) {
                     let _ = respond_to.send(
                         Err(error)
                     );
@@ -298,7 +316,10 @@ impl CudaLocalActor {
                 }
                 let copy_ctx = Arc::clone(&self.copy_ctx);
                 tokio::spawn(async move {
-                    respond_to.send(Ok(copy_ctx.read().await.acquire_exec_stream().await))
+                    // The response owns the lease too: caller cancellation must
+                    // not let recovery replace a stream still being acquired.
+                    let stream = copy_ctx.read().await.acquire_exec_stream().await;
+                    respond_to.send(Ok(LocalHandleCtx { stream, _activity: activity }))
                 });
             }
         }
@@ -343,12 +364,13 @@ impl CudaLocalActorHandle {
         })
     }
 
-    async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice) -> anyhow::Result<Tensor> {
+    async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope) -> anyhow::Result<Tensor> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaLocalActorMessage::Copy {
                 src,
                 dst_device,
+                activity,
                 respond_to,
             }
         ).await.context("CUDA actor channel closed")?;
@@ -368,10 +390,12 @@ impl CudaLocalActorHandle {
     }
 
     //TODO these are 'exec' streams, not for copy
-    async fn acquire_exec_stream(&self) -> anyhow::Result<Guard<ThoCudaStream>> {
+    async fn acquire_exec_stream(&self) -> anyhow::Result<LocalHandleCtx> {
+        let activity = CudaActivityScope::for_operation(&self.gate)?;
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaLocalActorMessage::GetExecStream {
+                activity,
                 respond_to,
             }
         ).await.context("CUDA actor channel closed")?;
@@ -383,6 +407,7 @@ impl CudaLocalActorHandle {
 
 struct LocalHandleCtx {
     stream: Guard<ThoCudaStream>,
+    _activity: CudaActivityScope,
 }
 
 impl SyncCtx for ThoStreamGuard {}
@@ -406,7 +431,8 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
         // Register before acquiring copy resources; children share this scope so
         // a pause drains the whole copy instead of blocking its remaining chunks.
-        Ok(thoosa_shared::CudaActivityScope::for_operation(&self.gate)?.run(self.copy_tensor(src, dst_device)).await?.into())
+        let activity = CudaActivityScope::for_operation(&self.gate)?;
+        Ok(self.copy_tensor(src, dst_device, activity).await?.into())
     }
 
     #[cfg(test)]
@@ -421,10 +447,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
     async fn init_handle_ctx(&self) -> Result<Box<dyn HandleCtx>, ThoError> {
 
-        let stream = self.acquire_exec_stream().await?;
-
-
-        Ok(Box::new(LocalHandleCtx { stream }))
+        Ok(Box::new(self.acquire_exec_stream().await?))
     }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
@@ -623,6 +646,83 @@ impl CopyCtx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockCudaActorHandleBuilder {
+        sync_result: Result<(), ThoError>,
+    }
+
+    impl MockCudaActorHandleBuilder {
+        fn build(self) -> Box<dyn CudaActorHandle> {
+            let mut ctx = MockHandleCtx::new();
+            ctx.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
+            ctx.expect_on_after_run().times(1).return_once(move || self.sync_result);
+            let mut actor = MockCudaActorHandle::new();
+            actor.expect_init_handle_ctx().times(1).return_once(move || Ok(Box::new(ctx)));
+            Box::new(actor)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stage_entry_points_preserve_fatal_execution_and_sync_errors() {
+        use crate::runner::common::cachable::DevicesWrap;
+        use crate::runner::oom_handler::{mock_runnable, test_types::{TestInput, TestOutput}};
+        use thoosa_shared::traits::RangeSelector;
+        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        for selected in [false, true] {
+            for fatal_sync in [false, true] {
+                let fatal = || ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "illegal address".into() };
+                let (execution, sync) = if fatal_sync { (Ok(TestOutput::new(1.)), Err(fatal())) } else { (Err(fatal()), Err(ThoError::oom())) };
+                let (stage, _) = mock_runnable::build([execution]);
+                let actor = MockCudaActorHandleBuilder { sync_result: sync }.build();
+                let input = Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1)));
+                let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(0).finish();
+                let result = if selected {
+                    actor.run_stage_with_select(Arc::new(stage), input, None::<RangeSelector>, 0, &ctx).await
+                } else {
+                    actor.run_stage(Arc::new(stage), input, 0, &ctx).await
+                };
+                assert!(result.unwrap_err().needs_cuda_ctx_reset(), "both entry points must surface the fatal error");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_local_copy_keeps_activity_in_queued_request() {
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let (sender, mut receiver) = mpsc::channel(1);
+        let handle = CudaLocalActorHandle { gate: Arc::clone(&gate), tho_device_idx: 1, sender };
+        let src = ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
+        let mut copy = Box::pin(handle.copy(src, 1usize.into()));
+        assert!(futures::poll!(copy.as_mut()).is_pending());
+        let request = receiver.recv().await.unwrap();
+        drop(copy);
+        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let mut idle = Box::pin(gate.wait_until_idle());
+        assert!(futures::poll!(idle.as_mut()).is_pending());
+        let CudaLocalActorMessage::Copy { activity, .. } = request else { panic!("expected copy") };
+        // Actor dispatch must admit this queued operation during draining.
+        activity.check_operation(&gate).unwrap();
+        activity.run(async { CudaActivityScope::for_operation(&gate).unwrap(); }).await;
+        tokio::time::timeout(Duration::from_secs(2), idle).await.unwrap();
+        gate.finish_pause(pause);
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_stream_acquisition_keeps_activity_in_request() {
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let (sender, mut receiver) = mpsc::channel(1);
+        let handle = CudaLocalActorHandle { gate: Arc::clone(&gate), tho_device_idx: 1, sender };
+        let mut acquire = Box::pin(handle.init_handle_ctx());
+        assert!(futures::poll!(acquire.as_mut()).is_pending());
+        let request = receiver.recv().await.unwrap();
+        drop(acquire);
+        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let mut idle = Box::pin(gate.wait_until_idle());
+        assert!(futures::poll!(idle.as_mut()).is_pending());
+        drop(request);
+        tokio::time::timeout(Duration::from_secs(2), idle).await.unwrap();
+        gate.finish_pause(pause);
+    }
 
     #[tokio::test]
     async fn test_local_copy_admission_is_device_local() {
