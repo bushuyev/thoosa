@@ -6,6 +6,7 @@ use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::syn_stage_runner::SyncStageRunner;
+use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
 use crate::runner::purger::Purger;
 use crate::tho_device::ThoDevice;
 use futures::FutureExt;
@@ -23,7 +24,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock};
 use thoosa_shims::context::ThoCudaContext;
-use tokio::sync::{RwLock as AsyncRwLock, Semaphore};
+use tokio::sync::RwLock as AsyncRwLock;
 use tracing::Instrument;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
 
@@ -34,6 +35,7 @@ pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 pub struct GlobalCtx {
 
     executors: Vec<SyncStageRunner>,
+    recovery: Arc<CudaRecoveryCoordinator>,
 
     num_devices: usize,//TODO replace with Vec<ThoDevice>
 
@@ -93,6 +95,8 @@ impl GlobalCtx {
 
         assert!(num_devices > 0);//TODO test if it works without GPU
 
+        let recovery = CudaRecoveryCoordinator::new(Arc::new(GlobalCtx::reset_cuda_context));
+
         let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
         for tho_device_idx in 1..num_devices {
             cuda_actors.push(Box::new(CudaLocalActorHandle::new(tho_device_idx)?) as Box<dyn CudaActorHandle>);
@@ -102,9 +106,10 @@ impl GlobalCtx {
             num_devices,
 
             executors: (0..num_devices).map(|tho_device_idx| {
-                SyncStageRunner::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+                SyncStageRunner::new_with_recovery(1024, tho_device_idx, Arc::clone(&recovery))
             })
             .collect(),
+            recovery,
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -125,6 +130,8 @@ impl GlobalCtx {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
+
+        let recovery = CudaRecoveryCoordinator::new(Arc::new(GlobalCtx::reset_cuda_context));
 
         const ARENA_SIZE: usize = 48 * 1024 * 1024 * 1024; //TODO config
 
@@ -159,8 +166,9 @@ impl GlobalCtx {
         Ok(Self {
             num_devices,
             executors: (0..num_devices).map(|tho_device_idx| {//TODO make dummy CPU 0 executor
-                SyncStageRunner::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+                SyncStageRunner::new_with_recovery(1024, tho_device_idx, Arc::clone(&recovery))
             }).collect(),
+            recovery,
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -179,9 +187,7 @@ impl GlobalCtx {
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
         async move {
-            static RUNNING: Semaphore = Semaphore::const_new(1);
-            let _permit = RUNNING.try_acquire().expect("reset is already running");//StageExecutor should ensure that it is executed by at most one task at a time.
-
+            // The shared coordinator serializes backend work for every device.
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
             track_await(GlobalCtx::global()
@@ -191,7 +197,7 @@ impl GlobalCtx {
 
             GlobalCtx::global()
                 .cuda_actor(tho_device_idx)
-                .restart()
+                .restart_backend()
                 .await?;
 
 
@@ -204,6 +210,19 @@ impl GlobalCtx {
     pub fn get_executor(&self, tho_device:usize) -> &SyncStageRunner {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.executors.len={}", self.executors.len());
         &self.executors[tho_device]//tho_device is 0 in tests
+    }
+
+    pub async fn restart_cuda_device(&self, device: usize) -> Result<(), ThoError> {
+        let ticket = self.get_executor(device).request_cuda_reset(ThoError::ContextReset)?;
+        // Admitted callers must release their activity before the independent
+        // coordinator can drain. Waiting here would wait on the caller itself.
+        if thoosa_shared::CudaActivityScope::current().is_some() {
+            return Err(ThoError::ContextReset);
+        }
+        if let Some(ticket) = ticket {
+            thoosa_shared::cuda_activity_gate().wait_for_pause_to_finish(ticket).await?;
+        }
+        Ok(())
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{

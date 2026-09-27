@@ -851,6 +851,7 @@ async fn fail_all_pending(
 
 #[derive(Debug, Clone)]
 pub struct CudaIPCActorHandle {
+    tho_device_idx: usize,
     sender: mpsc::Sender<CudaIPCActorMessage>,
 }
 
@@ -864,6 +865,7 @@ impl CudaIPCActorHandle {
         tokio::spawn(CudaIPCActor::run(actor));
 
         Ok(Self {
+            tho_device_idx: tho_device_id,
             sender,
         })
     }
@@ -968,6 +970,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 
     async fn restart(&self) -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
+    }
+
+    async fn restart_backend(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Restart {
@@ -1292,7 +1298,7 @@ mod tests {
     #[tokio::test]
     async fn test_cancelled_copy_caller_keeps_activity_with_request() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let handle = CudaIPCActorHandle { sender };
+        let handle = CudaIPCActorHandle { sender, tho_device_idx: 1 };
         // A CPU tensor exercises real copy admission and message ownership
         // without starting a CUDA worker or allocating GPU storage.
         let src = ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
