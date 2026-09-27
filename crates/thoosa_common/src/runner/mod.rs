@@ -11,3 +11,4 @@ mod purger;
 pub mod run_ctx;
 pub mod cache_areas;
 mod syn_stage_runner;
+mod cuda_recovery;
