@@ -25,7 +25,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
-use thoosa_shared::{ThoError, cuda_activity_gate};
+use thoosa_shared::{CudaActivityGate, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::oneshot::Sender;
@@ -218,20 +218,23 @@ impl dyn CudaActorHandle + '_ {
 }
 
 struct CudaLocalActor {
+    gate: Arc<CudaActivityGate>,
     tho_device_idx:usize,
     receiver: mpsc::Receiver<CudaLocalActorMessage>,
     copy_ctx:Arc<RwLock<CopyCtx>>,
 }
 
 impl CudaLocalActor {
-    pub fn new(tho_device_idx:usize, receiver: mpsc::Receiver<CudaLocalActorMessage>) -> Result<Self, ThoError> {
+    pub fn new(gate: Arc<CudaActivityGate>, receiver: mpsc::Receiver<CudaLocalActorMessage>) -> Result<Self, ThoError> {
+        let tho_device_idx = gate.device_idx();
         debug!("CudaActor::new: tho_device_idx={tho_device_idx}");
         assert!(tho_device_idx > 0);
 
         Ok(Self {
             tho_device_idx,
             receiver,
-            copy_ctx: Arc::new(RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 32)?)),
+            copy_ctx: Arc::new(RwLock::new(CopyCtx::with_gate(Arc::clone(&gate), 0.2, 32)?)),
+            gate,
         })
     }
 
@@ -239,7 +242,7 @@ impl CudaLocalActor {
 
         match msg {
             CudaLocalActorMessage::Copy{ src, dst_device, respond_to } => {
-                if let Err(error) = cuda_activity_gate().check_admission() {
+                if let Err(error) = self.gate.check_admission() {
                     let _ = respond_to.send(
                         Err(error)
                     );
@@ -248,7 +251,7 @@ impl CudaLocalActor {
 
                 let copy_ctx = Arc::clone(&self.copy_ctx);
                 let tho_device_idx = self.tho_device_idx;
-                let generation = cuda_activity_gate().device_generation(tho_device_idx);
+                let generation = self.gate.device_generation();
                 tokio::spawn(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
                     let src_ptr = src.t_ref().data_ptr() as usize;
@@ -287,7 +290,7 @@ impl CudaLocalActor {
                 });
             }
             CudaLocalActorMessage::GetExecStream { respond_to } => {
-                if let Err(error) = cuda_activity_gate().check_admission() {
+                if let Err(error) = self.gate.check_admission() {
                     let _ = respond_to.send(
                         Err(error)
                     );
@@ -318,21 +321,24 @@ impl CudaLocalActor {
 
 #[derive(Debug, Clone)]
 pub struct CudaLocalActorHandle {
+    gate: Arc<CudaActivityGate>,
     tho_device_idx: usize,
     sender: mpsc::Sender<CudaLocalActorMessage>,
 }
 
 
 impl CudaLocalActorHandle {
-    pub fn new(tho_device_id:usize) -> Result<Self, ThoError> {
+    pub fn new(gate: Arc<CudaActivityGate>) -> Result<Self, ThoError> {
+        let tho_device_id = gate.device_idx();
         debug!("CudaLocalActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);
-        let actor = CudaLocalActor::new(tho_device_id, receiver)?;
+        let actor = CudaLocalActor::new(Arc::clone(&gate), receiver)?;
         tokio::spawn(CudaLocalActor::run(actor));
 
         Ok(Self {
             tho_device_idx: tho_device_id,
+            gate,
             sender,
         })
     }
@@ -400,7 +406,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
         // Register before acquiring copy resources; children share this scope so
         // a pause drains the whole copy instead of blocking its remaining chunks.
-        Ok(thoosa_shared::CudaActivityScope::for_operation()?.run(self.copy_tensor(src, dst_device)).await?.into())
+        Ok(thoosa_shared::CudaActivityScope::for_operation(&self.gate)?.run(self.copy_tensor(src, dst_device)).await?.into())
     }
 
     #[cfg(test)]
@@ -428,6 +434,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
 
 pub struct CopyCtx {
+    gate: Arc<CudaActivityGate>,
     cuda_device: usize,
 
     pub(crate) buffs: usize,
@@ -450,6 +457,13 @@ impl Debug for CopyCtx {
 
 impl CopyCtx {
     pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> Result<CopyCtx, ThoError> {
+        // Standalone contexts (including IPC workers) own their admission state.
+        // Local actors instead inject the gate shared with their stage runner.
+        Self::with_gate(Arc::new(CudaActivityGate::new(cuda_device + 1)), mem_k, buffs)
+    }
+
+    fn with_gate(gate: Arc<CudaActivityGate>, mem_k: f64, buffs: usize) -> Result<CopyCtx, ThoError> {
+        let cuda_device = gate.device_idx() - 1;
 
         debug!("make_instance_for_cuda_device: cuda_device={cuda_device} mem_k={mem_k} buffs={buffs}");
 
@@ -465,6 +479,7 @@ impl CopyCtx {
         };
 
         Ok(Self {
+            gate,
             cuda_device,
             buffs,
             buf_size,
@@ -562,9 +577,9 @@ impl CopyCtx {
 
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_tho_device == 0 {
-            track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool_h2d)).await
+            track_await(copy_d2h(&self.gate, kind, src_t, self.buf_size, &self.bufs_pool_h2d)).await
         } else {
-            track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool_h2d, dst_tho_device)).await
+            track_await(copy_h2d(&self.gate, kind, src_t, self.buf_size, &self.bufs_pool_h2d, dst_tho_device)).await
         }
     }
 
@@ -579,12 +594,12 @@ impl CopyCtx {
         let t = if dst_tho_device_idx == 0 {
             //TODO opt to .to if tensor_mem_size < buf_size {
             track_await(copy_d2h_from_ptr(
-                kind, self.buf_size,
+                &self.gate, kind, self.buf_size,
                 &self.bufs_pool_d2h, src_ptr, src_size
             )).await
         } else {
             track_await(copy_h2d_from_ptr(
-                kind,
+                &self.gate, kind,
                 self.buf_size,
                 &self.bufs_pool_h2d,
                 dst_tho_device_idx,
@@ -600,7 +615,35 @@ impl CopyCtx {
 
     /// Copies CUDA storage into an already allocated CPU range, which lets an IPC worker fill a tensor owned by the parent shared allocator.
     pub async fn copy_to_cpu_ptr(&self, src_ptr: usize, src_size: &[i64], kind: Kind, dst_ptr: usize) -> Result<(), ThoError> {
-        track_await(copy_d2h_to_ptr(kind, self.buf_size, &self.bufs_pool_d2h, src_ptr, src_size, dst_ptr)).await
+        track_await(copy_d2h_to_ptr(&self.gate, kind, self.buf_size, &self.bufs_pool_d2h, src_ptr, src_size, dst_ptr)).await
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_local_copy_admission_is_device_local() {
+        let failed_gate = Arc::new(CudaActivityGate::new(1));
+        let healthy_gate = Arc::new(CudaActivityGate::new(2));
+        let (failed_tx, mut failed_rx) = mpsc::channel(1);
+        let (healthy_tx, mut healthy_rx) = mpsc::channel(1);
+        let failed = CudaLocalActorHandle { gate: Arc::clone(&failed_gate), tho_device_idx: 1, sender: failed_tx };
+        let healthy = CudaLocalActorHandle { gate: healthy_gate, tho_device_idx: 2, sender: healthy_tx };
+        let pause = failed_gate.request_pause(ThoError::ContextReset).unwrap();
+        for terminal in [false, true] {
+            if terminal { failed_gate.fail_pause(pause, None); }
+            let src = || ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
+            let error = failed.copy(src(), 1usize.into()).await.unwrap_err();
+            assert_eq!(error.is_cuda_recovery_failed(), terminal);
+            assert!(failed_rx.try_recv().is_err());
+            // Exercise the actual handle's admission and enqueue without a GPU.
+            // A different device must still be able to publish its copy request.
+            let mut copy = Box::pin(healthy.copy(src(), 2usize.into()));
+            assert!(futures::poll!(copy.as_mut()).is_pending());
+            assert!(matches!(healthy_rx.try_recv().unwrap(), CudaLocalActorMessage::Copy { .. }));
+        }
+    }
 }

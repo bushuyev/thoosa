@@ -99,7 +99,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId, 
 use thoosa_shared::traits::AsyncStage;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MaxParallelCtx, OutId, RunCtx, Select, DebugId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, RangeOrValue, collect_futures_with_progress, cuda_activity_gate, mono_key, panic_to_err_async, parse_resources, debug_id};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, RangeOrValue, collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, debug_id};
 use thoosa_shared::{ResourceType, ThoError, cdt, cdt_for_dir};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::{Handle, Runtime};

@@ -22,7 +22,7 @@ use std::time::Duration;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock};
+use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock};
 use thoosa_shims::context::ThoCudaContext;
 use tokio::sync::RwLock as AsyncRwLock;
 use tracing::Instrument;
@@ -34,8 +34,7 @@ pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 #[derive(Debug)]
 pub struct GlobalCtx {
 
-    executors: Vec<SyncStageRunner>,
-    recovery: Arc<CudaRecoveryCoordinator>,
+    devices: Vec<DeviceExecutionCtx>,
 
     num_devices: usize,//TODO replace with Vec<ThoDevice>
 
@@ -45,10 +44,22 @@ pub struct GlobalCtx {
     purger: Purger,
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
-    cuda_actors:Vec<Box<dyn CudaActorHandle>>,//TODO change to enum, return Enum from cuda_actor() and use instead of is_ipc
-
     is_ipc: bool,
     arena_fd:Option<OwnedFd> //TODO needed in IPC mode only
+}
+
+// Keep actor and runner ownership together: direct actor copies and scheduled
+// stages must use the very same device gate. The runner retains its coordinator.
+#[derive(Debug)]
+struct DeviceExecutionCtx {
+    runner: SyncStageRunner,
+    cuda_actor: Option<Box<dyn CudaActorHandle>>,
+}
+
+impl DeviceExecutionCtx {
+    fn cpu() -> Self {
+        Self { runner: SyncStageRunner::new_cpu(1024), cuda_actor: None }
+    }
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -96,21 +107,21 @@ impl GlobalCtx {
 
         assert!(num_devices > 0);//TODO test if it works without GPU
 
-        let recovery = CudaRecoveryCoordinator::new(Arc::new(GlobalCtx::reset_cuda_context));
-
-        let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
+        let mut devices = Vec::with_capacity(num_devices);
+        devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
-            cuda_actors.push(Box::new(CudaLocalActorHandle::new(tho_device_idx)?) as Box<dyn CudaActorHandle>);
+            let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
+            let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context));
+            let actor = CudaLocalActorHandle::new(Arc::clone(&gate))?;
+            devices.push(DeviceExecutionCtx {
+                runner: SyncStageRunner::new_with_recovery(1024, recovery),
+                cuda_actor: Some(Box::new(actor)),
+            });
         }
 
         Ok(Self {
             num_devices,
-
-            executors: (0..num_devices).map(|tho_device_idx| {
-                SyncStageRunner::new_with_recovery(1024, tho_device_idx, Arc::clone(&recovery))
-            })
-            .collect(),
-            recovery,
+            devices,
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -121,7 +132,6 @@ impl GlobalCtx {
             purger: Purger::new(),
             shutting_down: false.into(),
 
-            cuda_actors,
             is_ipc: false,
             arena_fd: None,
         })
@@ -131,8 +141,6 @@ impl GlobalCtx {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
-
-        let recovery = CudaRecoveryCoordinator::new(Arc::new(GlobalCtx::reset_cuda_context));
 
         const ARENA_SIZE: usize = 48 * 1024 * 1024 * 1024; //TODO config
 
@@ -158,18 +166,23 @@ impl GlobalCtx {
         let arena_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
 
-        let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
+        let mut devices = Vec::with_capacity(num_devices);
+        devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
-            // Each actor retains its own descriptor so worker resets can remap the parent-owned arena independently.
-            cuda_actors.push(Box::new(CudaIPCActorHandle::new(tho_device_idx, cuda_worker_args.clone(), arena_fd.try_clone()?).await?) as Box<dyn CudaActorHandle>);
+            let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
+            let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context));
+            // Each actor retains its own descriptor so replacement workers can
+            // remap the parent-owned arena independently of other devices.
+            let actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
+            devices.push(DeviceExecutionCtx {
+                runner: SyncStageRunner::new_with_recovery(1024, recovery),
+                cuda_actor: Some(Box::new(actor)),
+            });
         }
 
         Ok(Self {
             num_devices,
-            executors: (0..num_devices).map(|tho_device_idx| {//TODO make dummy CPU 0 executor
-                SyncStageRunner::new_with_recovery(1024, tho_device_idx, Arc::clone(&recovery))
-            }).collect(),
-            recovery,
+            devices,
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -180,7 +193,6 @@ impl GlobalCtx {
             purger: Purger::new(),
             shutting_down: false.into(),
 
-            cuda_actors,
             is_ipc: true,
             arena_fd: Some(arena_fd),
         })
@@ -188,7 +200,7 @@ impl GlobalCtx {
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
         async move {
-            // The shared coordinator serializes backend work for every device.
+            // This device's coordinator invokes the hook after its activity drains.
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
             track_await(GlobalCtx::global()
@@ -209,8 +221,8 @@ impl GlobalCtx {
     }
 
     pub fn get_executor(&self, tho_device:usize) -> &SyncStageRunner {
-        debug!("GlobalCtx::get_executor: tho_device={tho_device} self.executors.len={}", self.executors.len());
-        &self.executors[tho_device]//tho_device is 0 in tests
+        debug!("GlobalCtx::get_executor: tho_device={tho_device} self.devices.len={}", self.devices.len());
+        &self.devices[tho_device].runner//tho_device is 0 in tests
     }
 
     #[cfg(test)]
@@ -222,7 +234,7 @@ impl GlobalCtx {
             return Err(ThoError::ContextReset);
         }
         if let Some(ticket) = ticket {
-            thoosa_shared::cuda_activity_gate().wait_for_pause_to_finish(ticket).await?;
+            self.get_executor(device).cuda_gate().expect("CUDA device").wait_for_pause_to_finish(ticket).await?;
         }
         Ok(())
     }
@@ -486,7 +498,7 @@ impl GlobalCtx {
     pub async fn shutdown(&self) {
         GLB_SHUTTING_DOWN.store(true, Relaxed);
 
-        for (i, actor) in self.cuda_actors.iter().enumerate() {
+        for (i, actor) in self.devices.iter().enumerate().filter_map(|(i, device)| device.cuda_actor.as_ref().map(|actor| (i, actor))) {
             if let Err(e) = actor.shutdown().await {
                 error!("Got {e} while shutting down actor {i}");
             }
@@ -508,8 +520,7 @@ impl GlobalCtx {
 
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
         let device:ThoDevice = device.into();
-        let gpu_device_ordinal = device.gpu_ordinal();
-        self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}"))
+        self.devices.get(device.tho_device_idx()).and_then(|device| device.cuda_actor.as_ref()).expect(&format!("No CudaActor for device={device:?}"))
     }
 }
 
@@ -877,7 +888,7 @@ impl MockGlobalCtx {
 
         static COPY_CTX_ONCE: std::sync::OnceLock<Box<dyn CudaActorHandle>> = std::sync::OnceLock::new();
         // This mock-only accessor must preserve the infallible generated mock API.
-        COPY_CTX_ONCE.get_or_init(|| match CudaLocalActorHandle::new(device.tho_device_idx()) {
+        COPY_CTX_ONCE.get_or_init(|| match CudaLocalActorHandle::new(Arc::new(CudaActivityGate::new(device.tho_device_idx()))) {
             Ok(actor) => Box::new(actor) as Box<dyn CudaActorHandle>,
             Err(error) => panic!("failed to initialize mock CUDA actor: {error:?}"),
         })
