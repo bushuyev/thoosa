@@ -969,6 +969,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         r
     }
 
+    #[cfg(test)]
     async fn restart(&self) -> Result<(), ThoError> {
         crate::runner::global_ctx::GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
     }

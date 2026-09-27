@@ -90,6 +90,7 @@ impl RegisteredCacheHandle {
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
 
+    //TODO num_devices is to be replaces with Cuda devices list. Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda[0]]
     fn new(num_devices: usize) -> anyhow::Result<Self> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
@@ -212,6 +213,7 @@ impl GlobalCtx {
         &self.executors[tho_device]//tho_device is 0 in tests
     }
 
+    #[cfg(test)]
     pub async fn restart_cuda_device(&self, device: usize) -> Result<(), ThoError> {
         let ticket = self.get_executor(device).request_cuda_reset(ThoError::ContextReset)?;
         // Admitted callers must release their activity before the independent
