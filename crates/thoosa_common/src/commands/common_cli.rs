@@ -19,7 +19,7 @@ use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
 use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing, format_perf_map, PERF};
 use thoosa_shared::run_configs::{run_id, RUN_ID};
-use thoosa_shared::{cuda_activity_gate, ThoError};
+use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::{snapshot_not_ready, track_await};
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
@@ -187,11 +187,11 @@ where
                         }
                     }
 
-                    if !cuda_activity_gate().is_paused() {
-                        debug!("run_cli: purge_cpu tick");
-                        GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
-                        debug!("run_cli: purge_cpu done");
-                    }
+                    // CPU cache maintenance uses the cache registry's own locks;
+                    // a recovering GPU must not stop unrelated CPU work.
+                    debug!("run_cli: purge_cpu tick");
+                    GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
+                    debug!("run_cli: purge_cpu done");
                 }
                 _ = rx.changed() => {
                     if *rx.borrow() {

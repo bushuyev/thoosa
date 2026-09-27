@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::watch;
 use tokio::task::{JoinError, JoinSet};
 use tracing::{debug, error};
-use crate::{cuda_activity_gate, CudaActivityScope, FuturesOrdering, ThoError};
+use crate::{CudaActivityScope, FuturesOrdering, ThoError};
 use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard};
 
 pub async fn collect_futures_with_progress<T, F>(
@@ -126,13 +126,9 @@ where
     set.spawn(async move {
         match activity {
             Some(activity) => activity.run(async move { (idx, fut.await) }).await,
-            None => {
-                // Report terminal admission failure without polling the computation.
-                match cuda_activity_gate().wait_if_paused().await {
-                    Ok(()) => (idx, fut.await),
-                    Err(error) => (idx, Err(error)),
-                }
-            }
+            // Generic collectors also execute CPU and unrelated-device work.
+            // Device admission belongs to the submitted operation itself.
+            None => (idx, fut.await),
         }
     });
 

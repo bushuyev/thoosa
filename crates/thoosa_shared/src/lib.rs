@@ -18,7 +18,6 @@ use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use mockall::automock;
 use num_traits::PrimInt;
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 #[cfg(test)]
 use rand::SeedableRng;
@@ -191,7 +190,7 @@ pub enum FuturesOrdering {
     Ordered,
 }
 
-/// A process-wide admission cycle, independent of any device's worker lifetime.
+/// An admission cycle local to one gate, independent of its device generation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CudaRecoveryCycle(pub u64);
 
@@ -207,8 +206,9 @@ pub enum CudaRecoveryState {
     Failed(Arc<CudaRecoveryFailure>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaActivityPauseTicket {
+    gate_id: u64,
     cycle: CudaRecoveryCycle,
     owner: bool,
 }
@@ -227,19 +227,30 @@ impl CudaActivityPauseTicket {
 struct CudaActivityGateState {
     recovery: CudaRecoveryState,
     cycle: CudaRecoveryCycle,
-    device_generations: HashMap<usize, CudaDeviceGeneration>,
+    generation: CudaDeviceGeneration,
     active: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CudaActivityGate {
+    id: u64,
+    device_idx: usize,
     state: Mutex<CudaActivityGateState>,
     notify: tokio::sync::Notify,
 }
 
 impl CudaActivityGate {
-    fn new() -> Self {
-        Self::default()
+    pub fn new(device_idx: usize) -> Self {
+        assert!(device_idx > 0, "CPU execution has no CUDA admission gate");
+        // Device ordinals can be reused by independent contexts. Tickets must
+        // identify the actual gate, not just an ordinal or a local cycle number.
+        static NEXT_GATE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_GATE_ID.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |id| id.checked_add(1)).expect("CUDA gate identity overflow");
+        Self { id, device_idx, state: Mutex::new(CudaActivityGateState::default()), notify: tokio::sync::Notify::new() }
+    }
+
+    pub fn device_idx(&self) -> usize {
+        self.device_idx
     }
 
     pub fn is_paused(&self) -> bool {
@@ -255,8 +266,8 @@ impl CudaActivityGate {
         matches!(self.state.lock().recovery, CudaRecoveryState::Recovering { .. })
     }
 
-    pub fn device_generation(&self, device_idx: usize) -> CudaDeviceGeneration {
-        self.state.lock().device_generations.get(&device_idx).copied().unwrap_or_default()
+    pub fn device_generation(&self) -> CudaDeviceGeneration {
+        self.state.lock().generation
     }
 
     pub fn failure(&self) -> Option<ThoError> {
@@ -306,22 +317,18 @@ impl CudaActivityGate {
             self.notify.notify_waiters();
         }
 
-        Ok(CudaActivityPauseTicket { cycle: state.cycle, owner })
+        Ok(CudaActivityPauseTicket { gate_id: self.id, cycle: state.cycle, owner })
     }
 
-    pub fn finish_pause(&self, ticket: CudaActivityPauseTicket, recovered_devices: &[usize]) {
+    pub fn finish_pause(&self, ticket: CudaActivityPauseTicket) {
         info!("CudaActivityGate::finish_pause: self={self:?} ticket={ticket:?}");
-        if !ticket.owner {
+        if ticket.gate_id != self.id || !ticket.owner {
             return;
         }
 
         let mut state = self.state.lock();
         if matches!(state.recovery, CudaRecoveryState::Recovering { .. }) && state.cycle == ticket.cycle {
-            // Explicit successes keep an unrelated device's generation unchanged.
-            for device_idx in recovered_devices.iter().copied().collect::<HashSet<_>>() {
-                let generation = state.device_generations.entry(device_idx).or_default();
-                generation.0 = generation.0.checked_add(1).expect("CUDA device generation overflow");
-            }
+            state.generation.0 = state.generation.0.checked_add(1).expect("CUDA device generation overflow");
             state.recovery = CudaRecoveryState::Running;
             self.notify.notify_waiters();
         }
@@ -330,7 +337,7 @@ impl CudaActivityGate {
     /// A failed cycle is terminal; stale success/drop handlers cannot reopen it.
     pub fn fail_pause(&self, ticket: CudaActivityPauseTicket, recovery_error: Option<ThoError>) {
         let mut state = self.state.lock();
-        if !ticket.owner || state.cycle != ticket.cycle {
+        if ticket.gate_id != self.id || !ticket.owner || state.cycle != ticket.cycle {
             return;
         }
         if let CudaRecoveryState::Recovering { cause } = &state.recovery {
@@ -370,6 +377,9 @@ impl CudaActivityGate {
     }
 
     pub async fn wait_for_pause_to_finish(&self, ticket: CudaActivityPauseTicket) -> Result<(), ThoError> {
+        if ticket.gate_id != self.id {
+            return Err(ThoError::new("CUDA pause ticket belongs to another gate"));
+        }
         debug!("CudaActivityGate::wait_for_pause_to_finish: self={self:?}");
         loop {
             let notified = {
@@ -402,12 +412,6 @@ impl CudaActivityGate {
             notified.await;
         }
     }
-}
-
-static CUDA_ACTIVITY_GATE: Lazy<CudaActivityGate> = Lazy::new(CudaActivityGate::new);
-
-pub fn cuda_activity_gate() -> &'static CudaActivityGate {
-    &CUDA_ACTIVITY_GATE
 }
 
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
@@ -2298,9 +2302,10 @@ mod shared_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_collect_futures_with_progress_waits_for_cuda_activity_gate() {
+    async fn test_collect_futures_with_progress_runs_during_unrelated_cuda_recovery() {
         let started = Arc::new(AtomicUsize::new(0));
-        let pause_ticket = super::cuda_activity_gate().request_pause(ThoError::ContextReset).unwrap();
+        let gate = super::CudaActivityGate::new(1);
+        let pause_ticket = gate.request_pause(ThoError::ContextReset).unwrap();
 
         let collect = {
             let started = Arc::clone(&started);
@@ -2315,23 +2320,20 @@ mod shared_tests {
                     }),
                     4,
                     FuturesOrdering::Unordered,
-                    "test_collect_futures_with_progress_waits_for_cuda_activity_gate",
+                    "test_collect_futures_with_progress_runs_during_unrelated_cuda_recovery",
                 )
                     .await
             })
         };
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(started.load(Ordering::SeqCst), 0);
-
-        super::cuda_activity_gate().finish_pause(pause_ticket, &[]);
-
         let results = tokio::time::timeout(Duration::from_secs(2), collect)
             .await
-            .expect("collector should resume")
+            .expect("unrelated recovery must not block the collector")
             .expect("collector task should not panic");
         assert_eq!(results.len(), 4);
         assert_eq!(started.load(Ordering::SeqCst), 4);
+        assert!(gate.is_recovering());
+        gate.finish_pause(pause_ticket);
     }
 
     #[test]
