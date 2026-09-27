@@ -193,6 +193,7 @@ pub fn speed_gb_per_s(bytes: u64, millis: u64) -> f64 {
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h"))]
 pub async fn copy_d2h<R: AsRef<Tensor>>(
+    gate: &Arc<thoosa_shared::CudaActivityGate>,
     init_type: Kind,
     src_t: &R,
     buf_size: usize,
@@ -210,11 +211,12 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
 
-    track_await(copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).await
+    track_await(copy_d2h_from_ptr(gate, init_type, buf_size, &bufs_pool, src_ptr, &src_size)).await
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_from_ptr"))]
 pub async fn copy_d2h_from_ptr(
+    gate: &Arc<thoosa_shared::CudaActivityGate>,
     init_type: Kind,
     buf_size_bytes: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
@@ -222,7 +224,7 @@ pub async fn copy_d2h_from_ptr(
     src_size: &[i64],
 ) -> Result<Tensor, ThoError> {
     let dst_t = Tensor::f_empty(src_size, (init_type, Cpu))?;
-    track_await(copy_d2h_to_ptr(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size, dst_t.data_ptr() as usize)).await?;
+    track_await(copy_d2h_to_ptr(gate, init_type, buf_size_bytes, bufs_pool, src_ptr, src_size, dst_t.data_ptr() as usize)).await?;
     debug!("copy_d2h_from_ptr: dst_t={dst_t:?} dst_t.device={:?}", dst_t.device());
     Ok(dst_t)
 }
@@ -230,6 +232,7 @@ pub async fn copy_d2h_from_ptr(
 /// Copies a CUDA tensor into caller-owned CPU storage. The caller must keep both pointer ranges alive and guarantee that `dst_ptr` covers the byte size implied by `init_type` and `src_size`.
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_d2h_to_ptr"))]
 pub async fn copy_d2h_to_ptr(
+    gate: &Arc<thoosa_shared::CudaActivityGate>,
     init_type: Kind,
     buf_size_bytes: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
@@ -239,7 +242,7 @@ pub async fn copy_d2h_to_ptr(
 ) -> Result<(), ThoError> {
     // Admit before touching CUDA; descendants inherit this registration and drain
     // across reset instead of waiting for the reset that needs them to finish.
-    CudaActivityScope::for_operation()?.run(copy_d2h_to_ptr_admitted(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size, dst_ptr)).await
+    CudaActivityScope::for_operation(gate)?.run(copy_d2h_to_ptr_admitted(init_type, buf_size_bytes, bufs_pool, src_ptr, src_size, dst_ptr)).await
 }
 
 async fn copy_d2h_to_ptr_admitted(
@@ -303,6 +306,7 @@ async fn copy_d2h_to_ptr_admitted(
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d"))]
 pub async fn copy_h2d<R: AsRef<Tensor>>(
+    gate: &Arc<thoosa_shared::CudaActivityGate>,
     init_type: Kind,
     src_t: &R,
     buf_size: usize,
@@ -322,7 +326,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     let src_size = src_t.as_ref().size();
 
     track_await(copy_h2d_from_ptr(
-        init_type,
+        gate, init_type,
         buf_size,
         bufs_pool,
         dst_tho_device_idx,
@@ -335,6 +339,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::copy_h2d_from_ptr"))]
 pub async fn copy_h2d_from_ptr(
+    gate: &Arc<thoosa_shared::CudaActivityGate>,
     init_type: Kind,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
@@ -344,7 +349,7 @@ pub async fn copy_h2d_from_ptr(
 ) -> Result<Tensor, ThoError> {
     // Admit before touching CUDA; descendants inherit this registration and drain
     // across reset instead of waiting for the reset that needs them to finish.
-    CudaActivityScope::for_operation()?.run(copy_h2d_from_ptr_admitted(init_type, buf_size, bufs_pool, dst_tho_device_idx, src_ptr, size)).await
+    CudaActivityScope::for_operation(gate)?.run(copy_h2d_from_ptr_admitted(init_type, buf_size, bufs_pool, dst_tho_device_idx, src_ptr, size)).await
 }
 
 async fn copy_h2d_from_ptr_admitted(
@@ -775,6 +780,7 @@ mod tests {
             println!("src_t=\t{src_t}");
 
             let dst = copy_d2h_from_ptr(
+                &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 tensor_kind,
                 buf_size,
                 &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
@@ -790,6 +796,7 @@ mod tests {
             println!("dst=\t{dst}");
 
             let dst = copy_h2d_from_ptr(
+                &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 tensor_kind,
                 buf_size,
                 &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
@@ -844,6 +851,7 @@ mod tests {
             println!("src_t=\t{src_t}");
 
             let dst = copy_d2h_from_ptr(
+                &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 tensor_kind,
                 buf_size,
                 &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
@@ -859,6 +867,7 @@ mod tests {
             println!("dst=\t{dst}");
 
             let dst = copy_h2d_from_ptr(
+                &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
                 tensor_kind,
                 buf_size,
                 &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
@@ -906,6 +915,7 @@ mod tests {
         let bogus_device_ptr = bogus_cpu_tensor.data_ptr() as usize; // not a CUdeviceptr
 
         let res = super::copy_d2h_from_ptr(
+            &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
             Kind::Int,
             buf_size,
             &bufs_pool,

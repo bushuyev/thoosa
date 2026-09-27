@@ -851,13 +851,15 @@ async fn fail_all_pending(
 
 #[derive(Debug, Clone)]
 pub struct CudaIPCActorHandle {
+    gate: Arc<thoosa_shared::CudaActivityGate>,
     tho_device_idx: usize,
     sender: mpsc::Sender<CudaIPCActorMessage>,
 }
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
-    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<String>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
+    pub async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
+        let tho_device_id = gate.device_idx();
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);
@@ -866,6 +868,7 @@ impl CudaIPCActorHandle {
 
         Ok(Self {
             tho_device_idx: tho_device_id,
+            gate,
             sender,
         })
     }
@@ -934,7 +937,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
-        let activity = thoosa_shared::CudaActivityScope::for_operation()?;
+        let activity = thoosa_shared::CudaActivityScope::for_operation(&self.gate)?;
         debug!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?}");
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
         match &dst_device.into() {
@@ -1175,7 +1178,7 @@ mod tests {
     use anyhow::Context as _;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-    use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload};
+    use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, CudaIPCActorMessage, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::tests::run_ipc_test;
     use crate::ipc::wraps::SyncStageIpcWrapper;
@@ -1297,9 +1300,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_ipc_copy_admission_is_device_local() {
+        let failed_gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let healthy_gate = Arc::new(thoosa_shared::CudaActivityGate::new(2));
+        let (failed_tx, mut failed_rx) = tokio::sync::mpsc::channel(1);
+        let (healthy_tx, mut healthy_rx) = tokio::sync::mpsc::channel(1);
+        let failed = CudaIPCActorHandle { gate: Arc::clone(&failed_gate), tho_device_idx: 1, sender: failed_tx };
+        let healthy = CudaIPCActorHandle { gate: healthy_gate, tho_device_idx: 2, sender: healthy_tx };
+        let pause = failed_gate.request_pause(ThoError::ContextReset).unwrap();
+        for terminal in [false, true] {
+            if terminal { failed_gate.fail_pause(pause, None); }
+            let src = || ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
+            let error = failed.copy(src(), 1usize.into()).await.unwrap_err();
+            assert_eq!(error.is_cuda_recovery_failed(), terminal);
+            assert!(failed_rx.try_recv().is_err());
+            // Copy admission is in the real parent handle; the worker need not
+            // start to prove an unrelated recovery cannot block publication.
+            let mut copy = Box::pin(healthy.copy(src(), 2usize.into()));
+            assert!(futures::poll!(copy.as_mut()).is_pending());
+            assert!(matches!(healthy_rx.try_recv().unwrap(), CudaIPCActorMessage::Copy { .. }));
+        }
+    }
+
+    #[tokio::test]
     async fn test_cancelled_copy_caller_keeps_activity_with_request() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let handle = CudaIPCActorHandle { sender, tho_device_idx: 1 };
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let handle = CudaIPCActorHandle { sender, tho_device_idx: 1, gate: Arc::clone(&gate) };
         // A CPU tensor exercises real copy admission and message ownership
         // without starting a CUDA worker or allocating GPU storage.
         let src = ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
@@ -1307,14 +1334,14 @@ mod tests {
         assert!(futures::poll!(copy.as_mut()).is_pending());
         let request = receiver.recv().await.unwrap();
         drop(copy);
-        let pause = thoosa_shared::cuda_activity_gate().request_pause(ThoError::ContextReset).unwrap();
-        let mut idle = Box::pin(thoosa_shared::cuda_activity_gate().wait_until_idle());
+        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let mut idle = Box::pin(gate.wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending());
         // The request retains the scope even though its caller has gone away.
         // Discarding it before dispatch is equivalent to completing that activity.
         drop(request);
         tokio::time::timeout(std::time::Duration::from_secs(2), idle).await.unwrap();
-        thoosa_shared::cuda_activity_gate().finish_pause(pause, &[]);
+        gate.finish_pause(pause);
     }
 
     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
