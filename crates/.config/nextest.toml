@@ -5,8 +5,8 @@ experimental = ["wrapper-scripts"]
 heavy = { max-threads = 1 }
 
 [profile.default]
-test-threads = 1
-default-filter = 'not test(/::heavy[^:]*$/)'
+test-threads = 8
+default-filter = 'not (test(/::heavy[^:]*$/) | test(/_ipc$/))'
 #retries = 3
 
 
@@ -15,12 +15,20 @@ test-threads = 32
 default-filter = 'test(/::heavy[^:]*$/)'
 retries = 0
 
+
+[profile.ipc]
+test-threads = 1
+default-filter = 'test(/_ipc$/) & not test(/::heavy[^:]*$/)'
+retries = 0
+
+
 [[profile.default.scripts]]
 filter = 'all()'
 run-wrapper = 'systemd'
 
 [scripts.wrapper.passthrough]
 command = ["bash", "-c", 'exec "$0" "$@"']
+
 
 [profile.codex]
 retries = 0
@@ -30,6 +38,7 @@ retries = 0
 filter = 'all()'
 run-wrapper = 'passthrough'
 
+
 [profile.heavy]
 default-filter = 'test(/::heavy[^:]*$/)'
 retries = 0
@@ -37,6 +46,7 @@ retries = 0
 [[profile.heavy.overrides]]
 filter = 'test(/::heavy[^:]*$/)'
 threads-required = "num-cpus"
+
 
 [scripts.wrapper.systemd]
 command = [
