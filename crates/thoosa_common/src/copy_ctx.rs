@@ -16,8 +16,8 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::Ordering::{AcqRel, Acquire};
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
@@ -72,6 +72,10 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
 
     async fn restart(&self) -> Result<(), ThoError>;
+
+    // Backend work is called by GlobalCtx's coordinator hook after draining.
+    // It must neither request a new cycle nor change admission state.
+    async fn restart_backend(&self) -> Result<(), ThoError>;
 
     async fn shutdown(&self) -> Result<(), ThoError> {
         Ok(())
@@ -216,7 +220,6 @@ struct CudaLocalActor {
     tho_device_idx:usize,
     receiver: mpsc::Receiver<CudaLocalActorMessage>,
     copy_ctx:Arc<RwLock<CopyCtx>>,
-    is_restarting:Arc<AtomicBool>,
 }
 
 impl CudaLocalActor {
@@ -228,7 +231,6 @@ impl CudaLocalActor {
             tho_device_idx,
             receiver,
             copy_ctx: Arc::new(RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 32)?)),
-            is_restarting: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -244,8 +246,8 @@ impl CudaLocalActor {
                 }
 
                 let copy_ctx = Arc::clone(&self.copy_ctx);
-                let is_resetting = Arc::clone(&self.is_restarting);
                 let tho_device_idx = self.tho_device_idx;
+                let generation = cuda_activity_gate().device_generation(tho_device_idx);
                 tokio::spawn(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
                     let src_ptr = src.t_ref().data_ptr() as usize;
@@ -253,16 +255,19 @@ impl CudaLocalActor {
                     let src_kind = src.t_ref().kind();
                     let _src_keepalive = src;
 
-                    let result = copy_ctx.read().await.copy_from_ptr(
+                    let mut result = copy_ctx.read().await.copy_from_ptr(
                         src_ptr,
                         &src_size,
                         dst_device.tho_device_idx(),
                         src_kind,
                     ).await;
 
-                    if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
-                        if let Err(e) = Self::do_restart(copy_ctx, is_resetting, tho_device_idx, e.clone()).await {
-                            error!("CudaActor::handle_message, Copy:, e={e:?}");
+                    if let Err(error) = &result && error.needs_cuda_ctx_reset() {
+                        // Report synchronously and release the caller. Recovery is
+                        // independent and may need cache locks held by that caller.
+                        if let Err(error) = GlobalCtx::global().get_executor(tho_device_idx)
+                            .request_cuda_reset_for_generation(generation, error.clone()) {
+                            result = Err(error);
                         }
                     }
 
@@ -273,18 +278,10 @@ impl CudaLocalActor {
             }
 
             CudaLocalActorMessage::Restart { respond_to } => {
-                if self.is_restarting.load(Relaxed) {//TODO should not be needed, pause is controlled by thoosa_shared::CudaActivityGate::request_pause
-                    let _ = respond_to.send(
-                        Err(ThoError::new("CudaActor is resetting"))
-                    );
-                    return;
-                }
-
                 let copy_ctx = Arc::clone(&self.copy_ctx);
-                let is_resetting = Arc::clone(&self.is_restarting);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
-                    let result = Self::do_restart(copy_ctx, is_resetting, tho_device_idx, ThoError::ContextReset).await;
+                    let result = Self::do_restart(copy_ctx, tho_device_idx).await;
                     let _ = respond_to.send(result);
                 });
             }
@@ -303,49 +300,12 @@ impl CudaLocalActor {
         }
     }
 
-    async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, is_resetting:Arc<AtomicBool>, tho_device_idx:usize, cause: ThoError) -> Result<(), ThoError> {
-        if let Some(error) = cuda_activity_gate().failure() {
-            return Err(error);
-        }
-        if is_resetting.load(Relaxed) {
-            return Ok(());
-        }
-
-        let ticket = cuda_activity_gate().request_pause(cause)?;
-        is_resetting.store(true, Relaxed);
-
-        // Scope fallible cleanup so every returned error completes the owned cycle.
-        let result = async {
-            track_await(GlobalCtx::global()
-                .drop_data_on_device(tho_device_idx, "drop"))
-                .await?;
-            let device:ThoDevice = tho_device_idx.into();
-
-            debug!("CudaActor::do_reset: drop_device done");
-
-            let mut cu_ctx = ThoCudaContext::new(device.gpu_ordinal() as i32)?;
-            cu_ctx.restart()?;
-
-            info!("CudaActor::do_reset: drop_device done");
-
-            timeout(Duration::from_millis(1000), copy_ctx.write()).await?.restart()
-        }.await;
-        is_resetting.store(false, Relaxed);
-        match result {
-            Ok(_) => {
-                let is_owner = ticket.is_owner();
-
-                cuda_activity_gate().finish_pause(ticket, &[tho_device_idx]);
-
-                info!("CudaActor::do_reset: is_owner={is_owner} Reset ok");
-                Ok(())
-            }
-            Err(e) => {
-                info!("CudaActor::do_reset Reset: failed: e={e:?}");
-                cuda_activity_gate().fail_pause(ticket, Some(e.clone()));
-                Err(cuda_activity_gate().failure().unwrap_or(e))
-            }
-        }
+    async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, tho_device_idx: usize) -> Result<(), ThoError> {
+        // Cache cleanup and admission transitions belong to the coordinator.
+        let device: ThoDevice = tho_device_idx.into();
+        let mut cu_ctx = ThoCudaContext::new(device.gpu_ordinal() as i32)?;
+        cu_ctx.restart()?;
+        timeout(Duration::from_millis(1000), copy_ctx.write()).await?.restart()
     }
 
     async fn run(mut actor: CudaLocalActor) {
@@ -357,6 +317,7 @@ impl CudaLocalActor {
 
 #[derive(Debug, Clone)]
 pub struct CudaLocalActorHandle {
+    tho_device_idx: usize,
     sender: mpsc::Sender<CudaLocalActorMessage>,
 }
 
@@ -370,6 +331,7 @@ impl CudaLocalActorHandle {
         tokio::spawn(CudaLocalActor::run(actor));
 
         Ok(Self {
+            tho_device_idx: tho_device_id,
             sender,
         })
     }
@@ -441,6 +403,10 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 
     async fn restart(&self) -> Result<(), ThoError> {
+        GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
+    }
+
+    async fn restart_backend(&self) -> Result<(), ThoError> {
         Ok(self.restart_inner().await?)
     }
 
