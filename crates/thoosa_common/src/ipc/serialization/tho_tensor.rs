@@ -29,7 +29,7 @@ where
             size: Vec<i64>,
             kind: SerdeKind,
             selector:Option<Box<dyn ThoSelector>>,
-            tho_device_idx:usize
+            worker_id: crate::ipc::worker_msg::CudaWorkerId
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -42,7 +42,7 @@ where
             helper.size,
             helper.kind.0,
             helper.selector,
-            helper.tho_device_idx
+            helper.worker_id
         ))
 
     }
@@ -158,7 +158,7 @@ where
 
                 state.serialize_field("kind", kind_to_str(kind).map_err(S::Error::custom)?)?;
                 state.serialize_field("selector", selector)?;
-                state.serialize_field("tho_device_idx", &key.device_idx)?;
+                state.serialize_field("worker_id", &key.worker_id)?;
                 state.end()
             }
             ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
@@ -188,8 +188,8 @@ mod tests {
         let is_installed_ctx = MockGlobalCtx::is_installed_context();
         is_installed_ctx.expect().return_const(false);
 
-        let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, 2);
-        // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, 2);
+        let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
+        // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
 
         let cuda_tensor_bytes = serde_json::to_vec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> = serde_json::from_slice(&cuda_tensor_bytes).unwrap();
@@ -204,7 +204,8 @@ mod tests {
         assert_eq!(key.key, 10);
         assert_eq!(kind, Kind::Float);
         assert_eq!(size, vec![3,10]);
-        assert_eq!(key.device_idx, 2);
+        assert_eq!(key.worker_id.device_idx, 2);
+        assert_eq!(key.worker_id.generation, thoosa_shared::CudaDeviceGeneration(7));
 
         let cuda_tensor_bytes = postcard::to_allocvec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> =  postcard::from_bytes::<ThoTensor<AnyDims, SynKey>>(&cuda_tensor_bytes).unwrap();
@@ -218,7 +219,8 @@ mod tests {
         assert_eq!(key.key, 10);
         assert_eq!(kind, Kind::Float);
         assert_eq!(size, vec![3,10]);
-        assert_eq!(key.device_idx, 2);
+        assert_eq!(key.worker_id.device_idx, 2);
+        assert_eq!(key.worker_id.generation, thoosa_shared::CudaDeviceGeneration(7));
 
     }
 
@@ -304,7 +306,7 @@ mod tests {
             )
         ]);
 
-        let msg = CudaWorkerMsgIn::new(0, Operation::InstallStage{
+        let msg = CudaWorkerMsgIn::new(crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) }, 0, Operation::InstallStage{
             endpoint_name:"test_a".to_string(),
             stage_id: 0,
             init_data: Box::new(StageAInit::new(1))

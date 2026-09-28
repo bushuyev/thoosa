@@ -2,7 +2,7 @@ use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;
@@ -34,6 +34,7 @@ where
     stage_id: u32,
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
+    worker_id: CudaWorkerId,
     // Generic inputs can supply the concrete typetag conversion that a blanket WorkerStageInput implementation cannot express.
     clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
 
@@ -90,6 +91,7 @@ where
 
 
                 let rs = ipc_actor.invoke_stage(
+                    self.worker_id,
                     self.endpoint_name.to_string(),
                     self.stage_id,
                     self.clone_refs(input)?, //clones refs
@@ -122,6 +124,7 @@ where
 
 
                 let rs = ipc_actor.invoke_stage(
+                    self.worker_id,
                     self.endpoint_name.to_string(),
                     self.stage_id,
                     self.clone_refs(&input)?, //clones refs
@@ -176,20 +179,23 @@ where
         let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
         let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
+        let worker_id = ipc_actor.worker_id()?;
         let rs = ipc_actor.install_stage(
+            worker_id,
             endpoint_name.to_string(),
             stage_id,
             init_data,
         ).await?;
 
         match rs {
-            CudaWorkerMsgOut { request_id, status } => {
+            CudaWorkerMsgOut { status, .. } => {
                 match status {
                     OpResult::Ok(_) => {
                         Ok(Self {
                             endpoint_name,
                             stage_id,
                             tho_device_idx,
+                            worker_id,
                             pd:PhantomData,
                             clone_refs,
                         })
@@ -212,7 +218,7 @@ where
 
     fn handle_rs(rs: CudaWorkerMsgOut) -> Result<<St as Stage>::Out, ThoError> {
         match rs {
-            CudaWorkerMsgOut { request_id, status } => {
+            CudaWorkerMsgOut { status, .. } => {
                 match status {
                     OpResult::Ok(r) => {
                         match r {
@@ -247,6 +253,7 @@ where
         let endpoint_name = self.endpoint_name;
         let stage_id = self.stage_id;
         let tho_device_idx = self.tho_device_idx;
+        let worker_id = self.worker_id;
 
         debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}");
 
@@ -258,7 +265,7 @@ where
 
             debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx} spawned");
 
-            if let Err(error) = ipc_actor.drop_endpoint(stage_id, endpoint_name.to_string()).await {
+            if let Err(error) = ipc_actor.drop_endpoint(stage_id, endpoint_name.to_string(), worker_id).await {
                 if !GlobalCtx::is_shutting_down() {
                     error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
                 }
@@ -396,8 +403,8 @@ where
             DynSyncStageEnum::Local(stage) => {
                 stage.has_gpu_data(device_idx).await
             }
-            DynSyncStageEnum::Proxy { .. } => {
-                true
+            DynSyncStageEnum::Proxy { stage, .. } => {
+                stage.tho_device_idx == device_idx
             }
         }
     }
@@ -408,10 +415,12 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageEnum::Proxy { stage,  .. } => {
+                if stage.tho_device_idx != device_idx { return Ok(()); }
                 crate::ipc::serialization::json::purge_ipc_sync_stage::<JsonIpcCodec>(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
                     stage.stage_id,
+                    stage.worker_id,
                 ).await
             }
         }
@@ -546,8 +555,8 @@ where
             DynSyncStageWithStateEnum::Local(stage) => {
                 stage.has_gpu_data(device_idx).await
             }
-            DynSyncStageWithStateEnum::Proxy { .. } => {
-                true
+            DynSyncStageWithStateEnum::Proxy { stage, .. } => {
+                stage.tho_device_idx == device_idx
             }
         }
     }
@@ -558,10 +567,12 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
+                if stage.tho_device_idx != device_idx { return Ok(()); }
                 crate::ipc::serialization::json::purge_ipc_sync_stage::<crate::ipc::serialization::json::JsonIpcCodec>(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
                     stage.stage_id,
+                    stage.worker_id,
                 ).await
             }
         }

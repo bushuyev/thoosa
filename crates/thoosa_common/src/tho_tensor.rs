@@ -31,7 +31,7 @@ use thoosa_shared::{n_trace_line, CopyToDevice, ThoError};
 use thoosa_shared::{panic_to_err, debug_id};
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput, WorkerOutput};
 
 
 //TODO remove, it should be in DevicesWrap between async
@@ -182,17 +182,17 @@ impl<D: Dims> Display for ThoTensor<D, DebugId> {
 #[derive(Debug)]
 pub struct KeyHolder {
     pub key:u64,
-    pub device_idx:usize,
+    pub worker_id: CudaWorkerId,
     count:Arc<()>,
     pub do_drop:bool,
 }
 
 impl Clone for KeyHolder {
     fn clone(&self) -> Self {
-        debug!("KeyHolder::clone: self={self:?} self.device_idx={} strong_count={:?}", self.device_idx, Arc::strong_count(&self.count) );
+        debug!("KeyHolder::clone: self={self:?} self.worker_id.device_idx={} strong_count={:?}", self.worker_id.device_idx, Arc::strong_count(&self.count) );
         KeyHolder {
             key:  self.key,
-            device_idx: self.device_idx,
+            worker_id: self.worker_id,
             count: Arc::clone(&self.count),
             do_drop: self.do_drop,
         }
@@ -201,14 +201,15 @@ impl Clone for KeyHolder {
 
 impl Drop for KeyHolder {
     fn drop(&mut self) {
-        debug!("KeyHolder::drop: self={self:?} self.device_idx={} strong_count={:?} GlobalCtx::is_installed()={}", self.device_idx, Arc::strong_count(&self.count), GlobalCtx::is_installed() );
-        if self.do_drop && self.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 {
+        debug!("KeyHolder::drop: self={self:?} self.worker_id.device_idx={} strong_count={:?} GlobalCtx::is_installed()={}", self.worker_id.device_idx, Arc::strong_count(&self.count), GlobalCtx::is_installed() );
+        if self.do_drop && self.worker_id.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 {
             debug!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
 
-            let device_idx = self.device_idx;
+            let device_idx = self.worker_id.device_idx;
             let key = self.key;
+            let worker_id = self.worker_id;
             tokio::spawn(async move {
-                if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key).await {
+                if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key, worker_id).await {
                     error!("Can't drop tensor key={key:?} e={e:?}");
                 }
             });
@@ -343,7 +344,7 @@ where
 
         match &self.inner {
             ThoTensorInner::Val { t } => ThoDevice::from(t.device()).tho_device_idx(),
-            ThoTensorInner::Ref { key, .. } => key.device_idx,
+            ThoTensorInner::Ref { key, .. } => key.worker_id.device_idx,
         }
     }
 
@@ -413,15 +414,16 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         })
     }
 
-    pub fn new_ref(id: Id, key: u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, tho_device_idx: usize) -> Self {
+    pub fn new_ref(id: Id, key: u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, worker_id: CudaWorkerId) -> Self {
+        let tho_device_idx = worker_id.device_idx;
 
         // #[cfg(tho_debug)]
         // let key_holder = if GlobalCtx::is_installed(){
         debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
 
         // let trace = n_trace_line(&Backtrace::capture(), 200);
-        static KEYS:OnceLock<Mutex<HashMap<u64, Arc<()>>>> = OnceLock::new();
-        let count = Arc::clone(KEYS.get_or_init(||Mutex::new(HashMap::new())).lock().entry(key).or_insert(Arc::new(())));
+        static KEYS:OnceLock<Mutex<HashMap<(CudaWorkerId, u64), Arc<()>>>> = OnceLock::new();
+        let count = Arc::clone(KEYS.get_or_init(||Mutex::new(HashMap::new())).lock().entry((worker_id, key)).or_insert(Arc::new(())));
 
         debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
 
@@ -430,7 +432,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             inner: ThoTensorInner::Ref {
                 key: KeyHolder {
                     key,
-                    device_idx: tho_device_idx,
+                    worker_id,
                     count,
                     do_drop: true,
                 },
@@ -441,6 +443,13 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             pd: PhantomData,
         }
 
+    }
+
+    pub fn ref_worker_id(&self) -> Option<CudaWorkerId> {
+        match &self.inner {
+            ThoTensorInner::Ref { key, .. } => Some(key.worker_id),
+            ThoTensorInner::Val { .. } => None,
+        }
     }
 
     pub fn ref_key(&self) -> Option<u64> {
@@ -514,14 +523,14 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn tho_device_idx(&self) -> usize {
         match &self.inner {
             ThoTensorInner::Val { t } => ThoDevice::from(self.t_ref().device()).tho_device_idx(),
-            ThoTensorInner::Ref { key, .. } => key.device_idx,
+            ThoTensorInner::Ref { key, .. } => key.worker_id.device_idx,
         }
     }
 
     pub fn tho_device(&self) -> ThoDevice {
         match &self.inner {
             ThoTensorInner::Val { t } => ThoDevice::from(t.device()),
-            ThoTensorInner::Ref { key, .. } => <usize as Into<ThoDevice>>::into(key.device_idx),
+            ThoTensorInner::Ref { key, .. } => <usize as Into<ThoDevice>>::into(key.worker_id.device_idx),
         }
     }
 
@@ -646,3 +655,29 @@ impl WorkerOutput for ThoTensor<ChannelsData, SynKey> {}
 // Postcard stage calls need concrete typetag registrations for tensor inputs used across the main workflow.
 #[typetag::serde(name = "ThoTensor_ChannelsData_Input")]
 impl WorkerInput for ThoTensor<ChannelsData, SynKey> {}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+    use thoosa_shared::CudaDeviceGeneration;
+
+    #[test]
+    fn test_reference_ownership_is_scoped_to_device_and_generation() {
+        let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
+        installed.expect().return_const(false);
+        let worker_id = CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(0) };
+        let make = |worker| ThoTensor::<AnyDims, ()>::new_ref((), 15, vec![1], Kind::Float, None, worker);
+        let first = make(worker_id);
+        let same = make(worker_id);
+        let replacement = make(CudaWorkerId { generation: CudaDeviceGeneration(1), ..worker_id });
+        let other = make(CudaWorkerId { device_idx: 2, ..worker_id });
+        let key = |tensor: ThoTensor| match tensor.inner {
+            ThoTensorInner::Ref { key, .. } => key,
+            _ => unreachable!(),
+        };
+        let first = key(first);
+        assert!(Arc::ptr_eq(&first.count, &key(same).count));
+        assert!(!Arc::ptr_eq(&first.count, &key(replacement).count));
+        assert!(!Arc::ptr_eq(&first.count, &key(other).count));
+    }
+}

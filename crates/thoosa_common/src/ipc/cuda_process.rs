@@ -2,7 +2,7 @@ use crate::copy_ctx::{CudaActorHandle, HandleCtx};
 use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::{IpcTensorKind, send_fd};
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -37,6 +37,7 @@ use tracing::Instrument;
 use tracing::field::debug;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
+pub const WORKER_ID_ENV: &str = "THOOSA_CUDA_WORKER_ID";
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 pub  const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 // Shutdown normally completes immediately, but keep a bounded kill fallback for a worker stuck after acknowledging the request.
@@ -116,6 +117,7 @@ pub enum CudaIPCActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
     DropThoTensor {
         key:u64,
+        worker_id: CudaWorkerId,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
     Restart {
@@ -126,6 +128,7 @@ pub enum CudaIPCActorMessage {
     },
     SendMsg {
         input: CudaWorkerMsgIn,
+        activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>
     },
 }
@@ -148,6 +151,7 @@ pub struct CudaIPCActor {
 
 #[derive(Debug)]
 struct SpawnedState {
+    worker_id: CudaWorkerId,
     pending: PendingResponses,
     tx:Sender<CudaWorkerMsgIn>,
     child:Child,
@@ -228,7 +232,7 @@ impl CudaIPCActor {
         let tho_device_idx = gate.device_idx();
         let cuda_worker_args = Arc::new(cuda_worker_args);
 
-        let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args, arena_fd.as_fd()).await?;
+        let spawned_state = Self::spawn_worker_and_loops(CudaWorkerId { device_idx: tho_device_idx, generation: gate.device_generation() }, &cuda_worker_args, arena_fd.as_fd()).await?;
 
 
         debug!("CudaIPCActor::new: worker device_info={:?}", spawned_state.device_info);
@@ -244,10 +248,10 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_and_loops(tho_device_idx: usize, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<SpawnedState, ThoError> {
+    async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<SpawnedState, ThoError> {
         debug!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
 
-        let (mut child, stream, device_info) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args, arena_fd).await?;
+        let (mut child, stream, device_info) = Self::spawn_worker_for_cuda_device(worker_id, cuda_worker_args, arena_fd).await?;
 
         let (reader, writer) = stream.into_split();
 
@@ -261,6 +265,7 @@ impl CudaIPCActor {
         debug!("CudaIPCActor::spawn_worker_and_loops, ok");
 
         Ok( SpawnedState {
+            worker_id,
             child,
             tx,
             pending,
@@ -271,7 +276,8 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
+    async fn spawn_worker_for_cuda_device(worker_id: CudaWorkerId, args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
+        let cuda_device = worker_id.device_idx - 1;
         let exe = std::env::current_exe()?;
 
         debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
@@ -296,6 +302,7 @@ impl CudaIPCActor {
         let mut child = command
             .env_remove(CUDA_VISIBLE_DEVICES)
             .env(IPC_SOCK_ENV, &sock_path)
+            .env(WORKER_ID_ENV, serde_json::to_string(&worker_id)?)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -326,6 +333,7 @@ impl CudaIPCActor {
 
         let device_info:DeviceInfo = PostcardToFromBytes::from_bytes(&read_frame(&mut stream, "DeviceInfo/main", MAX_FRAME_LEN).await?)?;
         debug!("CudaIPCActor::spawn_worker: main received: {device_info:?}");
+        device_info.worker_id.check(worker_id)?;
 
         // The arena descriptor is the only descriptor sent per worker; all tensor copies subsequently use offsets in this mapping.
         send_fd(&stream, arena_fd).await?;
@@ -348,8 +356,12 @@ impl CudaIPCActor {
                 }
 
                 return if let Some(tensor_key) = src.ref_key() {
+                    if let Err(error) = src.ref_worker_id().expect("tensor worker").check(self.spawned_state.worker_id) {
+                        let _ = respond_to.send(Err(error));
+                        return Ok(());
+                    }
                     assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
-                     self.handle_ref_d2h_copy(tensor_key, dst_device, activity, respond_to).await
+                     self.handle_ref_d2h_copy(src, tensor_key, dst_device, activity, respond_to).await
                 } else {
                     debug!("handle_message: src={src:?} dst_device={dst_device:?}");
                     assert_ne!(*dst_device, Cpu, "If source is concrete tensor it should be on CPU and can be copied only to GPU");
@@ -359,7 +371,12 @@ impl CudaIPCActor {
 
             }
 
-            CudaIPCActorMessage::DropThoTensor { key, respond_to } => {
+            CudaIPCActorMessage::DropThoTensor { key, worker_id, respond_to } => {
+                // A delayed destructor must never delete a replacement worker's key.
+                if worker_id != self.spawned_state.worker_id {
+                    let _ = respond_to.send(Ok(()));
+                    return Ok(());
+                }
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let pending = Arc::clone(&self.spawned_state.pending);
@@ -376,6 +393,7 @@ impl CudaIPCActor {
 
                     if self_tx.send(
                         CudaWorkerMsgIn {
+                            worker_id,
                             request_id: id,
                             operation: Operation::DropThoTensor {tensor_key: key},
                         },
@@ -394,7 +412,7 @@ impl CudaIPCActor {
             CudaIPCActorMessage::Restart { respond_to } => {
                 info!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
 
-                let replacement = match Self::spawn_worker_and_loops(self.tho_device_idx, &self.cuda_worker_args, self.arena_fd.as_fd()).await {
+                let replacement = match Self::spawn_worker_and_loops(CudaWorkerId { device_idx: self.tho_device_idx, generation: thoosa_shared::CudaDeviceGeneration(self.spawned_state.worker_id.generation.0.checked_add(1).expect("worker generation overflow")) }, &self.cuda_worker_args, self.arena_fd.as_fd()).await {
                     Ok(replacement) => replacement,
                     Err(error) => {
                         let _ = respond_to.send(Err(error));
@@ -407,6 +425,7 @@ impl CudaIPCActor {
                 let _ = respond_to.send(Ok(()));
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
+                let worker_id = self.spawned_state.worker_id;
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let pending = Arc::clone(&self.spawned_state.pending);
@@ -421,8 +440,9 @@ impl CudaIPCActor {
 
                 if self_tx.send(
                     CudaWorkerMsgIn {
-                            request_id: next_id,
-                            operation: Operation::Shutdown{ dummy: "dummy".to_string() },
+                        worker_id,
+                        request_id: next_id,
+                        operation: Operation::Shutdown{ dummy: "dummy".to_string() },
                     },
                 ).await.is_err() {
 
@@ -440,24 +460,42 @@ impl CudaIPCActor {
 
                 debug!("CudaIPCActorMessage::Shutdown: final");
             }
-            CudaIPCActorMessage::SendMsg { mut input, respond_to } => {
+            CudaIPCActorMessage::SendMsg { mut input, activity, respond_to } => {
+                if let Err(error) = input.worker_id.check(self.spawned_state.worker_id).and_then(|_| activity.check_operation(&self.gate)) {
+                    let response = if matches!(input.operation, Operation::DropStage { .. } | Operation::PurgeStage { .. }) {
+                        Ok(CudaWorkerMsgOut { worker_id: input.worker_id, request_id: input.request_id, status: OpResult::Ok(None) })
+                    } else { Err(error) };
+                    let _ = respond_to.send(response);
+                    return Ok(());
+                }
                 let self_tx = self.spawned_state.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
+                let gate = Arc::clone(&self.gate);
+                let generation = input.worker_id.generation;
 
                 input.request_id = next_id;
 
-                tokio::spawn(async move {
+                tokio::spawn(activity.run(async move {
 
                     let response = send_request_and_wait_msg(
                         self_tx,
                         pending,
                         input,
                     ).await;
+                    // Reporting belongs to the admitted request, even if its
+                    // proxy/initializer caller was cancelled before the reply.
+                    let response = response.map(|mut response| {
+                        if let OpResult::Failed(error) = response.status {
+                            let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
+                            response.status = error.into();
+                        }
+                        response
+                    });
                     let _ = respond_to.send(response);
 
                     Ok::<_, ThoError>(())
-                });
+                }));
             }
 
 
@@ -498,6 +536,7 @@ impl CudaIPCActor {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_ref_d2h_copy"))]
     async fn handle_ref_d2h_copy(
         &mut self,
+        source: ThoTensor,
         tensor_key: u64,
         dst_device: ThoDevice,
         activity: thoosa_shared::CudaActivityScope,
@@ -509,6 +548,7 @@ impl CudaIPCActor {
 
         let gate = Arc::clone(&self.gate);
         let generation = activity.generation(&gate).expect("copy device lease");
+        let worker_id = self.spawned_state.worker_id;
         let describe_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
@@ -518,6 +558,7 @@ impl CudaIPCActor {
             self_tx.clone(),
             Arc::clone(&pending),
             CudaWorkerMsgIn {
+                worker_id,
                 request_id: describe_id,
                 operation: Operation::DescribeRef { tensor_key },
             },
@@ -557,12 +598,14 @@ impl CudaIPCActor {
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         tokio::spawn(activity.run(async move {
+            let _source = source;
             // Retain every ancestor lease until the worker finishes using storage.
             let result = async {
                 let response = send_request_and_wait_msg(
                     self_tx,
                     pending,
                     CudaWorkerMsgIn {
+                        worker_id,
                         request_id: transfer_id,
                         operation: Operation::D2hCopy {
                             tensor_key,
@@ -590,6 +633,7 @@ impl CudaIPCActor {
     fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
         let gate = Arc::clone(&self.gate);
         let generation = activity.generation(&gate).expect("copy device lease");
+        let worker_id = self.spawned_state.worker_id;
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
@@ -612,6 +656,7 @@ impl CudaIPCActor {
                     self_tx,
                     pending,
                     CudaWorkerMsgIn {
+                        worker_id,
                         request_id: transfer_id,
                         operation: Operation::H2dCopy {
                             kind: src_kind.into(),
@@ -628,7 +673,7 @@ impl CudaIPCActor {
                 }
                 // The worker has completed its read before acknowledging, so the parent may now release the arena allocation.
                 drop(shared_source);
-                Ok(ThoTensor::new_ref((), done.tensor_ref, src_shape, src_kind, None, dst_device.tho_device_idx()))
+                Ok(ThoTensor::new_ref((), done.tensor_ref, src_shape, src_kind, None, worker_id))
             }.await;
             let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
         }));
@@ -809,6 +854,7 @@ async fn send_request_and_wait_msg(
     request: CudaWorkerMsgIn,
 ) -> Result<CudaWorkerMsgOut, ThoError> {
     let id = request.request_id;
+    let worker_id = request.worker_id;
     let (reply_tx, reply_rx) = oneshot::channel();
     {
         let mut pending = pending.lock().await;
@@ -820,9 +866,9 @@ async fn send_request_and_wait_msg(
         pending.remove(&id);
         return Err(ThoError::new("worker IPC writer task is closed"));
     }
-    reply_rx
-        .await
-        .with_context(|| format!("response channel for request {id} was dropped"))?
+    let response = reply_rx.await.with_context(|| format!("response channel for request {id} was dropped"))??;
+    response.worker_id.check(worker_id)?;
+    Ok(response)
 }
 
 
@@ -866,6 +912,16 @@ pub struct CudaIPCActorHandle {
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
+    pub fn worker_id(&self) -> Result<CudaWorkerId, ThoError> {
+        let activity = thoosa_shared::CudaActivityScope::for_operation(&self.gate)?;
+        Ok(CudaWorkerId { device_idx: self.tho_device_idx, generation: activity.generation(&self.gate).expect("worker lease") })
+    }
+
+    fn activity_for(&self, worker_id: CudaWorkerId) -> Result<thoosa_shared::CudaActivityScope, ThoError> {
+        let activity = thoosa_shared::CudaActivityScope::for_operation(&self.gate)?;
+        worker_id.check(CudaWorkerId { device_idx: self.tho_device_idx, generation: activity.generation(&self.gate).expect("worker lease") })?;
+        Ok(activity)
+    }
     pub async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
         let tho_device_id = gate.device_idx();
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
@@ -881,12 +937,14 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn invoke_stage(&self, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> anyhow::Result<CudaWorkerMsgOut> {
+    pub async fn invoke_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> anyhow::Result<CudaWorkerMsgOut> {
         debug!("CudaIPCActorHandle::invoke_stage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
+                activity: self.activity_for(worker_id)?,
                 input: CudaWorkerMsgIn {
+                    worker_id,
                     request_id: 0,
                     operation: Operation::InvokeStage {
                         endpoint_name,
@@ -904,13 +962,15 @@ impl CudaIPCActorHandle {
         Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    pub async fn install_stage(&self, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> anyhow::Result<CudaWorkerMsgOut> {
+    pub async fn install_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> anyhow::Result<CudaWorkerMsgOut> {
         debug!("CudaIPCActorHandle::invoke_stage: install_stage_2={endpoint_name} stage_id={stage_id} init_data={init_data:?}");
 
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
+                activity: self.activity_for(worker_id)?,
                 input: CudaWorkerMsgIn {
+                    worker_id,
                     request_id: 0,
                     operation: Operation::InstallStage {
                         endpoint_name,
@@ -946,6 +1006,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
         let activity = thoosa_shared::CudaActivityScope::for_operation(&self.gate)?;
+        if let Some(worker_id) = src.ref_worker_id() {
+            worker_id.check(CudaWorkerId { device_idx: self.tho_device_idx, generation: activity.generation(&self.gate).expect("copy lease") })?;
+        }
         debug!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?}");
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
         match &dst_device.into() {
@@ -1013,12 +1076,16 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     }
 
-    async fn drop_tho_tensor(&self, key:u64) -> Result<(), ThoError> {
+    async fn drop_tho_tensor(&self, key:u64, worker_id: CudaWorkerId) -> Result<(), ThoError> {
+        if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() {
+            return Ok(());
+        }
         debug!("CudaIPCActorHandle::drop_tho_tensor: key={key}");
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::DropThoTensor {
                 key,
+                worker_id,
                 respond_to,
             }
         ).await.context("CUDA actor channel closed")?;
@@ -1031,11 +1098,16 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+        if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() || self.gate.is_paused() {
+            return Ok(CudaWorkerMsgOut { worker_id, request_id: 0, status: OpResult::Ok(None) });
+        }
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
+                activity: self.activity_for(worker_id)?,
                 input: CudaWorkerMsgIn {
+                    worker_id,
                     request_id: 0,
                     operation: Operation::PurgeStage {
                         endpoint_name,
@@ -1052,11 +1124,18 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.context("CUDA actor response channel closed")?
     }
 
-    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+        // Retired endpoint destructors are expected after cache invalidation.
+        // They must neither wait for recovery nor reach the replacement worker.
+        if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() || self.gate.is_paused() {
+            return Ok(CudaWorkerMsgOut { worker_id, request_id: 0, status: OpResult::Ok(None) });
+        }
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
+                activity: self.activity_for(worker_id)?,
                 input: CudaWorkerMsgIn {
+                    worker_id,
                     request_id: 0,
                     operation: Operation::DropStage {
                         endpoint_name,
@@ -1074,12 +1153,15 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
+        let worker_id = self.worker_id()?;
         debug!("CudaIPCActorHandle::debug_worker");
 
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
+                activity: self.activity_for(worker_id)?,
                 input: CudaWorkerMsgIn {
+                    worker_id,
                     request_id: 0,
                     operation: Operation::Debug,
                 },
@@ -1177,6 +1259,7 @@ where
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub(crate) struct DeviceInfo {
+    pub worker_id: CudaWorkerId,
     pub(crate) free_mem:usize,
     pub(crate) total_mem:usize,
 }
@@ -1237,7 +1320,7 @@ mod tests {
         use crate::ipc::worker_msg::CudaWorkerMsgOut;
 
         // Exercise the worker's reply encoding and the parent's actual copy error consumer.
-        let reply = CudaWorkerMsgOut { request_id: 42, status: error.into() };
+        let reply = CudaWorkerMsgOut { worker_id: crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) }, request_id: 42, status: error.into() };
         let bytes = PostcardToFromBytes::to_bytes(&reply).unwrap();
         let decoded = PostcardToFromBytes::from_bytes(&bytes).unwrap();
         CudaIPCActor::copy_result(decoded).expect_err("worker error must fail the copy")
@@ -1304,6 +1387,67 @@ mod tests {
                 assert!(recovery.is_oom());
                 assert!(recovery.to_string().contains("replacement allocation"));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_retired_ipc_handles_cannot_reach_replacement_worker() {
+        use crate::ipc::worker_msg::CudaWorkerId;
+        let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
+        installed.expect().return_const(false);
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let handle = CudaIPCActorHandle { gate: Arc::clone(&gate), tho_device_idx: 1, sender };
+        let retired = handle.worker_id().unwrap();
+        let old_tensor = || ThoTensor::new_ref((), 42, vec![1], Kind::Float, None, retired);
+        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        gate.finish_pause(ticket);
+
+        assert!(matches!(handle.copy(old_tensor(), 0usize.into()).await.unwrap_err().what(), ThoError::ContextReset));
+        assert!(matches!(ThoError::from(handle.invoke_stage(retired, "stage".into(), 42, Box::new(()), false).await.unwrap_err()).what(), ThoError::ContextReset));
+        assert!(handle.install_stage(retired, "stage".into(), 42, Box::new(())).await.is_err());
+        handle.drop_tho_tensor(42, retired).await.unwrap();
+        handle.drop_endpoint(42, "stage".into(), retired).await.unwrap();
+        handle.purge_stage_state(42, "stage".into(), retired).await.unwrap();
+        assert!(receiver.try_recv().is_err(), "old IDs must never be rebound to the new worker");
+
+        let fresh: CudaWorkerId = handle.worker_id().unwrap();
+        let mut invoke = Box::pin(handle.invoke_stage(fresh, "stage".into(), 42, Box::new(()), false));
+        assert!(futures::poll!(invoke.as_mut()).is_pending());
+        let message = receiver.recv().await.unwrap();
+        drop(invoke);
+        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        let mut idle = Box::pin(gate.wait_until_idle());
+        assert!(futures::poll!(idle.as_mut()).is_pending(), "cancelled invocation must keep its request leased");
+        let CudaIPCActorMessage::SendMsg { input, .. } = &message else { panic!("expected stage request") };
+        assert_eq!(input.worker_id, fresh);
+        drop(message);
+        idle.await;
+        gate.finish_pause(ticket);
+    }
+
+    #[tokio::test]
+    async fn test_ipc_reply_identity_is_checked_after_wire_routing() {
+        use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
+        use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation};
+        use thoosa_shared::CudaDeviceGeneration;
+        for wrong_worker in [CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(0) }, CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(1) }] {
+            let current = CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(1) };
+            let pending = Arc::new(Mutex::new(HashMap::new()));
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let (reader, mut writer) = tokio::io::duplex(1024);
+            let reader_task = tokio::spawn(super::reader_loop(reader, Arc::clone(&pending), cancel.clone()));
+            let (sender, mut requests) = tokio::sync::mpsc::channel(1);
+            let request = CudaWorkerMsgIn::new(current, 42, Operation::Debug);
+            let mut response = Box::pin(super::send_request_and_wait_msg(sender, pending, request));
+            assert!(futures::poll!(response.as_mut()).is_pending());
+            assert_eq!(requests.recv().await.unwrap().worker_id, current);
+            let reply = CudaWorkerMsgOut { worker_id: wrong_worker, request_id: 42, status: OpResult::Ok(None) };
+            super::write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&reply).unwrap(), "test").await.unwrap();
+            let error = tokio::time::timeout(std::time::Duration::from_secs(2), response).await.unwrap().unwrap_err();
+            assert!(matches!(error.what(), ThoError::ContextReset));
+            cancel.cancel();
+            reader_task.await.unwrap();
         }
     }
 
@@ -1541,12 +1685,12 @@ mod tests {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }
 
-            cuda_actor.drop_tho_tensor(reff).await?;
+            cuda_actor.drop_tho_tensor(reff, cuda_ref.ref_worker_id().unwrap()).await?;
 
             debug!("run_main: drop ok");
 
             let r = track_await(cuda_actor.copy(
-                ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None, 1),
+                ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None, cuda_ref.ref_worker_id().unwrap()),
                 0.into(), //Cpu
             )).await;
 

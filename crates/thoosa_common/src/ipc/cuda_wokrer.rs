@@ -1,3 +1,4 @@
+use crate::ipc::worker_msg::CudaWorkerId;
 use anyhow::Context as _;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
@@ -75,13 +76,14 @@ impl WorkerSharedArena {
 
 #[derive(Debug)]
 pub struct AllTensors {
+    pub worker_id: CudaWorkerId,
     // Tensor values and their aliases are treated as read-only while stored; the write lock only protects map membership.
     tensors: RwLock<HashMap<u64, Tensor>>,
 }
 
 impl AllTensors {
-    pub fn new() -> Self {
-        Self { tensors: RwLock::new(HashMap::new()) }
+    pub fn new(worker_id: CudaWorkerId) -> Self {
+        Self { worker_id, tensors: RwLock::new(HashMap::new()) }
     }
 }
 
@@ -250,6 +252,9 @@ impl CudaWorker {
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
         // GlobalCtx::init_devices(2)?;//TODO config
 
+        // Identity comes from the parent before requests are accepted, never
+        // from a tensor's numeric key or a request supplied by the caller.
+        let worker_id: CudaWorkerId = serde_json::from_str(&std::env::var(cuda_process::WORKER_ID_ENV).context("missing CUDA worker identity")?)?;
         let cuda_device = tho_device.gpu_ordinal();
 
         let exec_stream_pool = Arc::new(Pool::from_iter(
@@ -268,6 +273,7 @@ impl CudaWorker {
         cuda_process::write_frame(
             &mut writer,
             &PostcardToFromBytes::to_bytes(&DeviceInfo {
+                worker_id,
                 free_mem,
                 total_mem
             })?,
@@ -295,7 +301,7 @@ impl CudaWorker {
         let (reply_tx, reply_rx) = mpsc::channel::<CudaWorkerMsgOut>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
-        let all_cuda_tensors = Arc::new(AllTensors::new());
+        let all_cuda_tensors = Arc::new(AllTensors::new(worker_id));
         let request_context = WorkerRequestContext {
             ws: Arc::clone(ws),
             endpoint_inits: Arc::new(endpoint_inits),
@@ -321,6 +327,11 @@ impl CudaWorker {
             };
             debug!("run_worker: postcard: ok={request:?}");
 
+            if let Err(error) = request.worker_id.check(worker_id) {
+                reply_tx.send(CudaWorkerMsgOut { worker_id, request_id: request.request_id, status: error.into() }).await?;
+                continue;
+            }
+
             // Shutdown is loop control rather than a request task: stop accepting frames, then drain all work accepted before it.
             if matches!(&request.operation, Operation::Shutdown { .. }) {
                 let request_id = request.request_id;
@@ -344,7 +355,7 @@ impl CudaWorker {
         }
 
         reply_tx
-            .send(CudaWorkerMsgOut { request_id: shutdown_request_id, status: OpResult::Ok(None) })
+            .send(CudaWorkerMsgOut { worker_id, request_id: shutdown_request_id, status: OpResult::Ok(None) })
             .await
             .context("worker response writer is closed")?;
 
@@ -358,7 +369,9 @@ impl CudaWorker {
 
     async fn process_worker_request<W: Workspace + ?Sized + 'static>(request: CudaWorkerMsgIn, context: WorkerRequestContext<W>) -> anyhow::Result<()> {
         let request_id = request.request_id;
+        let worker_id = context.all_cuda_tensors.worker_id;
         let op_r: Result<(), ThoError> = (async || {
+            request.worker_id.check(worker_id)?;
             match request.operation {
                 Operation::DescribeRef { tensor_key } => {
                     let status = {
@@ -368,7 +381,7 @@ impl CudaWorker {
                             Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key, tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
                         }
                     };
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.context("worker response writer is closed")?;
+                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status }).await.context("worker response writer is closed")?;
                     debug!("run_worker: DescribeRef response {request_id} sent");
                     Ok(())
                 }
@@ -385,6 +398,7 @@ impl CudaWorker {
                     debug!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref} request.request_id={:?}", request.request_id);
 
                     context.reply_tx.send(CudaWorkerMsgOut {
+                        worker_id,
                         request_id,
                         status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)),
                     }).await.context("worker response writer is closed")?;
@@ -403,6 +417,7 @@ impl CudaWorker {
                     // The alias protects worker CUDA storage until every chunk has synchronized and written the parent mapping.
                     drop(source);
                     context.reply_tx.send(CudaWorkerMsgOut {
+                        worker_id,
                         request_id,
                         status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)),
                     }).await.context("worker response writer is closed")?;
@@ -426,7 +441,7 @@ impl CudaWorker {
                         }
                     };
                     if is_duplicate {
-                        context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }).await.context("worker response writer is closed")?;
+                        context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }).await.context("worker response writer is closed")?;
                         return Ok(());
                     }
                     let endpoint_wrapper = match init_fn(init_data, Arc::clone(&context.ws), &context.all_cuda_tensors, &context.tho_device).await {
@@ -438,7 +453,7 @@ impl CudaWorker {
                     };
                     debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
                     context.installed_endpoints.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
                 Operation::InvokeStage { endpoint_name, stage_id, input, consume } => {
@@ -468,7 +483,7 @@ impl CudaWorker {
                         }
                     }?;
                     debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={result:?}");
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(result)) }).await.context("worker response writer is closed")?;
+                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(result)) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
                 Operation::PurgeStage { endpoint_name, stage_id } => {
@@ -480,14 +495,14 @@ impl CudaWorker {
                     } else {
                         error!("no endpoint found");
                     }
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
                 Operation::DropStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
                     let removed = context.installed_endpoints.remove(&endpoint_key).is_some();
                     debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
                 Operation::Shutdown { dummy: _ } => {
@@ -502,7 +517,7 @@ impl CudaWorker {
                     }
 
                     let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));
-                    context.reply_tx.send(CudaWorkerMsgOut { request_id, status: OpResult::Ok(Some(out)) }).await.context("worker response writer is closed")?;
+                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(out)) }).await.context("worker response writer is closed")?;
 
 
                     Ok(())
@@ -514,7 +529,7 @@ impl CudaWorker {
             Ok(()) => Ok(()),
             Err(error) => {
                 error!("run_worker: e={error:?}");
-                context.reply_tx.send(CudaWorkerMsgOut { request_id, status: error.into() }).await.context("worker response writer is closed")?;
+                context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: error.into() }).await.context("worker response writer is closed")?;
                 Ok(())
             }
         }
@@ -525,7 +540,7 @@ impl CudaWorker {
         let removed = context.all_cuda_tensors.tensors.write().remove(&tensor_key);
         debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
         let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
-        context.reply_tx.send(CudaWorkerMsgOut { request_id, status }).await.context("worker response writer is closed")
+        context.reply_tx.send(CudaWorkerMsgOut { worker_id: context.all_cuda_tensors.worker_id, request_id, status }).await.context("worker response writer is closed")
     }
 }
 
@@ -580,6 +595,7 @@ where
 {
 
     fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
+        input_ref.ref_worker_id().ok_or_else(|| ThoError::new("worker input must be a tensor reference"))?.check(all_cuda_tensors.worker_id)?;
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
 
         debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} selector={:?} remove={remove}", input_ref.selector());
@@ -655,7 +671,7 @@ where
 
         debug!("worker_tensor_to_ref: out_key={out_key} out_id={out_id:?}");
 
-        Ok(ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.tho_device_idx()))
+        Ok(ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, all_cuda_tensors.worker_id))
     }
 }
 
@@ -715,5 +731,34 @@ impl RunCtx for WokerRunCtx {
     }
 
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
+    }
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+    use thoosa_shared::CudaDeviceGeneration;
+
+    #[test]
+    fn test_reused_tensor_key_rejects_old_generation_and_other_device() {
+        let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
+        installed.expect().return_const(false);
+        let current = CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(3) };
+        let tensors = AllTensors::new(current);
+        tensors.tensors.write().insert(42, Tensor::f_from_slice(&[7f32]).unwrap());
+        for worker_id in [
+            CudaWorkerId { generation: CudaDeviceGeneration(2), ..current },
+            CudaWorkerId { device_idx: 1, ..current },
+        ] {
+            let stale: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, worker_id);
+            for consume in [false, true] {
+                assert!(matches!(stale.ref_to_tensor(&tensors, consume).unwrap_err().what(), ThoError::ContextReset));
+                assert!(tensors.tensors.read().contains_key(&42), "stale consume must not remove the replacement tensor");
+            }
+        }
+        let valid: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, current);
+        assert_eq!(valid.ref_to_tensor(&tensors, false).unwrap().t_ref().double_value(&[0]), 7.);
+        valid.ref_to_tensor(&tensors, true).unwrap();
+        assert!(!tensors.tensors.read().contains_key(&42));
     }
 }

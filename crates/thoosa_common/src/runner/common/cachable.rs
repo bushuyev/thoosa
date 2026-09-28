@@ -61,6 +61,8 @@ pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
 
     fn is_on_device(&self, device_idx: usize) -> bool;
 
+    fn has_any_data(&self) -> bool;
+
     fn is_on_cpu_before(&self, purge_until: u64) -> bool;
 
     fn is_uniquely_held(&self) -> bool;
@@ -92,6 +94,10 @@ where
 
     fn is_on_device(&self, device_idx: usize) -> bool {
         DevicesWrap::is_on_device(self.as_ref(), device_idx)
+    }
+
+    fn has_any_data(&self) -> bool {
+        self.resident_devices.iter().any(|resident| resident.load(Ordering::Acquire))
     }
 
     fn is_on_cpu_before(&self, purge_until: u64) -> bool {
@@ -128,6 +134,8 @@ where
         device_idx == 0
     }
 
+    fn has_any_data(&self) -> bool { true }
+
     fn is_on_cpu_before(&self, _purge_until: u64) -> bool {
         true
     }
@@ -138,6 +146,113 @@ where
 
     fn mem_size(&self) -> u64 {
         self.as_ref().mem_size()
+    }
+}
+
+/// Shared computations retain the device generation that started them. Recovery
+/// can discard that device's pending work without cancelling healthy cache entries.
+pub struct CachedFuture<O: Clone> {
+    inner: Shared<BoxFuture<'static, Result<O, ThoError>>>,
+    origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>,
+    invalidated: Arc<AtomicBool>,
+}
+
+impl<O: Clone> CachedFuture<O> {
+    pub fn for_device(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>, gate: Option<Arc<thoosa_shared::CudaActivityGate>>) -> Self
+    where O: Send + Sync + 'static,
+    {
+        let activity = match &gate {
+            Some(gate) => thoosa_shared::CudaActivityScope::for_operation(gate).map(Some),
+            None => Ok(thoosa_shared::CudaActivityScope::current()),
+        };
+        let origin = gate.map(|gate| {
+            let generation = activity.as_ref().ok().and_then(|scope| scope.as_ref()).and_then(|scope| scope.generation(&gate)).unwrap_or_else(|| gate.device_generation());
+            (gate, generation)
+        });
+        if origin.is_none() && matches!(&activity, Ok(None)) {
+            return Self::with_origin(inner, origin, Arc::new(AtomicBool::new(false)));
+        }
+        let computation_origin = origin.clone();
+        let inner = async move {
+            let activity = activity?;
+            let dependencies = activity.clone();
+            let run = async move {
+                let interrupted = async {
+                    let origin_ended = async {
+                        match &computation_origin {
+                            Some((gate, generation)) => gate.wait_for_generation_end(*generation).await,
+                            None => std::future::pending().await,
+                        }
+                    };
+                    let dependency_ended = async {
+                        match &dependencies {
+                            Some(scope) => scope.wait_for_interruption().await,
+                            None => std::future::pending().await,
+                        }
+                    };
+                    tokio::select! { error = origin_ended => error, error = dependency_ended => error }
+                };
+                tokio::select! {
+                    biased;
+                    error = interrupted => Err(error),
+                    result = inner => {
+                        if let Some(scope) = &dependencies { scope.check_dependencies()?; }
+                        if let Some((gate, generation)) = &computation_origin { gate.check_generation(*generation)?; }
+                        result
+                    }
+                }
+            };
+            match activity { Some(scope) => scope.run(run).await, None => run.await }
+        }.boxed().shared();
+        // A cache owns its pending future even when every caller cancels. Keep
+        // polling it so recovery can drop suspended locks/leases before draining.
+        tokio::spawn(inner.clone());
+        Self::with_origin(inner, origin, Arc::new(AtomicBool::new(false)))
+    }
+
+    fn with_origin(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>, origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>, invalidated: Arc<AtomicBool>) -> Self {
+        Self { inner, origin, invalidated }
+    }
+
+    pub fn peek(&self) -> Option<&Result<O, ThoError>> { self.inner.peek() }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool { self.inner.ptr_eq(&other.inner) }
+
+    pub(crate) fn invalidate_pending_on(&self, device: usize) -> bool {
+        if self.origin.as_ref().is_some_and(|(gate, _)| gate.device_idx() == device) && !matches!(self.peek(), Some(Ok(_))) {
+            self.invalidated.store(true, Ordering::Release);
+            true
+        } else { false }
+    }
+}
+
+impl<O: Clone> Clone for CachedFuture<O> {
+    fn clone(&self) -> Self {
+        Self::with_origin(self.inner.clone(), self.origin.clone(), Arc::clone(&self.invalidated))
+    }
+}
+
+impl<O: Clone> std::fmt::Debug for CachedFuture<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedFuture").field("origin", &self.origin).finish_non_exhaustive()
+    }
+}
+
+impl<O: Clone> From<Shared<BoxFuture<'static, Result<O, ThoError>>>> for CachedFuture<O> {
+    fn from(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>) -> Self { Self::with_origin(inner, None, Arc::new(AtomicBool::new(false))) }
+}
+
+impl<O: Clone> Future for CachedFuture<O> {
+    type Output = Result<O, ThoError>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        if self.invalidated.load(Ordering::Acquire) {
+            return std::task::Poll::Ready(Err(ThoError::ContextReset));
+        }
+        let result = std::pin::Pin::new(&mut self.inner).poll(cx);
+        if self.invalidated.load(Ordering::Acquire) {
+            std::task::Poll::Ready(Err(ThoError::ContextReset))
+        } else { result }
     }
 }
 
@@ -153,7 +268,7 @@ where
 
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Self::Out, ThoError>>>,
+        CachedFuture<Self::Out>,
     >
     where
         Self: Sized,
@@ -191,7 +306,9 @@ where
                         return Ok(());
                     }
 
-                    let Some(shared_fut) = track_await(Self::cache()).await.get(&key_for_purger) else {
+                    // Release the map guard before awaiting cleanup: recovery
+                    // may concurrently remove this generation's cache entry.
+                    let Some(shared_fut) = track_await(Self::cache()).await.get(&key_for_purger).map(|entry| entry.value().clone()) else {
                         debug!("Cached::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
                         return Ok(());
                     };
@@ -215,39 +332,22 @@ where
 
         GlobalCtx::global().do_age();
 
-        #[cfg(any(debug_assertions, tho_debug))]
-        let debug_key = key.clone();
-        match cache.entry(key) {
-            Entry::Occupied(slot) => {
-                let shared = slot.get().clone();
-                drop(slot);
-                track_await(shared
-                    .map(|res| {
-                        if let Ok(_data) = &res {
-                            #[cfg(any(debug_assertions, tho_debug))]
-                            debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?}");
-
-                            // data.add_cache_area(cache_area);
-                        }
-                        res
-                    })).await
-            }
+        let shared = match cache.entry(key.clone()) {
+            Entry::Occupied(slot) => slot.get().clone(),
             Entry::Vacant(slot) => {
-                let fut = Arc::clone(&self)
-                    .run(input, ctx)
-                    .boxed()
-                    .shared();
-
-                slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
-
-                track_await(fut).await.map(|v| {
-                    #[cfg(any(debug_assertions, tho_debug))]
-                    debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}");
-
-                    v
-                })
+                let gate = GlobalCtx::global().cuda_activity_gate(device_idx);
+                let future = CachedFuture::for_device(Arc::clone(&self).run(input, ctx).boxed().shared(), gate);
+                slot.insert(future.clone());
+                future
             }
+        };
+        let result = track_await(shared.clone()).await;
+        if result.as_ref().is_err_and(|error| matches!(error.what(), ThoError::ContextReset) || error.is_cuda_recovery_failed()) {
+            // Compare identity: another caller may already have installed a new
+            // generation's computation under this same logical cache key.
+            cache.remove_if(&key, |_, current| current.ptr_eq(&shared));
         }
+        result
     }
 }
 

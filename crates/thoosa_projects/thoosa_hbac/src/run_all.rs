@@ -714,7 +714,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
                 similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
                 slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.2),
+                        q: RangeOrValue::Value(0.3),
                         // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                     }),
                 }),

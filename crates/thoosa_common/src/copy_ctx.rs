@@ -85,15 +85,15 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(())
     }
 
-    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String, worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
         unreachable!()
     }
 
-    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String, _worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
         unreachable!()
     }
 
-    async fn drop_tho_tensor(&self, key:u64)-> Result<(), ThoError>
+    async fn drop_tho_tensor(&self, key:u64, worker_id: crate::ipc::worker_msg::CudaWorkerId)-> Result<(), ThoError>
     {
         Ok(())
     }
@@ -451,7 +451,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
-       Ok(CudaWorkerMsgOut{ request_id: 0, status: OpResult::Ok(None) })
+       Ok(CudaWorkerMsgOut{ worker_id: crate::ipc::worker_msg::CudaWorkerId { device_idx: self.tho_device_idx, generation: self.gate.device_generation() }, request_id: 0, status: OpResult::Ok(None) })
     }
 }
 

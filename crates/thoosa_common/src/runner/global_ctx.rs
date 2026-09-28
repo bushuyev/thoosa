@@ -220,6 +220,11 @@ impl GlobalCtx {
         }.boxed()
     }
 
+    /// Instance caches use the same gate as dispatch when creating device state.
+    pub fn cuda_activity_gate(&self, device: usize) -> Option<Arc<CudaActivityGate>> {
+        self.devices[device].runner.cuda_gate().cloned()
+    }
+
     pub fn get_executor(&self, tho_device:usize) -> &SyncStageRunner {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.devices.len={}", self.devices.len());
         &self.devices[tho_device].runner//tho_device is 0 in tests
@@ -669,6 +674,11 @@ pub mod mock_global_ctx {
         }
 
         pub fn with_get_executor(mut self) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_cuda_activity_gate().returning(move |device| real.cuda_activity_gate(device));
+            } else {
+                self.mock.expect_cuda_activity_gate().returning(|_| None);
+            }
             self.mock.expect_get_executor().times(0..).return_const(SyncStageRunner::new(16));
             self
         }

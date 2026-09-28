@@ -134,7 +134,7 @@ where
 
     Self::Out: WithId
 {
-    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>
+    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Self::Out>>
     where
         Self: Sized,
         Self::Out: WithId + Sync + Send,
@@ -264,7 +264,7 @@ where
 
     Self::Out: WithId
 {
-    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>
+    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Self::Out>>
     where
         Self: Sized,
         Self::Out: Sync + Send
