@@ -145,7 +145,7 @@ where
     let mut prev_park = vec![0u64; workers];
     let mut prev_busy = vec![std::time::Duration::ZERO; workers];
 
-    let purge_cpu_worker = tokio::spawn(async move {
+    let mut purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));//TODO config
         track_await(ticker.tick()).await;
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -209,11 +209,17 @@ where
         task = "periodically purge CPU caches and log Tokio metrics",
     )));
 
-    if let Some(command ) = args.command{
+    let command_result = if let Some(command ) = args.command{
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
         debug!("run_common_cli: command={command:?}");
-        command.run(&store, &ws, root_ctx).await?;
-    }
+        // A local CUDA failure can originate in detached copy work even if the
+        // command no longer awaits that request. Still terminate the application.
+        tokio::select! {
+            biased;
+            failure = GlobalCtx::wait_for_process_failure() => Err(failure.into()),
+            result = command.run(&store, &ws, root_ctx) => result,
+        }
+    } else { Ok(()) };
 
 
 
@@ -222,10 +228,19 @@ where
     track_await(GlobalCtx::global().shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);
-    let _ = track_await(purge_cpu_worker).await;
+    // A purge may be waiting for work in the poisoned local process. It must
+    // not delay the application shutdown requested by the recovery coordinator.
+    tokio::select! {
+        _ = GlobalCtx::wait_for_process_failure() => {
+            purge_cpu_worker.abort();
+            let _ = track_await(purge_cpu_worker).await;
+        }
+        _ = track_await(&mut purge_cpu_worker) => {}
+    }
 
 
     info!("run_id {} done", run_id());
 
-    Ok(())
+    if let Some(failure) = GlobalCtx::process_failure() { return Err(failure.into()); }
+    command_result
 }
