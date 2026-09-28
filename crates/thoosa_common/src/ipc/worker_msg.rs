@@ -111,13 +111,13 @@ pub enum OpResult {
 }
 
 // Serialize recovery semantics and diagnostics explicitly; anyhow itself is process-local.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerError {
     kind: WorkerErrorKind,
     message: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 enum WorkerErrorKind {
     Cuda(CudaAction),
     AdjusterFailed,
@@ -153,6 +153,12 @@ impl WorkerErrorKind {
 impl From<ThoError> for WorkerError {
     fn from(error: ThoError) -> Self {
         Self { kind: WorkerErrorKind::from_error(&error), message: format!("{error:#}") }
+    }
+}
+
+impl WorkerError {
+    pub(crate) fn requires_worker_exit(&self) -> bool {
+        matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. })
     }
 }
 

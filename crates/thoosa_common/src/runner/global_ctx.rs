@@ -63,6 +63,7 @@ impl DeviceExecutionCtx {
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
+static PROCESS_FAILURE: std::sync::LazyLock<tokio::sync::watch::Sender<Option<ThoError>>> = std::sync::LazyLock::new(|| tokio::sync::watch::channel(None).0);
 
 #[derive(Debug)]
 struct CacheRegistryEntry {
@@ -111,7 +112,7 @@ impl GlobalCtx {
         devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
-            let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context));
+            let recovery = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context), None, Some(Arc::new(GlobalCtx::fail_process)));
             let actor = CudaLocalActorHandle::new(Arc::clone(&gate))?;
             devices.push(DeviceExecutionCtx {
                 runner: SyncStageRunner::new_with_recovery(1024, recovery),
@@ -170,7 +171,7 @@ impl GlobalCtx {
         devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
-            let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context));
+            let recovery = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context), Some(Arc::new(|device, authority| Box::pin(async move { GlobalCtx::global().cuda_actor(device).retire_backend(authority).await }))), None);
             // Each actor retains its own descriptor so replacement workers can
             // remap the parent-owned arena independently of other devices.
             let actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
@@ -208,9 +209,11 @@ impl GlobalCtx {
                 .await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
+            let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("CUDA gate");
+            let authority = thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?;
             GlobalCtx::global()
                 .cuda_actor(tho_device_idx)
-                .restart_backend()
+                .restart_backend(authority)
                 .await?;
 
 
@@ -507,6 +510,31 @@ impl GlobalCtx {
             if let Err(e) = actor.shutdown().await {
                 error!("Got {e} while shutting down actor {i}");
             }
+        }
+    }
+
+    fn fail_process(error: ThoError) {
+        // Only local process-invalidating failures broaden the shutdown scope.
+        GLB_SHUTTING_DOWN.store(true, Relaxed);
+        for device in &Self::global().devices {
+            if let Some(gate) = device.runner.cuda_gate() { gate.fail_process(error.clone()); }
+        }
+        PROCESS_FAILURE.send_if_modified(|failure| {
+            if failure.is_some() { return false; }
+            *failure = Some(error);
+            true
+        });
+    }
+
+    pub fn process_failure() -> Option<ThoError> {
+        PROCESS_FAILURE.borrow().clone()
+    }
+
+    pub async fn wait_for_process_failure() -> ThoError {
+        let mut failure = PROCESS_FAILURE.subscribe();
+        loop {
+            if let Some(error) = failure.borrow_and_update().clone() { return error; }
+            if failure.changed().await.is_err() { return ThoError::new("process failure notifier closed"); }
         }
     }
 

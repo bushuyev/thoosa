@@ -13,3 +13,4 @@ pub mod worker_msg;
 pub mod proxy;
 #[cfg(test)]
 mod perf_test;
+mod pending;
