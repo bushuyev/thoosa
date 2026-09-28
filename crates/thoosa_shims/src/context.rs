@@ -46,12 +46,6 @@ impl ThoCudaContext {
             let mut cu_device: CuDevice = 0;
             check_cuda_status(tho_cu_device_get(&mut cu_device, device), "cuDeviceGet")?;
 
-            let mut primary_ctx: CuContext = std::ptr::null_mut();
-            check_cuda_status(
-                tho_cu_device_primary_ctx_retain(&mut primary_ctx, cu_device),
-                "cuDevicePrimaryCtxRetain",
-            )?;
-
             let mut pools_supported = 0;
             check_cuda_status(
                 tho_cu_device_get_attribute(
@@ -60,6 +54,14 @@ impl ThoCudaContext {
                     cu_device,
                 ),
                 "cuDeviceGetAttribute",
+            )?;
+
+            // Finish device queries before retaining so failures cannot leak a
+            // primary-context reference on each attempted backend rebuild.
+            let mut primary_ctx: CuContext = std::ptr::null_mut();
+            check_cuda_status(
+                tho_cu_device_primary_ctx_retain(&mut primary_ctx, cu_device),
+                "cuDevicePrimaryCtxRetain",
             )?;
 
             let tho_ctx = Self {
@@ -105,11 +107,7 @@ impl ThoCudaContext {
         unsafe {
             check_cuda_status(tho_cu_restart(self.cu_device), "tho_cu_restart")?;
 
-            let cu_device: CuDevice = 0;
-            check_cuda_status(
-                tho_cu_device_primary_ctx_retain(&mut self.ctx, cu_device),
-                "cuDevicePrimaryCtxRetain",
-            )
+            Ok(())
         }
     }
 }

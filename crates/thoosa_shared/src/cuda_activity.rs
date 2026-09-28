@@ -36,6 +36,13 @@ impl CudaActivityScope {
         CURRENT_ACTIVITY.try_with(Clone::clone).ok()
     }
 
+    pub fn recovery_ticket(gate: &Arc<CudaActivityGate>) -> Result<CudaActivityPauseTicket, ThoError> {
+        let ticket = Self::current().and_then(|scope| scope.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate)).and_then(|lease| lease.reset))
+            .ok_or_else(|| ThoError::new("backend reload requires the coordinator's recovery scope"))?;
+        gate.check_recovery_authority(ticket, true)?;
+        Ok(ticket)
+    }
+
     /// Register dispatch atomically with closing admission, before spawning work.
     pub fn try_enter(gate: &Arc<CudaActivityGate>) -> Result<Option<Self>, ThoError> {
         let mut state = gate.state.lock();

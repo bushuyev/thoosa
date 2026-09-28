@@ -274,6 +274,9 @@ fn main() -> anyhow::Result<()> {
         }
         Err(e) => {
             error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
+            // A poisoned local CUDA call may never return from spawn_blocking.
+            // Runtime Drop must not prevent the failed application from exiting.
+            if GlobalCtx::process_failure().is_some() { rt.shutdown_background(); }
             Err(e)
         }
     }

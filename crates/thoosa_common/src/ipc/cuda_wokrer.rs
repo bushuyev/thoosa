@@ -270,16 +270,6 @@ impl CudaWorker {
 
         let (free_mem, total_mem) = cuda_mem_for_device(cuda_device);
 
-        cuda_process::write_frame(
-            &mut writer,
-            &PostcardToFromBytes::to_bytes(&DeviceInfo {
-                worker_id,
-                free_mem,
-                total_mem
-            })?,
-            "DeviceInfo/worker"
-        ).await?;
-
         let arena_fd = recv_fd(reader.as_ref()).await?;
         debug!("run_worker: arena_fd={arena_fd:?}");
         let file = File::from(arena_fd);
@@ -298,6 +288,18 @@ impl CudaWorker {
         let shared_arena = Arc::new(WorkerSharedArena { mapping: arena });
         debug!("run_worker: mapped shared arena len={arena_size}");
 
+        let copy_ctx = Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 32)?));
+        // Readiness follows all fallible device and arena initialization.
+        cuda_process::write_frame(
+            &mut writer,
+            &PostcardToFromBytes::to_bytes(&DeviceInfo {
+                worker_id,
+                free_mem,
+                total_mem
+            })?,
+            "DeviceInfo/worker"
+        ).await?;
+
         let (reply_tx, reply_rx) = mpsc::channel::<CudaWorkerMsgOut>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
@@ -308,7 +310,7 @@ impl CudaWorker {
             exec_stream_pool,
             all_cuda_tensors,
             shared_arena,
-            copy_ctx: Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 32)?)),
+            copy_ctx,
             installed_endpoints: Arc::new(DashMap::new()),
             reply_tx: reply_tx.clone(),
             tho_device,

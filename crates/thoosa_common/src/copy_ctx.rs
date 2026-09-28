@@ -45,6 +45,7 @@ enum CudaLocalActorMessage {
         respond_to: oneshot::Sender<Result<LocalHandleCtx, ThoError>>
     },
     Restart {
+        authority: thoosa_shared::CudaActivityPauseTicket,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     }
 
@@ -79,7 +80,11 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
 
     // Backend work is called by GlobalCtx's coordinator hook after draining.
     // It must neither request a new cycle nor change admission state.
-    async fn restart_backend(&self) -> Result<(), ThoError>;
+    async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError>;
+
+    async fn retire_backend(&self, _authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError> {
+        Err(ThoError::new("this CUDA backend cannot terminate active work"))
+    }
 
     async fn shutdown(&self) -> Result<(), ThoError> {
         Ok(())
@@ -299,7 +304,11 @@ impl CudaLocalActor {
                  }));
             }
 
-            CudaLocalActorMessage::Restart { respond_to } => {
+            CudaLocalActorMessage::Restart { authority, respond_to } => {
+                if let Err(error) = self.gate.check_recovery_authority(authority, true) {
+                    let _ = respond_to.send(Err(error));
+                    return;
+                }
                 let copy_ctx = Arc::clone(&self.copy_ctx);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
@@ -328,9 +337,13 @@ impl CudaLocalActor {
     async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, tho_device_idx: usize) -> Result<(), ThoError> {
         // Cache cleanup and admission transitions belong to the coordinator.
         let device: ThoDevice = tho_device_idx.into();
-        let mut cu_ctx = ThoCudaContext::new(device.gpu_ordinal() as i32)?;
-        cu_ctx.restart()?;
-        timeout(Duration::from_millis(1000), copy_ctx.write()).await?.restart()
+        let mut copy_ctx = timeout(Duration::from_secs(30), copy_ctx.write_owned()).await?;
+        tokio::task::spawn_blocking(move || {
+            // CUDA context binding is thread-local; do not hold it across await.
+            let mut cu_ctx = ThoCudaContext::new(device.gpu_ordinal() as i32)?;
+            cu_ctx.restart()?;
+            copy_ctx.restart()
+        }).await?
     }
 
     async fn run(mut actor: CudaLocalActor) {
@@ -378,10 +391,12 @@ impl CudaLocalActorHandle {
         Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    async fn restart_inner(&self) -> anyhow::Result<()> {
+    async fn restart_inner(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> anyhow::Result<()> {
+        self.gate.check_recovery_authority(authority, true)?;
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaLocalActorMessage::Restart {
+                authority,
                 respond_to,
             }
         ).await.context("CUDA actor channel closed")?;
@@ -389,7 +404,6 @@ impl CudaLocalActorHandle {
         Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    //TODO these are 'exec' streams, not for copy
     async fn acquire_exec_stream(&self) -> anyhow::Result<LocalHandleCtx> {
         let activity = CudaActivityScope::for_operation(&self.gate)?;
         let (respond_to, recv) = oneshot::channel();
@@ -440,8 +454,8 @@ impl CudaActorHandle for CudaLocalActorHandle {
         GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
     }
 
-    async fn restart_backend(&self) -> Result<(), ThoError> {
-        Ok(self.restart_inner().await?)
+    async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError> {
+        Ok(self.restart_inner(authority).await?)
     }
 
 
@@ -558,25 +572,18 @@ impl CopyCtx {
     }
 
     pub fn restart(&mut self) -> Result<(), ThoError> {
-        info!("CopyCtx::reset_cuda_context: about to reset cu_ctx.reset");
-
+        // Build all replacements before publishing any pool. Both copy
+        // directions retain the same capacity as initial construction.
         let cuda_context = ThoCudaContext::new(self.cuda_device as i32)?;
         cuda_context.bind_to_thread()?;
-
-
-        info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
-
-        self.bufs_pool_h2d = Self::build_pool(self.buffs, self.buf_size, self.cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)?;
-        info!("CopyCtx::reset_cuda_context: bufs_pool rebuilt");
-
-        info!("CopyCtx::reset_cuda_context: ipc_bufs_pool rebuilt");
-
+        let h2d = Self::build_pool(self.buffs / 2, self.buf_size, self.cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)?;
+        let d2h = Self::build_pool(self.buffs / 2, self.buf_size, self.cuda_device, 0)?;
         let exec_streams = (0..32)
             .map(|_| ThoCudaStream::from_pool(self.cuda_device as i32, false))
             .collect::<Result<Vec<_>, _>>()?;
+        self.bufs_pool_h2d = h2d;
+        self.bufs_pool_d2h = d2h;
         self.exec_stream_pool = Arc::new(Pool::from_vec(exec_streams));
-
-        info!("CopyCtx::reset_cuda_context: exec_stream_pool rebuilt");
 
         Ok(())
     }

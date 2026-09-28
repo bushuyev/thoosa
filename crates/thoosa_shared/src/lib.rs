@@ -270,6 +270,28 @@ impl CudaActivityGate {
         self.state.lock().generation
     }
 
+    /// Backend controls must belong to the coordinator's current device cycle.
+    /// Retirement may precede draining; rebuilding requires physical idleness.
+    pub fn check_recovery_authority(&self, ticket: CudaActivityPauseTicket, require_idle: bool) -> Result<(), ThoError> {
+        let state = self.state.lock();
+        if let CudaRecoveryState::Failed(failure) = &state.recovery {
+            return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
+        }
+        if ticket.gate_id != self.id || !ticket.owner || ticket.cycle != state.cycle || !matches!(state.recovery, CudaRecoveryState::Recovering { .. }) || (require_idle && state.active != 0) {
+            return Err(ThoError::new("backend control requires authority for this device's current recovery cycle"));
+        }
+        Ok(())
+    }
+
+    /// A poisoned local process cannot continue CUDA work on any of its devices.
+    pub fn fail_process(&self, error: ThoError) {
+        let mut state = self.state.lock();
+        if !matches!(state.recovery, CudaRecoveryState::Failed(_)) {
+            state.recovery = CudaRecoveryState::Failed(Arc::new(CudaRecoveryFailure { original: error, recovery: None }));
+            self.notify.notify_waiters();
+        }
+    }
+
     /// Retry chains and queued dependent work cannot cross a recovery boundary.
     pub fn check_generation(&self, generation: CudaDeviceGeneration) -> Result<(), ThoError> {
         let state = self.state.lock();
