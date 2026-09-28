@@ -166,7 +166,7 @@ impl AsyncStage for LoadAndClcStage {
 impl Cached for LoadAndClcStage {//for test only, normally should be implemented with Derive(Cached)
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Self::Out, ThoError>>>,
+        thoosa_common::runner::common::cachable::CachedFuture<Self::Out>,
     >
     where
         Self: Sized,

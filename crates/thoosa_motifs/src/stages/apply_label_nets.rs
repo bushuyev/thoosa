@@ -778,7 +778,8 @@ where
     where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
     {
-        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
+        let ws = Arc::clone(ws);
+        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), trained_net_id, move || async move {
             // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
             let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
@@ -792,7 +793,7 @@ where
                 sync_init,
                 run_context,
                 WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
-                ws,
+                &ws,
             ).await
         }).await
     }

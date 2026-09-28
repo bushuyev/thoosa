@@ -754,6 +754,8 @@ impl WithId for MotifStatsOutput {
 impl Output for MotifStatsOutput {}
 //TODO add generic PlainWrapper implementing CachedPurgeOutput
 impl CachedPurgeOutput for MotifStatsOutput {
+    fn has_any_data(&self) -> bool { true }
+
     fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
         Box::pin(async { Ok(()) })
     }
@@ -920,7 +922,7 @@ where
     C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsSyncStage<C>>>, ThoError> {
-        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
 
                 Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?), init: () }))

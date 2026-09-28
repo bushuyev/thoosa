@@ -369,7 +369,7 @@ fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) 
             *current_batch_range = current_start + batch_range.start..current_start + batch_range.end;
             let mut selected_size = size.clone();
             selected_size[0] = selected_len;
-            Ok(ThoTensor::new_ref(tensor.id().clone(), key.key, selected_size, *kind, Some(Box::new(TrainStepTensorSelector(ranges))), key.device_idx))
+            Ok(ThoTensor::new_ref(tensor.id().clone(), key.key, selected_size, *kind, Some(Box::new(TrainStepTensorSelector(ranges))), key.worker_id))
         }
     }
 }

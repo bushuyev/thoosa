@@ -17,12 +17,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
     let map_type = quote! {
         dashmap::DashMap<
             <<Self as thoosa_shared::traits::Stage>::Out as thoosa_shared::traits::WithId>::ID,
-            futures_util::future::Shared<
-                futures_util::future::BoxFuture<'static, Result<
-                    <Self as thoosa_shared::traits::Stage>::Out,
-                    thoosa_shared::ThoosaError
-                >>
-            >,
+            thoosa_common::runner::common::cachable::CachedFuture<<Self as thoosa_shared::traits::Stage>::Out>,
         >
     };
 

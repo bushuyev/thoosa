@@ -195,7 +195,7 @@ pub enum FuturesOrdering {
 pub struct CudaRecoveryCycle(pub u64);
 
 /// Advances only when recovery of this particular device succeeds.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CudaDeviceGeneration(pub u64);
 
 #[derive(Debug, Default, Clone)]

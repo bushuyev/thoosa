@@ -1,7 +1,7 @@
 use crate::runner::common::cachable::{CachedPurgeOutput, DevicesWrap};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
 use log::{debug, info, trace, warn};
@@ -122,7 +122,7 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO remove Sync + Sen
         name: &str,
     ) -> Result<(), ThoError>;
 
-    //TODO remove? It's used when resetting device in local mode which doesn't really work. Allow reset in IPC mode only where stages are completely rebuilt
+    // Recovery removes only the failed device's data; healthy replicas survive.
     async fn drop_gpu(
         &self,
         device_idx: usize,
@@ -157,7 +157,7 @@ where
 
 #[async_trait]
 impl<K, CO> FuturesRunnerMapPurger
-    for DashMap<K, Shared<BoxFuture<'static, Result<CO, ThoError>>>>
+    for DashMap<K, thoosa_common::runner::common::cachable::CachedFuture<CO>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     CO: CachedPurgeOutput + Debug,
@@ -198,7 +198,7 @@ where
 
         let items: Vec<(
             K,
-            Shared<BoxFuture<'static, Result<CO, ThoError>>>,
+            thoosa_common::runner::common::cachable::CachedFuture<CO>,
         )> = self.iter()
             .filter(|entry| {
                 check_ids_to_keep(ids_to_keep, entry)
@@ -269,7 +269,7 @@ where
         //because of "implementation of `dashmap::Map` is not general enough"
         let items: Vec<(
             K,
-            Shared<BoxFuture<'static, Result<CO, ThoError>>>,
+            thoosa_common::runner::common::cachable::CachedFuture<CO>,
         )> = self.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
@@ -278,37 +278,24 @@ where
         let dump_eta_guard_id = dump_eta_guard.id();
 
 
-        track_await(stream::iter(items.into_iter()).for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
-            trace!("drop_gpu: key={key:?}");
-            if let Some(w) = fut.peek().and_then(|wrapper| wrapper.as_ref().ok()) {
-                if let Err(e) = track_await(w.drop_device(device_idx)).await {
-                    warn!("drop_gpu failed: key={key:?} err={e:?}");
+        track_await(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, fut)| async move {
+            if fut.invalidate_pending_on(device_idx) {
+                self.remove_if(&key, |_, current| current.ptr_eq(&fut));
+            } else if let Some(output) = fut.peek().and_then(|result| result.as_ref().ok()) {
+                if output.is_on_device(device_idx) {
+                    output.drop_device(device_idx).await?;
+                    if !output.has_any_data() {
+                        // Other devices may replace this entry while cleanup awaits.
+                        // Remove only the empty future from this snapshot.
+                        self.remove_if(&key, |_, current| current.ptr_eq(&fut));
+                    }
                 }
             }
-
+            // Unresolved futures can belong to healthy devices. Never await or
+            // evict them merely because this device is restarting.
             collect_eta_record_completion(dump_eta_guard_id);
-        })).await;
-
-        info!("FuturesRunnerMapPurger::drop_gpu: name={name:?} drop done");
-
-        // causes reset stall?
-        self.retain(|k, v| {
-            trace!("FuturesRunnerMapPurger::drop_gpu: key={k:?}");
-            if v.peek()
-                .and_then(|v| v.as_ref().map(|r| {
-
-                   r.is_on_device(0)// it's assumed that there are just two devices - CPU (tho_device_idx=0) and Cuda(0) (tho_device_idx=1). TODO check if on other devices.
-                }).ok())
-                .unwrap_or(false)
-            {
-                true
-            } else {
-                debug!("FuturesRunnerMapPurger::drop_gpu: key={k:?} removed");
-                false
-            }
-        });
-
-        info!("FuturesRunnerMapPurger::drop_gpu: name={name:?} retain done");
+            Ok(())
+        })).await?;
 
         Ok(())
     }
@@ -326,6 +313,95 @@ mod tests {
     use thoosa_shared::traits::{CachableIdTr, DummyCachableId, WithId};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+
+    #[tokio::test]
+    async fn test_recovery_invalidates_only_affected_pending_cache_work_without_waiters() {
+        use crate::runner::common::cachable::CachedFuture;
+        use crate::tho_tensor::ThoTensor;
+        use thoosa_shared::{CudaActivityGate, CudaActivityScope};
+        type Wrapped = Arc<DevicesWrap<ThoTensor<crate::dims::AnyDims, DummyCachableId>>>;
+        let first = Arc::new(CudaActivityGate::new(1));
+        let second = Arc::new(CudaActivityGate::new(2));
+        let map: DashMap<DummyCachableId, CachedFuture<Wrapped>> = DashMap::new();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let failed_gate = Arc::clone(&first);
+        let failed = CachedFuture::for_device(async move {
+            let _activity = CudaActivityScope::for_operation(&failed_gate)?;
+            started.send(()).unwrap();
+            std::future::pending::<Result<Wrapped, ThoError>>().await
+        }.boxed().shared(), Some(Arc::clone(&first)));
+        map.insert(DummyCachableId("failed"), failed.clone());
+        let healthy = CachedFuture::for_device(std::future::pending::<Result<Wrapped, ThoError>>().boxed().shared(), Some(Arc::clone(&second)));
+        map.insert(DummyCachableId("healthy"), healthy.clone());
+        tokio::time::timeout(Duration::from_secs(2), started_rx).await.unwrap().unwrap();
+        // No caller polls the failed computation. The cache must still release
+        // its suspended activity before recovery reaches the cleanup phase.
+        let ticket = first.request_pause(ThoError::ContextReset).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), first.wait_until_idle()).await.expect("an abandoned cache future must not pin recovery");
+        map.drop_gpu(1, "device recovery").await.unwrap();
+        assert!(!map.contains_key(&DummyCachableId("failed")));
+        assert!(map.get(&DummyCachableId("healthy")).unwrap().ptr_eq(&healthy));
+        assert!(matches!(failed.await.unwrap_err().what(), ThoError::ContextReset));
+        first.finish_pause(ticket);
+        // Cleanly unwind the independent background computation too.
+        let ticket = second.request_pause(ThoError::ContextReset).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), second.wait_until_idle()).await.unwrap();
+        second.finish_pause(ticket);
+    }
+
+    #[tokio::test]
+    async fn test_cache_result_cannot_publish_across_recovery_boundary() {
+        use crate::runner::common::cachable::CachedFuture;
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let failing_gate = Arc::clone(&gate);
+        let future = CachedFuture::for_device(async move {
+            failing_gate.request_pause(ThoError::ContextReset).unwrap();
+            Ok(42)
+        }.boxed().shared(), Some(Arc::clone(&gate)));
+        assert!(matches!(future.await.unwrap_err().what(), ThoError::ContextReset));
+        tokio::time::timeout(Duration::from_secs(2), gate.wait_until_idle()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_recovery_cache_cleanup_preserves_healthy_devices_and_pending_entries() {
+        use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
+        use crate::tho_tensor::ThoTensor;
+        use crate::ipc::worker_msg::CudaWorkerId;
+        use thoosa_shared::CudaDeviceGeneration;
+        let global = MockGlobalCtx::global_context();
+        let installed = MockGlobalCtx::is_installed_context();
+        installed.expect().return_const(false);
+        let mock = Box::leak(Box::new(mock_global_ctx::build().with_device_count(3).finish()));
+        global.expect().return_const(&*mock);
+        type Wrapped = Arc<DevicesWrap<ThoTensor<crate::dims::AnyDims, DummyCachableId>>>;
+        let tensor = |device, id| Arc::new(DevicesWrap::wrap(ThoTensor::new_ref(DummyCachableId(id), 42, vec![1], tch::Kind::Float, None, CudaWorkerId { device_idx: device, generation: CudaDeviceGeneration(0) })));
+        let failed: Wrapped = tensor(1, "failed");
+        let healthy: Wrapped = tensor(2, "healthy");
+        let cpu: Wrapped = Arc::new(DevicesWrap::wrap(ThoTensor::new(DummyCachableId("cpu"), tch::Tensor::f_from_slice(&[1f32]).unwrap()).unwrap()));
+        let map: DashMap<DummyCachableId, thoosa_common::runner::common::cachable::CachedFuture<Wrapped>> = DashMap::new();
+        for (key, output) in [("failed", &failed), ("healthy", &healthy), ("cpu", &cpu)] {
+            let future = ready(Ok(Arc::clone(output))).boxed().shared();
+            future.clone().await.unwrap();
+            map.insert(DummyCachableId(key), future.into());
+        }
+        let pending = futures_util::future::pending::<Result<Wrapped, ThoError>>().boxed().shared();
+        map.insert(DummyCachableId("pending"), pending.clone().into());
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let completed = crate::runner::common::cachable::CachedFuture::for_device(ready(Ok(Arc::clone(&cpu))).boxed().shared(), Some(Arc::clone(&gate)));
+        completed.clone().await.unwrap();
+        map.insert(DummyCachableId("completed_on_failed_device"), completed.clone());
+        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        gate.wait_until_idle().await;
+        tokio::time::timeout(Duration::from_secs(2), map.drop_gpu(1, "device recovery")).await.unwrap().unwrap();
+        assert!(!failed.is_on_device(1));
+        assert!(!map.contains_key(&DummyCachableId("failed")));
+        assert!(healthy.is_on_device(2) && map.contains_key(&DummyCachableId("healthy")));
+        assert!(cpu.is_on_device(0) && map.contains_key(&DummyCachableId("cpu")));
+        assert!(map.get(&DummyCachableId("pending")).unwrap().ptr_eq(&pending.into()));
+        assert!(Arc::ptr_eq(&completed.await.unwrap(), &cpu));
+        assert!(map.contains_key(&DummyCachableId("completed_on_failed_device")));
+        gate.finish_pause(ticket);
+    }
 
     #[derive(Debug, Clone)]
     struct DummyOutput {
@@ -391,7 +467,7 @@ mod tests {
 
         let map: DashMap<
             DummyCachableId,
-            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DummyOutput>>, ThoError>>>,
+            thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DummyOutput>>>,
         > = DashMap::new();
 
         let futures_active = Arc::new(AtomicUsize::new(0));
@@ -437,7 +513,7 @@ mod tests {
             .boxed()
             .shared();
 
-            map.insert(key, fut);
+            map.insert(key, fut.into());
         }
 
         for reff in &map {
@@ -476,10 +552,10 @@ mod tests {
 
         let map: DashMap<
             DummyCachableId,
-            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DummyOutput>>, ThoError>>>,
+            thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DummyOutput>>>,
         > = DashMap::new();
-        map.insert(keep_key.clone(), ready(Ok(Arc::clone(&keep_wrapper))).boxed().shared());
-        map.insert(drop_key, ready(Ok(Arc::clone(&drop_wrapper))).boxed().shared());
+        map.insert(keep_key.clone(), ready(Ok(Arc::clone(&keep_wrapper))).boxed().shared().into());
+        map.insert(drop_key, ready(Ok(Arc::clone(&drop_wrapper))).boxed().shared().into());
 
         for reff in &map {
             reff.value().clone().await?;

@@ -654,7 +654,7 @@ mod tests {
 
     static DUMMY_LOADER_CACHE_PTR: OnceLock<Arc<DashMap<
         <<DummyLoader as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<<DummyLoader as Stage>::Out, ThoError>>>,
+        thoosa_common::runner::common::cachable::CachedFuture<<DummyLoader as Stage>::Out>,
     >>> = OnceLock::new();
     static DUMMY_LOADER_REGISTER: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
@@ -662,7 +662,7 @@ mod tests {
     impl Cached for DummyLoader {
         async fn cache() -> &'static DashMap<
             <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Self::Out, ThoError>>>,
+            thoosa_common::runner::common::cachable::CachedFuture<Self::Out>,
         >
         where
             Self: Sized,
@@ -985,6 +985,22 @@ mod tests {
             .await
         }
 
+    }
+
+    #[tokio::test]
+    async fn test_run_cached_evicts_reset_errors_for_retry() {
+        use futures_util::FutureExt;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let loader = Arc::new(DummyLoader::new(3));
+        let input = DLoaderInput { id: DLoaderInputId("recovery_retry") };
+        let key = loader.out_id(input.id());
+        let cache = DummyLoader::cache().await;
+        cache.insert(key.clone(), futures_util::future::ready(Err(ThoError::ContextReset)).boxed().shared().into());
+        assert!(matches!(Arc::clone(&loader).run_cached(input.clone(), RunCtxImpl::new(0, "reset")).await.unwrap_err().what(), ThoError::ContextReset));
+        assert!(!cache.contains_key(&key));
+        let output = Arc::clone(&loader).run_cached(input, RunCtxImpl::new(0, "retry")).await.unwrap();
+        assert_eq!(output.id(), &key);
+        assert_eq!(loader.run_count.load(Relaxed), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]

@@ -453,7 +453,7 @@ mod tests {
 
         println!("do_test_distinct_stateful_endpoints: e={e:?}");
 
-        cuda_actor.drop_endpoint(1, TEST_ENDPOINT.to_string()).await?;
+        cuda_actor.drop_endpoint(1, TEST_ENDPOINT.to_string(), (cuda_actor.as_ref() as &dyn std::any::Any).downcast_ref::<crate::ipc::cuda_process::CudaIPCActorHandle>().unwrap().worker_id()?).await?;
 
         Ok(())
     }
