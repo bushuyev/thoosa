@@ -358,26 +358,29 @@ mod tests {
 
                 let input_tensor:ThoTensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?.into();
                 let input_ref = cuda_actor.copy(input_tensor.shallow_clone(), ThoDevice::from(1)).await?;
+                let input_worker_id = input_ref.ref_worker_id().unwrap();
                 let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected worker input ref"))?;
-                let input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-success", "input").into(), input_key, input_ref.size(), input_ref.kind(), None, 1);
+                let input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-success", "input").into(), input_key, input_ref.size(), input_ref.kind(), None, input_worker_id);
 
                 let output = oom_handler.consume(&stage, ConsumeTestInput::new(input), RunCtxImpl::new(1, "consume-success"), NoContexts).await?;
+                let output_worker_id = output.ref_worker_id().unwrap();
                 let output_key = output.ref_key().ok_or_else(|| ThoError::new("consume test expected worker output ref"))?;
-                let new_ref = ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, 1);
+                let new_ref = ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, output_worker_id);
                 let output_cpu = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
 
                 assert!(output_cpu.t_ref().f_allclose(&Tensor::f_from_slice(&[2.0f32, 4.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
 
-                let consumed_input = cuda_actor.copy(ThoTensor::new_ref((), input_key, vec![1, 2], Float, None, 1), ThoDevice::from(0)).await;
+                let consumed_input = cuda_actor.copy(ThoTensor::new_ref((), input_key, vec![1, 2], Float, None, input_worker_id), ThoDevice::from(0)).await;
                 assert!(consumed_input.is_err(), "successful consume must remove the worker input tensor");
 
                 let failed_tensor:ThoTensor = Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?.into();
                 let failed_ref = cuda_actor.copy(failed_tensor, ThoDevice::from(1)).await?;
+                let failed_worker_id = failed_ref.ref_worker_id().unwrap();
                 let failed_key = failed_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected failed worker input ref"))?;
-                let failed_input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-failure", "input").into(), failed_key, failed_ref.size(), failed_ref.kind(), None, 1);
+                let failed_input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-failure", "input").into(), failed_key, failed_ref.size(), failed_ref.kind(), None, failed_worker_id);
                 let failed_result = oom_handler.consume(&stage, ConsumeTestInput::new(failed_input.shallow_clone()), RunCtxImpl::new(1, "consume-failure"), NoContexts).await;
                 assert!(failed_result.is_err());
-                let new_ref = ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, 1);
+                let new_ref = ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, failed_worker_id);
                 let preserved_input = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
                 debug!("preserved_input=\n{}", preserved_input.t_ref());
                 assert!(preserved_input.t_ref().f_allclose(&Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
@@ -443,7 +446,7 @@ mod tests {
                 debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
 
                 let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                    .copy(ThoTensor::new_ref((), out_key, output_ref.size(), output_ref.kind(), None, 1), 0.into()).await?;
+                    .copy(ThoTensor::new_ref((), out_key, output_ref.size(), output_ref.kind(), None, output_ref.ref_worker_id().unwrap()), 0.into()).await?;
                 let cpu_out: ThoTensor<ClcStageOutput, SynKey> = ThoTensor::new(output_ref.id().clone(), tensor.t())?;
 
 

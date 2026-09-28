@@ -585,7 +585,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
-        SYNC_MOTIF_LOADER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        SYNC_MOTIF_LOADER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
 
             if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
@@ -1126,7 +1126,7 @@ where
     C:RunCtx + 'static
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SyncLoadMotifResources<C>>>, ThoError>{
-        SYNC_LOAD_MOTIF_RESOURCES_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        SYNC_LOAD_MOTIF_RESOURCES_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
 
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
@@ -1394,7 +1394,7 @@ where
     C:RunCtx + 'static
 {
     async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLoadRandomSlices<C>>>, ThoError> {
-        SYNC_LOAD_RANDOM_SLICES_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        SYNC_LOAD_RANDOM_SLICES_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, 0, tho_device_idx, Box::new(())).await?),
@@ -1692,7 +1692,7 @@ pub mod mock_motif_loader {
         #[async_trait]
         impl Cached for MotifLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, ThoError >>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>>>;
             async fn run_cached(
                 self: Arc<Self>,
                 input: <MockMotifLoader as Stage>::In<'static>,

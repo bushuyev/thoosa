@@ -226,11 +226,9 @@ where
         for (key, val) in keys_vals {
             debug!("TmpCached::drop_gpu: key={key:?}");
 
-            if let Err(err) = track_await(val.drop_device(device_idx)).await {
-                debug!("TmpCached::drop_gpu: key={key:?} dump_to_cpu err={err:?}");
-            } else {
-                debug!("TmpCached::drop_gpu: key={key:?} dump_to_cpu ok");
-            }
+            // Keep healthy copies, but never report successful recovery if a
+            // failed-device slot could not be removed.
+            track_await(val.drop_device(device_idx)).await?;
 
         }
         Ok(())

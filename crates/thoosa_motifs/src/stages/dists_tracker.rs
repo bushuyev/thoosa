@@ -531,10 +531,10 @@ impl DistsMask {
                 Ok(track_await(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
             }
             ThoTensorInner::Ref { key, size, kind, selector } => {
-                let device = ThoDevice::from(key.device_idx);
+                let device = ThoDevice::from(key.worker_id.device_idx);
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?}");
                 let actor = GlobalCtx::global().cuda_actor(device);
-                let copied = track_await(actor.copy(ThoTensor::new_ref((), key.key, size, kind, selector, 1), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
+                let copied = track_await(actor.copy(ThoTensor::new_ref((), key.key, size, kind, selector, key.worker_id), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?} copied={copied:?}");
 
                 // track_await(actor.drop_tho_tensor(*key)).await?;
@@ -554,7 +554,7 @@ impl DistsMask {
             let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
             debug!("into_worker_ipc_refs: out_key={key:?} out_id={id:?}");
 
-            Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.tho_device_idx()))
+            Ok(ThoTensor::new_ref(id, key, size, kind, None, all_cuda_tensors.worker_id))
         }
 
         Ok(Self {

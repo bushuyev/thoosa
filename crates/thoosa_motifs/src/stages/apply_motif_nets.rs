@@ -739,7 +739,7 @@ where
 {
     //StackAppliedMotifNets is a singleton, id parameter is only for output tensor to match cache ApplyMotifNet's cache entry key
     pub async fn new(id: SynKey, device: ThoDevice) -> Result<Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>, ThoError> {
-        STACK_APPLIED_MOTIF_NETS_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        STACK_APPLIED_MOTIF_NETS_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
                 let init = StackAppliedMotifNetsInput::new(id.clone(), Vec::new(), device.tho_device_idx());
@@ -1134,7 +1134,8 @@ where
     where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
     {
-        APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(trained_net_id, || async move {
+        let ws = Arc::clone(ws);
+        APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), trained_net_id, move || async move {
             let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![
@@ -1147,7 +1148,7 @@ where
                 sync_init,
                 run_context,
                 WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
-                ws,
+                &ws,
             ).await
         }).await
     }

@@ -217,7 +217,7 @@ where
                 motif.size(),
                 motif.kind(),
                 motif.selector(),
-                motif.tho_device().tho_device_idx(),
+                motif.ref_worker_id().expect("motif tensor reference identity"),
             );
             static TRAIN_MOTIF_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);

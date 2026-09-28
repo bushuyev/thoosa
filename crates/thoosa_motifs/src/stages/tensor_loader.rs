@@ -208,7 +208,7 @@ pub(crate) mod mock_tensor_loader {
         #[async_trait]
         impl Cached for TensorLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey >>>, ThoError >>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey >>>>>;
             async fn run_cached(
                     self: Arc<Self>,
                     input: <MockTensorLoader as Stage>::In<'static>,

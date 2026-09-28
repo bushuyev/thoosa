@@ -383,7 +383,7 @@ where
     C: RunCtx  + 'static
 {
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncLogitsBatch<C>>>, ThoError> {
-        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(0, || async move {
+        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
                 if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, 0, device.tho_device_idx(), Box::new(())).await?),

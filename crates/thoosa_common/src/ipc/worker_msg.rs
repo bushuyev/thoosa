@@ -6,6 +6,23 @@ use crate::ipc::cuda_wokrer::WorkerStageOutput;
 use crate::ipc::ipc_cuda_utils::IpcTensorKind;
 use crate::runner::common::cachable::ThoDataRef;
 
+/// Numeric tensor and endpoint IDs are only meaningful in their originating
+/// worker. A replacement process may allocate exactly the same IDs again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CudaWorkerId {
+    pub device_idx: usize,
+    pub generation: thoosa_shared::CudaDeviceGeneration,
+}
+
+impl CudaWorkerId {
+    pub fn check(self, expected: Self) -> Result<(), ThoError> {
+        if self != expected {
+            return Err(ThoError::ContextReset.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
+        }
+        Ok(())
+    }
+}
+
 #[typetag::serde(tag = "type")]
 pub trait WorkerInput:Any + Send + Sync + Debug{
 
@@ -72,13 +89,15 @@ pub enum Operation {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgIn {
+    pub worker_id: CudaWorkerId,
     pub request_id:u64,
     pub operation: Operation
 }
 
 impl CudaWorkerMsgIn {
-    pub fn new(request_id: u64, operation:Operation) -> Self {
+    pub fn new(worker_id: CudaWorkerId, request_id: u64, operation:Operation) -> Self {
         Self {
+            worker_id,
             request_id,
             operation
         }
@@ -158,6 +177,7 @@ impl From<WorkerError> for ThoError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CudaWorkerMsgOut {
+    pub worker_id: CudaWorkerId,
     pub request_id:u64,
     pub status:OpResult
 }
