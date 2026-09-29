@@ -209,7 +209,7 @@ impl Display for Logits {
 
 #[derive(Debug, Clone)]
 pub struct NetResources<RC: ResourcesConfig> {
-    //TODO rename Node to Net
+
     train_resources: RC,
     valid_resources: RC,
 }
@@ -246,7 +246,7 @@ where
 
 impl<R: ResourcesConfig> Display for NetResources<R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "xxx") //TODO
+        write!(f, "NetResources: train_resources={:?} valid_resources={:?}", self.train_resources, self.valid_resources)
     }
 }
 

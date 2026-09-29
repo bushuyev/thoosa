@@ -585,17 +585,7 @@ impl SeqBuilder {
         });
         Ok(self)
     }
-
-    pub fn conv_2d(
-        &mut self,
-        _kernel: u32,
-        _in_channels: u32,
-        _out_channels: u32,
-        _config: ConvConfig,
-    ) -> anyhow::Result<&mut Self> {
-        todo!()
-    }
-
+    
     pub fn max_pool(&mut self, kernel: u32, stride: u32, padding: u32) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::MaxPool {
             kernel_size: kernel,

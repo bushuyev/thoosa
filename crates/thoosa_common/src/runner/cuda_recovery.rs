@@ -25,7 +25,7 @@ pub(crate) struct CudaRecoveryCoordinator {
     cycle: Mutex<Option<RecoveryCycle>>,
     reset: ResetFn,
     retire: Option<RetireFn>,
-    process_failure: Option<ProcessFailureFn>,
+    process_failure: Option<ProcessFailureFn>,//to tear down main process in local mode.
     drain_timeout: Duration,
 }
 

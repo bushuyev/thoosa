@@ -99,6 +99,15 @@ where
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
 
+impl<C> Drop for SyncFreqFilter<C>
+where
+    C: RunCtx + 'static {
+    fn drop(&mut self) {
+        let id = self.id.to_string();
+        GlobalCtx::global().remove_cache(&id);
+    }
+}
+
 
 impl<C> SyncFreqFilter<C>
 where
@@ -122,7 +131,7 @@ where
             return Ok(Arc::clone(v))
         }
 
-        let v = if GlobalCtx::global().is_ipc() {
+        let stage = if GlobalCtx::global().is_ipc() {
 
             // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
             Arc::new(DynSyncStageWithStateEnum::Proxy {
@@ -139,9 +148,11 @@ where
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
         };
 
-        cache.insert(id, Arc::clone(&v));
+        // GlobalCtx::global().register_cache((&format!("{:?}", stage.id), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
-        Ok(v)
+        cache.insert(id, Arc::clone(&stage));
+
+        Ok(stage)
     }
 
     pub fn new_local(init:SyncFreqFilterIpcInit) ->Result<Self, ThoError>{
@@ -454,35 +465,6 @@ where
 
     }
 
-    fn run_conv_with_padding(&self, stride: u32, padding: &Padding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
-        let t = input_t.size()[1];
-        let kernel_size = kernel_t.size()[2];
-        let pad = kernel_size / 2;
-        let stride_i64 = stride as i64;
-
-
-        let output_3d = match padding {
-            Padding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
-            Padding::Replicate(_) => {
-                let left = input_t.f_narrow(2, 0, 1)?.f_repeat([1, 1, pad])?;
-                let right = input_t.f_narrow(2, t - 1, 1)?.f_repeat([1, 1, pad])?;
-                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
-                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
-            }
-            Padding::Reflect(_) => {
-                if pad >= t {
-                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
-                }
-                let left = input_t.f_narrow(2, 1, pad)?.f_flip([2])?;
-                let right = input_t.f_narrow(2, t - pad - 1, pad)?.f_flip([2])?;
-                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
-                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
-            }
-        };
-
-        Ok(output_3d.f_view((self.num_channels, -1))?)
-    }
-
     fn effective_output_stride(filter_configs: &[InputFilter]) -> Result<i64, ThoError> {
         filter_configs.iter().try_fold(1_i64, |effective_stride, filter| {
             let stage_stride = match &filter {
@@ -765,12 +747,12 @@ where
 
     //it's called when local GPU reset is requested
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("TrainStep2::drop_gpu");
-        todo!()
+        debug!("SyncFreqFilter::drop_gpu");
+       Ok(())
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
-        debug!("TrainStep2::purge_cpu");
+        debug!("SyncFreqFilter::purge_cpu");
         0
     }
 }

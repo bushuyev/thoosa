@@ -52,15 +52,6 @@ impl WorkerInput for TestStageInitB{
 
 }
 
-impl WorkerStageInput for TestStageInitB {
-    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-        todo!()
-    }
-
-    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
-        todo!()
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestInputB {
@@ -395,10 +386,12 @@ mod tests {
                 let ipc: &dyn Any = actor.as_ref();
                 let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
                 let retired = ipc.worker_id()?;
+
                 let old_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(7, 1, TestStageInitB::new(2, 1)).await?);
                 let old_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 let old_key = old_tensor.ref_key().unwrap();
                 actor.restart().await?;
+
                 let fresh_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(7, 1, TestStageInitB::new(3, 1)).await?);
                 let fresh_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 // Deliberately collide numeric identities across generations.

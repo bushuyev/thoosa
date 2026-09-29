@@ -18,9 +18,8 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
-use with_id::WithId;
 
 pub struct ProxyStage<St>
 where
@@ -348,19 +347,6 @@ where
 
 }
 
-impl <St, Init> OutId for DynSyncStageEnum<St, Init>
-where
-    St:SyncStage+StageWithState+Send+Sync,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static,
-    <St as Stage>::Out: thoosa_shared::traits::WithId,
-    for<'a> <St as Stage>::In<'a>: thoosa_shared::traits::WithId
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as thoosa_shared::traits::WithId>::ID) -> <Self::Out as thoosa_shared::traits::WithId>::ID {
-        todo!()
-    }
-}
 
 impl <St, Init> StageWithState for DynSyncStageEnum<St, Init>
 where
@@ -416,7 +402,7 @@ where
             }
             DynSyncStageEnum::Proxy { stage,  .. } => {
                 if stage.tho_device_idx != device_idx { return Ok(()); }
-                crate::ipc::serialization::json::purge_ipc_sync_stage::<JsonIpcCodec>(
+                crate::ipc::serialization::json::purge_ipc_sync_stage(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
                     stage.stage_id,
@@ -450,18 +436,18 @@ where
 }
 
 #[derive(Debug)]
-pub enum DynSyncStageWithStateEnum<St, Init=()>
+pub enum DynSyncStageWithStateEnum<St, Init = ()>
 where
-    St:SyncStage+StageWithState,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static
+    St: SyncStage + StageWithState,
+    for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
+    <St as Stage>::Out: WorkerStageOutput + DeserializeOwned + 'static,
+    Init: Debug + Send + Sync + 'static,
 {
     Local(Arc<St>),
     Proxy {
         stage: Arc<ProxyStage<St>>,
-        init: Init
-    }
+        init: Init,
+    },
 }
 
 impl <St, Init> Stage for DynSyncStageWithStateEnum<St, Init>
@@ -568,7 +554,7 @@ where
             }
             DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
                 if stage.tho_device_idx != device_idx { return Ok(()); }
-                crate::ipc::serialization::json::purge_ipc_sync_stage::<crate::ipc::serialization::json::JsonIpcCodec>(
+                crate::ipc::serialization::json::purge_ipc_sync_stage(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
                     stage.stage_id,
@@ -596,6 +582,29 @@ where
             }
             DynSyncStageWithStateEnum::Proxy { .. } => {
                 0
+            }
+        }
+    }
+}
+
+
+impl <St, Init> WithId for DynSyncStageWithStateEnum<St, Init>
+where
+    St:SyncStage+StageWithState + WithId,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    type ID = St::ID;
+
+    fn id(&self) -> &St::ID {
+        match self {
+            DynSyncStageWithStateEnum::Local(stage) => {
+                stage.id()
+            }
+            DynSyncStageWithStateEnum::Proxy { stage, .. } => {
+                // &stage.stage_id
+                todo!()
             }
         }
     }

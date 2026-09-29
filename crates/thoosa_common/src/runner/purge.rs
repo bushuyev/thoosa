@@ -150,7 +150,11 @@ where
                 return true;
             }
             let kd: &dyn CachableIdTr = entry.key();
-            !set.contains(kd)
+            let keep_this_key = set.contains(kd);
+            if keep_this_key {
+                info!("check_ids_to_keep: kd={kd:?}")//TODO remove info
+            }
+            !keep_this_key
         })
         .unwrap_or(true)
 }

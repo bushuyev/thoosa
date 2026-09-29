@@ -434,7 +434,7 @@ pub struct SyncStageRunner {
     worker: JoinHandle<()>,
     exclusive_job_id: Arc<RwLock<Option<JobId>>>,
     tho_device_idx: usize,
-    recovery: Option<Arc<CudaRecoveryCoordinator>>,
+    recovery: Option<Arc<CudaRecoveryCoordinator>>,//None for CPU
 }
 
 impl Debug for SyncStageRunner {
@@ -638,8 +638,11 @@ impl SyncStageRunner {
             let generation = recovery.as_ref().map(|recovery| {
                 CudaActivityScope::current().and_then(|scope| scope.generation(recovery.gate())).expect("admitted CUDA generation")
             });
-            let mut result = track_await(fut).await;
-            let error = match &mut result { Err(error) => Some(error), Ok(value) => nested_error(value) };
+            let mut result = track_await(fut).await;//<--- wrapped
+            let error = match &mut result {
+                Err(error) => Some(error),
+                Ok(value) => nested_error(value)
+            };
             let is_oom = error.as_ref().is_some_and(|error| error.is_oom());
             let is_ok = error.is_none();
             if let Some(error) = error {
@@ -1648,6 +1651,7 @@ mod tests {
         (job, result_rx)
     }
 
+    #[cfg(test)]
     fn runner_with_limits(device: usize, limits: &Arc<FuturesLimits>) -> Arc<SyncStageRunner> {
         let recovery = (device != 0).then(|| CudaRecoveryCoordinator::new(Arc::new(CudaActivityGate::new(device)), Arc::new(|_| Box::pin(async { Ok(()) }))));
         Arc::new(SyncStageRunner::new_inner_with_buffer_limits(1, device, recovery, Arc::clone(limits)))

@@ -40,15 +40,12 @@ impl IpcCodec for JsonIpcCodec {
 }
 
 
-
-pub async fn purge_ipc_sync_stage<C>(
+pub async fn purge_ipc_sync_stage(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
     stage_id: u32,
     worker_id: crate::ipc::worker_msg::CudaWorkerId,
 ) -> Result<(), ThoError>
-where
-    C: IpcCodec,
 {
     debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
 

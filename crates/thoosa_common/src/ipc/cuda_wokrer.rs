@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
-use thoosa_shared::perf_logging::init_tracing;
+use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
@@ -231,6 +231,8 @@ impl CudaWorker {
                     ThoDevice::from(Device::Cuda(0)),
                 ).await//TODO Cuda(0)
             })?;
+
+            info!("perf: \n{}", format_perf_map(&PERF));
 
             std::process::exit(0);
         }

@@ -222,7 +222,7 @@ where
             static TRAIN_MOTIF_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
-            let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
+            let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let cosine_motif = match &run_config.net {
@@ -547,7 +547,7 @@ where
 
         let channels = perf_log!(sync_read_lock!(self.ws)).channels();
 
-        info!("TrainMotifNets::run: input={input:?}");
+        debug!("TrainMotifNets::run: input={input:?}");
 
         let (select_motifs_run_config_ids, mut motifs_rates_selected_motifs_run_config_ids) = match input.motifs_by {
 
@@ -557,7 +557,7 @@ where
                 let run_configs_selected_motifs = track_await(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
                 for (select_motifs_run_config_id, selected_motifs) in &run_configs_selected_motifs {
 
-                    info!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs in channels={:?} selected_motifs={selected_motifs:?}", selected_motifs.iter().map(|motifs_in_channel|motifs_in_channel.len()).collect::<Vec<_>>());
+                    debug!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs in channels={:?} selected_motifs={selected_motifs:?}", selected_motifs.iter().map(|motifs_in_channel|motifs_in_channel.len()).collect::<Vec<_>>());
                     motifs_rates_selected_motifs_run_config_ids.extend(
                         selected_motifs
                             .into_iter()
@@ -589,7 +589,7 @@ where
             }
         };
         let motifs_rates_selected_motifs_run_config_ids_len = motifs_rates_selected_motifs_run_config_ids.len();
-        info!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len} motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
+        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len} motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
 
         let reusable_completed_trials = track_await(completed_train_motif_trials(&self.store, &select_motifs_run_config_ids)).await?;
         debug!("TrainMotifNets::run: reusable_completed_trials.len={}", reusable_completed_trials.len());

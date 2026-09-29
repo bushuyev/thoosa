@@ -1,0 +1,40 @@
+@startuml
+'https://plantuml.com/sequence-diagram
+
+participant "self : SyncStageRunner" as self
+participant "fut : Future" as fut
+
+autonumber
+
+'== Handling unrecoverable error ==
+
+'OOMHanler -> SyncStageRunner: submit/submit_observed(retry_token, fut)
+
+self -> CudaActivityScope: current
+
+self -> CudaActivityGate: check_generation
+
+
+
+opt fut.needs_cuda_ctx_reset()
+
+    self -> CudaRecoveryCoordinator: request
+
+    participant "Mutex<RecoveryCycle>" as cycle
+
+    CudaRecoveryCoordinator -> cycle:lock
+    alt cycle.is_some
+        return cycle.ticket
+    else
+        cycle->RecoveryCycle::new
+    end
+    CudaRecoveryCoordinator -> self: drain()/ManagerCmd::DrainForRecovery/drain_commands
+
+    cycle->drop
+
+    CudaRecoveryCoordinator->CudaRecoveryCoordinator:run/reset
+end
+
+
+
+@enduml

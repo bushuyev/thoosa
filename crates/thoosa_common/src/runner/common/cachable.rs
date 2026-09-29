@@ -514,7 +514,7 @@ where
 
                     }
 
-                    Err(ThoError::NotFound)
+                    Err(ThoError::NotFound(Some(format!("select_ref: id={:?} selector={selector:?}", self.id))))
                 }
             }
         }
@@ -783,7 +783,7 @@ where
             }
         }
 
-        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound))
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound(Some(id))))
     }
 
     //needed only for TmpCached to return not yet loaded data retrieving TmpCached after dump to cpu.
@@ -804,7 +804,7 @@ where
             }
         }
 
-        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound))
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), ThoError::NotFound(Some(id))))
     }
 
     pub async fn load_from_any_device_(
@@ -855,7 +855,7 @@ where
             self.mark_not_resident_on_device(source_device_idx);
         }
 
-        Err(ThoError::NotFound)
+        Err(ThoError::NotFound(Some(format!("load_from_any_device_: id={:?}", self.id))))
     }
 
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {

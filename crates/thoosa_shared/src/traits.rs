@@ -198,26 +198,7 @@ impl Display for DebugId {
     }
 }
 
-///////////////////////////////////
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Named)]
-pub struct TmpId(Uuid);
 
-
-impl TmpId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-unsafe impl Send for TmpId {}
-unsafe impl Sync for TmpId {}
-
-
-
-impl Display for TmpId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 ///--------------------
 #[derive(Debug, Eq, PartialEq, Hash, Clone, CpuData, Named)]
 #[dummy_data(clone)]
@@ -261,11 +242,7 @@ impl Display for DataId {
         write!(f, "{}", self.0)
     }
 }
-///////////////////////////////////
 
-
-
-//TODO should be needed only for cachable, remove from Output super trait
 #[delegatable_trait]
 #[automock(type ID=DummyCachableId;)]
 pub trait WithId {

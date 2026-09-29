@@ -164,7 +164,7 @@ impl Named for PathBuf {}//TODO it's for LoadNet - add type for NetId
 
 pub trait RunConfig: Debug {
     fn set_id(&mut self, id: RunConfigId);
-    fn get_id(&mut self) ->RunConfigId;
+    fn get_id(&self) ->RunConfigId;
 
     fn type_name() -> &'static str;//TODO rename
 }

@@ -973,7 +973,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             }
 
             // Root configs own an ID, while nested configs reject ID access.
-            fn get_id(&mut self) -> thoosa_shared::run_configs::RunConfigId {
+            fn get_id(&self) -> thoosa_shared::run_configs::RunConfigId {
                 #get_id
             }
 

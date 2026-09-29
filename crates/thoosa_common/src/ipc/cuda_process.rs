@@ -1252,7 +1252,7 @@ mod tests {
         for error in [
             ThoError::AdjusterFailed,
             ThoError::ContextReset,
-            ThoError::NotFound,
+            ThoError::NotFound(Some("worker".to_string())),
             SyncStageRunnerError::SubmitErrorClosed.into(),
             SyncStageRunnerError::SubmitErrorCancelled.into(),
         ] {

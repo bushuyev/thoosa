@@ -621,12 +621,13 @@ impl CopyCtx {
         dst_tho_device_idx: usize,
         kind: Kind,
     ) -> Result<Tensor, ThoError> {
-        let t = if dst_tho_device_idx == 0 {
-            //TODO opt to .to if tensor_mem_size < buf_size {
+
+        if dst_tho_device_idx == 0 {
             track_await(copy_d2h_from_ptr(
                 &self.gate, kind, self.buf_size,
                 &self.bufs_pool_d2h, src_ptr, src_size
             )).await
+
         } else {
             track_await(copy_h2d_from_ptr(
                 &self.gate, kind,
@@ -636,11 +637,7 @@ impl CopyCtx {
                 src_ptr,
                 src_size,
             )).await
-        };
-
-        // println!("copy_from_ptr: copied t.size={:?} dst_device={dst_device} t=\n{t}", t.size());
-
-        t
+        }
     }
 
     /// Copies CUDA storage into an already allocated CPU range, which lets an IPC worker fill a tensor owned by the parent shared allocator.

@@ -223,7 +223,7 @@ where
 
 
 
-    info!("\n{}", format_perf_map(&PERF));
+    info!("perf: \n{}", format_perf_map(&PERF));
 
     track_await(GlobalCtx::global().shutdown()).await;
 
