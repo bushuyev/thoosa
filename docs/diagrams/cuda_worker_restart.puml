@@ -1,0 +1,168 @@
+@startuml
+title CudaWorker restart (per device)
+
+skinparam shadowing false
+skinparam linetype ortho
+skinparam nodesep 100
+skinparam ranksep 50
+
+' Fatal recovery path. Healthy maintenance is described separately below.
+' Sources: runner/cuda_recovery.rs, runner/syn_stage_runner.rs,
+' runner/global_ctx.rs, ipc/cuda_process.rs, ipc/pending.rs.
+
+(*) --> "Report fatal CUDA error or IPC transport failure\nfor device d, generation g" as report
+
+note left
+NeedsRestart can originate in initialization,
+execution, consume, synchronization, or copying.
+Actor-owned requests report even if the caller
+was cancelled; transport loss is also monitored.
+end note
+
+report --> "GlobalCtx::global().get_runner(d)\nrequest_cuda_reset_for_generation(g, cause)\nCudaRecoveryCoordinator::request" as request
+
+request --> if "Gate failed or generation mismatched?" as invalid_report then
+    -left->[yes] "Return existing terminal failure;\nignore a retired generation;\nreject a future generation" as reject_report
+    --> (*)
+else
+    -->[no] if "Local mode with NeedsRestart?" as local_fatal then
+        -left->[yes] "Fail the device gate; request runner drain\nAbort any healthy maintenance recovery\nGlobalCtx::fail_process" as local_shutdown
+        note left
+        A poisoned local context requires process relaunch.
+        No in-process repair or cudaDeviceReset is attempted.
+        Healthy explicit restart is different: it drains the
+        device, synchronizes its retained primary context via
+        tho_cu_restart, and rebuilds local copy/stream pools.
+        It does not reset LibTorch's process-wide state.
+        end note
+        --> "Close all local CUDA gates\nNotify the application to shut down\nReturn CudaRecoveryFailed" as process_failed
+        --> (*)
+    else
+        -->[IPC] if "Recovery already active for d?" as coalesced then
+            -right->[yes] "Join the existing recovery ticket\nReturn ContextReset to admitted work\nUnwind and release activity leases" as joined
+            --> (*)
+        else
+            -->[no] "Close admission on gate d atomically\nOwn its recovery ticket\nSend DrainForRecovery to runner d\nSpawn independent coordinator task" as begin_recovery
+        endif
+    endif
+endif
+
+note right
+One gate, runner, actor, and coordinator per device.
+Independent GPU and CPU work continues.
+Recovery survives cancellation of its reporter.
+The admitted reporter returns ContextReset and
+unwinds instead of waiting for its own recovery.
+Setup errors, panic, abort, or runtime interruption
+fail this cycle through the coordinator / RecoveryGuard.
+No recovery mutex is held across a drain or rebuild.
+end note
+
+begin_recovery --> if "Coordinator setup succeeded?" as setup_ok then
+    -->[yes] "Purge queued jobs with ContextReset\nClear OOM reservations and capacity waiters\nResume suspended parents for unwinding\nKeep servicing running-job completions" as drain_runner
+else
+    -left->[no] "Fail this recovery cycle\nPreserve original cause and recovery error\nKeep gate d closed; wake waiters\nReturn CudaRecoveryFailed" as failed
+    note left
+    Also reached on errors, panic, coordinator interruption,
+    or timeout during drain / retirement / rebuild.
+    IPC failure is terminal only for device d.
+    No generation is published on failure.
+    end note
+    --> (*)
+endif
+
+drain_runner --> "Wait for runner drain acknowledgment\nand gate d activity count = 0\nDeadline: 30 s" as drain
+
+note right
+Leases cover stages, copies, and descendants.
+Nested work observing recovery returns ContextReset
+so its parents can unwind; active descendants retain
+ancestor leases until physical work ends.
+
+Concurrently, the IPC actor reacts to a fatal reply
+or transport failure by retiring the old worker.
+This resolves pending requests and releases leases
+after confirmed process exit, without waiting 30 s.
+end note
+
+drain --> if "Drain completed successfully?" as drained then
+    -->[yes] "Enter CudaActivityScope::run_reset\nGlobalCtx::reset_cuda_context(d)\nInvalidate cached data only on device d" as reset_hook
+else
+    -->[no] if "Drain timed out?" as drain_timeout then
+        -->[yes] "Send BackendControl::Retire(ticket)\nWait for confirmed worker retirement\nDeadline: 60 s" as retire_fallback
+        --> if "Retirement succeeded?" as fallback_ok then
+            -->[yes] "Wait for runner drain and idle gate again\nDeadline: 30 s" as drain_again
+            --> if "Second drain succeeded?" as drained_again then
+                -->[yes] reset_hook
+            else
+                -left->[error / timeout] failed
+            endif
+        else
+            -left->[error / timeout] failed
+        endif
+    else
+        -left->[error] failed
+    endif
+endif
+
+reset_hook --> "Send BackendControl::Restart(ticket)\nCheck ticket ownership and idle gate\nRetire old worker if still present" as restart_backend
+
+note right
+The entire reset hook has a 60 s deadline,
+including cache invalidation and backend restart.
+Retire / Restart use a separate priority control
+channel, bypassing the bounded work queue.
+
+Retirement, on every path:
+1. Close pending-request registration.
+2. Stop and join IPC reader/writer tasks.
+3. Kill and reap the child (wait deadline: 10 s).
+4. Only after exit, free retained shared buffers
+   and fail outstanding requests.
+
+A fatal reply can wake its caller earlier, but
+its shared storage remains retained until exit.
+If exit cannot be confirmed, quarantine storage
+and fail waiters; never reuse those allocations.
+end note
+
+restart_backend --> if "Authority valid and old worker reaped?" as retired then
+    -->[yes] "Spawn new CudaWorker for device d\nAssign identity (d, g + 1)\nSend parent shared-arena descriptor" as spawn_worker
+else
+    -left->[no / error] failed
+endif
+
+spawn_worker --> "Worker obtains a fresh primary context\nInitialize shared mapping and copy/stream pools\nReceive and validate DeviceInfo identity\nReadiness deadline: 30 s" as ready
+
+ready --> if "Replacement ready?" as ready_ok then
+    -->[yes] if "Recovery authority still valid?" as authority_ok then
+        -->[yes] "Install replacement and acknowledge restart\nCoordinator verifies it still owns the cycle\nPublish generation g + 1 and reopen gate d" as publish
+        note right
+        Backend acknowledgment precedes gate publication.
+        If the replacement dies in that interval, the actor
+        waits for publication before reporting its failure.
+        Report deduplication and publication share the
+        coordinator lock; stale completion cannot reopen a gate.
+        end note
+    else
+        -left->[no] "Retire replacement; do not publish it" as discard_replacement
+        --> failed
+    endif
+else
+    -left->[error / timeout] "Kill and reap failed replacement" as failed_startup
+    --> failed
+endif
+
+publish --> "Wake admission waiters\nReconstruct device stage state on demand\nAccept fresh work in generation g + 1" as resumed
+
+note right
+Old tensor / endpoint identities are rejected.
+Old cleanup cannot delete replacement state.
+Old retry chains return ContextReset: callers must
+rebuild generation-bound input/state before retrying.
+Other devices retain their generations and caches.
+end note
+
+resumed --> (*)
+
+@enduml
