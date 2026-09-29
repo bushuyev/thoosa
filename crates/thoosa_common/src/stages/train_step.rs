@@ -243,17 +243,6 @@ where
     }
 }
 
-impl<F, DI, DO, C> OutId for TrainStep<F, DI, DO, C>
-where
-    DI: Dims,
-    DO: Dims,
-    C: RunCtx,
-    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
-{
-    fn out_id<'a>(&self, _input_id: &SynKey) -> () {
-        ()
-    }
-}
 
 impl<F, DI, DO, C> Adjustable for TrainStep<F, DI, DO, C>
 where

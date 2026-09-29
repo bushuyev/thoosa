@@ -497,14 +497,18 @@ impl DistsMask {
     fn into_local_tensor(tensor: DistsMaskTensor, label: &str) -> Result<Tensor, ThoError> {
         match tensor.inner {
             ThoTensorInner::Val { t } => Ok(t),
-            ThoTensorInner::Ref { key, .. } => Err(ThoError::new(format!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}"))),
+            ThoTensorInner::Ref { key, .. } => {
+                panic!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}")
+            },
         }
     }
 
     fn local_tensor_ref<'a>(tensor: &'a DistsMaskTensor, label: &str) -> Result<&'a Tensor, ThoError> {
         match &tensor.inner {
             ThoTensorInner::Val { t } => Ok(t),
-            ThoTensorInner::Ref { key, .. } => Err(ThoError::new(format!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}"))),
+            ThoTensorInner::Ref { key, .. } => {
+                panic!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}")
+            },
         }
     }
 
@@ -536,10 +540,6 @@ impl DistsMask {
                 let actor = GlobalCtx::global().cuda_actor(device);
                 let copied = track_await(actor.copy(ThoTensor::new_ref((), key.key, size, kind, selector, key.worker_id), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?} copied={copied:?}");
-
-                // track_await(actor.drop_tho_tensor(*key)).await?;
-
-                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} dropped");
 
                 Ok(copied)
             }

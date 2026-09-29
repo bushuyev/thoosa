@@ -52,7 +52,9 @@ impl CudaActivityScope {
             CudaRecoveryState::Running => {}
         }
         state.active += 1;
-        Ok(Some(Self { leases: vec![Arc::new(ActivityLease { gate: Arc::clone(gate), generation: state.generation, reset: None })] }))
+        Ok(Some(Self { leases: vec![
+            Arc::new(ActivityLease { gate: Arc::clone(gate), generation: state.generation, reset: None })
+        ] }))
     }
 
     pub fn with_inherited(mut self, inherited: Option<Self>) -> Self {

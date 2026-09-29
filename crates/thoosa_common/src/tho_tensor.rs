@@ -249,10 +249,10 @@ where
     D: Dims,
     Id: Named + Debug + Clone,
 {
-    pub id: Id,
-    pub inner: ThoTensorInner, //TODO pub
+    pub(crate) id: Id,
+    pub inner: ThoTensorInner,
 
-    pub pd: PhantomData<D>,//TODO pub
+    pub(crate) pd: PhantomData<D>,
 }
 
 /// Dimension-erased access used by common model builders without depending on feature-specific markers.
@@ -374,7 +374,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Val { t } => t,
             ThoTensorInner::Ref { key, .. } => {
                 error!("ThoTensor::inner_tensor_ref: {:?}", Backtrace::capture());
-                todo!("out-of-process ThoTensor ref is not implemented yet, key={key:?}")
+                panic!("can't get ref of a remote tensor key={key:?}")
             },
         }
     }
@@ -384,7 +384,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Val { t } => t,
             ThoTensorInner::Ref { key, .. } => {
                 error!("ThoTensor::inner_tensor_mut: {:?}", Backtrace::capture());
-                todo!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}")
+                panic!("can't get mut ref of a remote tensor key={key:?}")
             },
         }
     }
@@ -394,7 +394,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Val { t } => t,
             ThoTensorInner::Ref { key, .. } => {
                 error!("ThoTensor::into_inner_tensor: {:?}", Backtrace::capture());
-                todo!("out-of-process ThoTensor ref cannot be consumed as a local tensor yet, key={key:?}")
+                panic!("can't get remote tensor key={key:?}")
             },
         }
     }
@@ -510,7 +510,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Val { t } => t,
             ThoTensorInner::Ref { key, .. } => {
                 error!("ThoTensor::to_mut: {:?}", Backtrace::capture());
-                todo!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}")
+                panic!("out-of-process ThoTensor ref is not mutable in this process, key={key:?}")
             },
         };
         ThoTensorMut { id, t, pd: Default::default() }

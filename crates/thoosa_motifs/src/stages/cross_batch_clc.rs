@@ -504,7 +504,7 @@ where
 
             Ok(
                 Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+                    stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(init)).await?),
                     init: (),
                 })
             )

@@ -308,7 +308,7 @@ mod tests {
 
         let msg = CudaWorkerMsgIn::new(crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) }, 0, Operation::InstallStage{
             endpoint_name:"test_a".to_string(),
-            stage_id: 0,
+            stage_id: Some(0.to_string()),
             init_data: Box::new(StageAInit::new(1))
         });
 

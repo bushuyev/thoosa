@@ -43,15 +43,6 @@ impl TestStageInitA {
     }
 }
 
-impl WorkerStageInput for TestStageInitA {
-    fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-        todo!()
-    }
-
-    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
-        todo!()
-    }
-}
 
 #[typetag::serde]
 impl WorkerInput for TestStageInitA {
@@ -208,7 +199,7 @@ where
         if GlobalCtx::global().is_ipc() {
 
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, 0, tho_device_idx, Box::new(init)).await?),
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(init)).await?),
                 init: (),
             })
         } else {

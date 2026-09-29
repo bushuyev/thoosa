@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -106,29 +107,30 @@ where
 {
 
     pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
-        let id = init.find_motifs_run_config_id;
+        let find_motifs_run_config_id = init.find_motifs_run_config_id;
+        let id = find_motifs_run_config_id;
         let mut instances = INSTANCES.lock().await;
 
 
         let cache = instances
-            .entry(init.find_motifs_run_config_id)
+            .entry(find_motifs_run_config_id)
             .or_insert_with(|| {
                 Box::new(HashMap::<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>::new())
             })
             .downcast_mut::<HashMap<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>>()
             .unwrap();
 
-        if let Some(v) = cache.get(&init.find_motifs_run_config_id) {
+        if let Some(v) = cache.get(&find_motifs_run_config_id) {
             return Ok(Arc::clone(v))
         }
 
-        let v = if GlobalCtx::global().is_ipc() {
+        let stage = if GlobalCtx::global().is_ipc() {
 
             // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
             Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                     SYNC_FREQ_FILTER_ENDPOINT,
-                    init.find_motifs_run_config_id,
+                    Some(find_motifs_run_config_id.to_string()),
                     init.tho_device_idx,
                     Box::new(init.clone()),
                     Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
@@ -139,9 +141,12 @@ where
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
         };
 
-        cache.insert(id, Arc::clone(&v));
+        //freq. filter is used to apply motif nets up to final training so it's never unregistered
+        GlobalCtx::global().register_cache((format!("{:?}", find_motifs_run_config_id).leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
-        Ok(v)
+        cache.insert(id, Arc::clone(&stage));
+
+        Ok(stage)
     }
 
     pub fn new_local(init:SyncFreqFilterIpcInit) ->Result<Self, ThoError>{
@@ -369,8 +374,6 @@ where
 
 }
 
-impl SyncFreqFilter<WokerRunCtx> {}
-
 
 #[derive(Debug)]
 // This is public because the public StageWithState implementation exposes the prepared filters as its associated state.
@@ -452,35 +455,6 @@ where
             min_input_split_len
         }))
 
-    }
-
-    fn run_conv_with_padding(&self, stride: u32, padding: &Padding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
-        let t = input_t.size()[1];
-        let kernel_size = kernel_t.size()[2];
-        let pad = kernel_size / 2;
-        let stride_i64 = stride as i64;
-
-
-        let output_3d = match padding {
-            Padding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
-            Padding::Replicate(_) => {
-                let left = input_t.f_narrow(2, 0, 1)?.f_repeat([1, 1, pad])?;
-                let right = input_t.f_narrow(2, t - 1, 1)?.f_repeat([1, 1, pad])?;
-                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
-                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
-            }
-            Padding::Reflect(_) => {
-                if pad >= t {
-                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
-                }
-                let left = input_t.f_narrow(2, 1, pad)?.f_flip([2])?;
-                let right = input_t.f_narrow(2, t - pad - 1, pad)?.f_flip([2])?;
-                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
-                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
-            }
-        };
-
-        Ok(output_3d.f_view((self.num_channels, -1))?)
     }
 
     fn effective_output_stride(filter_configs: &[InputFilter]) -> Result<i64, ThoError> {
@@ -763,16 +737,6 @@ where
         Ok(())
     }
 
-    //it's called when local GPU reset is requested
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("TrainStep2::drop_gpu");
-        todo!()
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        debug!("TrainStep2::purge_cpu");
-        0
-    }
 }
 
 

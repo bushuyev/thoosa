@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fmt::Debug;
+use log::warn;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 use crate::ipc::cuda_wokrer::WorkerStageOutput;
@@ -79,10 +80,10 @@ pub enum Operation {
         arena_offset: usize,
     },
     DropThoTensor { tensor_key: u64 },
-    InstallStage { endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput> },
-    InvokeStage { endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume: bool },
-    PurgeStage { endpoint_name: String, stage_id: u32 },
-    DropStage { endpoint_name: String, stage_id: u32 },
+    InstallStage { endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput> },
+    InvokeStage { endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume: bool },
+    PurgeStage { endpoint_name: String, stage_id: Option<String> },
+    DropStage { endpoint_name: String, stage_id: Option<String> },
     Debug,
     Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?
 }
@@ -121,7 +122,7 @@ pub struct WorkerError {
 enum WorkerErrorKind {
     Cuda(CudaAction),
     AdjusterFailed,
-    NotFound,
+    NotFound,//TODO add what
     ContextReset,
     SubmitErrorClosed,
     SubmitErrorCancelled,
@@ -139,7 +140,10 @@ impl WorkerErrorKind {
                 recovery: failure.recovery.clone().map(|error| Box::new(error.into())),
             },
             ThoError::AdjusterFailed => Self::AdjusterFailed,
-            ThoError::NotFound => Self::NotFound,
+            ThoError::NotFound(what) => {
+                warn!("WorkerErrorKind:NotFound: what={what:?}");
+                Self::NotFound//TODO add what
+            },//TODO add
             ThoError::ContextReset => Self::ContextReset,
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed) => Self::SubmitErrorClosed,
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled) => Self::SubmitErrorCancelled,
@@ -168,7 +172,7 @@ impl From<WorkerError> for ThoError {
         match kind {
             WorkerErrorKind::Cuda(action) => Self::Cuda { action, msg: message },
             WorkerErrorKind::AdjusterFailed => Self::AdjusterFailed.context(message),
-            WorkerErrorKind::NotFound => Self::NotFound.context(message),
+            WorkerErrorKind::NotFound => Self::NotFound(Some("worker".to_string())).context(message),
             WorkerErrorKind::ContextReset => Self::ContextReset.context(message),
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),

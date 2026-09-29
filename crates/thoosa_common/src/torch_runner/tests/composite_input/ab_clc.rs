@@ -324,7 +324,7 @@ impl ProxyABClcSyncStage {
             id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
             num_calls: AtomicUsize::default(),
             stage: Arc::new(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_AB_CLC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?),
+                stage: Arc::new(ProxyStage::proxy(SYNC_AB_CLC_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),
                 init: ()
             }),
         })

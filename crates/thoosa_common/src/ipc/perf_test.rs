@@ -100,7 +100,7 @@ where
     pub async fn new() -> Result<DynSyncStageEnum<SimpStage<RunCtxImpl>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
             Ok(DynSyncStageEnum::Proxy {
-                stage:Arc::new(ProxyStage::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, 0, 1, Box::new(())).await?),
+                stage:Arc::new(ProxyStage::<SimpStage<RunCtxImpl>>::proxy(SIMP_ENDPOINT, Some(0.to_string()), 1, Box::new(())).await?),
                 init:()
             })
 

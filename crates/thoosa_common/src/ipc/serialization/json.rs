@@ -40,17 +40,14 @@ impl IpcCodec for JsonIpcCodec {
 }
 
 
-
-pub async fn purge_ipc_sync_stage<C>(
+pub async fn purge_ipc_sync_stage(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
-    stage_id: u32,
+    stage_id: Option<String>,
     worker_id: crate::ipc::worker_msg::CudaWorkerId,
 ) -> Result<(), ThoError>
-where
-    C: IpcCodec,
 {
-    debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
+    debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id:?}");
 
     let response = actor.purge_stage_state(
         stage_id,
@@ -58,7 +55,6 @@ where
         worker_id,
     ).await?;
 
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} stage_id={stage_id}");
 
     // Cleanup failures must reach recovery instead of silently reopening admission.
     match response.status {

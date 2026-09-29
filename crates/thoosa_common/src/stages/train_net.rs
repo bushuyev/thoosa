@@ -681,6 +681,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(test)]
     async fn trial_with_batch_factory(batch: TestBatchFactory) -> Result<(TestTrial, std::sync::Weak<TestTrainStep>), ThoError> {
         let run_config = DummyRunConfig::new(None, 1);
         let (stage, ()) = DummyTrainStepFactory.new(run_config.clone(), mock_run_ctx::default(1), PathBuf::from("/tmp/thoosa_train_net_cleanup.safetensors")).await?;

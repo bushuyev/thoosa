@@ -386,7 +386,7 @@ where
         SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
                 if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, 0, device.tho_device_idx(), Box::new(())).await?),
+                    stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(())).await?),
                     init: (),
                 }))
             } else {
@@ -713,7 +713,7 @@ where
             let stage_id = TRAIN_FINAL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
 
