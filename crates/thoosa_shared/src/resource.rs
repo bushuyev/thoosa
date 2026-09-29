@@ -240,7 +240,7 @@ impl ResourceStats {
 }
 
 #[async_trait]
-pub trait ResourcesConfig {
+pub trait ResourcesConfig:Debug {
     type R;
     async fn to_resources<S: ResourceStore + ?Sized + Send + Sync>(
         &self,

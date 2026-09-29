@@ -113,21 +113,27 @@ where
 
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO remove Sync + Send
-    async fn has_gpu_data(&self, device_idx: usize) -> bool;
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        false
+    }
 
     async fn purge_gpu(
         &self,
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
         name: &str,
-    ) -> Result<(), ThoError>;
+    ) -> Result<(), ThoError> {
+        Ok(())
+    }
 
     // Recovery removes only the failed device's data; healthy replicas survive.
     async fn drop_gpu(
         &self,
         device_idx: usize,
         name: &str,
-    ) -> Result<(), ThoError>;
+    ) -> Result<(), ThoError> {
+        Ok(())
+    }
 
     // #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(
@@ -137,7 +143,9 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO remove Sync + Sen
         Ok(0)
     }
 
-    async fn purge_cpu(&self, purge_until: u64) -> usize;
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        0
+    }
 }
 
 pub fn check_ids_to_keep<K, V>(ids_to_keep:Option<&HashSet<&dyn CachableIdTr>>, entry:&RefMulti<K, V>)->bool
@@ -150,7 +158,11 @@ where
                 return true;
             }
             let kd: &dyn CachableIdTr = entry.key();
-            !set.contains(kd)
+            let keep_this_key = set.contains(kd);
+            if keep_this_key {
+                info!("check_ids_to_keep: kd={kd:?}")//TODO remove info
+            }
+            !keep_this_key
         })
         .unwrap_or(true)
 }

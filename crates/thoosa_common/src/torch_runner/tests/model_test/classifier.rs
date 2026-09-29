@@ -78,7 +78,7 @@ impl Classifier {
                 sync_classifier: Arc::new(DynSyncStageEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_CLASSIFIER_ENDPOINT,
-                        0,
+                        Some(0.to_string()),
                         device.tho_device_idx(),
                         Box::new(init),
                         Arc::new(|input: &ThoTensor<ABData, ModelTestId>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),

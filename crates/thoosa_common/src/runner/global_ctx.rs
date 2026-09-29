@@ -171,7 +171,12 @@ impl GlobalCtx {
         devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
-            let recovery = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context), Some(Arc::new(|device, authority| Box::pin(async move { GlobalCtx::global().cuda_actor(device).retire_backend(authority).await }))), None);
+            let recovery = CudaRecoveryCoordinator::with_backend(
+                Arc::clone(&gate),
+                Arc::new(GlobalCtx::reset_cuda_context),
+                Some(Arc::new(|device, authority| Box::pin(async move { GlobalCtx::global().cuda_actor(device).retire_backend(authority).await }))),
+                None
+            );
             // Each actor retains its own descriptor so replacement workers can
             // remap the parent-owned arena independently of other devices.
             let actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
@@ -206,10 +211,11 @@ impl GlobalCtx {
 
             track_await(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
+                // .dump_all_to_cpu(&HashMap::new(), tho_device_idx, "drop"))
                 .await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
-            let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("CUDA gate");
+            let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("no CUDA gate");
             let authority = thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?;
             GlobalCtx::global()
                 .cuda_actor(tho_device_idx)
@@ -229,7 +235,7 @@ impl GlobalCtx {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    fn mock_executor(&self, device: usize) -> &SyncStageRunner {
+    fn mock_runner(&self, device: usize) -> &SyncStageRunner {
         // Keep the generated mock's owned runner separate from real delegation.
         self.get_runner(device)
     }
@@ -309,7 +315,7 @@ impl GlobalCtx {
         async_perf_log!(async_read_owned_lock!(Arc::clone(&entry.gate), "{ctx}"), "{ctx}")
     }
 
-    pub fn remove_cache(&self, key:&'static str) {
+    pub fn remove_cache(&self, key:&str) {
         debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
@@ -441,7 +447,6 @@ impl GlobalCtx {
         Ok(())
     }
 
-    ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn drop_data_on_device<'a>(
         &'a self,
@@ -711,7 +716,7 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_get_executor(mut self, device_count: usize) -> Self {
+        pub fn with_get_runner(mut self, device_count: usize) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_cuda_activity_gate().returning(move |device| real.cuda_activity_gate(device));
             } else {
@@ -721,19 +726,19 @@ pub mod mock_global_ctx {
                     } else {
                         SyncStageRunner::new_with_reset_hook(16, device, std::sync::Arc::new(|_| Box::pin(async { Ok(()) })))
                     };
-                    self = self.with_executor(executor);
+                    self = self.with_runner(executor);
                 }
             }
             self
         }
 
-        pub fn with_executor(mut self, executor: SyncStageRunner) -> Self {
+        pub fn with_runner(mut self, executor: SyncStageRunner) -> Self {
             // Expectations must preserve the same per-device ownership as the
             // application; a single CPU runner would hide recovery regressions.
             let gate = executor.cuda_gate().cloned();
             let device = gate.as_ref().map_or(0, |gate| gate.device_idx());
             self.mock.expect_cuda_activity_gate().withf(move |requested| *requested == device).returning(move |_| gate.clone());
-            self.mock.expect_mock_executor().withf(move |requested| *requested == device).return_const(executor);
+            self.mock.expect_mock_runner().withf(move |requested| *requested == device).return_const(executor);
             self
         }
 
@@ -886,7 +891,7 @@ pub mod mock_global_ctx {
             .with_device_count(params.device_count)
             .with_register_cache()
             .with_remove_cache()
-            .with_get_executor(params.device_count)
+            .with_get_runner(params.device_count)
             .with_run_purge_gpu()
             .with_is_ipc(is_ipc)
             .with_is_all_on_cpu(true);
@@ -935,11 +940,11 @@ pub mod mock_global_ctx {
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 impl MockGlobalCtx {
-    pub fn get_executor(&self, device: usize) -> &SyncStageRunner {
+    pub fn get_runner(&self, device: usize) -> &SyncStageRunner {
         // Mockall owns values returned by reference. Delegate explicitly when
         // using real actors so stages and copies share the real device gate.
         if let Some(real) = mock_global_ctx::manual_method_real_ctx() { return real.get_runner(device); }
-        self.mock_executor(device)
+        self.mock_runner(device)
     }
 
     pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, _device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
@@ -1008,19 +1013,19 @@ mod tests {
         use super::mock_global_ctx::{build_with_params, MockGlobalCtxBuildParams};
         let mock = build_with_params(MockGlobalCtxBuildParams { device_count: 3, ..Default::default() }, false);
         assert!(mock.cuda_activity_gate(0).is_none());
-        assert!(mock.get_executor(0).cuda_gate().is_none());
+        assert!(mock.get_runner(0).cuda_gate().is_none());
         let first = mock.cuda_activity_gate(1).unwrap();
         let second = mock.cuda_activity_gate(2).unwrap();
         assert!(!Arc::ptr_eq(&first, &second));
         for device in 1..3 {
-            assert!(Arc::ptr_eq(&mock.cuda_activity_gate(device).unwrap(), mock.get_executor(device).cuda_gate().unwrap()));
+            assert!(Arc::ptr_eq(&mock.cuda_activity_gate(device).unwrap(), mock.get_runner(device).cuda_gate().unwrap()));
         }
-        let ticket = mock.get_executor(1).request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
+        let ticket = mock.get_runner(1).request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(2), first.wait_for_pause_to_finish(ticket)).await.unwrap().unwrap();
         assert_eq!(first.device_generation().0, 1);
         assert_eq!(second.device_generation().0, 0);
-        assert_eq!(mock.get_executor(2).submit(0, async { Ok(2) }, None).await.unwrap(), 2);
-        assert_eq!(mock.get_executor(0).submit(0, async { Ok(0) }, None).await.unwrap(), 0);
+        assert_eq!(mock.get_runner(2).submit(0, async { Ok(2) }, None).await.unwrap(), 2);
+        assert_eq!(mock.get_runner(0).submit(0, async { Ok(0) }, None).await.unwrap(), 0);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1044,7 +1049,7 @@ mod tests {
         let gate = GlobalCtx::global().cuda_activity_gate(1).unwrap();
         let generation = gate.device_generation();
         // Real-context mocks must dispatch through the real device runner too.
-        assert!(std::ptr::eq(super::MockGlobalCtx::global().get_executor(1), GlobalCtx::global().get_runner(1)));
+        assert!(std::ptr::eq(super::MockGlobalCtx::global().get_runner(1), GlobalCtx::global().get_runner(1)));
 
         let t_cpu = Tensor::rand(&[10000], FLOAT_CPU);
         let t_cuda = cuda_actor.copy(t_cpu.into(), 1.into()).await?;

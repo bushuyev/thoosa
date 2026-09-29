@@ -529,7 +529,7 @@ pub enum ThoError {
     AdjusterFailed,
     // Shared futures require Clone; sharing keeps the original source and backtrace intact.
     Anyhow(Arc<anyhow::Error>),
-    NotFound,
+    NotFound(Option<String>),
     SyncStageRunner(SyncStageRunnerError),
     ContextReset,
 }
@@ -585,7 +585,7 @@ impl Display for ThoError {
             }
             Self::AdjusterFailed => f.write_str("adjuster failed"),
             Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
-            Self::NotFound => f.write_str("not found"),
+            Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
             Self::SyncStageRunner(error) => Display::fmt(error, f),
             Self::ContextReset => f.write_str("context reset"),
         }

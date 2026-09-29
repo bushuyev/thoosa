@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
-use thoosa_shared::perf_logging::init_tracing;
+use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
@@ -231,6 +231,8 @@ impl CudaWorker {
                     ThoDevice::from(Device::Cuda(0)),
                 ).await//TODO Cuda(0)
             })?;
+
+            info!("perf: \n{}", format_perf_map(&PERF));
 
             std::process::exit(0);
         }
@@ -430,9 +432,9 @@ impl CudaWorker {
                     Self::drop_tensor(&context, request_id, &tensor_key).await?;
                     Ok(())
                 }
-                Operation::InstallStage { endpoint_name: key, stage_id, init_data } => {
-                    let init_fn = context.endpoint_inits.get(&key).ok_or_else(|| ThoError::new(format!("No init function for key={key:?} stage_id={stage_id}")))?;
-                    let endpoint_key = cuda_process::endpoint_stage_key(&key, stage_id);
+                Operation::InstallStage { endpoint_name, stage_id, init_data } => {
+                    let init_fn = context.endpoint_inits.get(&endpoint_name).ok_or_else(|| ThoError::new(format!("No init function for endpoint_name={endpoint_name:?} stage_id={stage_id:?}")))?;
+                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
                     debug!("run_worker: install endpoint key={endpoint_key} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
                     let is_duplicate = match context.installed_endpoints.entry(endpoint_key.clone()) {
                         dashmap::mapref::entry::Entry::Occupied(_) => true,
@@ -453,25 +455,27 @@ impl CudaWorker {
                             return Err(error);
                         }
                     };
-                    debug!("run_worker: install endpoint key={key:?} stage_id={stage_id} endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
+                    debug!("run_worker: install endpoint endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
                     context.installed_endpoints.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
                 Operation::InvokeStage { endpoint_name, stage_id, input, consume } => {
-                    let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
-                    debug!("run_worker: Operation::InvokeStage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?} consume={consume}");
+                    debug!("run_worker: Operation::InvokeStage: endpoint_name={endpoint_name} stage_id={stage_id:?} input={input:?} consume={consume}");
+
+                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+
                     let endpoint = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone)).ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
                     let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
                     let stream = context.exec_stream_pool.acquire().await;
                     let result = match endpoint.as_with_state() {
                         Some(with_state) => {
-                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} as_with_state");
+                            debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} as_with_state");
                             // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
                             panic_to_err_async!(with_state.do_run_with_state(&input, &context.all_cuda_tensors, &context.tho_device, &stream, &run_ctx))
                         }
                         None => {
-                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} no state");
+                            debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
                             panic_to_err!({
                             let _guard = ThoStreamGuard::new(&stream)?;
                             let response = if consume {
@@ -484,13 +488,15 @@ impl CudaWorker {
                         })
                         }
                     }?;
-                    debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} stage_id={stage_id} endpoint_key={endpoint_key:?} result={result:?}");
+                    debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(result)) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
                 Operation::PurgeStage { endpoint_name, stage_id } => {
-                    let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
-                    debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id} endpoint_key={endpoint_key:?}");
+                    debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
+
+                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
+
                     let endpoint = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
                     if let Some(endpoint) = endpoint {
                         endpoint.purge(context.tho_device.clone()).await?;
@@ -501,7 +507,7 @@ impl CudaWorker {
                     Ok(())
                 }
                 Operation::DropStage { endpoint_name, stage_id } => {
-                    let endpoint_key = cuda_process::endpoint_stage_key(&endpoint_name, stage_id);
+                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
                     let removed = context.installed_endpoints.remove(&endpoint_key).is_some();
                     debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;

@@ -343,7 +343,7 @@ impl StageCommand for MotifCommands {
                             init_ctx.branch(false),
                             train_label_nets_args.max_motif_net_loss,
                             train_label_nets_args.selected_motif_nets_limit,
-                            train_label_nets_args.motif_slices_step.unwrap(), //TODO or take from find motifs
+                            train_label_nets_args.motif_slices_step.unwrap_or(100), //TODO or take from find motifs
                             None,
                             false,
                         )).await?);

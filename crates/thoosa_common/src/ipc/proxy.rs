@@ -18,9 +18,8 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
-use with_id::WithId;
 
 pub struct ProxyStage<St>
 where
@@ -31,13 +30,12 @@ where
     pd:PhantomData<St>,
     endpoint_name:&'static str,
     // Each proxy keeps the id used at installation so invocations reach its own worker-side state.
-    stage_id: u32,
+    stage_id: Option<String>,
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
     worker_id: CudaWorkerId,
     // Generic inputs can supply the concrete typetag conversion that a blanket WorkerStageInput implementation cannot express.
-    clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
-
+    clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>
 }
 
 impl<St> Debug for ProxyStage<St>
@@ -93,7 +91,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.worker_id,
                     self.endpoint_name.to_string(),
-                    self.stage_id,
+                    self.stage_id.clone(),
                     self.clone_refs(input)?, //clones refs
                     false,
                 ).await?;
@@ -126,7 +124,7 @@ where
                 let rs = ipc_actor.invoke_stage(
                     self.worker_id,
                     self.endpoint_name.to_string(),
-                    self.stage_id,
+                    self.stage_id.clone(),
                     self.clone_refs(&input)?, //clones refs
                     true,
                 ).await?;
@@ -150,27 +148,27 @@ where
 {
     pub async fn proxy(
         endpoint_name:&'static str,
-        stage_id: u32,
+        stage_id: Option<String>,
         tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>
     ) -> Result<Self, ThoError> {
-        Self::proxy_inner(endpoint_name, stage_id, tho_device_idx, init_data, None).await
+        Self::proxy_inner(endpoint_name, stage_id.clone(), tho_device_idx, init_data, None).await
     }
 
     pub async fn proxy_with_input_cloner(
         endpoint_name: &'static str,
-        stage_id: u32,
+        stage_id: Option<String>,
         tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>,
         clone_refs: Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>,
     ) -> Result<Self, ThoError> {
         // Direct generic inputs such as ThoTensor still need to enter the concrete WorkerInput registry.
-        Self::proxy_inner(endpoint_name, stage_id, tho_device_idx, init_data, Some(clone_refs)).await
+        Self::proxy_inner(endpoint_name, stage_id.clone(), tho_device_idx, init_data, Some(clone_refs)).await
     }
 
     async fn proxy_inner(
         endpoint_name: &'static str,
-        stage_id: u32,
+        stage_id: Option<String>,
         tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>,
         clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
@@ -183,7 +181,7 @@ where
         let rs = ipc_actor.install_stage(
             worker_id,
             endpoint_name.to_string(),
-            stage_id,
+            stage_id.clone(),
             init_data,
         ).await?;
 
@@ -251,11 +249,11 @@ where
     fn drop(&mut self) {
 
         let endpoint_name = self.endpoint_name;
-        let stage_id = self.stage_id;
+        let stage_id = self.stage_id.clone();
         let tho_device_idx = self.tho_device_idx;
         let worker_id = self.worker_id;
 
-        debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}");
+        debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id:?} tho_device_idx={tho_device_idx}");
 
         let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
         let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
@@ -263,11 +261,11 @@ where
 
         tokio::spawn(async move {
 
-            debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx} spawned");
+            debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id:?} tho_device_idx={tho_device_idx} spawned");
 
-            if let Err(error) = ipc_actor.drop_endpoint(stage_id, endpoint_name.to_string(), worker_id).await {
+            if let Err(error) = ipc_actor.drop_endpoint(stage_id.clone(), endpoint_name.to_string(), worker_id).await {
                 if !GlobalCtx::is_shutting_down() {
-                    error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id} tho_device_idx={tho_device_idx}: {error:?}");
+                    error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id:?} tho_device_idx={tho_device_idx}: {error:?}");
                 }
             }
             Ok::<_, ThoError>(())
@@ -348,19 +346,6 @@ where
 
 }
 
-impl <St, Init> OutId for DynSyncStageEnum<St, Init>
-where
-    St:SyncStage+StageWithState+Send+Sync,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static,
-    <St as Stage>::Out: thoosa_shared::traits::WithId,
-    for<'a> <St as Stage>::In<'a>: thoosa_shared::traits::WithId
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as thoosa_shared::traits::WithId>::ID) -> <Self::Out as thoosa_shared::traits::WithId>::ID {
-        todo!()
-    }
-}
 
 impl <St, Init> StageWithState for DynSyncStageEnum<St, Init>
 where
@@ -416,10 +401,10 @@ where
             }
             DynSyncStageEnum::Proxy { stage,  .. } => {
                 if stage.tho_device_idx != device_idx { return Ok(()); }
-                crate::ipc::serialization::json::purge_ipc_sync_stage::<JsonIpcCodec>(
+                crate::ipc::serialization::json::purge_ipc_sync_stage(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
-                    stage.stage_id,
+                    stage.stage_id.clone(),
                     stage.worker_id,
                 ).await
             }
@@ -450,18 +435,18 @@ where
 }
 
 #[derive(Debug)]
-pub enum DynSyncStageWithStateEnum<St, Init=()>
+pub enum DynSyncStageWithStateEnum<St, Init = ()>
 where
-    St:SyncStage+StageWithState,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static
+    St: SyncStage + StageWithState,
+    for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
+    <St as Stage>::Out: WorkerStageOutput + DeserializeOwned + 'static,
+    Init: Debug + Send + Sync + 'static,
 {
     Local(Arc<St>),
     Proxy {
         stage: Arc<ProxyStage<St>>,
-        init: Init
-    }
+        init: Init,
+    },
 }
 
 impl <St, Init> Stage for DynSyncStageWithStateEnum<St, Init>
@@ -568,10 +553,10 @@ where
             }
             DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
                 if stage.tho_device_idx != device_idx { return Ok(()); }
-                crate::ipc::serialization::json::purge_ipc_sync_stage::<crate::ipc::serialization::json::JsonIpcCodec>(
+                crate::ipc::serialization::json::purge_ipc_sync_stage(
                     GlobalCtx::global().cuda_actor(device_idx).as_ref(),
                     stage.endpoint_name,
-                    stage.stage_id,
+                    stage.stage_id.clone(),
                     stage.worker_id,
                 ).await
             }
@@ -600,3 +585,27 @@ where
         }
     }
 }
+
+
+
+// impl <St, Init> WithId for DynSyncStageWithStateEnum<St, Init>
+// where
+//     St:SyncStage+StageWithState + WithId,
+//     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+//     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+//     Init:Debug + Send + Sync + 'static
+// {
+//     type ID = dyn CachableIdTr;
+//
+//     fn id(&self) -> &LocalOrIPCId<St::ID> {
+//         match self {
+//             DynSyncStageWithStateEnum::Local(stage) => {
+//                 stage.id()
+//             }
+//             DynSyncStageWithStateEnum::Proxy { stage, .. } => {
+//                 // &stage.stage_id
+//                 &stage.stage_id
+//             }
+//         }
+//     }
+// }

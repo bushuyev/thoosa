@@ -1078,7 +1078,7 @@ impl MotifsStore for SqlStore {
                 channel_motifs[channel_id].push((motif_id, rate));
             }
 
-            info!("list_selected_motifs: result={result:?}");
+            debug!("list_selected_motifs: result={result:?}");
 
             Ok(result)
         })

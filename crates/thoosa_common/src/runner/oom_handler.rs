@@ -730,7 +730,7 @@ where
 }
 
 fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::syn_stage_runner::SyncStageRunner {
-    GlobalCtx::global().get_executor(tho_device_idx)
+    GlobalCtx::global().get_runner(tho_device_idx)
 }
 
 async fn run_stage_borrowed<R, W>(
@@ -738,7 +738,7 @@ async fn run_stage_borrowed<R, W>(
     input: Arc<W>,
     tho_device_idx: usize,
     run_ctx: R::Ctx,
-    retry: Option<RetryToken>,
+    retry_token: Option<RetryToken>,
 ) -> Result<R::Out, ThoError>
 where
     R: SyncStage + Send + Sync + 'static,
@@ -768,7 +768,7 @@ where
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             cuda_actor.run_stage(task, input, tho_device_idx, &run_ctx).await
         },
-        retry
+        retry_token
     )).await
 }
 
@@ -1890,7 +1890,7 @@ mod tests {
         use crate::runner::syn_stage_runner::SyncStageRunner;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let global_context = MockGlobalCtx::global_context();
-            let mock = Box::leak(Box::new(mock_global_ctx::build().with_executor(
+            let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(
                 SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))
             ).finish()));
             global_context.expect().return_const(&*mock);

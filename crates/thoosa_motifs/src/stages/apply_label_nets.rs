@@ -55,6 +55,7 @@ use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
+use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -522,7 +523,7 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Relaxed);
             let init = StackAppliedLabelNetsInit::new(id, order);
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(init)).await?),
+                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(init)).await?),
                 init: (),
             })
         } else {
@@ -732,7 +733,7 @@ where
 
             // Keep a cloned initializer as proxy metadata because worker installation consumes its serialized copy.
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, self.trained_net_id, device.tho_device_idx(), Box::new(self.clone())).await?),
+                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, Some(self.trained_net_id.to_string()), device.tho_device_idx(), Box::new(self.clone())).await?),
                 init: self,
             }))
         } else {
@@ -762,6 +763,23 @@ where
     pd: PhantomData<C>,
 }
 
+#[async_trait]
+impl <C> FuturesRunnerMapPurger for ApplyLabelNet<C>
+where
+    C: RunCtx + 'static
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.net.lock().await.tho_device_idx() !=0
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        let mut guard = self.net.lock().await;
+        *guard = guard.copy_to_device(0).await?;
+        Ok(())
+    }
+}
+
+
 // Loading a trained label net repeatedly must reuse both its module state and installed endpoint.
 static APPLY_LABEL_NET_INSTANCES: InstanceCache = InstanceCache::new();
 
@@ -789,12 +807,16 @@ where
                 ],
                 None,
             );
-            oom_handler.new_stage(
+            let stage = oom_handler.new_stage(
                 sync_init,
                 run_context,
                 WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
                 &ws,
-            ).await
+            ).await?;
+
+            // GlobalCtx::global().register_cache((stage., Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+
+            Ok(stage)
         }).await
     }
 

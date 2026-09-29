@@ -69,6 +69,7 @@ use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 use tracing::field::debug;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use crate::stages::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::stages::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
@@ -744,7 +745,7 @@ where
                 // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
                 let init = StackAppliedMotifNetsInput::new(id.clone(), Vec::new(), device.tho_device_idx());
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, 0, device.tho_device_idx(), Box::new(init)).await?),
+                    stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_MOTIF_NETS_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(init)).await?),
                     init: (),
                 }))
             } else {
@@ -927,7 +928,7 @@ where
 
             // A failed worker installation is retried with a fresh endpoint id by OOMHandler::new_stage.
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, self.trained_net_id, device.tho_device_idx(), Box::new(self)).await?),
+                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some(self.trained_net_id.to_string()), device.tho_device_idx(), Box::new(self)).await?),
                 init: motif_meta,
             }))
         } else {
@@ -1070,6 +1071,22 @@ where
 // A trained network owns mutable inference state, so reuse one stage instance per context and net.
 static APPLY_MOTIF_NET_INSTANCES: InstanceCache = InstanceCache::new();
 
+#[async_trait]
+impl <C> FuturesRunnerMapPurger for ApplyMotifNet<C>
+where
+    C: RunCtx + 'static
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.motif_net.lock().await.data().tho_device_idx() !=0
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        let mut guard = self.motif_net.lock().await;
+        *guard = guard.copy_to_device(0).await?;
+        Ok(())
+    }
+
+}
 
 //properties needed when running stage
 pub trait ApplyMotifNetProps {

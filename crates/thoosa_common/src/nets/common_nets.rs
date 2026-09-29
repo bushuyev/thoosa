@@ -735,7 +735,7 @@ where
                     .into();
 
                 let mut listener = PlotVecf32::new(
-                    format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
+                    format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),//get_id - it's not set 
                 );
 
                 let train_result = panic_to_err_async!(

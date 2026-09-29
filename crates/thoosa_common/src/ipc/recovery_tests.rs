@@ -127,12 +127,12 @@ fn initialize<'a>(input: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace
 
 async fn install_and_probe(actor: &CudaIPCActorHandle) -> Result<u32, ThoError> {
     let worker = actor.worker_id()?;
-    let installed = actor.install_stage(worker, ENDPOINT.into(), 1, input(RecoveryAction::Probe)).await?;
+    let installed = actor.install_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Probe)).await?;
     assert!(matches!(installed.status, OpResult::Ok(_)));
-    let response = actor.invoke_stage(worker, ENDPOINT.into(), 1, input(RecoveryAction::Probe), false).await?;
+    let response = actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Probe), false).await?;
     let OpResult::Ok(Some(output)) = response.status else { panic!("probe failed") };
     let output: Box<dyn Any> = output;
-    Ok(output.downcast::<DebugOutput>().unwrap().debug_data_snap()[0].parse().unwrap())
+    Ok(output.downcast::<DebugOutput>().unwrap().debug_data_snap()[0].parse()?)
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                 let pending = tokio::spawn({
                     let actor = actor.clone();
                     let started = started.clone();
-                    async move { actor.install_stage(worker, ENDPOINT.into(), 2, input(RecoveryAction::Hold { started })).await }
+                    async move { actor.install_stage(worker, ENDPOINT.into(), Some(2.to_string()), input(RecoveryAction::Hold { started })).await }
                 });
                 wait_for_file(&started).await;
                 if mode == "cancelled" {
@@ -163,7 +163,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                         let actor = actor.clone();
                         let started = started.clone();
                         let release = release.clone();
-                        async move { actor.install_stage(worker, ENDPOINT.into(), 3, input(RecoveryAction::DeferredFatal { started, release })).await }
+                        async move { actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::DeferredFatal { started, release })).await }
                     });
                     wait_for_file(&started).await;
                     caller.abort();
@@ -173,15 +173,15 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                     gate.wait_for_generation_end(worker.generation).await;
                 } else if mode == "copy" {
                     use crate::copy_ctx::CudaActorHandle;
-                    let response = actor.install_stage(worker, ENDPOINT.into(), 3, input(RecoveryAction::Poison)).await?;
+                    let response = actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Poison)).await?;
                     assert!(matches!(response.status, OpResult::Ok(_)));
                     let error = actor.copy(Tensor::f_from_slice(&[1f32])?.into(), 1.into()).await.unwrap_err();
                     assert!(matches!(error.what(), ThoError::ContextReset), "fatal direct copy did not report recovery: {error:#}");
                 } else {
                     let response = if mode == "install" {
-                        actor.install_stage(worker, ENDPOINT.into(), 3, input(RecoveryAction::Fatal)).await
+                        actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Fatal)).await
                     } else {
-                        actor.invoke_stage(worker, ENDPOINT.into(), 1, input(if mode == "poison" { RecoveryAction::Poison } else { RecoveryAction::Fatal }), mode == "consume").await
+                        actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(if mode == "poison" { RecoveryAction::Poison } else { RecoveryAction::Fatal }), mode == "consume").await
                     };
                     let error: ThoError = match response {
                         Ok(response) => match response.status { OpResult::Failed(error) => error.into(), _ => panic!("fatal request succeeded") },
@@ -217,7 +217,7 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
             let pid = install_and_probe(actor).await?;
             let worker = actor.worker_id()?;
             let gate = global.cuda_activity_gate(1).unwrap();
-            let _ = actor.invoke_stage(worker, ENDPOINT.into(), 1, input(RecoveryAction::Fatal), false).await;
+            let _ = actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await;
             assert_eq!(global.get_runner(0).submit(0, async { Ok(42) }, None).await?, 42);
             let failure = gate.wait_if_paused().await.unwrap_err();
             assert!(failure.is_cuda_recovery_failed());

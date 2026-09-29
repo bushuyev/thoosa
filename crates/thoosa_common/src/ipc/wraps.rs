@@ -174,7 +174,7 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
@@ -190,7 +190,7 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
@@ -213,7 +213,7 @@ where
 impl <Co, St, I, O>SyncStageIpcWrapper for WorkerWrapperWithState<Co, St, I, O>
 where
     Co: IpcCodec,
-    St: SyncStage + StageWithState+ Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
@@ -228,10 +228,15 @@ where
     where
         Self: Sync
     {
-        // Purge uses the application's CPU-first device index, not tch::Device.
-        // self.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz") TODO
+        debug!("SyncStageIpcWrapper>::purge: self.base={:?}", self.base);
 
-        async {Ok(())}.boxed()
+        let base = Arc::clone(&self.base);
+        async move {
+
+            base.purge_gpu(None, tho_device.tho_device_idx(), "worker").await?;
+
+            Ok(())
+        }.boxed()
     }
 }
 
@@ -240,7 +245,7 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,

@@ -31,6 +31,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
+use crate::runner::purge::FuturesRunnerMapPurger;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -55,6 +56,11 @@ pub struct SyncClcStage {
     fail_until: Vec<FailUntil>,
     use_matmul: bool,
 }
+
+impl  FuturesRunnerMapPurger for SyncClcStage {
+
+}
+
 
 #[derive(Debug)]
 pub(crate) struct ClcDynSyncStage {
@@ -105,7 +111,7 @@ impl SyncClcStage {
                 stage: Arc::new(DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_CLC_ENDPOINT,
-                        0,
+                        Some(0.to_string()),
                         device.tho_device_idx(),
                         Box::new(init),
                         Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),

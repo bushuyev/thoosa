@@ -4,19 +4,21 @@ use std::mem;
 use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use futures_util::{stream, TryStreamExt};
 use rand::distr::{Alphanumeric, SampleString};
 use log::{debug, error, warn};
 use mockall_double::double;
 use tokio::sync::RwLockReadGuard;
 use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::runner::common::cachable::DevicesWrap;
+use crate::runner::common::cachable::{CachedPurgeOutput, DevicesWrap};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::RegisteredCacheHandle;
-use crate::runner::purge::{FuturesRunnerMapPurger, WeakMapPurger};
+use crate::runner::purge::{FuturesRunnerMapPurger, WeakMapPurger, PURGE_GPU_CONCURRENCY_LIMIT};
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -216,21 +218,28 @@ where
         Ok(())
     }
 
-    async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TmpCached::drop_gpu: device_idx={device_idx}");
-        let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
+        let items: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
 
-        for (key, val) in keys_vals {
-            debug!("TmpCached::drop_gpu: key={key:?}");
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu{:?}", name), self.len(), 1);
+        let dump_eta_guard_id = dump_eta_guard.id();
 
-            // Keep healthy copies, but never report successful recovery if a
-            // failed-device slot could not be removed.
-            track_await(val.drop_device(device_idx)).await?;
+        track_await(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, data)| async move {
+            if data.is_on_device(device_idx) {
+                data.drop_device(device_idx).await?;
+                if !data.has_any_data() {
+                    self.remove(&key);
+                }
+            }
+            collect_eta_record_completion(dump_eta_guard_id);
+            Ok(())
+        })).await?;
 
-        }
+
         Ok(())
     }
 

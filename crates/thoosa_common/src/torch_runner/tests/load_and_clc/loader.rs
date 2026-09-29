@@ -282,7 +282,7 @@ impl SyncTestTensorLoader {
             let init = SyncTestTensorLoaderInit::new(size, kind);
             // ProxyStage2 installs the typed initializer and keeps the endpoint stage id for later invocations.
             DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_TEST_TENSOR_LOADER_ENDPOINT, 0, tho_device_idx, Box::new(init)).await.expect("SyncTestTensorLoader::new: install endpoint")),
+                stage: Arc::new(ProxyStage::proxy(SYNC_TEST_TENSOR_LOADER_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(init)).await.expect("SyncTestTensorLoader::new: install endpoint")),
                 init: (),
             }
         } else {

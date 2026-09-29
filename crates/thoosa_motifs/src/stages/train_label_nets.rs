@@ -286,7 +286,7 @@ where
         if GlobalCtx::global().is_ipc() {
             let stage_id = 0;
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, stage_id, device.tho_device_idx(), Box::new(())).await?),
+                stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(())).await?),
                 init: (),
             })
         } else {
@@ -681,11 +681,17 @@ where
                                        let label = label.clone();
                                        let sync_label_batch = Arc::clone(&sync_label_batch);
                                        async move {
+                                           //TODO
+                                           let hash_set = x_1_wrapped.iter().chain(x_0_wrapped.iter()).map(|wrap| wrap.id().clone()).collect::<std::collections::HashSet<_>>();
+                                           let dyn_refs_set = hash_set.iter().map(|id|id as &dyn thoosa_shared::traits::CachableIdTr).collect::<std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>>();
+                                           let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
+                                               (LM::name(), &dyn_refs_set)
+                                           ]);
+
                                            let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
-                                           let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();//TODO fill with x_1_wrapped x_0_wrapped ids
                                            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
                                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
-                                               Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
+                                               Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
                                            ], None);
                                            let output = track_await(oom_handler.run(
                                                &sync_label_batch,
@@ -894,7 +900,7 @@ where
     fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>, descr: &'static str) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 
-        // TODO(perf): each produced batch waits for collect_futures_with_progress to load/apply both sides; add a bounded prefetch queue so ApplyMotifNets overlaps TrainNet forward/backward.
+
         let futures = futures::stream::iter(resource_indexes_for_batches.into_iter().enumerate()).then(move |(i, batch_keys)|   {
             let build_batch_fn = Arc::clone(&build_batch_fn);
             let loader = Arc::clone(&loader);
@@ -1061,7 +1067,7 @@ where
             let stage_id = TRAIN_LABEL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, stage_id, ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
         } else {
             let params_for_module = node_params.clone();
 

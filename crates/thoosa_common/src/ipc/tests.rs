@@ -294,7 +294,7 @@ mod tests {
         Ok(crate::ipc::proxy::DynSyncStageEnum::Proxy {
             stage: Arc::new(crate::ipc::proxy::ProxyStage::proxy_with_input_cloner(
                 SYNC_CONSUME_TEST_ENDPOINT,
-                0,
+                Some(0.to_string()),
                 tho_device_idx,
                 Box::new(()),
                 Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
@@ -325,7 +325,7 @@ mod tests {
     impl ConsumeData for ConsumeTestInput {
         type O = ThoTensor<LoadedTensor, SynKey>;
 
-        fn consume<R: Send, F, P>(self, _to_device_idx: usize, ctx: P, _trace_ctx: std::option::Option<&'static str>, do_run: F) -> impl std::future::Future<Output=ConsumeResult<Self::O, R>> + Send
+        fn consume<R: Send, F, P>(self, _to_device_idx: usize, ctx: P, _trace_ctx: std::option::Option<&'static str>, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
         where
             F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
             P: RunCtx,
@@ -333,7 +333,7 @@ mod tests {
             async move { do_run(self.input, ctx) }
         }
 
-        fn burp(input: Self::O) -> impl std::future::Future<Output=Self> + Send {
+        fn burp(input: Self::O) -> impl Future<Output=Self> + Send {
             async move { Self::new(input) }
         }
     }
