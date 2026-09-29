@@ -197,7 +197,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                 assert_ne!(pid, next_pid);
                 pid = next_pid;
                 assert!(GlobalCtx::process_failure().is_none(), "worker failure cannot terminate the parent process");
-                assert_eq!(global.get_executor(0).submit(0, async { Ok(42) }, None).await?, 42);
+                assert_eq!(global.get_runner(0).submit(0, async { Ok(42) }, None).await?, 42);
             }
             Ok::<_, ThoError>(())
         }).await?
@@ -218,14 +218,14 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
             let worker = actor.worker_id()?;
             let gate = global.cuda_activity_gate(1).unwrap();
             let _ = actor.invoke_stage(worker, ENDPOINT.into(), 1, input(RecoveryAction::Fatal), false).await;
-            assert_eq!(global.get_executor(0).submit(0, async { Ok(42) }, None).await?, 42);
+            assert_eq!(global.get_runner(0).submit(0, async { Ok(42) }, None).await?, 42);
             let failure = gate.wait_if_paused().await.unwrap_err();
             assert!(failure.is_cuda_recovery_failed());
             assert_eq!(gate.device_generation(), worker.generation, "unready replacement must never publish its generation");
             assert!(!Path::new(&format!("/proc/{pid}")).exists());
             assert!(actor.worker_id().unwrap_err().is_cuda_recovery_failed());
             assert!(GlobalCtx::process_failure().is_none());
-            assert_eq!(global.get_executor(0).submit(0, async { Ok(43) }, None).await?, 43);
+            assert_eq!(global.get_runner(0).submit(0, async { Ok(43) }, None).await?, 43);
             Ok::<_, ThoError>(())
         }).await?
     }, async |sock| {
@@ -244,10 +244,10 @@ fn test_fatal_local_cuda_error_requests_process_shutdown_in_child() -> Result<()
         let result = rt.block_on(async {
             let global = GlobalCtx::init_devices(2)?;
             let error = match mode.as_str() {
-                "execution" => global.get_executor(1).submit(0, async { tokio::task::spawn_blocking(poison_and_synchronize).await? }, None).await.unwrap_err(),
+                "execution" => global.get_runner(1).submit(0, async { tokio::task::spawn_blocking(poison_and_synchronize).await? }, None).await.unwrap_err(),
                 "consume" => {
                     use thoosa_shared::traits::ConsumeResult;
-                    let result = global.get_executor(1).submit_consume(0, async {
+                    let result = global.get_runner(1).submit_consume(0, async {
                         let error = tokio::task::spawn_blocking(poison_and_synchronize).await?.unwrap_err();
                         Ok(ConsumeResult::<_, ()>::Failed { input: vec![7], error })
                     }, None).await?;
@@ -268,7 +268,7 @@ fn test_fatal_local_cuda_error_requests_process_shutdown_in_child() -> Result<()
             assert!(failure.original.needs_cuda_ctx_reset());
             assert!(GlobalCtx::is_shutting_down());
             assert_eq!(global.cuda_activity_gate(1).unwrap().device_generation().0, 0);
-            assert!(global.get_executor(1).submit(0, async { panic!("local device reopened"); #[allow(unreachable_code)] Ok(()) }, None).await.unwrap_err().is_cuda_recovery_failed());
+            assert!(global.get_runner(1).submit(0, async { panic!("local device reopened"); #[allow(unreachable_code)] Ok(()) }, None).await.unwrap_err().is_cuda_recovery_failed());
             global.shutdown().await;
             Ok::<_, ThoError>(())
         });
