@@ -102,7 +102,7 @@ impl RegisteredCacheHandle {
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
 
-    //TODO num_devices is to be replaces with Cuda devices list. Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda[0]]
+    //TODO num_devices is to be replaces with Cuda devices list. Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda(0)]
     fn new(num_devices: usize) -> anyhow::Result<Self> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
@@ -224,26 +224,26 @@ impl GlobalCtx {
     }
 
     /// Instance caches use the same gate as dispatch when creating device state.
-    pub fn cuda_activity_gate(&self, device: usize) -> Option<Arc<CudaActivityGate>> {
-        self.devices[device].runner.cuda_gate().cloned()
+    pub fn cuda_activity_gate(&self, tho_device_idx: usize) -> Option<Arc<CudaActivityGate>> {
+        self.devices[tho_device_idx].runner.cuda_gate().cloned()
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     fn mock_executor(&self, device: usize) -> &SyncStageRunner {
         // Keep the generated mock's owned runner separate from real delegation.
-        self.get_executor(device)
+        self.get_runner(device)
     }
 
     #[cfg(test)]
     pub async fn restart_cuda_device(&self, device: usize) -> Result<(), ThoError> {
-        let ticket = self.get_executor(device).request_cuda_reset(ThoError::ContextReset)?;
+        let ticket = self.get_runner(device).request_cuda_reset(ThoError::ContextReset)?;
         // Admitted callers must release their activity before the independent
         // coordinator can drain. Waiting here would wait on the caller itself.
         if thoosa_shared::CudaActivityScope::current().is_some() {
             return Err(ThoError::ContextReset);
         }
         if let Some(ticket) = ticket {
-            self.get_executor(device).cuda_gate().expect("CUDA device").wait_for_pause_to_finish(ticket).await?;
+            self.get_runner(device).cuda_gate().expect("CUDA device").wait_for_pause_to_finish(ticket).await?;
         }
         Ok(())
     }
@@ -518,10 +518,14 @@ impl GlobalCtx {
         // Only local process-invalidating failures broaden the shutdown scope.
         GLB_SHUTTING_DOWN.store(true, Relaxed);
         for device in &Self::global().devices {
-            if let Some(gate) = device.runner.cuda_gate() { gate.fail_process(error.clone()); }
+            if let Some(gate) = device.runner.cuda_gate() {
+                gate.fail_process(error.clone());
+            }
         }
         PROCESS_FAILURE.send_if_modified(|failure| {
-            if failure.is_some() { return false; }
+            if failure.is_some() {
+                return false;
+            }
             *failure = Some(error);
             true
         });
@@ -552,7 +556,7 @@ impl GlobalCtx {
 
 impl GlobalCtx {
 
-    pub fn get_executor(&self, tho_device: usize) -> &SyncStageRunner {
+    pub fn get_runner(&self, tho_device: usize) -> &SyncStageRunner {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.devices.len={}", self.devices.len());
         &self.devices[tho_device].runner
     }
@@ -934,7 +938,7 @@ impl MockGlobalCtx {
     pub fn get_executor(&self, device: usize) -> &SyncStageRunner {
         // Mockall owns values returned by reference. Delegate explicitly when
         // using real actors so stages and copies share the real device gate.
-        if let Some(real) = mock_global_ctx::manual_method_real_ctx() { return real.get_executor(device); }
+        if let Some(real) = mock_global_ctx::manual_method_real_ctx() { return real.get_runner(device); }
         self.mock_executor(device)
     }
 
@@ -1040,7 +1044,7 @@ mod tests {
         let gate = GlobalCtx::global().cuda_activity_gate(1).unwrap();
         let generation = gate.device_generation();
         // Real-context mocks must dispatch through the real device runner too.
-        assert!(std::ptr::eq(super::MockGlobalCtx::global().get_executor(1), GlobalCtx::global().get_executor(1)));
+        assert!(std::ptr::eq(super::MockGlobalCtx::global().get_executor(1), GlobalCtx::global().get_runner(1)));
 
         let t_cpu = Tensor::rand(&[10000], FLOAT_CPU);
         let t_cuda = cuda_actor.copy(t_cpu.into(), 1.into()).await?;
