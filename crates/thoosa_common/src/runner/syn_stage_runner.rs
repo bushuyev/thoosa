@@ -2676,6 +2676,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_held_recovery_allows_healthy_gpu_and_cpu_to_complete_work() {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let limits = Arc::new(FuturesLimits::new_with_parallelism(2, 2));
+            let started = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let gate = Arc::new(CudaActivityGate::new(1));
+            let recovery = CudaRecoveryCoordinator::new(Arc::clone(&gate), Arc::new({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move |_| {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    Box::pin(async move { started.notify_one(); release.notified().await; Ok(()) })
+                }
+            }));
+            let owner = SyncStageRunner::new_inner_with_buffer_limits(1, 1, Some(recovery), Arc::clone(&limits));
+            let healthy = runner_with_limits(2, &limits);
+            let cpu = runner_with_limits(0, &limits);
+            owner.request_cuda_reset(needs_reset_error()).unwrap();
+            started.notified().await;
+            let mut queued = Box::pin(owner.submit(0, async { Ok(99) }, None));
+            assert!(futures::poll!(queued.as_mut()).is_pending());
+            // Complete several waves using the same shared execution budget,
+            // with A's backend deliberately held until every wave has finished.
+            for value in 0..8 {
+                let (gpu_result, cpu_result) = tokio::join!(healthy.submit(0, async move { Ok(value) }, None), cpu.submit(0, async move { Ok(value) }, None));
+                assert_eq!(gpu_result.unwrap(), value);
+                assert_eq!(cpu_result.unwrap(), value);
+                assert!(gate.is_recovering());
+                assert_eq!(healthy.cuda_gate().unwrap().device_generation(), CudaDeviceGeneration(0));
+                assert!(cpu.cuda_gate().is_none());
+                assert!(futures::poll!(queued.as_mut()).is_pending());
+            }
+            release.notify_one();
+            assert_eq!(queued.await.unwrap(), 99);
+            assert_eq!(gate.device_generation(), CudaDeviceGeneration(1));
+            owner.shutdown().await;
+            Arc::try_unwrap(healthy).unwrap().shutdown().await;
+            Arc::try_unwrap(cpu).unwrap().shutdown().await;
+        }).await.expect("healthy devices must complete independent work throughout another device's recovery");
+    }
+
+    #[tokio::test]
     async fn test_reset_does_not_wait_for_unrelated_gpu_or_cpu_activity() {
         tokio::time::timeout(Duration::from_secs(2), async {
             let owner = SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })));

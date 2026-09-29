@@ -14,3 +14,5 @@ pub mod proxy;
 #[cfg(test)]
 mod perf_test;
 mod pending;
+#[cfg(test)]
+mod recovery_tests;

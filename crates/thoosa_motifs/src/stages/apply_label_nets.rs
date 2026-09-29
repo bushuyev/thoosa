@@ -1334,6 +1334,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+
         let motif_width = 4;
         let step = 1;
         let motifs = vec![
@@ -1363,6 +1365,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_apply_label_nets_handles_three_motif_nets_for_one_label() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+
         let motif_width = 4;
         let step = 1;
         let motifs = vec![
@@ -1385,6 +1389,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_apply_label_nets_handles_more_labels_and_label_nets() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+
         let motif_width = 4;
         let step = 1;
         let motifs = vec![

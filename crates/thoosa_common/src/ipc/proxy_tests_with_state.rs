@@ -385,6 +385,55 @@ mod tests {
     }
 
     #[test]
+    fn test_state_reconstruction_and_stale_cleanup_after_replacement_ipc() -> Result<(), ThoError> {
+        use crate::ipc::cuda_process::CudaIPCActorHandle;
+        use std::any::Any;
+        run_ipc_test(module_path!(), async {
+            tokio::time::timeout(Duration::from_secs(45), async {
+                let global = GlobalCtx::global();
+                let actor = global.cuda_actor(1);
+                let ipc: &dyn Any = actor.as_ref();
+                let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
+                let retired = ipc.worker_id()?;
+                let old_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(7, 1, TestStageInitB::new(2, 1)).await?);
+                let old_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
+                let old_key = old_tensor.ref_key().unwrap();
+                actor.restart().await?;
+                let fresh_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(7, 1, TestStageInitB::new(3, 1)).await?);
+                let fresh_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
+                // Deliberately collide numeric identities across generations.
+                assert_eq!(fresh_tensor.ref_key(), Some(old_key));
+                let fresh_input = || TestInputB { value: fresh_tensor.clone_ref().unwrap() };
+                let error = actor.run_stage(Arc::clone(&old_stage), fresh_input(), 1, &TestRunCtx).await.unwrap_err();
+                assert!(matches!(error.what(), ThoError::ContextReset));
+                let error = actor.copy(old_tensor.clone_ref()?, 0.into()).await.unwrap_err();
+                assert!(matches!(error.what(), ThoError::ContextReset));
+                // Embedded stale tensor references must also be rejected by
+                // the new worker when the endpoint itself belongs to it.
+                let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
+                assert!(matches!(error.what(), ThoError::ContextReset));
+                actor.drop_endpoint(7, TEST_ENDPOINT.into(), retired).await?;
+                actor.purge_stage_state(7, TEST_ENDPOINT.into(), retired).await?;
+                actor.drop_tho_tensor(old_key, retired).await?;
+                drop(old_stage);
+                drop(old_tensor);
+                // Reconstructed state and live colliding tensor survive every
+                // old cleanup path, including the deferred Drop implementations.
+                for _ in 0..2 {
+                    let result = actor.run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, &TestRunCtx).await?;
+                    let cpu = actor.copy(result.value, 0.into()).await?;
+                    assert!(Tensor::f_full([1, 3], 3., FLOAT_CPU)?.f_allclose(cpu.t_ref(), 0.01, 0.01, false)?);
+                }
+                assert_eq!(ipc.worker_id()?.generation.0, retired.generation.0 + 1);
+                Ok::<_, ThoError>(())
+            }).await?
+        }, async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+        })
+    }
+
+    #[test]
     fn test_distinct_stateful_endpoints_ipc() -> Result<(), ThoError> {
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
