@@ -1317,13 +1317,21 @@ mod tests {
     #[tokio::test]
     async fn test_worker_exit_precedes_pending_storage_release_and_shutdown_is_bounded() {
         use super::*;
+        struct ExitCheckedStorage(u32);
+        impl Drop for ExitCheckedStorage {
+            fn drop(&mut self) {
+                // Assert at the allocation's destruction, not only after the
+                // retirement future returns: releasing before kill must fail.
+                assert!(!std::path::Path::new(&format!("/proc/{}", self.0)).exists(), "storage released while worker can still access it");
+            }
+        }
         for graceful in [false, true] {
             let child = Command::new("sleep").arg("60").kill_on_drop(true).spawn().unwrap();
             let pid = child.id().unwrap();
             let worker_id = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) };
             let pending = Arc::new(PendingRequests::new(worker_id));
             let (tx, mut rx) = mpsc::channel(1);
-            let storage = Arc::new(vec![0u8; 1024]);
+            let storage = Arc::new(ExitCheckedStorage(pid));
             let weak = Arc::downgrade(&storage);
             let (reply, mut response) = oneshot::channel();
             pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker_id, 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
