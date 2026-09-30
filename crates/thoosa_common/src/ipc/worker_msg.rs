@@ -80,10 +80,10 @@ pub enum Operation {
         arena_offset: usize,
     },
     DropThoTensor { tensor_key: u64 },
-    InstallStage { endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput> },
-    InvokeStage { endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume: bool },
-    PurgeStage { endpoint_name: String, stage_id: u32 },
-    DropStage { endpoint_name: String, stage_id: u32 },
+    InstallStage { endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput> },
+    InvokeStage { endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume: bool },
+    PurgeStage { endpoint_name: String, stage_id: Option<String> },
+    DropStage { endpoint_name: String, stage_id: Option<String> },
     Debug,
     Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?
 }

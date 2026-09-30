@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -54,8 +54,16 @@ pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> Str
 
 
 // Installed stages share an initializer name but must have distinct invocation keys.
-pub(crate) fn endpoint_stage_key(endpoint_name: &str, stage_id: u32) -> String {
-    format!("{endpoint_name}{stage_id}")
+pub(crate) fn endpoint_stage_key<StageId>(endpoint_name: String, stage_id: Option<StageId>) -> String
+where
+    StageId:Display
+{
+    match stage_id {
+        None => endpoint_name,
+        Some(stage_id) => {
+            format!("{endpoint_name}{stage_id}")
+        }
+    }
 }
 
 
@@ -845,8 +853,8 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn invoke_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: u32, input: Box<dyn WorkerInput>, consume:bool) -> anyhow::Result<CudaWorkerMsgOut> {
-        debug!("CudaIPCActorHandle::invoke_stage: endpoint_name={endpoint_name} stage_id={stage_id} input={input:?}");
+    pub async fn invoke_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume:bool) -> anyhow::Result<CudaWorkerMsgOut> {
+        debug!("CudaIPCActorHandle::invoke_stage: endpoint_name={endpoint_name} stage_id={stage_id:?} input={input:?}");
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::SendMsg {
@@ -870,8 +878,8 @@ impl CudaIPCActorHandle {
         Ok(recv.await.context("CUDA actor response channel closed")??)
     }
 
-    pub async fn install_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: u32, init_data: Box<dyn WorkerInput>) -> anyhow::Result<CudaWorkerMsgOut> {
-        debug!("CudaIPCActorHandle::invoke_stage: install_stage_2={endpoint_name} stage_id={stage_id} init_data={init_data:?}");
+    pub async fn install_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput>) -> anyhow::Result<CudaWorkerMsgOut> {
+        debug!("CudaIPCActorHandle::invoke_stage: install_stage_2={endpoint_name} stage_id={stage_id:?} init_data={init_data:?}");
 
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -998,7 +1006,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
         if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() || self.gate.is_paused() {
             return Ok(CudaWorkerMsgOut { worker_id, request_id: 0, status: OpResult::Ok(None) });
         }
@@ -1024,7 +1032,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.context("CUDA actor response channel closed")?
     }
 
-    async fn drop_endpoint(&self, stage_id: u32, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn drop_endpoint(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
         // Retired endpoint destructors are expected after cache invalidation.
         // They must neither wait for recovery nor reach the replacement worker.
         if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() || self.gate.is_paused() {
@@ -1370,15 +1378,15 @@ mod tests {
         gate.finish_pause(ticket);
 
         assert!(matches!(handle.copy(old_tensor(), 0usize.into()).await.unwrap_err().what(), ThoError::ContextReset));
-        assert!(matches!(ThoError::from(handle.invoke_stage(retired, "stage".into(), 42, Box::new(()), false).await.unwrap_err()).what(), ThoError::ContextReset));
-        assert!(handle.install_stage(retired, "stage".into(), 42, Box::new(())).await.is_err());
+        assert!(matches!(ThoError::from(handle.invoke_stage(retired, "stage".into(), Some(42.to_string()), Box::new(()), false).await.unwrap_err()).what(), ThoError::ContextReset));
+        assert!(handle.install_stage(retired, "stage".into(), Some(42.to_string()), Box::new(())).await.is_err());
         handle.drop_tho_tensor(42, retired).await.unwrap();
-        handle.drop_endpoint(42, "stage".into(), retired).await.unwrap();
-        handle.purge_stage_state(42, "stage".into(), retired).await.unwrap();
+        handle.drop_endpoint(Some(42.to_string()), "stage".into(), retired).await.unwrap();
+        handle.purge_stage_state(Some(42.to_string()), "stage".into(), retired).await.unwrap();
         assert!(receiver.try_recv().is_err(), "old IDs must never be rebound to the new worker");
 
         let fresh: CudaWorkerId = handle.worker_id().unwrap();
-        let mut invoke = Box::pin(handle.invoke_stage(fresh, "stage".into(), 42, Box::new(()), false));
+        let mut invoke = Box::pin(handle.invoke_stage(fresh, "stage".into(), Some(42.to_string()), Box::new(()), false));
         assert!(futures::poll!(invoke.as_mut()).is_pending());
         let message = receiver.recv().await.unwrap();
         drop(invoke);

@@ -38,7 +38,7 @@ use crate::ipc::worker_msg::{CudaWorkerMsgOut, OpResult};
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
 enum CudaLocalActorMessage {
-    Copy{ src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
+    Copy{ src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope, respond_to: Sender<Result<Tensor, ThoError>>},
 
     GetExecStream {
         activity: CudaActivityScope,
@@ -90,11 +90,11 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(())
     }
 
-    async fn purge_stage_state(&self, stage_id: u32, endpoint_name: String, worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
         unreachable!()
     }
 
-    async fn drop_endpoint(&self, _stage_id: u32, _endpoint_name: String, _worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn drop_endpoint(&self, _stage_id: Option<String>, _endpoint_name: String, _worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
         unreachable!()
     }
 
@@ -707,7 +707,7 @@ mod tests {
         // Actor dispatch must admit this queued operation during draining.
         activity.check_operation(&gate).unwrap();
         activity.run(async { CudaActivityScope::for_operation(&gate).unwrap(); }).await;
-        tokio::time::timeout(Duration::from_secs(2), idle).await.unwrap();
+        timeout(Duration::from_secs(2), idle).await.unwrap();
         gate.finish_pause(pause);
     }
 
@@ -724,7 +724,7 @@ mod tests {
         let mut idle = Box::pin(gate.wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending());
         drop(request);
-        tokio::time::timeout(Duration::from_secs(2), idle).await.unwrap();
+        timeout(Duration::from_secs(2), idle).await.unwrap();
         gate.finish_pause(pause);
     }
 

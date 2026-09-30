@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -99,15 +100,6 @@ where
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
 
-impl<C> Drop for SyncFreqFilter<C>
-where
-    C: RunCtx + 'static {
-    fn drop(&mut self) {
-        let id = self.id.to_string();
-        GlobalCtx::global().remove_cache(&id);
-    }
-}
-
 
 impl<C> SyncFreqFilter<C>
 where
@@ -115,19 +107,20 @@ where
 {
 
     pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
-        let id = init.find_motifs_run_config_id;
+        let find_motifs_run_config_id = init.find_motifs_run_config_id;
+        let id = find_motifs_run_config_id;
         let mut instances = INSTANCES.lock().await;
 
 
         let cache = instances
-            .entry(init.find_motifs_run_config_id)
+            .entry(find_motifs_run_config_id)
             .or_insert_with(|| {
                 Box::new(HashMap::<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>::new())
             })
             .downcast_mut::<HashMap<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>>()
             .unwrap();
 
-        if let Some(v) = cache.get(&init.find_motifs_run_config_id) {
+        if let Some(v) = cache.get(&find_motifs_run_config_id) {
             return Ok(Arc::clone(v))
         }
 
@@ -137,7 +130,7 @@ where
             Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                     SYNC_FREQ_FILTER_ENDPOINT,
-                    init.find_motifs_run_config_id,
+                    Some(find_motifs_run_config_id.to_string()),
                     init.tho_device_idx,
                     Box::new(init.clone()),
                     Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
@@ -148,7 +141,8 @@ where
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
         };
 
-        // GlobalCtx::global().register_cache((&format!("{:?}", stage.id), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+        //freq. filter is used to apply motif nets up to final training so it's never unregistered
+        GlobalCtx::global().register_cache((format!("{:?}", find_motifs_run_config_id).leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         cache.insert(id, Arc::clone(&stage));
 
@@ -379,8 +373,6 @@ where
     }
 
 }
-
-impl SyncFreqFilter<WokerRunCtx> {}
 
 
 #[derive(Debug)]
@@ -745,16 +737,6 @@ where
         Ok(())
     }
 
-    //it's called when local GPU reset is requested
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("SyncFreqFilter::drop_gpu");
-       Ok(())
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        debug!("SyncFreqFilter::purge_cpu");
-        0
-    }
 }
 
 

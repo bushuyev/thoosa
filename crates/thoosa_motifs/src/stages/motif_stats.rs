@@ -925,7 +925,7 @@ where
         MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
 
-                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, 0, tho_device_idx, Box::new(())).await?), init: () }))
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
             } else {
                 Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<C>::new_local()))))
             }
@@ -1081,7 +1081,7 @@ where
             let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
             // Use shared consuming dispatch so tensor references are deleted only after success.
             Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, stage_id, tho_device_idx, Box::new(())).await?),
+                stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
                 init: ()
             })
         } else {
