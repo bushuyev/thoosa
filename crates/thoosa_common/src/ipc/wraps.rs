@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, error};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use std::any::Any;
 use std::borrow::Borrow;
@@ -22,7 +22,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::MutexGuard;
 
@@ -257,6 +257,10 @@ where
         StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
     }
 
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>> {
+        StageWithState::get_state_info(self.base.as_ref(), tho_device.tho_device_idx())
+    }
+
 
     fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::do_run_with_state: input={input:?}");
@@ -301,6 +305,7 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>>;
 
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>>;
 
     fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
 }
@@ -308,6 +313,7 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 pub trait ErasedWithState: Sync + Debug {
 
     fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>>;
 }
 
 impl<T> ErasedWithState for T
@@ -326,4 +332,11 @@ where
             Ok(output)
         }.boxed()
     }
+
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>> {
+        async move {
+            SyncStageIpcWrapperWithState::get_state_info(self, tho_device).await
+        }.boxed()
+    }
 }
+

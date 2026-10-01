@@ -30,7 +30,7 @@ use tch::Kind::Int;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
@@ -194,6 +194,7 @@ where
             Ok(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
                 init: (),
+                state: Default::default(),
             })
 
 
@@ -261,6 +262,10 @@ where
         }.boxed()
     }
 
+    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStageInfo, ThoError>> {
+        todo!()
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
@@ -268,6 +273,8 @@ where
             value: (input.value.as_ref() * k.as_ref()).into(),
         })
     }
+
+
 }
 
 #[async_trait]

@@ -117,6 +117,7 @@ impl SyncClcStage {
                         Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
                     ).await.expect("SyncClcStage::new: install endpoint")),
                     init: (),
+                    state: Default::default(),
                 }),
             }
         } else {

@@ -449,7 +449,7 @@ where
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
 
         let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
-        // TODO(perf): group nets by filter/run id, channel, and motif width so the same input slice can feed a batched multi-net pass instead of thousands of tiny ApplyMotifNet/OOMHandler runs.
+
         let futures = apply_motif_nets
             .into_iter()
             .map(|(net_id, freq_filter_find_motifs_run_config_id_freq_filter, apply_motif_net)|{
@@ -930,6 +930,7 @@ where
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some(self.trained_net_id.to_string()), device.tho_device_idx(), Box::new(self)).await?),
                 init: motif_meta,
+                state: Default::default(),
             }))
         } else {
             let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;

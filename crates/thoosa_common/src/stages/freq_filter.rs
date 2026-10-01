@@ -23,7 +23,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageWithState, SyncStage, ThoSelector};
+use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageStageInfo, StageWithState, SyncStage, ThoSelector};
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
@@ -136,6 +136,7 @@ where
                     Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
                 ).await?),
                 init: (),
+                state: Default::default(),
             })
         } else {
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
@@ -704,7 +705,7 @@ where
             Ok(filters)
         }.boxed()
     }
-
+    
     fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
     }

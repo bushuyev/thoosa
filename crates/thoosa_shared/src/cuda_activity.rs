@@ -75,8 +75,10 @@ impl CudaActivityScope {
     /// Admitted operations may drain during recovery, but never run against a
     /// replacement generation or borrow another gate's cleanup authority.
     pub fn check_operation(&self, gate: &Arc<CudaActivityGate>) -> Result<(), ThoError> {
+
         let lease = self.leases.iter().find(|lease| Arc::ptr_eq(&lease.gate, gate))
             .ok_or_else(|| ThoError::new("CUDA operation has no activity lease for its device"))?;
+
         let state = gate.state.lock();
         if let CudaRecoveryState::Failed(failure) = &state.recovery {
             return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
