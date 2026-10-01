@@ -396,10 +396,14 @@ impl CudaIPCActor {
                 });
             }
             CudaIPCActorMessage::SendMsg { mut input, activity, respond_to } => {
+
                 if let Err(error) = input.worker_id.check(self.worker().worker_id).and_then(|_| activity.check_operation(&self.gate)) {
+
                     let response = if matches!(input.operation, Operation::DropStage { .. } | Operation::PurgeStage { .. }) {
                         Ok(CudaWorkerMsgOut { worker_id: input.worker_id, request_id: input.request_id, status: OpResult::Ok(None) })
-                    } else { Err(error) };
+                    } else {
+                        Err(error)
+                    };
                     let _ = respond_to.send(response);
                     return Ok(());
                 }
@@ -413,23 +417,40 @@ impl CudaIPCActor {
 
                 tokio::spawn(activity.run(async move {
 
-                    let response = send_request_and_wait_msg(
-                        self_tx,
-                        pending,
-                        input,
-                    ).await;
-                    // Reporting belongs to the admitted request, even if its
-                    // proxy/initializer caller was cancelled before the reply.
-                    let response = response.map(|mut response| {
-                        if let OpResult::Failed(error) = response.status {
-                            let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
-                            response.status = error.into();
-                        }
-                        response
-                    });
-                    let _ = respond_to.send(response);
+                    match input.operation {
+                        Operation::PurgeStage { .. } => {
+                            let response = send_request_and_wait_msg(
+                                self_tx,
+                                pending,
+                                input,
+                            ).await?;
 
-                    Ok::<_, ThoError>(())
+                            debug!("Operation::PurgeStage: response={response:?}");
+                            let _ = respond_to.send(Ok(response));
+                            Ok::<_, ThoError>(())
+                        }
+                        _=> {
+                            let response = send_request_and_wait_msg(
+                                self_tx,
+                                pending,
+                                input,
+                            ).await;
+                            // Reporting belongs to the admitted request, even if its
+                            // proxy/initializer caller was cancelled before the reply.
+                            let response = response.map(|mut response| {
+                                if let OpResult::Failed(error) = response.status {
+                                    let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
+                                    response.status = error.into();
+                                }
+                                response
+                            });
+                            let _ = respond_to.send(response);
+
+                            Ok::<_, ThoError>(())
+                        }
+
+                    }
+
                 }));
             }
 
@@ -624,7 +645,11 @@ impl CudaIPCActor {
                         }
                     }
                     // Transport loss is reported even if all callers cancelled.
-                    let cause = if error.needs_cuda_ctx_reset() { error.clone() } else { ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: format!("CUDA worker transport failed: {error}") } };
+                    let cause = if error.needs_cuda_ctx_reset() {
+                        error.clone()
+                    } else {
+                        ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: format!("CUDA worker transport failed: {error}") }
+                    };
                     if GlobalCtx::is_installed() {
                         let _ = crate::copy_ctx::report_cuda_copy_result::<()>(Err(cause), &actor.gate, generation);
                     } else {
@@ -804,6 +829,7 @@ async fn reader_loop<R>(
     debug!("worker IPC reader loop finished");
 }
 
+//TODO inline
 async fn send_request_and_wait_msg(tx: mpsc::Sender<CudaWorkerMsgIn>, pending: PendingResponses, request: CudaWorkerMsgIn) -> Result<CudaWorkerMsgOut, ThoError> {
     send_request(tx, pending, request, None, false).await
 }

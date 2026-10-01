@@ -224,7 +224,11 @@ where
             let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy {
+                stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
+                init: (),
+                state: Default::default()
+            }, node_params))
         } else {
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
@@ -1756,6 +1760,7 @@ mod tests {
                 let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, Some(stage_id.to_string()), 1, Box::new(init), input_cloner).await?),
                     init: (),
+                    state: Default::default(),
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
                 let input = TrainStepInput::<InDims, OutDims>::new(

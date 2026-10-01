@@ -12,6 +12,7 @@ use std::any::Any;
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
@@ -786,6 +787,11 @@ pub trait StageWithState: SyncStage + Sync {
     type S: Debug + Send + Sync;
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
+    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStageInfo, ThoError>> {
+        async {
+            Ok(StageStageInfo::new(vec!["xxx".to_string()]))
+        }.boxed()
+    }
 
     fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         unimplemented!()
@@ -971,5 +977,18 @@ where
     fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
         let Self { state } = *self;
         StageWithState::do_run_with_state(stage, input, state, ctx)
+    }
+}
+
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StageStageInfo {
+    tensors:Vec<String>
+}
+
+impl StageStageInfo {
+    pub fn new(tensors: Vec<String>) -> Self {
+        Self { tensors }
     }
 }

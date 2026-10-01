@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
+use thoosa_shared::traits::StageStageInfo;
 use crate::ipc::cuda_wokrer::WorkerStageOutput;
 use crate::ipc::ipc_cuda_utils::IpcTensorKind;
 use crate::runner::common::cachable::ThoDataRef;
@@ -25,7 +26,7 @@ impl CudaWorkerId {
 }
 
 #[typetag::serde(tag = "type")]
-pub trait WorkerInput:Any + Send + Sync + Debug{
+pub trait WorkerInput: Any + Send + Sync + Debug {
 
 }
 
@@ -55,6 +56,12 @@ impl DebugOutput {
 
 #[typetag::serde]
 impl WorkerOutput for DebugOutput {
+
+}
+
+
+#[typetag::serde]
+impl WorkerOutput for StageStageInfo{
 
 }
 
