@@ -23,7 +23,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageStageInfo, StageWithState, SyncStage, ThoSelector};
+use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageStateInfo, StageWithState, SyncStage, ThoSelector};
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};

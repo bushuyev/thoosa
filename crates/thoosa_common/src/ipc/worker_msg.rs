@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
 use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput};
-use thoosa_shared::traits::StageStageInfo;
+use thoosa_shared::traits::StageStateInfo;
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 
 /// Numeric tensor and endpoint IDs are only meaningful in their originating
