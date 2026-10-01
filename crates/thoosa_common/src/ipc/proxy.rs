@@ -22,7 +22,7 @@ use std::string::ToString;
 use std::sync::{Arc, LazyLock};
 use parking_lot::RwLock;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
 
 pub struct ProxyStage<St>

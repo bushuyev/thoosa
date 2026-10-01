@@ -38,7 +38,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
 use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput, WorkerTensorInfoPayload};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
-use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStageInfo, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStateInfo, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
