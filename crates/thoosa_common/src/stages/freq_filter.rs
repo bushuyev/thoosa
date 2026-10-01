@@ -141,7 +141,9 @@ where
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
         };
 
+        // let stage_id = stage.id();
         //freq. filter is used to apply motif nets up to final training so it's never unregistered
+        //TODO instead of format!("{:?}", find_motifs_run_config_id).leak() here should be stage.id
         GlobalCtx::global().register_cache((format!("{:?}", find_motifs_run_config_id).leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         cache.insert(id, Arc::clone(&stage));
@@ -372,6 +374,17 @@ where
         Ok(output_3d.f_view((self.num_channels, -1))?)
     }
 
+}
+
+impl <C> WithId for SyncFreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
 }
 
 
