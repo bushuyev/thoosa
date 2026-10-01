@@ -22,7 +22,7 @@ use std::string::ToString;
 use std::sync::{Arc, LazyLock};
 use parking_lot::RwLock;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
 
 pub struct ProxyStage<St>
@@ -380,7 +380,7 @@ where
 
 
 #[async_trait]
-impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum<St, Init>
+impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum<St, Init>//TODO stages without State don't have GPU data, remove
 where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
@@ -558,6 +558,8 @@ where
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
             DynSyncStageWithStateEnum::Proxy { stage, init, state, } => {
+                debug!("FuturesRunnerMapPurger>::purge_gpu: stage={stage:?} init={init:?} state={state:?} device_idx={device_idx}");
+
                 if stage.tho_device_idx != device_idx {//not our device is being purged
                     return Ok(());
                 }
@@ -568,9 +570,11 @@ where
                     stage.endpoint_name.to_string(),
                     stage.worker_id,
                 ).await?;
+                debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
 
                 if let OpResult::Ok(Some(state_box)) = state_out.status {
                     if let Ok(state_rs) = (state_box as Box<dyn Any>).downcast::<St::S>() {
+                        debug!("FuturesRunnerMapPurger>::purge_gpu: state_rs={state_rs:?}");
                         *state.write() = Some(state_rs);
                     }
                 }

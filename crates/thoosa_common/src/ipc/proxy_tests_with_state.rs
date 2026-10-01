@@ -30,11 +30,13 @@ use tch::Kind::Int;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
-use thoosa_shared::ipc_types::WorkerOutput;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::ipc_types::{TensorKey, WorkerOutput, WorkerTensorInfoPayload};
+use crate::cuda_utils::tensor_mem_size;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
@@ -180,6 +182,7 @@ where
     P:Debug,
     C:RunCtx
 {
+    id:SynKey,
     pd:PhantomData<(P, C)>,
     k:tokio::sync::Mutex<ThoTensor> //state - needs to be dumped to CPU when handling OOM in other stages
 }
@@ -189,29 +192,47 @@ where
     P:Debug,
     C:RunCtx
 {
-    pub async fn new(stage_id: Option<String>, tho_device_idx: usize, init: TestStageInitB) -> Result<DynSyncStageWithStateEnum<TestStageB<u32, TestRunCtx>>, ThoError> {
+    pub async fn new(stage_id: Option<String>, tho_device_idx: usize, init: TestStageInitB) -> Result<Arc<DynSyncStageWithStateEnum<TestStageB<u32, TestRunCtx>>>, ThoError> {
         if GlobalCtx::global().is_ipc() {
 
-            Ok(DynSyncStageWithStateEnum::Proxy {
+            Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
                 init: (),
                 state: Default::default(),
-            })
+            }))
 
 
 
         } else {
-            Ok(DynSyncStageWithStateEnum::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init))))
+            Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init)))))
         }
     }
 
     pub fn new_local(init: TestStageInitB) -> Self {
         Self {
+            id: mono_key!(0, "TestStageB").into(),
             k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, ThoDevice::from(init.tho_device_ids).into())).into()),
             pd: PhantomData
         }
     }
 
+}
+
+
+const TEST_ENDPOINT: &str = "TestStageB";
+
+
+pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    let init: Box<dyn Any> = init;
+    let init = init.downcast::<TestStageInitB>().unwrap();
+    async move {
+        debug!("test_with_state_init: init={init:?}");
+
+        Ok(Box::new(WorkerWrapperWithState::new(
+            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(*init)),
+            PhantomData::<JsonIpcCodec>
+        )) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 unsafe impl <P, C> Sync for TestStageB<P, C>
@@ -263,8 +284,24 @@ where
         }.boxed()
     }
 
-    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStageInfo, ThoError>> {
-        todo!()
+    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
+        async {
+            let tensor = self.k.lock().await;
+            Ok(StageStateInfo::new(HashMap::from([
+                (format!("{}/{}", TEST_ENDPOINT, self.id),
+                 WorkerTensorInfoPayload::new(TensorKey::stage_state(
+                    TEST_ENDPOINT,
+                    &self.id,
+                    "k"
+                ), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size())))
+            ])))
+        }.boxed()
+    }
+
+    fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async {
+            Ok(self.k.lock().await.as_ref().shallow_clone())
+        }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
@@ -276,7 +313,9 @@ where
     }
 
 
+
 }
+
 
 #[async_trait]
 impl <P, C> FuturesRunnerMapPurger for TestStageB<P, C>
@@ -304,21 +343,6 @@ where
     }
 }
 
-const TEST_ENDPOINT: &str = "TestStageB";
-
-
-pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    let init: Box<dyn Any> = init;
-    let init = init.downcast::<TestStageInitB>().unwrap();
-    async move {
-        debug!("test_with_state_init: init={init:?}");
-
-        Ok(Box::new(WorkerWrapperWithState::new(
-            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(*init)),
-            PhantomData::<JsonIpcCodec>
-        )) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
@@ -398,12 +422,12 @@ mod tests {
                 let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
                 let retired = ipc.worker_id()?;
 
-                let old_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 1)).await?);
+                let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 1)).await?;
                 let old_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 let old_key = old_tensor.ref_key().unwrap();
                 actor.restart().await?;
 
-                let fresh_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 1)).await?);
+                let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 1)).await?;
                 let fresh_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 // Deliberately collide numeric identities across generations.
                 assert_eq!(fresh_tensor.ref_key(), Some(old_key));
@@ -471,8 +495,8 @@ mod tests {
     async fn do_test_distinct_stateful_endpoints() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         // Reuse one initializer name with different ids to prove both worker-side state instances remain independently invokable.
-        let first_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?);
-        let second_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 1)).await?);
+        let first_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+        let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 1)).await?;
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
@@ -515,7 +539,7 @@ mod tests {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
-        let test_stage = Arc::new(TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?);
+        let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
 
         GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 

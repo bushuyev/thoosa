@@ -18,11 +18,12 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tch::Tensor;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use tokio::sync::MutexGuard;
 use uuid::Uuid;
-use crate::ipc_types::WorkerOutput;
+use crate::ipc_types::{WorkerOutput, WorkerTensorInfoPayload};
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -788,9 +789,15 @@ pub trait StageWithState: SyncStage + Sync {
     type S: Debug + Send + Sync;
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
-    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStageInfo, ThoError>> {
+    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
-            Ok(StageStageInfo::new(vec!["xxx".to_string()]))
+            Ok(StageStateInfo::empty())
+        }.boxed()
+    }
+
+    fn get_state_tensor(&self, tho_device: usize, tensor_id:String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async {
+            todo!()
         }.boxed()
     }
 
@@ -984,17 +991,25 @@ where
 
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct StageStageInfo {
-    tensors:Vec<String>
+pub struct StageStateInfo {
+    tensors:HashMap<String, WorkerTensorInfoPayload>
 }
 
-impl StageStageInfo {
-    pub fn new(tensors: Vec<String>) -> Self {
+impl StageStateInfo {
+    pub fn new(tensors: HashMap<String, WorkerTensorInfoPayload>) -> Self {
         Self { tensors }
+    }
+
+    pub fn empty() -> Self {
+        Self { tensors:HashMap::new() }
+    }
+
+    pub fn tensors(self:Box<Self>) -> HashMap<String, WorkerTensorInfoPayload> {
+        self.tensors
     }
 }
 
 #[typetag::serde]
-impl WorkerOutput for StageStageInfo{
+impl WorkerOutput for StageStateInfo {
 
 }
