@@ -2,7 +2,7 @@ use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;

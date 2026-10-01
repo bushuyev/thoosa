@@ -13,12 +13,12 @@ use thoosa_shared::{CudaAction, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use super::cuda_process::CudaIPCActorHandle;
 use super::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx};
-use super::worker_msg::{DebugOutput, OpResult, WorkerInput, WorkerOutput};
+use super::worker_msg::{DebugOutput, OpResult, WorkerInput};
 use super::wraps::SyncStageIpcWrapper;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::ws::{Workspace, mock_ws_simp};
-
+use thoosa_shared::ipc_types::WorkerOutput;
 const ENDPOINT: &str = "recovery-lifecycle";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

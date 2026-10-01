@@ -22,7 +22,7 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -41,6 +41,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
+use thoosa_shared::ipc_types::WorkerOutput;
 
 pub const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 

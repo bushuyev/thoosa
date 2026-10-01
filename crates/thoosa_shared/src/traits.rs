@@ -22,6 +22,7 @@ use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use tokio::sync::MutexGuard;
 use uuid::Uuid;
+use crate::ipc_types::WorkerOutput;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -991,4 +992,9 @@ impl StageStageInfo {
     pub fn new(tensors: Vec<String>) -> Self {
         Self { tensors }
     }
+}
+
+#[typetag::serde]
+impl WorkerOutput for StageStageInfo{
+
 }
