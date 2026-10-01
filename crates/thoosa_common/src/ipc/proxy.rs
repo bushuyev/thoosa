@@ -13,10 +13,13 @@ use log::{debug, error};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
+use std::hash::Hasher;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::string::ToString;
+use std::sync::{Arc, LazyLock};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
@@ -587,25 +590,31 @@ where
 }
 
 
+static EMPTY_STR: LazyLock<String> = LazyLock::new(|| String::from(""));
 
-// impl <St, Init> WithId for DynSyncStageWithStateEnum<St, Init>
-// where
-//     St:SyncStage+StageWithState + WithId,
-//     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-//     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-//     Init:Debug + Send + Sync + 'static
-// {
-//     type ID = dyn CachableIdTr;
-//
-//     fn id(&self) -> &LocalOrIPCId<St::ID> {
-//         match self {
-//             DynSyncStageWithStateEnum::Local(stage) => {
-//                 stage.id()
-//             }
-//             DynSyncStageWithStateEnum::Proxy { stage, .. } => {
-//                 // &stage.stage_id
-//                 &stage.stage_id
-//             }
-//         }
-//     }
-// }
+
+impl <St, Init> WithId for DynSyncStageWithStateEnum<St, Init>
+where
+    St:SyncStage+StageWithState + WithId,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static,
+    <St as WithId>::ID:AsRef<String>
+
+{
+    type ID = String;
+
+    //to use same id for proxies and local stages with state when registering in GlobalCtx::global().register_cache
+    fn id(&self) -> &String {
+        match self {
+            DynSyncStageWithStateEnum::Local(stage) => {
+                stage.id().as_ref()
+            }
+            DynSyncStageWithStateEnum::Proxy { stage, .. } => {
+                stage.stage_id.as_ref().unwrap_or_else(|| {
+                    &EMPTY_STR
+                })
+            }
+        }
+    }
+}

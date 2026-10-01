@@ -233,7 +233,7 @@ where
         let base = Arc::clone(&self.base);
         async move {
 
-            base.purge_gpu(None, tho_device.tho_device_idx(), "worker").await?;
+            // base.purge_gpu(None, tho_device.tho_device_idx(), "worker").await?;
 
             Ok(())
         }.boxed()
