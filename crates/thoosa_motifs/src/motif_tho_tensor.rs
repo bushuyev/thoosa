@@ -4,12 +4,12 @@ use std::ops::{Deref, DerefMut};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::Batch;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageOutput};
-use thoosa_common::ipc::worker_msg::WorkerOutput;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::traits::WithId;
 
 use crate::dims::{ChannelsMotifsSlices, LabelProbability, MotifProbability, MotifSlices};

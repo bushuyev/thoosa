@@ -3,7 +3,7 @@ use crate::dims::Dims;
 use crate::ipc::cuda_wokrer::{AllTensors, DEBUG_DATA};
 use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapperWithState;
 use crate::runner::common::cachable::DevicesWrap;
@@ -32,6 +32,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, 
 use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
 use crate::runner::purge::FuturesRunnerMapPurger;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]

@@ -1,10 +1,9 @@
 use super::pending::{KeepAlive, PendingRequests};
-use thoosa_shared::CudaActivityPauseTicket;
 use crate::copy_ctx::{CudaActorHandle, HandleCtx};
 use crate::cuda_utils::tensor_mem_size;
-use crate::ipc::ipc_cuda_utils::{IpcTensorKind, send_fd};
+use crate::ipc::ipc_cuda_utils::send_fd;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
-use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -24,7 +23,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tch::Device::{Cpu, Cuda};
 use tch::{Device, Tensor};
+use thoosa_shared::CudaActivityPauseTicket;
 use thoosa_shared::ThoError;
+use thoosa_shared::ipc_types::IpcTensorKind;
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
 use thoosa_shims::context::ThoCudaContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -37,6 +38,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
+use thoosa_shared::ipc_types::WorkerTensorInfoPayload;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const WORKER_ID_ENV: &str = "THOOSA_CUDA_WORKER_ID";
@@ -66,25 +68,6 @@ where
     }
 }
 
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct WorkerTensorInfoPayload {
-    tensor_key: u64,
-    kind: IpcTensorKind,
-    shape: Vec<i64>,
-    tensor_byte_len: usize,
-}
-
-impl WorkerTensorInfoPayload {
-    pub fn new(tensor_key: u64, kind: IpcTensorKind, shape: Vec<i64>, tensor_byte_len: usize) -> Self {
-        Self { tensor_key, kind, shape, tensor_byte_len }
-    }
-}
-
-#[typetag::serde]
-impl WorkerOutput for WorkerTensorInfoPayload {
-
-}
 
 pub(crate) async fn worker_response_writer_loop<W>(
     mut writer: W,
@@ -1200,9 +1183,7 @@ pub(crate) struct DeviceInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{PendingRequests, BackendControl};
-    use tokio::sync::mpsc;
-    use anyhow::Context as _;
+    use super::{BackendControl, PendingRequests};
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
     use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, CudaIPCActorMessage, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload};
@@ -1222,6 +1203,7 @@ mod tests {
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
     use crate::ws::{Workspace, mock_ws_simp};
+    use anyhow::Context as _;
     use futures_util::FutureExt;
     use futures_util::future::BoxFuture;
     use log::{debug, info};
@@ -1249,6 +1231,7 @@ mod tests {
     use tokio::net::{UnixListener, UnixStream};
     use tokio::process::{Child, Command};
     use tokio::sync::Mutex;
+    use tokio::sync::mpsc;
     use tokio::task::JoinSet;
 
     fn round_trip_worker_error(error: ThoError) -> ThoError {

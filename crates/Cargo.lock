@@ -5118,7 +5118,6 @@ dependencies = [
  "tracing-subscriber",
  "tub",
  "typetag",
- "with-id",
 ]
 
 [[package]]
@@ -6638,12 +6637,6 @@ dependencies = [
  "unicode-xid",
  "wasmparser",
 ]
-
-[[package]]
-name = "with-id"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f159105e7eb7c30b46f7e5450aac05fafec95971ed42d4ba9931c27ea4dd1f6f"
 
 [[package]]
 name = "writeable"

@@ -13,7 +13,7 @@ use crate as thoosa_common;
 use crate::ipc::cuda_wokrer::AllTensors;
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::DevicesWrap;
@@ -24,6 +24,7 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::Workspace;
 use thoosa_shared::traits::MaxParallelCtx;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 pub(crate) const SYNC_CLASSIFIER_ENDPOINT: &str = "ModelTestClassifier";
 

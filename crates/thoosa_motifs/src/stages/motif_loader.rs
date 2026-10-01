@@ -52,7 +52,7 @@ use crate::stages::stft::SyncStftSelector;
 use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -70,6 +70,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Adjustable;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, CpuData)]
 pub struct MotifLoaderInput {

@@ -49,7 +49,7 @@ use clap::Args;
 use rand::rng;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream, preload_one};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
@@ -77,6 +77,7 @@ use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err, shuffle_and_chunk_with_rng};
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tokio::{join, try_join};
 

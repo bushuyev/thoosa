@@ -4,118 +4,25 @@
 //! tensor offsets. These helpers remain for their focused low-level tests and any
 //! callers that still need standalone shared mappings.
 
-use std::ffi::{CString, c_void};
-use std::fmt::{Debug, Formatter};
+use std::ffi::c_void;
+use std::fmt::Debug;
 use std::io;
-use std::marker::PhantomData;
 use std::mem::{size_of, zeroed};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-use std::ptr::NonNull;
-use std::sync::Arc;
 
-use cust::sys::CU_MEMHOSTREGISTER_PORTABLE;
-use log::{debug, error};
 use serde::{Deserialize, Serialize};
-use tch::{Device, Kind, Tensor};
+use tch::{Kind, Tensor};
 use tokio::net::UnixStream;
-use tokio::task::{JoinError, spawn_blocking};
-use tub::Pool;
 
-use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress};
-use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::cuda_result::check_cuda_status;
-use thoosa_shims::memcpy::{
-    tho_cu_mem_host_register, tho_cu_mem_host_unregister, tho_cu_memcpy_dtoh_async,
-    tho_cu_memcpy_htod_async,
-};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
+use thoosa_shared::ipc_types::IpcTensorKind;
+use thoosa_shared::ThoError;
 
-use crate::cuda_utils::{make_chunks, tensor_mem_size};
 
 fn invalid(message: impl Into<String>) -> ThoError {
     ThoError::new(message)
 }
 
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum IpcTensorKind {
-    Uint8,
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    Half,
-    Float,
-    Double,
-    ComplexHalf,
-    ComplexFloat,
-    ComplexDouble,
-    Bool,
-    QInt8,
-    QUInt8,
-    QInt32,
-    BFloat16,
-    Float8e5m2,
-    Float8e4m3fn,
-    Float8e5m2fnuz,
-    Float8e4m3fnuz,
-}
-
-impl From<Kind> for IpcTensorKind {
-    fn from(value: Kind) -> Self {
-        match value {
-            Kind::Uint8 => Self::Uint8,
-            Kind::Int8 => Self::Int8,
-            Kind::Int16 => Self::Int16,
-            Kind::Int => Self::Int32,
-            Kind::Int64 => Self::Int64,
-            Kind::Half => Self::Half,
-            Kind::Float => Self::Float,
-            Kind::Double => Self::Double,
-            Kind::ComplexHalf => Self::ComplexHalf,
-            Kind::ComplexFloat => Self::ComplexFloat,
-            Kind::ComplexDouble => Self::ComplexDouble,
-            Kind::Bool => Self::Bool,
-            Kind::QInt8 => Self::QInt8,
-            Kind::QUInt8 => Self::QUInt8,
-            Kind::QInt32 => Self::QInt32,
-            Kind::BFloat16 => Self::BFloat16,
-            Kind::Float8e5m2 => Self::Float8e5m2,
-            Kind::Float8e4m3fn => Self::Float8e4m3fn,
-            Kind::Float8e5m2fnuz => Self::Float8e5m2fnuz,
-            Kind::Float8e4m3fnuz => Self::Float8e4m3fnuz,
-        }
-    }
-}
-
-impl From<IpcTensorKind> for Kind {
-    fn from(value: IpcTensorKind) -> Self {
-        match value {
-            IpcTensorKind::Uint8 => Kind::Uint8,
-            IpcTensorKind::Int8 => Kind::Int8,
-            IpcTensorKind::Int16 => Kind::Int16,
-            IpcTensorKind::Int32 => Kind::Int,
-            IpcTensorKind::Int64 => Kind::Int64,
-            IpcTensorKind::Half => Kind::Half,
-            IpcTensorKind::Float => Kind::Float,
-            IpcTensorKind::Double => Kind::Double,
-            IpcTensorKind::ComplexHalf => Kind::ComplexHalf,
-            IpcTensorKind::ComplexFloat => Kind::ComplexFloat,
-            IpcTensorKind::ComplexDouble => Kind::ComplexDouble,
-            IpcTensorKind::Bool => Kind::Bool,
-            IpcTensorKind::QInt8 => Kind::QInt8,
-            IpcTensorKind::QUInt8 => Kind::QUInt8,
-            IpcTensorKind::QInt32 => Kind::QInt32,
-            IpcTensorKind::BFloat16 => Kind::BFloat16,
-            IpcTensorKind::Float8e5m2 => Kind::Float8e5m2,
-            IpcTensorKind::Float8e4m3fn => Kind::Float8e4m3fn,
-            IpcTensorKind::Float8e5m2fnuz => Kind::Float8e5m2fnuz,
-            IpcTensorKind::Float8e4m3fnuz => Kind::Float8e4m3fnuz,
-        }
-    }
-}
 
 
 /// Sends one duplicated reference to `fd` over a connected Unix domain socket.

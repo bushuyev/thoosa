@@ -1,12 +1,12 @@
-use std::any::Any;
-use std::fmt::Debug;
+use crate::ipc::cuda_wokrer::WorkerStageOutput;
+use crate::runner::common::cachable::ThoDataRef;
 use log::warn;
 use serde::{Deserialize, Serialize};
-use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
+use std::any::Any;
+use std::fmt::Debug;
+use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput};
 use thoosa_shared::traits::StageStageInfo;
-use crate::ipc::cuda_wokrer::WorkerStageOutput;
-use crate::ipc::ipc_cuda_utils::IpcTensorKind;
-use crate::runner::common::cachable::ThoDataRef;
+use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 
 /// Numeric tensor and endpoint IDs are only meaningful in their originating
 /// worker. A replacement process may allocate exactly the same IDs again.
@@ -34,10 +34,6 @@ pub trait WorkerInput: Any + Send + Sync + Debug {
 impl WorkerInput for (){
 
 }
-#[typetag::serde(tag = "type")]
-pub trait WorkerOutput:Any + Send + Sync + Debug{
-
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DebugOutput {
@@ -60,10 +56,6 @@ impl WorkerOutput for DebugOutput {
 }
 
 
-#[typetag::serde]
-impl WorkerOutput for StageStageInfo{
-
-}
 
 
 #[derive(Debug, Serialize, Deserialize)]

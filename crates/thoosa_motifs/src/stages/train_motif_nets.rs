@@ -52,7 +52,7 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::{Batch, Slice, ThoBatch};
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::nets::common_nets::{OptConfig, StftRunConfig};
 use thoosa_common::nets::nodes::InitMode;
@@ -82,6 +82,7 @@ use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err, perf_log, sync_read_lock, val};
 use thoosa_store::Store;
 use crate::stages::instance_cache::InstanceCache;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 pub const TRAIN_MOTIF_STEP_ENDPOINT: &str = "TrainMotifStep";
 
@@ -1450,7 +1451,7 @@ mod tests {
     use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
     use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::tests::run_ipc_test;
-    use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+    use thoosa_common::ipc::worker_msg::{WorkerInput};
     use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
     use thoosa_common::ipc::wraps::WorkerWrapperWithState;
     use thoosa_common::nets::batches::BatchLengths;
@@ -1481,6 +1482,7 @@ mod tests {
     use thoosa_shared::traits::{DynSyncStageOutId, MaxParallelCtx};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key, debug_id};
+    use thoosa_shared::ipc_types::WorkerOutput;
     use thoosa_store::RunConfigRow;
     use tokio::fs;
 
