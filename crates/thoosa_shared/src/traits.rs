@@ -127,6 +127,11 @@ impl dyn CachableIdTr {
     }
 }
 
+impl Named for String {
+
+}
+
+
 //triggers blanked impl<T: ... Named + 'static> CachableId for T
 #[automock]
 pub trait Named {// like Type name
@@ -246,7 +251,7 @@ impl Display for DataId {
 #[delegatable_trait]
 #[automock(type ID=DummyCachableId;)]
 pub trait WithId {
-    type ID: CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug;
+    type ID: CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug + ?Sized;
 
     fn id(&self) -> &Self::ID;
 }

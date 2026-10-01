@@ -410,24 +410,24 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
             })),
         },
 
-        net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-            num_conv_layers: RangeOrValue::Range { range: Range { start: 8, end: 16 }, step: None },
-            // num_conv_layers: RangeOrValue::Value(8),
-            hidden_conv_channels: RangeOrValue::Range { range: Range { start: 32, end: 128 }, step: None },
-            num_head_layers: RangeOrValue::Range { range: Range { start: 10, end: 20 }, step: None },
-            num_head_features: RangeOrValue::Value(256),
-            kernel: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
-            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
-            joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
-        }),
+        // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+        //     num_conv_layers: RangeOrValue::Range { range: Range { start: 8, end: 16 }, step: None },
+        //     // num_conv_layers: RangeOrValue::Value(8),
+        //     hidden_conv_channels: RangeOrValue::Range { range: Range { start: 32, end: 128 }, step: None },
+        //     num_head_layers: RangeOrValue::Range { range: Range { start: 10, end: 20 }, step: None },
+        //     num_head_features: RangeOrValue::Value(256),
+        //     kernel: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
+        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        //     // joint: ConvNetJointArgsRangeOrValue::MinMax(MinMaxArgsRangeOrValue{ _dummy: 0 }),
+        //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _path_pd: Default::default() }),
+        // }),
 
-        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet( SelfAttentionNetArgsRangeOrValue {
-        //     head_size: RangeOrValue::Value(2),
-        //     n_heads: RangeOrValue::Value(4),
-        //     ff_mult: RangeOrValue::Value(2),
-        //     dropout: RangeOrValue::Value(0.1),
-        // })
+        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet( SelfAttentionNetArgsRangeOrValue {
+            head_size:  RangeOrValue::Range { range: Range { start: 4, end: 256 }, step: None },
+            n_heads: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            ff_mult: RangeOrValue::Value(2),
+            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        }),
         // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
         //     num_layers:  RangeOrValue::Value(4),
         //     features:  RangeOrValue::Value(100),
@@ -796,7 +796,7 @@ fn run_all_find_motifs_config_1<P: FieldName + 'static>() -> FindMotifsRunConfig
         finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
             similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.1) }),
                 slices: RangeOrValue::Value(100),
             }),
         }),
@@ -813,20 +813,20 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
                 min: RangeOrValue::Value(0.8),
             },
-            MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(3.0),
-                    eps: RangeOrValue::Value(1e-8),
-                }),
-                min: RangeOrValue::Value(0.6),
-            },
-            MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::Coherence(CoherenceRunConfigRangeOrValue {
-                    k: RangeOrValue::Value(10.0),
-                    eps: RangeOrValue::Value(1e-8),
-                }),
-                min: RangeOrValue::Value(0.6),
-            },
+            // MotifCriterionConstraintRangeOrValue {
+            //     metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
+            //         k: RangeOrValue::Value(3.0),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     }),
+            //     min: RangeOrValue::Value(0.6),
+            // },
+            // MotifCriterionConstraintRangeOrValue {
+            //     metric: MetricsRangeOrValue::Coherence(CoherenceRunConfigRangeOrValue {
+            //         k: RangeOrValue::Value(10.0),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     }),
+            //     min: RangeOrValue::Value(0.6),
+            // },
         ],
     }
 }
