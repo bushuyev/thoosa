@@ -25,7 +25,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::{Device, Tensor};
 use thoosa_shared::CudaActivityPauseTicket;
 use thoosa_shared::ThoError;
-use thoosa_shared::ipc_types::IpcTensorKind;
+use thoosa_shared::ipc_types::{IpcTensorKind, TensorKey};
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
 use thoosa_shims::context::ThoCudaContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
 use thoosa_shared::ipc_types::WorkerTensorInfoPayload;
+use thoosa_shared::traits::StageStateInfo;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const WORKER_ID_ENV: &str = "THOOSA_CUDA_WORKER_ID";
@@ -397,19 +398,45 @@ impl CudaIPCActor {
                 let generation = input.worker_id.generation;
 
                 input.request_id = next_id;
-
+                let worker_id = self.worker().worker_id;
+                let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.worker().pending);
+                let tx = self.worker().tx.clone();
                 tokio::spawn(activity.run(async move {
 
                     match input.operation {
                         Operation::PurgeStage { .. } => {
                             let response = send_request_and_wait_msg(
                                 self_tx,
-                                pending,
+                                Arc::clone(&pending),
                                 input,
                             ).await?;
 
-                            debug!("Operation::PurgeStage: response={response:?}");
-                            let _ = respond_to.send(Ok(response));
+                            if let OpResult::Ok(Some(v)) = response.status {
+                                debug!("Operation::PurgeStage: v={v:?}");
+                                let mut tensors:HashMap<String, ThoTensor> = HashMap::new();
+                                let Ok(info) = (v as Box<dyn Any>).downcast::<StageStateInfo>() else {
+                                    panic!("");//TODO return err
+                                };
+
+                                for (key, tensor_info) in info.tensors() {
+                                    let t = Self::do_ref_d2h_copy(
+                                        worker_id,
+                                        transfer_id,
+                                        Arc::clone(&pending),
+                                        tx.clone(),
+                                        tensor_info
+                                    ).await?;
+
+                                    tensors.insert(key, t);
+                                }
+                            }
+
+                            let _ = respond_to.send(Ok(CudaWorkerMsgOut{
+                                worker_id: response.worker_id,
+                                request_id: response.request_id,
+                                status: OpResult::Ok(None),
+                            }));
                             Ok::<_, ThoError>(())
                         }
                         _=> {
@@ -472,23 +499,39 @@ impl CudaIPCActor {
             let _source = source;
             let result = async {
                 let info = worker_tensor_info(send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, describe_id, Operation::DescribeRef { tensor_key })).await?)?;
-                if info.tensor_key != tensor_key || tensor_mem_size(info.kind.into(), &info.shape) != info.tensor_byte_len { return Err(ThoError::new("worker returned inconsistent tensor metadata")); }
-                let destination = Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?;
-                let arena_offset = parent_shared_arena_offset(&destination, info.tensor_byte_len, "D2H destination")?;
-                let destination = Arc::new(parking_lot::Mutex::new(destination));
-                // The registry retains this allocation even if this task aborts
-                // or transport fails while the worker is still writing to it.
-                let response = send_request(tx, pending, CudaWorkerMsgIn::new(worker_id, transfer_id, Operation::D2hCopy {
-                    tensor_key, kind: info.kind, shape: info.shape, tensor_byte_len: info.tensor_byte_len, arena_offset,
-                }), Some(Box::new(Arc::clone(&destination))), false).await?;
-                let done = Self::copy_result(response)?;
-                if done.transfer_id != transfer_id || done.tensor_ref != tensor_key { return Err(ThoError::new("worker D2H reply has an unexpected transfer identity")); }
-                let destination = Arc::try_unwrap(destination).map_err(|_| ThoError::new("completed D2H storage is still leased"))?.into_inner();
-                ThoTensor::new((), destination)
+                if info.tensor_key != tensor_key.into() || tensor_mem_size(info.kind.into(), &info.shape) != info.tensor_byte_len {
+                    return Err(ThoError::new("worker returned inconsistent tensor metadata"));
+                }
+
+                Self::do_ref_d2h_copy(worker_id, transfer_id, pending, tx, info).await
             }.await;
             let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
         }));
         Ok(())
+    }
+
+    async fn do_ref_d2h_copy(worker_id: CudaWorkerId, transfer_id: u64, pending: Arc<PendingRequests>, tx: Sender<CudaWorkerMsgIn>, info: WorkerTensorInfoPayload) -> Result<ThoTensor, ThoError> {
+
+
+        let destination = Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?;
+        let arena_offset = parent_shared_arena_offset(&destination, info.tensor_byte_len, "D2H destination")?;
+        let destination = Arc::new(parking_lot::Mutex::new(destination));
+        // The registry retains this allocation even if this task aborts
+        // or transport fails while the worker is still writing to it.
+        let response = send_request(tx, pending, CudaWorkerMsgIn::new(worker_id, transfer_id, Operation::D2hCopy {
+            tensor_key:info.tensor_key.clone(),
+            kind: info.kind,
+            shape: info.shape,
+            tensor_byte_len: info.tensor_byte_len,
+            arena_offset,
+        }), Some(Box::new(Arc::clone(&destination))), false).await?;
+        let done = Self::copy_result(response)?;
+
+        if done.transfer_id != transfer_id || done.tensor_ref != info.tensor_key {
+            return Err(ThoError::new("worker D2H reply has an unexpected transfer identity"));
+        }
+        let destination = Arc::try_unwrap(destination).map_err(|_| ThoError::new("completed D2H storage is still leased"))?.into_inner();
+        ThoTensor::new((), destination)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_h2d_copy"))]
@@ -538,8 +581,11 @@ impl CudaIPCActor {
                 if done.transfer_id != transfer_id {
                     return Err(ThoError::new(format!("worker H2D response transfer_id={} but expected {transfer_id}", done.transfer_id)));
                 }
+                let TensorKey::Data(tensor_ref ) = done.tensor_ref else {
+                    return Err(ThoError::new(format!("worker H2D got done.tensor_ref={:?} expecting data", done.tensor_ref)));
+                };
                 // The worker has completed its read before acknowledging, so the parent may now release the arena allocation.
-                Ok(ThoTensor::new_ref((), done.tensor_ref, src_shape, src_kind, None, worker_id))
+                Ok(ThoTensor::new_ref((), tensor_ref, src_shape, src_kind, None, worker_id))
             }.await;
             let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
         }));

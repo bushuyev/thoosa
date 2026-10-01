@@ -8,7 +8,7 @@ use crate::ipc::ipc_cuda_utils::recv_fd;
 use crate::ipc::proxy_tests::TestOutputA;
 use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
-use crate::ipc::worker_msg::CudaWorkerId;
+use crate::ipc::worker_msg::{CudaWorkerId};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
 use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper, SyncStageIpcWrapperWithState, WorkerWrapperWithState};
 use crate::runner::global_ctx::GlobalCtx;
@@ -36,9 +36,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
-use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput, WorkerTensorInfoPayload};
+use thoosa_shared::ipc_types::{IpcTensorKind, TensorKey, WorkerOutput, WorkerTensorInfoPayload};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
-use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStageInfo, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStateInfo, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -51,7 +51,7 @@ use tub::Pool;
 
 
 const WORKER_EXEC_STREAMS: usize = 32;
-static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1000000);
+static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1_000_000);//if starts from 0 it's difficult to find them in logs
 
 
 pub static DEBUG_DATA:LazyLock<Arc<Mutex<Vec<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(vec![])));
@@ -385,7 +385,7 @@ impl CudaWorker {
                         let tensors = context.all_cuda_tensors.tensors.read();
                         match tensors.get(&tensor_key) {
                             None => OpResult::failed(format!("worker tensor tensor_key={tensor_key} not found")),
-                            Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key, tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
+                            Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key.into(), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
                         }
                     };
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status }).await.context("worker response writer is closed")?;
@@ -407,17 +407,38 @@ impl CudaWorker {
                     context.reply_tx.send(CudaWorkerMsgOut {
                         worker_id,
                         request_id,
-                        status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)),
+                        status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref:tensor_ref.into() }) as Box<dyn WorkerOutput>)),
                     }).await.context("worker response writer is closed")?;
                     debug!("run_worker: Operation::H2dCopy done");
                     Ok(())
                 }
                 Operation::D2hCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
-                    debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
+                    debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "D2H destination")?;
 
                     let cuda_device = context.tho_device.gpu_ordinal();
-                    let source = prepare_d2h_source(&context.all_cuda_tensors, tensor_key, kind, &shape, cuda_device)?;
+                    let source = match &tensor_key {
+                        TensorKey::Data(tensor_key) => {
+                            prepare_d2h_source(&context.all_cuda_tensors, tensor_key.clone(), kind, &shape, cuda_device)
+                        }
+                        TensorKey::StageState{ endpoint_name, stage_id, tensor_id } => {
+                            let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(stage_id));
+
+                            let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+
+                            if let Some(endpoint) = endpoint {
+                                // endpoint.purge(context.tho_device.clone()).await?;
+                                if let Some(with_state) = endpoint.as_with_state(){
+
+                                    with_state.get_state_tensor(&context.tho_device, tensor_id.clone()).await
+                                } else {
+                                    panic!("no state for: endpoint_key={endpoint_key:}");
+                                }
+                            } else {
+                                panic!("no endpoint found: endpoint_key={endpoint_key:}");
+                            }
+                        }
+                    }?;
                     let source_ptr = source.data_ptr() as usize;
                     let destination_address = context.shared_arena.address(arena_offset, tensor_byte_len, "D2H destination")?;
                     context.copy_ctx.read().await.copy_to_cpu_ptr(source_ptr, &shape, kind.into(), destination_address).await?;
@@ -495,6 +516,7 @@ impl CudaWorker {
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(result)) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
+                //rename to DescribeStageState[Tensors]
                 Operation::PurgeStage { endpoint_name, stage_id } => {
                     debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
 
