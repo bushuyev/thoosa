@@ -4,8 +4,8 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
-use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput};
-use thoosa_shared::traits::StageStageInfo;
+use thoosa_shared::ipc_types::{IpcTensorKind, TensorKey, WorkerOutput};
+use thoosa_shared::traits::StageStateInfo;
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 
 /// Numeric tensor and endpoint IDs are only meaningful in their originating
@@ -56,8 +56,6 @@ impl WorkerOutput for DebugOutput {
 }
 
 
-
-
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
     DescribeRef {
@@ -71,7 +69,7 @@ pub enum Operation {
         arena_offset: usize,
     },
     D2hCopy {
-        tensor_key: u64,
+        tensor_key: TensorKey,
         kind: IpcTensorKind,
         shape: Vec<i64>,
         tensor_byte_len: usize,
@@ -194,7 +192,7 @@ pub struct CudaWorkerMsgOut {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct WorkerCopyDonePayload {
     pub(crate) transfer_id: u64,
-    pub(crate) tensor_ref: u64,
+    pub(crate) tensor_ref: TensorKey,
 }
 
 #[typetag::serde]

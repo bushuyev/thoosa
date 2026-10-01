@@ -81,16 +81,41 @@ impl From<IpcTensorKind> for Kind {
     }
 }
 
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TensorKey {
+    Data(u64),//all_cuda_tensors
+    StageState{endpoint_name:String, stage_id:String, tensor_id:String}
+}
+
+impl From<u64> for TensorKey {
+    fn from(value: u64) -> Self {
+        TensorKey::Data(value)
+    }
+}
+
+impl TensorKey {
+    pub fn stage_state<S0:ToString, S1:ToString, S2:ToString>(endpoint_name:S0, stage_id:S1, tensor_id:S2) -> Self {
+        TensorKey::StageState {
+            endpoint_name:endpoint_name.to_string(),
+            stage_id:stage_id.to_string(),
+            tensor_id:tensor_id.to_string()
+        }
+    }
+}
+
+
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerTensorInfoPayload {
-    pub tensor_key: u64,
+    pub tensor_key: TensorKey,
     pub kind: IpcTensorKind,
     pub shape: Vec<i64>,
     pub tensor_byte_len: usize,
 }
 
 impl WorkerTensorInfoPayload {
-    pub fn new(tensor_key: u64, kind: IpcTensorKind, shape: Vec<i64>, tensor_byte_len: usize) -> Self {
+    pub fn new(tensor_key: TensorKey, kind: IpcTensorKind, shape: Vec<i64>, tensor_byte_len: usize) -> Self {
         Self { tensor_key, kind, shape, tensor_byte_len }
     }
 }

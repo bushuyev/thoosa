@@ -20,9 +20,10 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
+use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::MutexGuard;
 use thoosa_shared::ipc_types::WorkerOutput;
@@ -257,8 +258,12 @@ where
         StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
     }
 
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>> {
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {
         StageWithState::get_state_info(self.base.as_ref(), tho_device.tho_device_idx())
+    }
+
+    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String) -> BoxFuture<'a, Result<Tensor, ThoError>> {
+        StageWithState::get_state_tensor(self.base.as_ref(), tho_device.tho_device_idx(), tensor_id)
     }
 
 
@@ -305,7 +310,9 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>>;
 
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>>;
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
+
+    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
 
     fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
 }
@@ -313,7 +320,8 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 pub trait ErasedWithState: Sync + Debug {
 
     fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>>;
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
+    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
 }
 
 impl<T> ErasedWithState for T
@@ -333,9 +341,15 @@ where
         }.boxed()
     }
 
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStageInfo, ThoError>> {
+    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {
         async move {
             SyncStageIpcWrapperWithState::get_state_info(self, tho_device).await
+        }.boxed()
+    }
+
+    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String) -> BoxFuture<'a, Result<Tensor, ThoError>> {
+        async move {
+            SyncStageIpcWrapperWithState::get_state_tensor(self, tho_device, tensor_id).await
         }.boxed()
     }
 }
