@@ -30,11 +30,13 @@ use tch::Kind::Int;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, DynSyncStageOutId, ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
-use thoosa_shared::ipc_types::WorkerOutput;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::ipc_types::{WorkerOutput, WorkerTensorInfoPayload};
+use crate::cuda_utils::tensor_mem_size;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
@@ -180,6 +182,7 @@ where
     P:Debug,
     C:RunCtx
 {
+    id:SynKey,
     pd:PhantomData<(P, C)>,
     k:tokio::sync::Mutex<ThoTensor> //state - needs to be dumped to CPU when handling OOM in other stages
 }
@@ -207,11 +210,29 @@ where
 
     pub fn new_local(init: TestStageInitB) -> Self {
         Self {
+            id: mono_key!(0, "TestStageB").into(),
             k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, ThoDevice::from(init.tho_device_ids).into())).into()),
             pd: PhantomData
         }
     }
 
+}
+
+
+const TEST_ENDPOINT: &str = "TestStageB";
+
+
+pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    let init: Box<dyn Any> = init;
+    let init = init.downcast::<TestStageInitB>().unwrap();
+    async move {
+        debug!("test_with_state_init: init={init:?}");
+
+        Ok(Box::new(WorkerWrapperWithState::new(
+            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(*init)),
+            PhantomData::<JsonIpcCodec>
+        )) as Box<dyn SyncStageIpcWrapper>)
+    }.boxed()
 }
 
 unsafe impl <P, C> Sync for TestStageB<P, C>
@@ -263,8 +284,13 @@ where
         }.boxed()
     }
 
-    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStageInfo, ThoError>> {
-        todo!()
+    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
+        async {
+            let tensor = self.k.lock().await;
+            Ok(StageStateInfo::new(HashMap::from([
+                (format!("{}/{}", TEST_ENDPOINT, self.id), WorkerTensorInfoPayload::new(0, tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size())))
+            ])))
+        }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
@@ -277,6 +303,7 @@ where
 
 
 }
+
 
 #[async_trait]
 impl <P, C> FuturesRunnerMapPurger for TestStageB<P, C>
@@ -304,21 +331,6 @@ where
     }
 }
 
-const TEST_ENDPOINT: &str = "TestStageB";
-
-
-pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
-    let init: Box<dyn Any> = init;
-    let init = init.downcast::<TestStageInitB>().unwrap();
-    async move {
-        debug!("test_with_state_init: init={init:?}");
-
-        Ok(Box::new(WorkerWrapperWithState::new(
-            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(*init)),
-            PhantomData::<JsonIpcCodec>
-        )) as Box<dyn SyncStageIpcWrapper>)
-    }.boxed()
-}
 
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
