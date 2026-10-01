@@ -15,7 +15,7 @@ use thoosa_common::cuda_utils::maybe_cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::IpcCodec;
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::nodes::LossFp;
 use thoosa_common::nets::tho_varstore::ThoTrainModule;
@@ -32,6 +32,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,

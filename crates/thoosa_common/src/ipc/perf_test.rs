@@ -5,7 +5,7 @@ use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::proxy_tests::{TestRunCtx, TestStageA};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::tests::{init_ipc_test, run_ipc_test};
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
@@ -27,6 +27,7 @@ use std::time::Duration;
 use tch::{Device, Tensor};
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::perf_logging::{PERF, format_perf_map};
 use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
 

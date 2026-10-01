@@ -2,7 +2,7 @@ use crate as thoosa_common;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
@@ -38,6 +38,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
+use thoosa_shared::ipc_types::WorkerOutput;
 use tracing::debug;
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";

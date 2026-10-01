@@ -20,7 +20,7 @@ use tch::{Device, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
@@ -35,7 +35,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, ConsumeResult, MaxParallelCtx, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{ThoError, mono_key};
 // use crate::stages::stages_seq::StagesSeq;
-
+use thoosa_shared::ipc_types::WorkerOutput;
 
 type LoadFn =
 dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;

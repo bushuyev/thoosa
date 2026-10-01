@@ -40,7 +40,7 @@ use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::train_nets::final_net;
 use crate::train_nets::{FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
@@ -69,6 +69,7 @@ use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tracing::field::debug;
 

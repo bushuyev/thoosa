@@ -27,7 +27,7 @@ use thoosa_common::dims::{ChannelsData, Dims};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::resources::Simple;
@@ -56,6 +56,7 @@ use thoosa_shared::traits::ConsumeResult;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoError, mono_key};
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tracing::error;
 

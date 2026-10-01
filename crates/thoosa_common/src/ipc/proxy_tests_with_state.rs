@@ -3,7 +3,7 @@ use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
 use crate::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapperWithState};
 use crate::nets::common_nets::ThoModuleWithStore;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
@@ -34,6 +34,7 @@ use thoosa_shared::traits::{CachableIdTr, Data, DynSyncStage, DynSyncStageBox, D
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {

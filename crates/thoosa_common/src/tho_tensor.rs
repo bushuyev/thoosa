@@ -31,7 +31,8 @@ use thoosa_shared::{n_trace_line, CopyToDevice, ThoError};
 use thoosa_shared::{panic_to_err, debug_id};
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
-use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput};
+use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput};
 
 
 //TODO remove, it should be in DevicesWrap between async

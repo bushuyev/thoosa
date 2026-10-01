@@ -70,6 +70,7 @@ pub mod rayon_pool;
 pub mod tracked_await;
 pub mod collect_futures_with_progress;
 pub mod futures_limits;
+pub mod ipc_types;
 
 pub use collect_futures_with_progress::collect_futures_with_progress;
 

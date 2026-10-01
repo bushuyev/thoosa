@@ -1,7 +1,7 @@
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
 use crate::runner::common::cachable::ThoDataRef;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
@@ -25,7 +25,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::MutexGuard;
-
+use thoosa_shared::ipc_types::WorkerOutput;
 
 ///
 

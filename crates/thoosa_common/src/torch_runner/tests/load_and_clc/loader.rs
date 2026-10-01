@@ -3,7 +3,7 @@ use crate::dims::{Dims, LocalSelect};
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{WorkerInput, WorkerOutput};
+use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::DevicesWrap;
@@ -35,7 +35,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, DebugId, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::Mutex;
-
+use thoosa_shared::ipc_types::WorkerOutput;
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
 pub struct LoaderInputId(&'static str);
