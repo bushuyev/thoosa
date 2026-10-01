@@ -20,8 +20,9 @@ use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::string::ToString;
 use std::sync::{Arc, LazyLock};
+use parking_lot::RwLock;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStageInfo, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
 
 pub struct ProxyStage<St>
@@ -448,7 +449,8 @@ where
     Local(Arc<St>),
     Proxy {
         stage: Arc<ProxyStage<St>>,
-        init: Init,
+        init: Init,//if async stages need to know parameters with which sync stage was initialized (motif_id, out_id etc)
+        state: RwLock<Option<Box<St::S>>>//TODO remove Option - the state should always be available?
     },
 }
 
@@ -536,7 +538,8 @@ where
     St:SyncStage+StageWithState + FuturesRunnerMapPurger,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static
+    Init:Debug + Send + Sync + 'static,
+    St::S: 'static
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self {
@@ -554,14 +557,25 @@ where
             DynSyncStageWithStateEnum::Local(local) => {
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
-            DynSyncStageWithStateEnum::Proxy { stage,  .. } => {
-                if stage.tho_device_idx != device_idx { return Ok(()); }
-                crate::ipc::serialization::json::purge_ipc_sync_stage(
-                    GlobalCtx::global().cuda_actor(device_idx).as_ref(),
-                    stage.endpoint_name,
+            DynSyncStageWithStateEnum::Proxy { stage, init, state, } => {
+                if stage.tho_device_idx != device_idx {//not our device is being purged
+                    return Ok(());
+                }
+
+
+                let state_out = GlobalCtx::global().cuda_actor(device_idx).purge_stage_state(
                     stage.stage_id.clone(),
+                    stage.endpoint_name.to_string(),
                     stage.worker_id,
-                ).await
+                ).await?;
+
+                if let OpResult::Ok(Some(state_box)) = state_out.status {
+                    if let Ok(state_rs) = (state_box as Box<dyn Any>).downcast::<St::S>() {
+                        *state.write() = Some(state_rs);
+                    }
+                }
+
+                Ok(())
             }
         }
     }

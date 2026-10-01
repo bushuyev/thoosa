@@ -11,7 +11,7 @@ use crate::ipc::proxy_tests::TestOutputA;
 use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput, WorkerOutput};
-use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
+use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper, SyncStageIpcWrapperWithState, WorkerWrapperWithState};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
 use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
-use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStageInfo, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -497,13 +497,22 @@ impl CudaWorker {
 
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id);
 
-                    let endpoint = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+                    let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+
                     if let Some(endpoint) = endpoint {
-                        endpoint.purge(context.tho_device.clone()).await?;
+                        // endpoint.purge(context.tho_device.clone()).await?;
+                        if let Some(with_state) = endpoint.as_with_state(){
+
+                            let state_info = with_state.get_state_info(&context.tho_device).await?;
+                            context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }).await.context("worker response writer is closed")?;
+                        } else {
+                            error!("no state for: endpoint_key={endpoint_key:}");
+                        }
                     } else {
-                        error!("no endpoint found");
+                        error!("no endpoint found: endpoint_key={endpoint_key:}");
                     }
-                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+
+
                     Ok(())
                 }
                 Operation::DropStage { endpoint_name, stage_id } => {
