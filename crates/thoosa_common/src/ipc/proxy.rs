@@ -604,6 +604,7 @@ where
 {
     type ID = String;
 
+    //to use same id for proxies and local stages with state when registering in GlobalCtx::global().register_cache
     fn id(&self) -> &String {
         match self {
             DynSyncStageWithStateEnum::Local(stage) => {
