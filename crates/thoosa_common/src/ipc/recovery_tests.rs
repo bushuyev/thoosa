@@ -100,7 +100,7 @@ async fn wait_for_file(path: &str) {
     while !Path::new(path).exists() { tokio::time::sleep(Duration::from_millis(5)).await; }
 }
 
-fn initialize<'a>(input: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _tensors: &'a AllTensors, _device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn initialize<'a>(tage_id:Option<String>, input: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _tensors: &'a AllTensors, _device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let input: Box<dyn Any> = input;
         match input.downcast::<RecoveryInput>().unwrap().action {

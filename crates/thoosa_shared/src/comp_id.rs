@@ -90,10 +90,7 @@ pub struct MonoKey {
 
 impl Display for MonoKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        #[cfg(any(debug_assertions, tho_debug))]
-        write!(f, "{}_{}", self.val, self.name)?;
-
-        #[cfg(not(any(debug_assertions, tho_debug)))]
+       
         write!(f, "{}", self.val)?;
 
         Ok(())
@@ -200,8 +197,8 @@ pub struct SynKey {//σύνθετος
 
 impl Display for SynKey{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        for val in self.vals.iter().take(5) {//TODO
-            write!(f, "_{}_", val)?;
+        for val in self.vals.iter() {
+            write!(f, "{}", val)?;
         }
 
         Ok(())
@@ -211,7 +208,7 @@ impl Display for SynKey{
 impl fmt::Debug for SynKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SynKey[")?;
-        for (idx, mono) in self.vals.iter().enumerate().take(5) {
+        for (idx, mono) in self.vals.iter().enumerate() {
             if idx > 0 {
                 f.write_str("/")?;
             }

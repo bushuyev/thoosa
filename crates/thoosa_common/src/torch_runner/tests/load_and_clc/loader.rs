@@ -333,7 +333,7 @@ impl WorkerOutput for ThoTensor<LoadedTensor, SynKey> {}
 #[typetag::serde(name = "ThoTensor_LoadedTensor_Input")]
 impl WorkerInput for ThoTensor<LoadedTensor, SynKey> {}
 
-pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncTestTensorLoaderInit>().expect("SyncTestTensorLoader endpoint received an unexpected initializer type");

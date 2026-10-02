@@ -409,7 +409,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncLogitsBatchOutput{}
 
-pub fn sync_logits_batch_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_logits_batch_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
 
@@ -661,7 +661,7 @@ impl std::borrow::Borrow<TrainStepInput<LabelProbability, LabelsProbabilities>> 
     }
 }
 
-fn train_final_step_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_final_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>() else {
             return Err(ThoError::new("TrainFinalStep endpoint received invalid initializer"));
