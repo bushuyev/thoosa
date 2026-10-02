@@ -234,7 +234,7 @@ where
         let base = Arc::clone(&self.base);
         async move {
 
-            // base.purge_gpu(None, tho_device.tho_device_idx(), "worker").await?;
+            base.drop_gpu(tho_device.tho_device_idx(), "worker").await?;
 
             Ok(())
         }.boxed()
@@ -295,9 +295,8 @@ pub trait SyncStageIpcWrapper: Send + Sync + Debug {
     fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
         unimplemented!()
     }
-
-
-    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>
+    
+    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>//move to SyncStageIpcWrapperWithState
     {
         async move {
             Ok(())
