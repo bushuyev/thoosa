@@ -303,7 +303,7 @@ mod tests {
         })
     }
 
-    fn sync_consume_test_endpoint_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    fn sync_consume_test_endpoint_init<'a>(tage_id: std::option::Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
         use futures_util::FutureExt;
         async move {
             // This stage has no initializer fields, but still uses the typed install message.

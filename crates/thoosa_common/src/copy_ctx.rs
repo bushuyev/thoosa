@@ -33,7 +33,8 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::error;
 use tub::{Guard, Pool};
-use crate::ipc::worker_msg::{CudaWorkerMsgOut, OpResult};
+use crate::ipc::proxy::StageStateDump;
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult};
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -90,7 +91,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(())
     }
 
-    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
         unreachable!()
     }
 

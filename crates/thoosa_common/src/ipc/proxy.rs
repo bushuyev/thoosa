@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
 use std::marker::PhantomData;
@@ -24,6 +24,7 @@ use parking_lot::RwLock;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use tokio::sync::MutexGuard;
+use thoosa_shared::ipc_types::WorkerOutput;
 
 pub struct ProxyStage<St>
 where
@@ -398,22 +399,7 @@ where
         }
     }
 
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            DynSyncStageEnum::Local(local) => {
-                local.purge_gpu(ids_to_keep, device_idx, name).await
-            }
-            DynSyncStageEnum::Proxy { stage,  .. } => {
-                if stage.tho_device_idx != device_idx { return Ok(()); }
-                crate::ipc::serialization::json::purge_ipc_sync_stage(
-                    GlobalCtx::global().cuda_actor(device_idx).as_ref(),
-                    stage.endpoint_name,
-                    stage.stage_id.clone(),
-                    stage.worker_id,
-                ).await
-            }
-        }
-    }
+
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self {
@@ -437,6 +423,7 @@ where
         }
     }
 }
+
 
 #[derive(Debug)]
 pub enum DynSyncStageWithStateEnum<St, Init = ()>
@@ -532,6 +519,18 @@ where
 }
 ///
 ///
+///
+#[derive(Debug)]
+pub struct StageStateDump {
+    tensors:HashMap<String, ThoTensor> // = HashMap::new();
+}
+
+impl StageStateDump {
+    pub fn new(tensors: HashMap<String, ThoTensor>) -> Self {
+        Self { tensors }
+    }
+}
+
 #[async_trait]
 impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum<St, Init>
 where
@@ -572,13 +571,13 @@ where
                 ).await?;
                 debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
 
-                if let OpResult::Ok(Some(state_box)) = state_out.status {
-                    if let Ok(state_rs) = (state_box as Box<dyn Any>).downcast::<St::S>() {
-                        debug!("FuturesRunnerMapPurger>::purge_gpu: state_rs={state_rs:?}");
-                        *state.write() = Some(state_rs);
-                    }
-                }
-
+                // if let OpResult::Ok(Some(state_box)) = state_out.status {
+                //     if let Ok(state_rs) = (state_box as Box<dyn Any>).downcast::<St::S>() {
+                //         debug!("FuturesRunnerMapPurger>::purge_gpu: state_rs={state_rs:?}");
+                //         *state.write() = Some(state_rs);
+                //     }
+                // }
+                // *state.write() = Some(state_out);
                 Ok(())
             }
         }

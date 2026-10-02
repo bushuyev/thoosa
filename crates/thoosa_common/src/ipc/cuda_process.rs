@@ -40,6 +40,7 @@ use tracing::Instrument;
 use tracing::field::debug;
 use thoosa_shared::ipc_types::WorkerTensorInfoPayload;
 use thoosa_shared::traits::StageStateInfo;
+use crate::ipc::proxy::StageStateDump;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const WORKER_ID_ENV: &str = "THOOSA_CUDA_WORKER_ID";
@@ -57,7 +58,7 @@ pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> Str
 
 
 // Installed stages share an initializer name but must have distinct invocation keys.
-pub(crate) fn endpoint_stage_key<StageId>(endpoint_name: String, stage_id: Option<StageId>) -> String
+pub(crate) fn endpoint_stage_key<StageId>(endpoint_name: String, stage_id: Option<&StageId>) -> String
 where
     StageId:Display
 {
@@ -115,6 +116,11 @@ pub enum CudaIPCActorMessage {
         key:u64,
         worker_id: CudaWorkerId,
         respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
+    PurgeStage {
+        input: CudaWorkerMsgIn,
+        activity: thoosa_shared::CudaActivityScope,
+        respond_to: oneshot::Sender<Result<StageStateDump, ThoError>>
     },
     SendMsg {
         input: CudaWorkerMsgIn,
@@ -379,6 +385,46 @@ impl CudaIPCActor {
                     let _ = respond_to.send(result);
                 });
             }
+            CudaIPCActorMessage::PurgeStage {mut input, activity, respond_to} => {
+                let self_tx = self.worker().tx.clone();
+                let pending = Arc::clone(&self.worker().pending);
+                let worker_id = self.worker().worker_id;
+                let next_id = Arc::clone(&self.next_id);
+                let tx = self.worker().tx.clone();
+                tokio::spawn(async move {
+                    let response = send_request_and_wait_msg(
+                        self_tx,
+                        Arc::clone(&pending),
+                        input,
+                    ).await?;
+
+                    if let OpResult::Ok(Some(v)) = response.status {
+                        debug!("handle_message: Operation::PurgeStage: v={v:?}");
+                        let mut tensors:HashMap<String, ThoTensor> = HashMap::new();
+                        let Ok(info) = (v as Box<dyn Any>).downcast::<StageStateInfo>() else {
+                            panic!("");//TODO return err
+                        };
+
+                        for (key, tensor_info) in info.tensors() {
+                            let t = Self::do_ref_d2h_copy(
+                                worker_id,
+                                next_id.fetch_add(1, Ordering::Relaxed),
+                                Arc::clone(&pending),
+                                tx.clone(),
+                                tensor_info
+                            ).await?;
+
+                            tensors.insert(key, t);
+                        }
+
+                        debug!("handle_message: Operation::PurgeStage: tensors={tensors:?}");
+                        let _ = respond_to.send(Ok(StageStateDump::new(tensors)));
+                    }
+
+
+                    Ok::<_, ThoError>(())
+                });
+            }
             CudaIPCActorMessage::SendMsg { mut input, activity, respond_to } => {
 
                 if let Err(error) = input.worker_id.check(self.worker().worker_id).and_then(|_| activity.check_operation(&self.gate)) {
@@ -405,40 +451,7 @@ impl CudaIPCActor {
                 tokio::spawn(activity.run(async move {
 
                     match input.operation {
-                        Operation::PurgeStage { .. } => {
-                            let response = send_request_and_wait_msg(
-                                self_tx,
-                                Arc::clone(&pending),
-                                input,
-                            ).await?;
 
-                            if let OpResult::Ok(Some(v)) = response.status {
-                                debug!("Operation::PurgeStage: v={v:?}");
-                                let mut tensors:HashMap<String, ThoTensor> = HashMap::new();
-                                let Ok(info) = (v as Box<dyn Any>).downcast::<StageStateInfo>() else {
-                                    panic!("");//TODO return err
-                                };
-
-                                for (key, tensor_info) in info.tensors() {
-                                    let t = Self::do_ref_d2h_copy(
-                                        worker_id,
-                                        transfer_id,
-                                        Arc::clone(&pending),
-                                        tx.clone(),
-                                        tensor_info
-                                    ).await?;
-
-                                    tensors.insert(key, t);
-                                }
-                            }
-
-                            let _ = respond_to.send(Ok(CudaWorkerMsgOut{
-                                worker_id: response.worker_id,
-                                request_id: response.request_id,
-                                status: OpResult::Ok(None),
-                            }));
-                            Ok::<_, ThoError>(())
-                        }
                         _=> {
                             let response = send_request_and_wait_msg(
                                 self_tx,
@@ -600,6 +613,7 @@ impl CudaIPCActor {
             CudaIPCActorMessage::Copy { respond_to, .. } => { let _ = respond_to.send(Err(error)); }
             CudaIPCActorMessage::SendMsg { respond_to, .. } => { let _ = respond_to.send(Err(error)); }
             CudaIPCActorMessage::DropThoTensor { respond_to, .. } => { let _ = respond_to.send(Ok(())); }
+            CudaIPCActorMessage::PurgeStage {respond_to, .. } => { let _ = respond_to.send(Err(error)); }
         }
     }
 
@@ -1061,13 +1075,14 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
+        debug!("CudaIPCActorHandle::purge_stage_state: stage_id={stage_id:?} endpoint_name={endpoint_name:?} worker_id={worker_id:?} self.gate={:?}", self.gate);
         if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() || self.gate.is_paused() {
-            return Ok(CudaWorkerMsgOut { worker_id, request_id: 0, status: OpResult::Ok(None) });
+            return Err(ThoError::AdjusterFailed);//TODO add ThoError variant
         }
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaIPCActorMessage::SendMsg {
+            CudaIPCActorMessage::PurgeStage {
                 activity: self.activity_for(worker_id)?,
                 input: CudaWorkerMsgIn {
                     worker_id,

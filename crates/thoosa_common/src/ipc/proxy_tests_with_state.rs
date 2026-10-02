@@ -25,6 +25,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 use tch::Device::Cpu;
 use tch::Kind::Int;
 use tch::Tensor;
@@ -193,24 +195,25 @@ where
     C:RunCtx
 {
     pub async fn new(stage_id: Option<String>, tho_device_idx: usize, init: TestStageInitB) -> Result<Arc<DynSyncStageWithStateEnum<TestStageB<u32, TestRunCtx>>>, ThoError> {
+        // static STAGE_ID:AtomicU32 = AtomicU32::new(0);
+        // let stage_id: String = STAGE_ID.fetch_add(1, Relaxed).to_string();
+        let stage_id: String = stage_id.expect("stage_id");//TODO should be generated inside stage based on init data. Fix when WithID is changed to return Cow
         if GlobalCtx::global().is_ipc() {
 
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, stage_id, tho_device_idx, Box::new(init)).await?),
+                stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, Some(stage_id), tho_device_idx, Box::new(init)).await?),
                 init: (),
                 state: Default::default(),
             }))
 
-
-
         } else {
-            Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(init)))))
+            Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(TestStageB::<u32, TestRunCtx>::new_local(stage_id, init)))))
         }
     }
 
-    pub fn new_local(init: TestStageInitB) -> Self {
+    pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
-            id: mono_key!(0, "TestStageB").into(),
+            id: mono_key!(stage_id, "TestStageB").into(),
             k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, ThoDevice::from(init.tho_device_ids).into())).into()),
             pd: PhantomData
         }
@@ -218,18 +221,17 @@ where
 
 }
 
-
 const TEST_ENDPOINT: &str = "TestStageB";
 
 
-pub fn with_state_init<'a>(init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn with_state_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn Any> = init;
     let init = init.downcast::<TestStageInitB>().unwrap();
     async move {
         debug!("test_with_state_init: init={init:?}");
 
         Ok(Box::new(WorkerWrapperWithState::new(
-            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(*init)),
+            Arc::new(TestStageB::<(), WokerRunCtx>::new_local(stage_id.expect("no id"), *init)),
             PhantomData::<JsonIpcCodec>
         )) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
@@ -425,23 +427,27 @@ mod tests {
                 let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 1)).await?;
                 let old_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 let old_key = old_tensor.ref_key().unwrap();
+                actor.purge_stage_state(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
                 actor.restart().await?;
 
                 let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 1)).await?;
                 let fresh_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 // Deliberately collide numeric identities across generations.
                 assert_eq!(fresh_tensor.ref_key(), Some(old_key));
+
                 let fresh_input = || TestInputB { value: fresh_tensor.clone_ref().unwrap() };
                 let error = actor.run_stage(Arc::clone(&old_stage), fresh_input(), 1, &TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::ContextReset));
+
                 let error = actor.copy(old_tensor.clone_ref()?, 0.into()).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::ContextReset));
+
                 // Embedded stale tensor references must also be rejected by
                 // the new worker when the endpoint itself belongs to it.
                 let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::ContextReset));
                 actor.drop_endpoint(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
-                actor.purge_stage_state(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
+
                 actor.drop_tho_tensor(old_key, retired).await?;
                 drop(old_stage);
                 drop(old_tensor);
