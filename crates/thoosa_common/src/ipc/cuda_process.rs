@@ -122,6 +122,7 @@ pub enum CudaIPCActorMessage {
         activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<StageStateDump, ThoError>>
     },
+
     SendMsg {
         input: CudaWorkerMsgIn,
         activity: thoosa_shared::CudaActivityScope,
@@ -385,6 +386,7 @@ impl CudaIPCActor {
                     let _ = respond_to.send(result);
                 });
             }
+
             CudaIPCActorMessage::PurgeStage {mut input, activity, respond_to} => {
                 let self_tx = self.worker().tx.clone();
                 let pending = Arc::clone(&self.worker().pending);
@@ -392,8 +394,13 @@ impl CudaIPCActor {
                 let next_id = Arc::clone(&self.next_id);
                 let tx = self.worker().tx.clone();
                 tokio::spawn(async move {
+                    let Operation::GetStageStateInfo { endpoint_name, stage_id } = &input.operation else {
+                        panic!("not Operation::GetStageStateInfo");
+                    };
+                    let endpoint_name= endpoint_name.clone();
+                    let stage_id= stage_id.clone();
                     let response = send_request_and_wait_msg(
-                        self_tx,
+                        self_tx.clone(),
                         Arc::clone(&pending),
                         input,
                     ).await?;
@@ -422,6 +429,19 @@ impl CudaIPCActor {
                     }
 
 
+                    let response = send_request_and_wait_msg(
+                        self_tx,
+                        Arc::clone(&pending),
+                        CudaWorkerMsgIn {
+                            worker_id,
+                            request_id: 0,
+                            operation: Operation::PurgeStage {
+                                endpoint_name,
+                                stage_id,
+                            },
+                        },
+                    ).await?;
+
                     Ok::<_, ThoError>(())
                 });
             }
@@ -429,7 +449,7 @@ impl CudaIPCActor {
 
                 if let Err(error) = input.worker_id.check(self.worker().worker_id).and_then(|_| activity.check_operation(&self.gate)) {
 
-                    let response = if matches!(input.operation, Operation::DropStage { .. } | Operation::PurgeStage { .. }) {
+                    let response = if matches!(input.operation, Operation::DropStage { .. } | Operation::GetStageStateInfo { .. }) {
                         Ok(CudaWorkerMsgOut { worker_id: input.worker_id, request_id: input.request_id, status: OpResult::Ok(None) })
                     } else {
                         Err(error)
@@ -973,7 +993,6 @@ impl CudaIPCActorHandle {
     }
 
 
-
 }
 
 struct IPCHanldeCTx {
@@ -1075,6 +1094,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
+
     async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
         debug!("CudaIPCActorHandle::purge_stage_state: stage_id={stage_id:?} endpoint_name={endpoint_name:?} worker_id={worker_id:?} self.gate={:?}", self.gate);
         if worker_id.device_idx != self.tho_device_idx || worker_id.generation != self.gate.device_generation() || self.gate.is_paused() {
@@ -1087,7 +1107,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
                 input: CudaWorkerMsgIn {
                     worker_id,
                     request_id: 0,
-                    operation: Operation::PurgeStage {
+                    operation: Operation::GetStageStateInfo {
                         endpoint_name,
                         stage_id,
                     },

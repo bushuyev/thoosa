@@ -79,6 +79,7 @@ pub enum Operation {
     DropThoTensor { tensor_key: u64 },
     InstallStage { endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput> },
     InvokeStage { endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume: bool },
+    GetStageStateInfo { endpoint_name: String, stage_id: Option<String> },
     PurgeStage { endpoint_name: String, stage_id: Option<String> },
     DropStage { endpoint_name: String, stage_id: Option<String> },
     Debug,

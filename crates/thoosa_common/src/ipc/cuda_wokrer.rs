@@ -63,7 +63,7 @@ pub struct CudaWorker;
 //stage_id - None for stateless stages, init_data, ctx, all_tensors, device
 pub type InitFn<W = dyn Workspace> = Box<dyn for <'a> Fn(Option<String>, Box<dyn WorkerInput>, Arc<RwLock<Box<W>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
-type InstalledEndpoints = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
+type InstalledStages = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
 
 struct WorkerSharedArena {
     mapping: MmapMut,
@@ -103,7 +103,7 @@ struct WorkerRequestContext<W: ?Sized> {
     shared_arena: Arc<WorkerSharedArena>,
     // CUDA copies still use the worker's pinned-buffer implementation; only the old per-transfer IPC memfds are replaced by arena offsets.
     copy_ctx: Arc<tokio::sync::RwLock<CopyCtx>>,
-    installed_endpoints: InstalledEndpoints,
+    installed_stages: InstalledStages,
     reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
 }
@@ -117,7 +117,7 @@ impl<W: ?Sized> Clone for WorkerRequestContext<W> {
             all_cuda_tensors: Arc::clone(&self.all_cuda_tensors),
             shared_arena: Arc::clone(&self.shared_arena),
             copy_ctx: Arc::clone(&self.copy_ctx),
-            installed_endpoints: Arc::clone(&self.installed_endpoints),
+            installed_stages: Arc::clone(&self.installed_stages),
             reply_tx: self.reply_tx.clone(),
             tho_device: self.tho_device,
         }
@@ -318,7 +318,7 @@ impl CudaWorker {
             all_cuda_tensors,
             shared_arena,
             copy_ctx,
-            installed_endpoints: Arc::new(DashMap::new()),
+            installed_stages: Arc::new(DashMap::new()),
             reply_tx: reply_tx.clone(),
             tho_device,
         };
@@ -426,7 +426,7 @@ impl CudaWorker {
                         TensorKey::StageState{ endpoint_name, stage_id, tensor_id } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(stage_id));
 
-                            let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+                            let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
 
                             if let Some(endpoint) = endpoint {
                                 // endpoint.purge(context.tho_device.clone()).await?;
@@ -463,8 +463,8 @@ impl CudaWorker {
 
                     let init_fn = context.endpoint_inits.get(&endpoint_name).ok_or_else(|| ThoError::new(format!("No init function for endpoint_name={endpoint_name:?} stage_id={stage_id:?}")))?;
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
-                    debug!("run_worker: install endpoint key={endpoint_key} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
-                    let is_duplicate = match context.installed_endpoints.entry(endpoint_key.clone()) {
+                    debug!("run_worker: install endpoint key={endpoint_key} installed_endpoints keys={:?}", context.installed_stages.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
+                    let is_duplicate = match context.installed_stages.entry(endpoint_key.clone()) {
                         dashmap::mapref::entry::Entry::Occupied(_) => true,
                         dashmap::mapref::entry::Entry::Vacant(entry) => {
                             // Reserve the composite key before initialization so concurrent duplicate installs cannot allocate state twice.
@@ -479,12 +479,12 @@ impl CudaWorker {
                     let endpoint_wrapper = match init_fn(stage_id, init_data, Arc::clone(&context.ws), &context.all_cuda_tensors, &context.tho_device).await {
                         Ok(endpoint_wrapper) => endpoint_wrapper,
                         Err(error) => {
-                            context.installed_endpoints.remove(&endpoint_key);
+                            context.installed_stages.remove(&endpoint_key);
                             return Err(error);
                         }
                     };
                     debug!("run_worker: install endpoint endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
-                    context.installed_endpoints.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
+                    context.installed_stages.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }
@@ -493,7 +493,7 @@ impl CudaWorker {
 
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
 
-                    let endpoint = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone)).ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
+                    let endpoint = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone)).ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
                     let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
                     let stream = context.exec_stream_pool.acquire().await;
                     let result = match endpoint.as_with_state() {
@@ -521,12 +521,32 @@ impl CudaWorker {
                     Ok(())
                 }
                 //rename to DescribeStageState[Tensors]
-                Operation::PurgeStage { endpoint_name, stage_id } => {
+                Operation::PurgeStage {endpoint_name, stage_id } => {
+                    debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
+
+                    let stage_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
+
+                    let stage: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&stage_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+
+                    if let Some(stage) = stage {
+                        stage.purge(context.tho_device.clone()).await?;
+
+                            // let state_info = with_state.
+                        context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+
+                    } else {
+                        error!("no endpoint found: endpoint_key={stage_key:}");
+                    }
+
+
+                    Ok(())
+                }
+                Operation::GetStageStateInfo { endpoint_name, stage_id } => {
                     debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
 
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
 
-                    let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_endpoints.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+                    let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
 
                     if let Some(endpoint) = endpoint {
                         // endpoint.purge(context.tho_device.clone()).await?;
@@ -546,8 +566,8 @@ impl CudaWorker {
                 }
                 Operation::DropStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
-                    let removed = context.installed_endpoints.remove(&endpoint_key).is_some();
-                    debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_endpoints.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
+                    let removed = context.installed_stages.remove(&endpoint_key).is_some();
+                    debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_stages.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
                     context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
                     Ok(())
                 }

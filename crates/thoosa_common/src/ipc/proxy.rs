@@ -276,15 +276,15 @@ where
         ).await?;
         debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
 
-        if let Err(error) = actor.drop_endpoint(
-            self.stage_id.clone(),
-            self.endpoint_name.to_string(),
-            self.worker_id,
-        ).await {
-            if !GlobalCtx::is_shutting_down() {
-                error!("ProxyStage2::drop: failed to drop endpoint_name={:?} stage_id={:?} tho_device_idx={tho_device_idx}: {error:?}", self.endpoint_name, self.stage_id);
-            }
-        }
+        // if let Err(error) = actor.drop_endpoint(
+        //     self.stage_id.clone(),
+        //     self.endpoint_name.to_string(),
+        //     self.worker_id,
+        // ).await {
+        //     if !GlobalCtx::is_shutting_down() {
+        //         error!("ProxyStage2::drop: failed to drop endpoint_name={:?} stage_id={:?} tho_device_idx={tho_device_idx}: {error:?}", self.endpoint_name, self.stage_id);
+        //     }
+        // }
 
         self.is_stage_installed.store(false, Relaxed);
 

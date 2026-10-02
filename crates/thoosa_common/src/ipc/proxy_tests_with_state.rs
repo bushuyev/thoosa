@@ -374,6 +374,7 @@ where
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("TestStageB::drop_gpu");
         Ok(())
     }
 
