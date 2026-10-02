@@ -405,7 +405,7 @@ impl CudaIPCActor {
                             panic!("");//TODO return err
                         };
 
-                        for (key, tensor_info) in info.tensors() {
+                        for (key, tensor_info) in info.tensors {
                             let t = Self::do_ref_d2h_copy(
                                 worker_id,
                                 next_id.fetch_add(1, Ordering::Relaxed),
@@ -418,7 +418,7 @@ impl CudaIPCActor {
                         }
 
                         debug!("handle_message: Operation::PurgeStage: tensors={tensors:?}");
-                        let _ = respond_to.send(Ok(StageStateDump::new(tensors)));
+                        let _ = respond_to.send(Ok(StageStateDump::new(info.scalars, tensors)));
                     }
 
 

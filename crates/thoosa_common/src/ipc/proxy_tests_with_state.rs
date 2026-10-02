@@ -43,12 +43,12 @@ use crate::cuda_utils::tensor_mem_size;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
     k:i64,
-    tho_device_ids:usize
+    tho_device_idx:usize
 }
 
 impl TestStageInitB {
     pub fn new(k: i64, tho_device_ids:usize) -> Self {
-        Self { k, tho_device_ids }
+        Self { k, tho_device_idx: tho_device_ids }
     }
 }
 
@@ -177,6 +177,33 @@ impl RunCtx for TestRunCtx {
     }
 }
 
+#[derive(Debug)]
+pub struct TestStageBState {
+    k:ThoTensor,
+    counter:u32
+}
+
+impl TestStageBState {
+    pub fn new(k:i64, tho_device_idx:usize) -> Self {
+        Self { k: Tensor::scalar_tensor(k, (Int, ThoDevice::from(tho_device_idx).into())).into(), counter: 0 }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TestStageStateScalars {
+    counter:u32
+}
+
+impl TestStageStateScalars {
+    pub fn new(counter: u32) -> Self {
+        Self { counter }
+    }
+}
+
+#[typetag::serde]
+impl WorkerOutput for TestStageStateScalars {
+
+}
 
 #[derive(Debug)]
 pub struct TestStageB<P, C>
@@ -186,7 +213,7 @@ where
 {
     id:SynKey,
     pd:PhantomData<(P, C)>,
-    k:tokio::sync::Mutex<ThoTensor> //state - needs to be dumped to CPU when handling OOM in other stages
+    k:tokio::sync::Mutex<TestStageBState> //state - needs to be dumped to CPU when handling OOM in other stages
 }
 
 impl <P, C> TestStageB<P, C>
@@ -214,7 +241,7 @@ where
     pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
             id: mono_key!(stage_id, "TestStageB").into(),
-            k: tokio::sync::Mutex::new(Tensor::scalar_tensor(init.k, (Int, ThoDevice::from(init.tho_device_ids).into())).into()),
+            k: tokio::sync::Mutex::new(TestStageBState::new(init.k, init.tho_device_idx)),
             pd: PhantomData
         }
     }
@@ -271,16 +298,20 @@ where
     P:Debug,
     C:RunCtx
 {
-    type S = ThoTensor;//can be a struct containing a tensor, module etc
+    type S = TestStageBState;//can be a struct containing a tensor, module etc
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
         async move {
 
             let mut guard = self.k.lock().await;
-            debug!("StageWithState>::pre_run: to_device_idx={to_device_idx} guard.tho_device_idx={}", guard.tho_device_idx());
+            debug!("StageWithState>::pre_run: to_device_idx={to_device_idx} guard={:?}", guard);
 
-            if guard.tho_device_idx() != to_device_idx {
-                *guard = guard.copy_to_device(to_device_idx).await?;
+            if guard.k.tho_device_idx() != to_device_idx {
+                // *guard = guard.copy_to_device(to_device_idx).await?;
+                *guard = TestStageBState {
+                    k: guard.k.copy_to_device(to_device_idx).await?,
+                    counter: guard.counter,
+                };
             }
             Ok(guard)
         }.boxed()
@@ -288,21 +319,24 @@ where
 
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
-            let tensor = self.k.lock().await;
-            Ok(StageStateInfo::new(HashMap::from([
-                (format!("{}/{}", TEST_ENDPOINT, self.id),
-                 WorkerTensorInfoPayload::new(TensorKey::stage_state(
-                    TEST_ENDPOINT,
-                    &self.id,
-                    "k"
-                ), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size())))
-            ])))
+            let state = self.k.lock().await;
+            Ok(StageStateInfo::new(
+                HashMap::from([
+                    (format!("{}/{}", TEST_ENDPOINT, self.id),
+                     WorkerTensorInfoPayload::new(TensorKey::stage_state(
+                        TEST_ENDPOINT,
+                        &self.id,
+                        "k"
+                    ), state.k.kind().into(), state.k.size(), tensor_mem_size(state.k.kind(), &state.k.size())))
+                ]),
+                Some(Box::new(TestStageStateScalars::new(state.counter)))
+            ))
         }.boxed()
     }
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
-            Ok(self.k.lock().await.as_ref().shallow_clone())
+            Ok(self.k.lock().await.k.as_ref().shallow_clone())
         }.boxed()
     }
 
@@ -310,7 +344,7 @@ where
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
         Ok(TestOutputB {
-            value: (input.value.as_ref() * k.as_ref()).into(),
+            value: (input.value.as_ref() * k.k.as_ref()).into(),
         })
     }
 
@@ -326,12 +360,15 @@ where
     C:RunCtx
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.k.lock().await.tho_device().ne(&Cpu.into())
+        self.k.lock().await.k.tho_device().ne(&Cpu.into())
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         let mut guard = self.k.lock().await;
-        *guard = guard.copy_to_device(0).await?;
+        *guard = TestStageBState {
+            k:guard.k.copy_to_device(0).await?,
+            counter: guard.counter
+        };
 
         Ok(())
     }

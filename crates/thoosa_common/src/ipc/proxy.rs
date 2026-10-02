@@ -20,6 +20,8 @@ use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::string::ToString;
 use std::sync::{Arc, LazyLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
@@ -40,7 +42,10 @@ where
     tho_device_idx: usize,
     worker_id: CudaWorkerId,
     // Generic inputs can supply the concrete typetag conversion that a blanket WorkerStageInput implementation cannot express.
-    clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>
+    clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
+
+    state: RwLock<Option<Box<StageStateDump>>>,
+    is_stage_installed: AtomicBool
 }
 
 impl<St> Debug for ProxyStage<St>
@@ -86,11 +91,23 @@ where
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
+                let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
+                let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+                // if !self.is_stage_installed.load(Relaxed) {
+                //
+                //     let worker_id = ipc_actor.worker_id()?;
+                //     let rs = ipc_actor.install_stage(
+                //         worker_id,
+                //         self.endpoint_name.to_string(),
+                //         self.stage_id.clone(),
+                //         self.state.read(),
+                //     ).await?;
+                // }
 
                 debug!("ProxyStage2::do_run: input={input:?}");
 
-                let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
-                let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
+
+
 
 
                 let rs = ipc_actor.invoke_stage(
@@ -201,6 +218,8 @@ where
                             worker_id,
                             pd:PhantomData,
                             clone_refs,
+                            state: Default::default(),
+                            is_stage_installed: true.into(),
                         })
 
                     }
@@ -241,6 +260,39 @@ where
             }
         }
     }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx}", self);
+
+        if self.tho_device_idx != tho_device_idx {//not our device is being purged
+            return Ok(());
+        }
+
+        let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let state_out = actor.purge_stage_state(
+            self.stage_id.clone(),
+            self.endpoint_name.to_string(),
+            self.worker_id,
+        ).await?;
+        debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
+
+        if let Err(error) = actor.drop_endpoint(
+            self.stage_id.clone(),
+            self.endpoint_name.to_string(),
+            self.worker_id,
+        ).await {
+            if !GlobalCtx::is_shutting_down() {
+                error!("ProxyStage2::drop: failed to drop endpoint_name={:?} stage_id={:?} tho_device_idx={tho_device_idx}: {error:?}", self.endpoint_name, self.stage_id);
+            }
+        }
+
+        self.is_stage_installed.store(false, Relaxed);
+
+        *self.state.write() = Some(Box::new(state_out));
+        debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx} done", self);
+
+        Ok(())
+    }
 }
 
 
@@ -252,7 +304,10 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     fn drop(&mut self) {
-
+        debug!("ProxyStage2::drop: endpoint_name={:?} self.is_stage_installed={:?}", self.endpoint_name, self.is_stage_installed);
+        if !self.is_stage_installed.load(Relaxed) {
+            return;
+        }
         let endpoint_name = self.endpoint_name;
         let stage_id = self.stage_id.clone();
         let tho_device_idx = self.tho_device_idx;
@@ -348,7 +403,6 @@ where
         }
     }
 
-
 }
 
 
@@ -437,7 +491,7 @@ where
     Proxy {
         stage: Arc<ProxyStage<St>>,
         init: Init,//if async stages need to know parameters with which sync stage was initialized (motif_id, out_id etc)
-        state: RwLock<Option<Box<St::S>>>//TODO remove Option - the state should always be available?
+        state: RwLock<Option<Box<StageStateDump>>>//TODO remove Option - the state should always be available?
     },
 }
 
@@ -522,12 +576,13 @@ where
 ///
 #[derive(Debug)]
 pub struct StageStateDump {
+    scalars:Option<Box<dyn WorkerOutput>>,
     tensors:HashMap<String, ThoTensor> // = HashMap::new();
 }
 
 impl StageStateDump {
-    pub fn new(tensors: HashMap<String, ThoTensor>) -> Self {
-        Self { tensors }
+    pub fn new(scalars: Option<Box<dyn WorkerOutput>>, tensors: HashMap<String, ThoTensor>) -> Self {
+        Self { scalars, tensors }
     }
 }
 
@@ -551,33 +606,13 @@ where
         }
     }
 
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self {
             DynSyncStageWithStateEnum::Local(local) => {
-                local.purge_gpu(ids_to_keep, device_idx, name).await
+                local.purge_gpu(ids_to_keep, tho_device_idx, name).await
             }
             DynSyncStageWithStateEnum::Proxy { stage, init, state, } => {
-                debug!("FuturesRunnerMapPurger>::purge_gpu: stage={stage:?} init={init:?} state={state:?} device_idx={device_idx}");
-
-                if stage.tho_device_idx != device_idx {//not our device is being purged
-                    return Ok(());
-                }
-
-
-                let state_out = GlobalCtx::global().cuda_actor(device_idx).purge_stage_state(
-                    stage.stage_id.clone(),
-                    stage.endpoint_name.to_string(),
-                    stage.worker_id,
-                ).await?;
-                debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
-
-                // if let OpResult::Ok(Some(state_box)) = state_out.status {
-                //     if let Ok(state_rs) = (state_box as Box<dyn Any>).downcast::<St::S>() {
-                //         debug!("FuturesRunnerMapPurger>::purge_gpu: state_rs={state_rs:?}");
-                //         *state.write() = Some(state_rs);
-                //     }
-                // }
-                // *state.write() = Some(state_out);
+               stage.purge_gpu(ids_to_keep, tho_device_idx, name).await?;
                 Ok(())
             }
         }

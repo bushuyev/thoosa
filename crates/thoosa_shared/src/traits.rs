@@ -786,7 +786,7 @@ pub trait SyncStage: Stage + Debug {
 }
 
 pub trait StageWithState: SyncStage + Sync {
-    type S: Debug + Send + Sync;
+    type S: Debug + Send + Sync;//State
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
@@ -992,21 +992,20 @@ where
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StageStateInfo {
-    tensors:HashMap<String, WorkerTensorInfoPayload>
+    pub scalars:Option<Box<dyn WorkerOutput>>,
+    pub tensors:HashMap<String, WorkerTensorInfoPayload>
 }
 
 impl StageStateInfo {
-    pub fn new(tensors: HashMap<String, WorkerTensorInfoPayload>) -> Self {
-        Self { tensors }
+    pub fn new(tensors: HashMap<String, WorkerTensorInfoPayload>, scalars: Option<Box<dyn WorkerOutput>>) -> Self {
+        Self { scalars, tensors }
     }
 
     pub fn empty() -> Self {
-        Self { tensors:HashMap::new() }
+        Self { scalars: None, tensors:HashMap::new() }
     }
 
-    pub fn tensors(self:Box<Self>) -> HashMap<String, WorkerTensorInfoPayload> {
-        self.tensors
-    }
+
 }
 
 #[typetag::serde]
