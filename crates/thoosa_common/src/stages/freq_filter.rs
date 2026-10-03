@@ -50,7 +50,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
-use tokio::sync::MutexGuard;
+use tokio::sync::{MutexGuard, RwLockReadGuard};
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
@@ -688,7 +688,7 @@ where
 {
     type S = Vec<PreparedFilter>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut filters = self.filters.lock().await;
             for filter in filters.iter_mut() {
@@ -702,11 +702,11 @@ where
                     _ => {}
                 }
             }
-            Ok(filters)
+            Ok(MutexGuard::map(filters, |v|v))
         }.boxed()
     }
     
-    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
     }
 }

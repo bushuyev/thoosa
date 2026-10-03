@@ -38,6 +38,7 @@ use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::{TensorKey, WorkerOutput, WorkerTensorInfoPayload};
+use thoosa_store::rusqlite::fallible_iterator::FallibleIterator;
 use crate::cuda_utils::tensor_mem_size;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -213,7 +214,7 @@ where
 {
     id:SynKey,
     pd:PhantomData<(P, C)>,
-    k:tokio::sync::Mutex<TestStageBState> //state - needs to be dumped to CPU when handling OOM in other stages
+    k:tokio::sync::Mutex<Option<TestStageBState>> //state - needs to be dumped to CPU when handling OOM in other stages
 }
 
 impl <P, C> TestStageB<P, C>
@@ -241,7 +242,7 @@ where
     pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
             id: mono_key!(stage_id, "TestStageB").into(),
-            k: tokio::sync::Mutex::new(TestStageBState::new(init.k, init.tho_device_idx)),
+            k: tokio::sync::Mutex::new(Some(TestStageBState::new(init.k, init.tho_device_idx))),
             pd: PhantomData
         }
     }
@@ -300,26 +301,38 @@ where
 {
     type S = TestStageBState;//can be a struct containing a tensor, module etc
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
         async move {
+            let lock_guard = self.k.lock().await;
+            return Ok(tokio::sync::MutexGuard::map(lock_guard, |v|v.as_mut().expect("no state")));
 
-            let mut guard = self.k.lock().await;
-            debug!("StageWithState>::pre_run: to_device_idx={to_device_idx} guard={:?}", guard);
+            // match self.k.lock().await.as_mut() {
+            //     Some(k) => {
+            //
+            //         debug!("StageWithState>::pre_run: to_device_idx={to_device_idx} k={:?}", k);
+            //
+            //         if k.tho_device_idx() != to_device_idx {
+            //             // *guard = guard.copy_to_device(to_device_idx).await?;
+            //             *k = TestStageBState {
+            //                 k: k.copy_to_device(to_device_idx).await?,
+            //                 counter: k.counter,
+            //             };
+            //         }
+            //         Ok(k)
+            //     }
+            //     None => {
+            //         todo!()
+            //     }
+            // }
 
-            if guard.k.tho_device_idx() != to_device_idx {
-                // *guard = guard.copy_to_device(to_device_idx).await?;
-                *guard = TestStageBState {
-                    k: guard.k.copy_to_device(to_device_idx).await?,
-                    counter: guard.counter,
-                };
-            }
-            Ok(guard)
+
         }.boxed()
     }
 
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
-            let state = self.k.lock().await;
+            let guard = self.k.lock().await;
+            let state = guard.as_ref().expect("no state");
             Ok(StageStateInfo::new(
                 HashMap::from([
                     (format!("{}/{}", TEST_ENDPOINT, self.id),
@@ -336,20 +349,17 @@ where
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
-            Ok(self.k.lock().await.k.as_ref().shallow_clone())
+            Ok(self.k.lock().await.as_ref().expect("no state").k.as_ref().shallow_clone())
         }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
         Ok(TestOutputB {
             value: (input.value.as_ref() * k.k.as_ref()).into(),
         })
     }
-
-
-
 }
 
 
@@ -360,14 +370,23 @@ where
     C:RunCtx
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.k.lock().await.k.tho_device().ne(&Cpu.into())
+
+        match self.k.lock().await.as_ref() {
+            Some(state) => {
+                state.k.tho_device().ne(&Cpu.into())
+            }
+            None => {
+                false
+            }
+        }
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         let mut guard = self.k.lock().await;
-        *guard = TestStageBState {
-            k:guard.k.copy_to_device(0).await?,
-            counter: guard.counter
+        let mut state = guard.as_mut().expect("no state");
+        *state = TestStageBState {
+            k: state.k.copy_to_device(0).await?,
+            counter: state.counter
         };
 
         Ok(())
@@ -375,6 +394,7 @@ where
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TestStageB::drop_gpu");
+        self.k.lock().await.take();
         Ok(())
     }
 
