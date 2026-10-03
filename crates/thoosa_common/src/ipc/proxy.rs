@@ -25,7 +25,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
-use tokio::sync::{Mutex, MutexGuard, RwLockReadGuard};
+use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLockReadGuard};
 use thoosa_shared::ipc_types::WorkerOutput;
 
 pub struct ProxyStage<St>
@@ -59,6 +59,7 @@ where
             .field("endpoint_name", &self.endpoint_name)
             .field("stage_id", &self.stage_id)
             .field("tho_device_idx", &self.tho_device_idx)
+            .field("state", &self.state)
             .finish_non_exhaustive()
     }
 }
@@ -159,6 +160,23 @@ where
             Ok(output) => ConsumeResult::Ok(output),
             Err(error) => ConsumeResult::Failed { input, error },
         }
+    }
+}
+
+impl <St>StageWithState for ProxyStage<St>
+where
+    St:SyncStage + StageWithState,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
+{
+    type S = Option<Box<StageStateDump>>;
+
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MappedMutexGuard<'_, Self::S>, ThoError>> {
+
+        async {
+            let guard = self.state.lock().await;
+            Ok(MutexGuard::map(guard, |v|v))
+        }.boxed()
     }
 }
 
@@ -530,7 +548,7 @@ where
     {
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),//TODO TestRunCtx
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),
         }
     }
 
@@ -538,11 +556,10 @@ where
         // Advertise typed state execution without exposing ThoTrainModule to the common runner.
         match self {
             Self::Local(_) => Some(self),
-            Self::Proxy { .. } => None,
+            Self::Proxy { stage,.. } => Some(self),
         }
     }
 }
-
 
 ///
 impl <St, Init> StageWithState for DynSyncStageWithStateEnum<St, Init>
@@ -558,20 +575,29 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         match self {
             Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
-            Self::Proxy { stage, init, state } => async {
+            Self::Proxy { stage, init,.. } => {
+                let stage = Arc::clone(&stage);
+                async move {
+                    debug!("SyncStage>::pre_run: stage={stage:?}");
+                    //Option
+                    // if let Some(state) = stage.state.lock().await.take() {
+                    //     debug!("SyncStage>::pre_run: state={state:?}");
+                    //     Ok(state)
+                    // } else {
+                        Err(ThoError::new("proxy ApplyStage2 does not have local state"))
+                    // }
 
-                if stage.state.lock().await.is_some() {
-
-                }
-                Err(ThoError::new("proxy ApplyStage2 does not have local state"))
-            }.boxed(),
+                }.boxed()
+            },
         }
     }
 
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy { stage, .. } => {
+                Arc::clone(stage).do_run(input, ctx)
+            },
         }
     }
 }
