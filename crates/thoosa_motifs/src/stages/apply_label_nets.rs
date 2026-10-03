@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
+use tokio::sync::MutexGuard;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{Batch, Slice};
 use thoosa_common::nets::batches::BatchLengths;
@@ -892,18 +893,18 @@ where
 {
     type S = ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut net = self.net.lock().await;
             if net.tho_device_idx() != to_device_idx {
                 *net = net.copy_to_device(to_device_idx).await?;
             }
-            Ok(net)
+            Ok(MutexGuard::map(net, |v|v))
         }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
-    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data().t_ref());
         debug!("ApplyLabelNet::do_run_with_state: id={:?} input={:?}", self.id, input);
         let out_id = self.out_id(input.id());

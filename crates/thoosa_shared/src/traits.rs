@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tch::Tensor;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
-use tokio::sync::MutexGuard;
+use tokio::sync::{MappedMutexGuard, MutexGuard, RwLockReadGuard};
 use uuid::Uuid;
 use crate::ipc_types::{WorkerOutput, WorkerTensorInfoPayload};
 
@@ -788,7 +788,7 @@ pub trait SyncStage: Stage + Debug {
 pub trait StageWithState: SyncStage + Sync {
     type S: Debug + Send + Sync;//State
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>>;
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             Ok(StageStateInfo::empty())
@@ -801,7 +801,7 @@ pub trait StageWithState: SyncStage + Sync {
         }.boxed()
     }
 
-    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         unimplemented!()
     }
 }
@@ -975,7 +975,7 @@ struct StageStateGuard<'a, S>
 where
     S: StageWithState,
 {
-    state: MutexGuard<'a, S::S>,
+    state: tokio::sync::MappedMutexGuard<'a, S::S>,
 }
 
 impl<S> ErasedStageState<S> for StageStateGuard<'_, S>
