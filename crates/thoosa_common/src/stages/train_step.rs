@@ -158,16 +158,16 @@ where
     type S = ThoTrainModule<DI, DO>;
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::pre_run"))]
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut guard = self.train_module.lock().await;
             guard.move_to_device(to_device_idx).await?;
-            Ok(guard)
+            Ok(MutexGuard::map(guard, |v|v))
         }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("TrainStep::do_run: input={input:?}");
         // Save inside the state owner so IPC training never exports a VarStore.
         if input.save_var_store {

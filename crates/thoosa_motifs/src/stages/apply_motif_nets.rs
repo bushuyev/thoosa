@@ -29,6 +29,7 @@ use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tch::{Device, IndexOp, Kind, Tensor, nn};
+use tokio::sync::MutexGuard;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, Slice};
@@ -1276,18 +1277,18 @@ where
 {
     type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut motif_net = self.motif_net.lock().await;
             if motif_net.tho_device_idx() != to_device_idx {
                 *motif_net = motif_net.copy_to_device(to_device_idx).await?;
             }
-            Ok(motif_net)
+            Ok(MutexGuard::map(motif_net, |v|v))
         }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: tokio::sync::MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = motif_net.extra().motif_id();
 
         debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input={:?}", self.id, input);

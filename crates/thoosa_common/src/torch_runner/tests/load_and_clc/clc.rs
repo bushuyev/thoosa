@@ -264,17 +264,17 @@ impl SyncStage for SyncClcStage {
 impl StageWithState for SyncClcStage {
     type S = ThoTensor<MulK, DebugId>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut k = self.k.lock().await;
             if k.tho_device_idx() != to_device_idx {
                 *k = k.copy_to_device(to_device_idx).await?;
             }
-            Ok(k)
+            Ok(MutexGuard::map(k, |v|v))
         }.boxed()
     }
 
-    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
 
         DEBUG_DATA.lock().push(format!("SyncClcStage::do_run_with_state: input.size={:?}", input.size()));
@@ -352,11 +352,11 @@ impl SyncStage for ClcDynSyncStage {
 impl StageWithState for ClcDynSyncStage {
     type S = ThoTensor<MulK, DebugId>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         StageWithState::pre_run(self.stage.as_ref(), to_device_idx)
     }
 
-    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, state: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         StageWithState::do_run_with_state(Arc::clone(&self.stage), input, state, ctx)
     }
 }
