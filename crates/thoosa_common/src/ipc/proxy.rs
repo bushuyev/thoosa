@@ -171,11 +171,12 @@ where
 {
     type S = Option<Box<StageStateDump>>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<MappedMutexGuard<'_, Self::S>>, ThoError>> {
 
         async {
             let guard = self.state.lock().await;
-            Ok(MutexGuard::map(guard, |v|v))
+            Ok(Some(MutexGuard::map(guard, |v|v)))
+            // Ok(MutexGuard::try_map(guard, |opt| opt.as_mut()).ok())
         }.boxed()
     }
 }
@@ -434,7 +435,7 @@ where
     type S = <St as StageWithState>::S;
 
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<MappedMutexGuard<'_, Self::S>>, ThoError>> {
         match self {
             Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
             Self::Proxy { .. } => async {
@@ -572,7 +573,7 @@ where
     type S = <St as StageWithState>::S;
 
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         match self {
             Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
             Self::Proxy { stage, init,.. } => {
@@ -580,12 +581,13 @@ where
                 async move {
                     debug!("SyncStage>::pre_run: stage={stage:?}");
                     //Option
-                    // if let Some(state) = stage.state.lock().await.take() {
-                    //     debug!("SyncStage>::pre_run: state={state:?}");
-                    //     Ok(state)
-                    // } else {
-                        Err(ThoError::new("proxy ApplyStage2 does not have local state"))
+                    if let Some(state) = stage.state.lock().await.take() {
+                        debug!("SyncStage>::pre_run: state={state:?}");
+                        // Ok(state)
+                    } //else {
+                    //     Err(ThoError::new("proxy ApplyStage2 does not have local state"))
                     // }
+                    Ok(None)
 
                 }.boxed()
             },

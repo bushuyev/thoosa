@@ -8,7 +8,7 @@ use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt};
 use futures_util::future::BoxFuture;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use tokio::sync::MutexGuard;
+use tokio::sync::{MappedMutexGuard, MutexGuard};
 use thoosa_shared::ipc_types::WorkerOutput;
 
 ///
@@ -255,7 +255,9 @@ where
     type S = <St as StageWithState>::S;
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<tokio::sync::MappedMutexGuard<'a, Self::S>, ThoError>> {
-        StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx())
+        async {
+            Ok(StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx()).await?.expect("no state 2"))//TODO error?
+        }.boxed()
     }
 
     fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {

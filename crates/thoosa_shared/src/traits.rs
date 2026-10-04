@@ -788,7 +788,8 @@ pub trait SyncStage: Stage + Debug {
 pub trait StageWithState: SyncStage + Sync {
     type S: Debug + Send + Sync;//State
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>>;
+    ///returns Option::None in IPC mode when it's used from ProxyStage where instead of copying from CPU to GPU it uploads StageState to the worker
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>>;
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             Ok(StageStateInfo::empty())
@@ -954,18 +955,18 @@ pub trait ErasedStageWithState<S>
 where
     S: SyncStage,
 {
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<Box<dyn ErasedStageState<S> + '_>>, ThoError>>;
 }
 
 impl<S> ErasedStageWithState<S> for S
 where
     S: StageWithState,
 {
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<Box<dyn ErasedStageState<S> + '_>>, ThoError>> {
         async move {
             let state = StageWithState::pre_run(self, to_device_idx).await?;
             // Keep the concrete guard type inside the erased value while it spans later async preparation.
-            Ok(Box::new(StageStateGuard::<S> { state }) as Box<dyn ErasedStageState<S>>)
+            Ok(state.map(|state|Box::new(StageStateGuard::<S> { state }) as Box<dyn ErasedStageState<S>>))
         }.boxed()
     }
 }
