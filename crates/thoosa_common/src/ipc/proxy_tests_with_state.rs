@@ -301,11 +301,11 @@ where
 {
     type S = TestStageBState;//can be a struct containing a tensor, module etc
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {//ensure state is present on the target device
         async move {
-            let lock_guard = self.k.lock().await;
-            return Ok(tokio::sync::MutexGuard::map(lock_guard, |v|v.as_mut().expect("no state")));
+            let lock_guard: MutexGuard<Option<TestStageBState>> = self.k.lock().await;
 
+            return   Ok(MutexGuard::try_map(lock_guard, |opt| opt.as_mut()).ok())
             // match self.k.lock().await.as_mut() {
             //     Some(k) => {
             //
@@ -332,7 +332,7 @@ where
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             let guard = self.k.lock().await;
-            let state = guard.as_ref().expect("no state");
+            let state = guard.as_ref().expect("no state 1");
             Ok(StageStateInfo::new(
                 HashMap::from([
                     (format!("{}/{}", TEST_ENDPOINT, self.id),
@@ -349,7 +349,7 @@ where
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
-            Ok(self.k.lock().await.as_ref().expect("no state").k.as_ref().shallow_clone())
+            Ok(self.k.lock().await.as_ref().expect("no state 4").k.as_ref().shallow_clone())
         }.boxed()
     }
 
@@ -383,7 +383,7 @@ where
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         let mut guard = self.k.lock().await;
-        let mut state = guard.as_mut().expect("no state");
+        let mut state = guard.as_mut().expect("no state 3");
         *state = TestStageBState {
             k: state.k.copy_to_device(0).await?,
             counter: state.counter

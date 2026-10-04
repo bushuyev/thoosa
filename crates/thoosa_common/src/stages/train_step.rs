@@ -158,11 +158,11 @@ where
     type S = ThoTrainModule<DI, DO>;
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::pre_run"))]
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut guard = self.train_module.lock().await;
             guard.move_to_device(to_device_idx).await?;
-            Ok(MutexGuard::map(guard, |v|v))
+            Ok(Some(MutexGuard::map(guard, |v|v)))
         }.boxed()
     }
 

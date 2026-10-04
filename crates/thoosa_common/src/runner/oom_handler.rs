@@ -751,7 +751,7 @@ where
     if tho_device_idx == 0 {
         // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
         let state = if let Some(with_state) = task.as_with_state() {
-            Some(with_state.pre_run(0).await?)
+            with_state.pre_run(0).await?
         } else {
             None
         };
@@ -823,7 +823,7 @@ where
     if tho_device_idx == 0 {//TODO remove?
         // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
         let state = if let Some(with_state) = task.as_with_state() {
-            Some(with_state.pre_run(0).await?)
+            with_state.pre_run(0).await?
         } else {
             None
         };

@@ -893,13 +893,13 @@ where
 {
     type S = ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut net = self.net.lock().await;
             if net.tho_device_idx() != to_device_idx {
                 *net = net.copy_to_device(to_device_idx).await?;
             }
-            Ok(MutexGuard::map(net, |v|v))
+            Ok(Some(MutexGuard::map(net, |v|v)))
         }.boxed()
     }
 
