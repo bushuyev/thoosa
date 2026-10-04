@@ -264,13 +264,13 @@ impl SyncStage for SyncClcStage {
 impl StageWithState for SyncClcStage {
     type S = ThoTensor<MulK, DebugId>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut k = self.k.lock().await;
             if k.tho_device_idx() != to_device_idx {
                 *k = k.copy_to_device(to_device_idx).await?;
             }
-            Ok(MutexGuard::map(k, |v|v))
+            Ok(Some(MutexGuard::map(k, |v|v)))
         }.boxed()
     }
 
@@ -352,7 +352,7 @@ impl SyncStage for ClcDynSyncStage {
 impl StageWithState for ClcDynSyncStage {
     type S = ThoTensor<MulK, DebugId>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         StageWithState::pre_run(self.stage.as_ref(), to_device_idx)
     }
 

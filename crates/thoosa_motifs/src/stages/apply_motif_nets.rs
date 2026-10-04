@@ -1267,8 +1267,6 @@ impl <C> SyncStage for ApplyMotifNet<C> where
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         Some(self)
     }
-
-
 }
 
 impl<C> StageWithState for ApplyMotifNet<C>
@@ -1277,13 +1275,13 @@ where
 {
     type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut motif_net = self.motif_net.lock().await;
             if motif_net.tho_device_idx() != to_device_idx {
                 *motif_net = motif_net.copy_to_device(to_device_idx).await?;
             }
-            Ok(MutexGuard::map(motif_net, |v|v))
+            Ok(Some(MutexGuard::map(motif_net, |v|v)))
         }.boxed()
     }
 

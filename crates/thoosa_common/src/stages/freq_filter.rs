@@ -688,7 +688,7 @@ where
 {
     type S = Vec<PreparedFilter>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut filters = self.filters.lock().await;
             for filter in filters.iter_mut() {
@@ -702,7 +702,7 @@ where
                     _ => {}
                 }
             }
-            Ok(MutexGuard::map(filters, |v|v))
+            Ok(Some(MutexGuard::map(filters, |v|v)))
         }.boxed()
     }
     
