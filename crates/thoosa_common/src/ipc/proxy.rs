@@ -29,9 +29,32 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStage
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLockReadGuard};
 use thoosa_shared::ipc_types::{H2DTensorKey, WorkerOutput};
 
-pub enum StageState {
-    BeingLoaded(HashMap<String, Tensor>),
-    Ready,
+#[derive(Debug)]
+pub enum StageState<S> {
+    BeingLoaded{ tensors:HashMap<String, Tensor>, keys_to_load:Vec<String>},
+    Ready(S),
+    OffLoaded(Vec<String>)
+}
+
+impl <S> AsRef<S> for  StageState<S> {
+    fn as_ref(&self) -> &S {
+        if let StageState::Ready(v) = self {
+            v
+        } else {
+            panic!("StageState::as_ref: no state")
+        }
+    }
+}
+
+impl <S> AsMut<S> for  StageState<S> {
+    fn as_mut(&mut self) -> &mut S {
+
+        if let StageState::Ready(v) = self {
+            v
+        } else {
+            panic!("StageState::as_mut: no state")
+        }
+    }
 }
 
 pub struct ProxyStage<St>
