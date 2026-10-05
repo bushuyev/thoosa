@@ -1,7 +1,7 @@
 use crate::dims::{Batch, Dims};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
+use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, StageState};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
 use crate::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapperWithState};
@@ -24,6 +24,8 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::mem;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
@@ -202,7 +204,7 @@ where
 {
     id:SynKey,
     pd:PhantomData<(P, C)>,
-    state:tokio::sync::Mutex<Option<TestStageBState>> //updatable state (like ThoTrainModule in TrainStep
+    state:tokio::sync::Mutex<StageState<TestStageBState>> //updatable state (like ThoTrainModule in TrainStep
 }
 
 impl <P, C> TestStageB<P, C>
@@ -230,7 +232,7 @@ where
     pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
             id: mono_key!(stage_id, "TestStageB").into(),
-            state: tokio::sync::Mutex::new(Some(TestStageBState::new(init.k, init.tho_device_idx))),
+            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k, init.tho_device_idx))),
             pd: PhantomData
         }
     }
@@ -291,9 +293,11 @@ where
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {//ensure state is present on the target device
         async move {
-            let lock_guard: MutexGuard<Option<TestStageBState>> = self.state.lock().await;
+            let lock_guard: MutexGuard<StageState<TestStageBState>> = self.state.lock().await;
 
-            return   Ok(MutexGuard::try_map(lock_guard, |opt| opt.as_mut()).ok())
+            debug!("TestStageB::pre_run: lock_guard={lock_guard:?}");
+
+            return   Ok(MutexGuard::try_map(lock_guard, |opt| Some(opt.as_mut())).ok())
 
         }.boxed()
     }
@@ -301,7 +305,7 @@ where
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             let guard = self.state.lock().await;
-            let k = &guard.as_ref().expect("no state 1").k_0;
+            let k = &guard.as_ref().k_0;
             Ok(StageStateInfo::new(
                 HashMap::from([
                     (format!("{}/{}", TEST_ENDPOINT, self.id),
@@ -318,18 +322,57 @@ where
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
-            Ok(self.state.lock().await.as_ref().expect("no state 4").k_0.as_ref().shallow_clone())
+            // Ok(self.state.lock().await.as_ref().expect("no state 4").k_0.as_ref().shallow_clone())
+            match &*self.state.lock().await {
+                StageState::Ready(state) =>  {
+                    Ok(state.k_0.as_ref().shallow_clone())
+                },
+                _=> {
+                    panic!("no state")
+                }
+            }
+
         }.boxed()
     }
 
     fn set_state_tensor(&self, tho_device: usize, tensor_id: String, t: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async {
+            debug!("TestStageB::set_state_tensor: tensor_id={tensor_id:?}");
+
             let mut guard = self.state.lock().await;
 
-            *guard = Some(TestStageBState {
-                k_0: t.into(),
-                // k_1: t.into(),
-            });
+
+            *guard = match &mut *guard {
+                StageState::Ready(state) =>  {
+                    panic!("unexpected state");
+                },
+                StageState::OffLoaded(keys) => {
+                    assert!(!keys.is_empty(), "no keys");
+
+                    let keys_len = keys.len();
+                    let mut keys = mem::take(keys);
+                    keys.retain(|v|!v.eq(&tensor_id));
+
+                    if keys_len != keys.len() - 1 {
+                        return Err(ThoError::NotFound(Some(tensor_id)));
+                    }
+
+                    if keys_len == 0 {
+                        StageState::Ready(TestStageBState {
+                            k_0: t.into(),
+                            // k_1: t.into(),
+                        })
+                    } else {
+                        StageState::BeingLoaded{ tensors: HashMap::from([(tensor_id, t)]), keys_to_load: keys }
+                    }
+                },
+                StageState::BeingLoaded{ tensors: tensor, keys_to_load } => {
+                    StageState::Ready(TestStageBState {
+                        k_0: t.into(),
+                        // k_1: t.into(),
+                    })
+                }
+            };
 
             Ok(())
         }.boxed()
@@ -355,19 +398,16 @@ where
 
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
 
-        match self.state.lock().await.as_ref() {
-            Some(state) => {
-                state.k_0.tho_device().ne(&Cpu.into())
-            }
-            None => {
-                false
-            }
+        match &*self.state.lock().await {
+            StageState::Ready(_) => true,
+            StageState::BeingLoaded{ tensors, .. } => !tensors.is_empty(),
+            StageState::OffLoaded(_) => false
         }
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TestStageB::drop_gpu");
-        self.state.lock().await.take();
+        *self.state.lock().await = StageState::OffLoaded(vec!["k_0".to_string()/*, "k_1".to_string()*/]);
         Ok(())
     }
 
