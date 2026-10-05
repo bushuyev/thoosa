@@ -81,10 +81,15 @@ impl From<IpcTensorKind> for Kind {
     }
 }
 
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TensorKey {
     Data(u64),//all_cuda_tensors
+    StageState{endpoint_name:String, stage_id:String, tensor_id:String}
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum H2DTensorKey {
+    New,//all_cuda_tensors
     StageState{endpoint_name:String, stage_id:String, tensor_id:String}
 }
 

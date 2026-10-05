@@ -4,7 +4,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
-use thoosa_shared::ipc_types::{IpcTensorKind, TensorKey, WorkerOutput};
+use thoosa_shared::ipc_types::{H2DTensorKey, IpcTensorKind, TensorKey, WorkerOutput};
 use thoosa_shared::traits::StageStateInfo;
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 
@@ -62,11 +62,13 @@ pub enum Operation {
         tensor_key: u64
     },
     H2dCopy {
+        tensor_key: H2DTensorKey,
         kind: IpcTensorKind,
         shape: Vec<i64>,
         tensor_byte_len: usize,
         // The parent owns the shared allocator, so the worker addresses the live CPU tensor by its offset in the arena mapping.
         arena_offset: usize,
+        dst_key: Option<H2DTensorKey>
     },
     D2hCopy {
         tensor_key: TensorKey,
