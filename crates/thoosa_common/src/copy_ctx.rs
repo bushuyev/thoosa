@@ -33,6 +33,7 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::error;
 use tub::{Guard, Pool};
+use thoosa_shared::ipc_types::H2DTensorKey;
 use crate::ipc::proxy::StageStateDump;
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult};
 

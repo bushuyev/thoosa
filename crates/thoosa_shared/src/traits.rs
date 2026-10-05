@@ -802,6 +802,13 @@ pub trait StageWithState: SyncStage + Sync {
         }.boxed()
     }
 
+    fn set_state_tensor(&self, tho_device: usize, tensor_id:String, t:Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async {
+            todo!()
+        }.boxed()
+    }
+
+
     fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         unimplemented!()
     }

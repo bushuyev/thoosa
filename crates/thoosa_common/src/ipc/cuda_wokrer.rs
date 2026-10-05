@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 use tch::{Device, Tensor};
-use thoosa_shared::ipc_types::{IpcTensorKind, TensorKey, WorkerOutput, WorkerTensorInfoPayload};
+use thoosa_shared::ipc_types::{H2DTensorKey, IpcTensorKind, TensorKey, WorkerOutput, WorkerTensorInfoPayload};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStateInfo, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
@@ -394,7 +394,7 @@ impl CudaWorker {
                     debug!("run_worker: DescribeRef response {request_id} sent");
                     Ok(())
                 }
-                Operation::H2dCopy { kind, shape, tensor_byte_len, arena_offset } => {
+                Operation::H2dCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
                     debug!("run_worker: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
 
                     let cuda_device = context.tho_device.gpu_ordinal();
@@ -402,14 +402,34 @@ impl CudaWorker {
 
                     let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
                     let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, 1, kind.into()).await?;
-                    let tensor_ref = insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?;
 
-                    debug!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref} request.request_id={:?}", request.request_id);
+                    let tensor_ref = if let Some(H2DTensorKey::StageState { endpoint_name, stage_id, tensor_id }) = dst_key {
+                        let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(&stage_id));
+
+                        let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+
+
+                        endpoint
+                            .expect(&format!("no endpoint {endpoint_name:?}"))
+                            .as_with_state()
+                            .unwrap()
+                            .set_state_tensor(&context.tho_device, tensor_id.clone(), cuda_t).await?;
+
+                        TensorKey::StageState {
+                            endpoint_name,
+                            stage_id,
+                            tensor_id,
+                        }
+                    } else {
+                        insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?.into()
+                    };
+
+                    debug!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref:?} request.request_id={:?}", request.request_id);
 
                     context.reply_tx.send(CudaWorkerMsgOut {
                         worker_id,
                         request_id,
-                        status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref:tensor_ref.into() }) as Box<dyn WorkerOutput>)),
+                        status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)),
                     }).await.context("worker response writer is closed")?;
                     debug!("run_worker: Operation::H2dCopy done");
                     Ok(())
@@ -531,7 +551,6 @@ impl CudaWorker {
                     if let Some(stage) = stage {
                         stage.purge(context.tho_device.clone()).await?;
 
-                            // let state_info = with_state.
                         context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
 
                     } else {
