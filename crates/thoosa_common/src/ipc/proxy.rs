@@ -1,5 +1,5 @@
 use crate::copy_ctx::CudaActorHandle;
-use crate::ipc::cuda_process::CudaIPCActorHandle;
+use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
@@ -23,10 +23,16 @@ use std::sync::{Arc, LazyLock};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
+use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLockReadGuard};
-use thoosa_shared::ipc_types::WorkerOutput;
+use thoosa_shared::ipc_types::{H2DTensorKey, WorkerOutput};
+
+pub enum StageState {
+    BeingLoaded(HashMap<String, Tensor>),
+    Ready,
+}
 
 pub struct ProxyStage<St>
 where
@@ -295,21 +301,34 @@ where
         ).await?;
         debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
 
-        // if let Err(error) = actor.drop_endpoint(
-        //     self.stage_id.clone(),
-        //     self.endpoint_name.to_string(),
-        //     self.worker_id,
-        // ).await {
-        //     if !GlobalCtx::is_shutting_down() {
-        //         error!("ProxyStage2::drop: failed to drop endpoint_name={:?} stage_id={:?} tho_device_idx={tho_device_idx}: {error:?}", self.endpoint_name, self.stage_id);
-        //     }
-        // }
 
         self.is_stage_installed.store(false, Relaxed);
 
         *self.state.lock().await = Some(Box::new(state_out));
         debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx} done", self);
 
+        Ok(())
+    }
+
+    async fn load_gpu(&self, tho_device_idx: usize) -> Result<(), ThoError> {
+        let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
+
+        let mut guard = self.state.lock().await;
+        if let Some(state) = guard.take() {
+            debug!("ProxyStage::load_gpu: state={state:?}");
+
+            for (key, tensor) in state.tensors {
+                debug!("ProxyStage::load_gpu: key={key:?} tensor={tensor:?}");
+                let key = H2DTensorKey::StageState {
+                    endpoint_name: self.endpoint_name.to_string(),
+                    stage_id: self.stage_id.as_ref().expect("no stage_id").clone(),
+                    tensor_id: key,
+                };
+                actor.copy_stage_state(tensor, tho_device_idx.into(), Some(key)).await?;
+            }
+            // Ok(state)
+        }
         Ok(())
     }
 }
@@ -422,34 +441,6 @@ where
         }
     }
 
-}
-
-
-impl <St, Init> StageWithState for DynSyncStageEnum<St, Init>
-where
-    St:SyncStage+StageWithState+Send+Sync,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static
-{
-    type S = <St as StageWithState>::S;
-
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<MappedMutexGuard<'_, Self::S>>, ThoError>> {
-        match self {
-            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
-            Self::Proxy { .. } => async {
-                Err(ThoError::new("proxy ApplyStage2 does not have local state"))
-            }.boxed(),
-        }
-    }
-
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
-        }
-    }
 }
 
 
@@ -575,16 +566,18 @@ where
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         match self {
-            Self::Local(stage) => StageWithState::pre_run(stage.as_ref(), to_device_idx),
+            Self::Local(stage) => {
+                //TODO add semaphore with single permit
+                StageWithState::pre_run(stage.as_ref(), to_device_idx)
+            },
             Self::Proxy { stage, init,.. } => {
                 let stage = Arc::clone(&stage);
                 async move {
                     debug!("SyncStage>::pre_run: stage={stage:?}");
+
+                    stage.load_gpu(to_device_idx).await?;
                     //Option
-                    if let Some(state) = stage.state.lock().await.take() {
-                        debug!("SyncStage>::pre_run: state={state:?}");
-                        // Ok(state)
-                    } //else {
+                     //else {
                     //     Err(ThoError::new("proxy ApplyStage2 does not have local state"))
                     // }
                     Ok(None)

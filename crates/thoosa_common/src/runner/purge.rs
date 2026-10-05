@@ -135,7 +135,7 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO remove Sync + Sen
         Ok(())
     }
 
-    // #[cfg(any(debug_assertions, tho_debug))]
+    
     async fn debug_gpu(
         &self,
         _device_idx: usize,
