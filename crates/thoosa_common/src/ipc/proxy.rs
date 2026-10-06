@@ -363,6 +363,11 @@ where
             return Ok(());
         }
 
+        // Keep the CPU dump across repeated purges and serialize offload with
+        // restoration. The worker no longer owns its tensors after the first dump.
+        let mut state = self.state.lock().await;
+        if state.is_some() { return Ok(()); }
+
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let state_out = actor.purge_stage_state(
             self.stage_id.clone(),
@@ -373,7 +378,7 @@ where
 
 
 
-        *self.state.lock().await = Some(Box::new(state_out));
+        *state = Some(Box::new(state_out));
         debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx} done", self);
 
         Ok(())
@@ -690,7 +695,7 @@ where
                 stage.has_gpu_data(device_idx).await
             }
             DynSyncStageWithStateEnum::Proxy { stage, .. } => {
-                stage.tho_device_idx == device_idx
+                stage.tho_device_idx == device_idx && stage.state.lock().await.is_none()
             }
         }
     }
