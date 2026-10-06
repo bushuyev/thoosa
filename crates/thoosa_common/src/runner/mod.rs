@@ -1,3 +1,4 @@
+/// OOM Handler code documentation
 pub mod global_ctx;
 pub mod oom_handler;
 pub mod purge;
