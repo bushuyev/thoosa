@@ -176,7 +176,7 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage2::do_run"))]
-    fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
         Self: Sized,
     {
@@ -185,22 +185,9 @@ where
             tokio::runtime::Handle::current().block_on(async move {
                 let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
                 let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
-                // if !self.is_stage_installed.load(Relaxed) {
-                //
-                //     let worker_id = ipc_actor.worker_id()?;
-                //     let rs = ipc_actor.install_stage(
-                //         worker_id,
-                //         self.endpoint_name.to_string(),
-                //         self.stage_id.clone(),
-                //         self.state.read(),
-                //     ).await?;
-                // }
+
 
                 debug!("ProxyStage2::do_run: input={input:?}");
-
-
-
-
 
                 let rs = ipc_actor.invoke_stage(
                     self.worker_id,
@@ -214,7 +201,6 @@ where
 
 
                 Self::handle_rs(rs)
-
 
             })
         })
@@ -657,10 +643,7 @@ where
                     debug!("SyncStage>::pre_run: stage={stage:?}");
 
                     stage.load_gpu(to_device_idx).await?;
-                    //Option
-                     //else {
-                    //     Err(ThoError::new("proxy ApplyStage2 does not have local state"))
-                    // }
+
                     Ok(None)
 
                 }.boxed()

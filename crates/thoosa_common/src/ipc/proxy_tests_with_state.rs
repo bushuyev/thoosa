@@ -626,6 +626,7 @@ mod tests {
         Ok(())
     }
 
+    //installs Stage, runs it, dumps its state to CPU, runs it again restoring state
     async fn do_test_with_state() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
