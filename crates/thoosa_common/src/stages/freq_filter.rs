@@ -30,6 +30,7 @@ use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
 use crate::dims::LocalSelect;
+use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
@@ -50,6 +51,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
+use thoosa_shared::ipc_types::{TensorKey, WorkerTensorInfoPayload};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
@@ -91,6 +93,8 @@ where
     C: RunCtx + 'static,
 {
     id: SynKey,
+    // IPC installs this endpoint under the run-config id, not its output SynKey.
+    stage_id: String,
     filters: tokio::sync::Mutex<Vec<PreparedFilter>>,
     num_channels:i64,
     sample_rate:f64,
@@ -154,13 +158,7 @@ where
 
     pub fn new_local(init:SyncFreqFilterIpcInit) ->Result<Self, ThoError>{
 
-        let filters = Self::prepare_filters(&init.filter_configs, init.num_channels, init.sample_rate)?;
-        let filters_have_config = filters.iter().any(|f|{
-            match f {
-                PreparedFilter::ZNorm { .. } => false,
-                _=> true,
-            }
-        });
+        let filters = Self::prepare_filters(&init.filter_configs, init.num_channels, init.sample_rate, init.tho_device_idx)?;
 
         let filters_have_config = filters.iter().any(|f|{
             match f {
@@ -183,6 +181,7 @@ where
 
         Ok(Self {
             id,
+            stage_id: init.find_motifs_run_config_id.to_string(),
             filters: tokio::sync::Mutex::new(filters),
             num_channels:init.num_channels,
             sample_rate:init.sample_rate,
@@ -190,7 +189,9 @@ where
         })
     }
 
-    fn prepare_filters(filter_configs: &[InputFilter], num_channels: i64, sample_rate: f64) -> Result<Vec<PreparedFilter>, ThoError> {
+    fn prepare_filters(filter_configs: &[InputFilter], num_channels: i64, sample_rate: f64, tho_device_idx: usize) -> Result<Vec<PreparedFilter>, ThoError> {
+        // A worker uses device 1; local construction can also target CPU or another GPU.
+        let device: Device = ThoDevice::from(tho_device_idx).into();
         let mut filters = Vec::with_capacity(filter_configs.len());
         for filter_config in filter_configs {
             match filter_config {
@@ -209,12 +210,12 @@ where
                         band_pass_config.kernel_size as i64,
                         sample_rate,
                         1e-6
-                    )?.f_repeat([num_channels, 1, 1])?.f_to_device(Cuda(0))?;//TODO device
+                    )?.f_repeat([num_channels, 1, 1])?.f_to_device(device)?;
 
                     debug!("FreqFilter::new: band_pass_config={band_pass_config:?} kernel.size={:?}", kernel.size());
 
                     filters.push(PreparedFilter::BandPass {
-                        kernel: ThoTensor::new((), kernel)?,
+                        kernel: PreparedFilterTensor::new(kernel)?,
                         stride: band_pass_config.stride,
                         padding: band_pass_config.padding,
                     });
@@ -235,14 +236,14 @@ where
                     }
 
                     let coeffs = sg_smoothing_coeffs(window_len as usize, sav_gol_config.poly_order as usize)?;
-                    let weights = Tensor::from_slice(&coeffs)
+                    let weights = Tensor::f_from_slice(&coeffs)?
                         .f_to_kind(tch::Kind::Float)?
-                        .f_to_device(Cuda(0))?//TODO device
+                        .f_to_device(device)?
                         .f_view([1, 1, window_len as i64])?
                         .f_repeat([num_channels, 1, 1])?;
 
                     filters.push(PreparedFilter::SavGol {
-                        weights: ThoTensor::new((), weights)?,
+                        weights: PreparedFilterTensor::new(weights)?,
                         window_len: window_len as i64,
                         stride: sav_gol_config.stride,
                         padding: sav_gol_config.padding,
@@ -305,6 +306,7 @@ where
                     // debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
                 }
                 PreparedFilter::BandPass { kernel, stride, padding } => {
+                    let kernel = kernel.ready()?;
                     let input_t = filtered_t.as_ref().f_unsqueeze(0)?;
 
                     let output = self.run_conv_with_padding(*stride, padding, &kernel.as_ref(), &input_t);
@@ -314,6 +316,7 @@ where
                     // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
                 }
                 PreparedFilter::SavGol { weights, window_len, stride, padding } => {
+                    let weights = weights.ready()?;
                     let t = filtered_t.size()[1];
                     if t < *window_len {
                         return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
@@ -389,17 +392,36 @@ where
 }
 
 
+// Scalar filter parameters stay in PreparedFilter while IPC transfers only the
+// tensors. An empty slot means offloaded (or only partly restored), never ready.
+#[derive(Debug)]
+pub struct PreparedFilterTensor {
+    tensor: Option<ThoTensor<BandPassDims, ()>>,
+    shape: Vec<i64>,
+    kind: Kind,
+}
+
+impl PreparedFilterTensor {
+    fn new(tensor: Tensor) -> Result<Self, ThoError> {
+        Ok(Self { shape: tensor.size(), kind: tensor.kind(), tensor: Some(ThoTensor::new((), tensor)?) })
+    }
+
+    fn ready(&self) -> Result<&ThoTensor<BandPassDims, ()>, ThoError> {
+        self.tensor.as_ref().ok_or_else(|| ThoError::new("frequency filter state is offloaded or incompletely restored"))
+    }
+}
+
 #[derive(Debug)]
 // This is public because the public StageWithState implementation exposes the prepared filters as its associated state.
 pub enum PreparedFilter {
     NotchBand { low_hz: f64, high_hz: f64 },
     BandPass {
-        kernel: ThoTensor<BandPassDims, ()>,
+        kernel: PreparedFilterTensor,
         stride: u32,
         padding: Padding,
     },
     SavGol {
-        weights: ThoTensor<BandPassDims, ()>,
+        weights: PreparedFilterTensor,
         window_len: i64,
         stride: u32,
         padding: Padding,
@@ -413,6 +435,24 @@ pub enum PreparedFilter {
     },
     ZNorm {
 
+    }
+}
+
+impl PreparedFilter {
+    fn tensor(&self) -> Option<&PreparedFilterTensor> {
+        match self {
+            Self::BandPass { kernel, .. } => Some(kernel),
+            Self::SavGol { weights, .. } => Some(weights),
+            _ => None,
+        }
+    }
+
+    fn tensor_mut(&mut self) -> Option<&mut PreparedFilterTensor> {
+        match self {
+            Self::BandPass { kernel, .. } => Some(kernel),
+            Self::SavGol { weights, .. } => Some(weights),
+            _ => None,
+        }
     }
 }
 
@@ -691,18 +731,61 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut filters = self.filters.lock().await;
+            // Restores arrive one tensor at a time and in arbitrary order. Do
+            // not expose a usable state until every tensor has been restored.
+            for filter in filters.iter() {
+                if let Some(tensor) = filter.tensor() { tensor.ready()?; }
+            }
             for filter in filters.iter_mut() {
-                match filter {
-                    PreparedFilter::BandPass { kernel, .. } if kernel.tho_device_idx() != to_device_idx => {
-                        *kernel = track_await(kernel.copy_to_device(to_device_idx)).await?;
+                if let Some(slot) = filter.tensor_mut() {
+                    let tensor = slot.ready()?;
+                    if tensor.tho_device_idx() != to_device_idx {
+                        slot.tensor = Some(track_await(tensor.copy_to_device(to_device_idx)).await?);
                     }
-                    PreparedFilter::SavGol { weights, .. } if weights.tho_device_idx() != to_device_idx => {
-                        *weights = track_await(weights.copy_to_device(to_device_idx)).await?;
-                    }
-                    _ => {}
                 }
             }
             Ok(Some(MutexGuard::map(filters, |v|v)))
+        }.boxed()
+    }
+
+    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
+        async move {
+            let filters = self.filters.lock().await;
+            let mut tensors = Vec::new();
+            for (index, filter) in filters.iter().enumerate() {
+                if let Some(slot) = filter.tensor() {
+                    let tensor = slot.ready()?;
+                    // Position identifies repeated filters of the same kind and
+                    // preserves their association with the retained parameters.
+                    tensors.push(WorkerTensorInfoPayload::new(TensorKey::stage_state(SYNC_FREQ_FILTER_ENDPOINT, &self.stage_id, index), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size())));
+                }
+            }
+            Ok(StageStateInfo::new(tensors, None))
+        }.boxed()
+    }
+
+    fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move {
+            let filters = self.filters.lock().await;
+            let slot = filters.iter().enumerate().find(|(index, _)| index.to_string() == tensor_id).and_then(|(_, filter)| filter.tensor()).ok_or_else(|| ThoError::NotFound(Some(tensor_id)))?;
+            // The worker's D2H request retains this alias until its copy has
+            // synchronized; PurgeStage then drops the stage-owned allocation.
+            Ok(slot.ready()?.as_ref().f_alias()?)
+        }.boxed()
+    }
+
+    fn set_state_tensor(&self, tho_device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move {
+            let mut filters = self.filters.lock().await;
+            let slot = filters.iter_mut().enumerate().find(|(index, _)| index.to_string() == tensor_id).and_then(|(_, filter)| filter.tensor_mut()).ok_or_else(|| ThoError::NotFound(Some(tensor_id.clone())))?;
+            if slot.tensor.is_some() {
+                return Err(ThoError::new(format!("frequency filter state tensor {tensor_id} is already loaded")));
+            }
+            if tensor.kind() != slot.kind || tensor.size() != slot.shape || tensor.device() != Device::from(ThoDevice::from(tho_device)) {
+                return Err(ThoError::new(format!("frequency filter state tensor {tensor_id} has incompatible kind, shape, or device")));
+            }
+            slot.tensor = Some(ThoTensor::new((), tensor)?);
+            Ok(())
         }.boxed()
     }
     
@@ -718,36 +801,35 @@ where
     Self:Send + Sync
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        let mut filters = self.filters.lock().await;
-        for filter in filters.iter_mut() {
-            match filter {
-                PreparedFilter::BandPass { kernel, .. } if kernel.tho_device_idx() != 0 => {
-                    return  true
-                }
-                PreparedFilter::SavGol { weights, .. } if weights.tho_device_idx() != 0 => {
-                    return  true
-                }
-                _ => {}
-            }
-        }
-        false
+        let filters = self.filters.lock().await;
+        device_idx != 0 && filters.iter().filter_map(PreparedFilter::tensor).any(|slot| slot.tensor.as_ref().is_some_and(|tensor| tensor.tho_device_idx() == device_idx))
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("SyncFreqFilter::purge_gpu");
         let mut filters = self.filters.lock().await;
         for filter in filters.iter_mut() {
-            match filter {
-                PreparedFilter::BandPass { kernel, .. } if kernel.tho_device_idx() != 0 => {
-                    *kernel = track_await(kernel.copy_to_device(0)).await?;
+            if let Some(slot) = filter.tensor_mut() {
+                if let Some(tensor) = &slot.tensor && device_idx != 0 && tensor.tho_device_idx() == device_idx {
+                    slot.tensor = Some(track_await(tensor.copy_to_device(0)).await?);
                 }
-                PreparedFilter::SavGol { weights, .. } if weights.tho_device_idx() != 0 => {
-                    *weights = track_await(weights.copy_to_device(0)).await?;
-                }
-                _ => {}
             }
         }
 
+        Ok(())
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        // In IPC, the parent has already copied every state tensor to CPU.
+        // Release worker storage, retaining only metadata needed for restoration.
+        let mut filters = self.filters.lock().await;
+        for filter in filters.iter_mut() {
+            if let Some(slot) = filter.tensor_mut() {
+                if slot.tensor.as_ref().is_some_and(|tensor| device_idx != 0 && tensor.tho_device_idx() == device_idx) {
+                    slot.tensor = None;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -835,6 +917,14 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::ipc::cuda_process::CudaIPCActorHandle;
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::worker_msg::OpResult;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::transforms::filters::ZeroPadding;
+    use crate::ws::mock_ws_simp;
+    use std::time::Duration;
     use std::sync::Arc;
     use tch::Tensor;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
@@ -848,6 +938,158 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::{StageHash, SyncStage};
+
+    fn state_test_filters() -> Vec<InputFilter> {
+        vec![
+            InputFilter::BandPassFilter(BandPassFilterParams { low_hz: 3., band_hz: 12., kernel_size: 9, stride: 1, padding: Padding::Zero(ZeroPadding {}) }),
+            InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
+            InputFilter::SavGolFilter(SavGolFilterParams { window_len: 7, poly_order: 2, stride: 1, padding: Padding::Zero(ZeroPadding {}) }),
+            // A second band-pass verifies that tensor keys identify positions,
+            // rather than collapsing repeated filter kinds into one entry.
+            InputFilter::BandPassFilter(BandPassFilterParams { low_hz: 5., band_hz: 16., kernel_size: 11, stride: 2, padding: Padding::Zero(ZeroPadding {}) }),
+        ]
+    }
+
+    fn state_test_input(scale: f64) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
+        let tensor = Tensor::f_arange(256, (Kind::Float, Device::Cpu))?.f_mul_scalar(0.13)?.f_sin()?.f_mul_scalar(scale)?.f_view([2, 128])?;
+        ThoTensor::new(mono_key!("filter-state-input", "filter-state-input").into(), tensor)
+    }
+
+    fn state_test_reference(stage: &SyncFreqFilter<RunCtxImpl>, input: &ThoTensor<ChannelsData, SynKey>) -> Result<Tensor, ThoError> {
+        // Explicit CPU convolution supplies an independent reference and avoids
+        // oneDNN's raw allocator interface, unsupported by the parent's shared arena.
+        let filters = stage.filters.try_lock().context("reference filter state is locked")?;
+        let mut output = input.as_ref().f_alias()?;
+        for filter in filters.iter() {
+            output = match filter {
+                PreparedFilter::BandPass { kernel, stride, padding } | PreparedFilter::SavGol { weights: kernel, stride, padding, .. } => {
+                    assert!(matches!(padding, Padding::Zero(_)));
+                    let kernel = kernel.ready()?;
+                    let width = kernel.size()[2];
+                    output.f_constant_pad_nd([width / 2, width / 2])?.f_unfold(1, width, *stride as i64)?.f_mul(kernel.as_ref())?.f_sum_dim_intlist(&[2i64][..], false, Kind::Float)?
+                }
+                PreparedFilter::Median { window } => median(&output, *window)?,
+                _ => panic!("unexpected filter in state-transfer fixture"),
+            };
+        }
+        Ok(output)
+    }
+
+    // Use the production stateful wrapper so metadata, D2H, worker purge,
+    // per-tensor H2D, and the next stage invocation all cross the real protocol.
+    fn state_test_init<'a>(_stage_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _tensors: &'a AllTensors, device: &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+        async move {
+            let init: Box<dyn Any> = init;
+            let mut init = *init.downcast::<SyncFreqFilterIpcInit>().map_err(|_| ThoError::new("unexpected filter initializer"))?;
+            init.tho_device_idx = device.tho_device_idx();
+            let stage = Arc::new(SyncFreqFilter::<WokerRunCtx>::new_local(init)?);
+            Ok(Box::new(WorkerWrapperWithState::new(stage, PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        }.boxed()
+    }
+
+    async fn do_test_filter_state() -> Result<(), ThoError> {
+        let global = GlobalCtx::global();
+        let actor = global.cuda_actor(1);
+        let multiple = state_test_filters();
+        let cases = [vec![], vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })], vec![multiple[0].clone()], multiple];
+        for (case, configs) in cases.into_iter().enumerate() {
+            let config_id = 7100 + case as RunConfigId;
+            let reference = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., config_id, 0))?);
+            let tensor_count = reference.get_state_info(0).await?.tensors.len();
+            let stage = SyncFreqFilter::<RunCtxImpl>::new(SyncFreqFilterIpcInit::new(configs, 2, 100., config_id, 1)).await?;
+            let ctx = RunCtxImpl::new(1, "freq_filter_state");
+            // Exercise both initial invocation and repeated restore cycles.
+            for cycle in 0..3 {
+                let input = state_test_input(cycle as f64 + 1.)?;
+                let expected = state_test_reference(&reference, &input)?;
+                let input = Arc::new(DevicesWrap::wrap(input));
+                let output = actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
+                let output = output.copy_to_device(0).await?;
+                assert!(output.as_ref().f_allclose(&expected, 1e-4, 1e-5, false)?, "filter output changed in case {case}, cycle {cycle}");
+                // A purge for another device must preserve this stage's state.
+                stage.purge_gpu(None, 2, "other device").await?;
+                assert_eq!(stage.has_gpu_data(1).await, global.is_ipc() || tensor_count > 0);
+                global.dump_all_to_cpu(&HashMap::new(), 1, "freq filter state test").await?;
+                assert!(!stage.has_gpu_data(1).await);
+                assert!(global.is_all_on_cpu(1, true));
+                // The CPU dump must survive both repeated global and direct purges.
+                global.dump_all_to_cpu(&HashMap::new(), 1, "already offloaded").await?;
+                stage.purge_gpu(None, 1, "already offloaded").await?;
+
+                if global.is_ipc() && tensor_count > 0 {
+                    let ipc: &dyn Any = actor.as_ref();
+                    let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
+                    let input = state_test_input(1.)?.copy_to_device(1).await?;
+                    // Bypass proxy pre_run: a worker invocation must fail until
+                    // the parent restores state, proving worker storage was dropped.
+                    let response = ipc.invoke_stage(ipc.worker_id()?, SYNC_FREQ_FILTER_ENDPOINT.into(), Some(config_id.to_string()), Box::new(input), false).await?;
+                    let OpResult::Failed(error) = response.status else { panic!("worker kept filter tensors after purge") };
+                    assert!(ThoError::from(error).to_string().contains("offloaded"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_filter_state_local() -> Result<(), ThoError> {
+        let global = GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let result = tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await?;
+        global.shutdown().await;
+        result
+    }
+
+    #[test]
+    fn test_filter_state_ipc() -> Result<(), ThoError> {
+        crate::ipc::tests::run_ipc_test(module_path!(), async {
+            tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await?
+        }, async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
+        })
+    }
+
+    #[tokio::test]
+    async fn test_filter_state_restore_requires_all_tensors() -> Result<(), ThoError> {
+        let stage = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(state_test_filters(), 2, 100., 7104, 0))?);
+        let input = state_test_input(1.)?;
+        let ctx = RunCtxImpl::new(0, "filter state restore");
+        let expected = Arc::clone(&stage).do_run(&input, &ctx)?;
+        let info = stage.get_state_info(0).await?;
+        assert_eq!(info.tensors.len(), 3);
+        let mut tensors = Vec::new();
+        for info in info.tensors {
+            let TensorKey::StageState { endpoint_name, stage_id, tensor_key } = info.tensor_key else { panic!("expected stage-state identity") };
+            assert_eq!(endpoint_name, SYNC_FREQ_FILTER_ENDPOINT);
+            assert_eq!(stage_id, "7104");
+            let tensor = stage.get_state_tensor(0, tensor_key.clone()).await?;
+            assert_eq!(tensor.size(), info.shape);
+            assert_eq!(tensor_mem_size(tensor.kind(), &tensor.size()), info.tensor_byte_len);
+            tensors.push((tensor_key, tensor));
+        }
+        // Model worker offload without requiring CUDA in this state-machine test.
+        for filter in stage.filters.lock().await.iter_mut() {
+            if let Some(slot) = filter.tensor_mut() { slot.tensor = None; }
+        }
+        assert!(StageWithState::pre_run(stage.as_ref(), 0).await.is_err());
+        assert!(stage.set_state_tensor(0, "unknown".into(), Tensor::f_zeros([1], (Kind::Float, Device::Cpu))?).await.is_err());
+        let (key, tensor) = &tensors[0];
+        assert!(stage.set_state_tensor(0, key.clone(), tensor.f_to_kind(Kind::Double)?).await.is_err());
+        assert!(stage.set_state_tensor(0, key.clone(), Tensor::f_zeros([1], (Kind::Float, Device::Cpu))?).await.is_err());
+        assert!(stage.set_state_tensor(1, key.clone(), tensor.f_alias()?).await.is_err());
+        // HashMap iteration during H2D is unordered. Restore in reverse order,
+        // reject duplicates, and only permit execution after the final upload.
+        while let Some((key, tensor)) = tensors.pop() {
+            stage.set_state_tensor(0, key.clone(), tensor.f_alias()?).await?;
+            assert!(stage.set_state_tensor(0, key, tensor).await.is_err());
+            if !tensors.is_empty() { assert!(StageWithState::pre_run(stage.as_ref(), 0).await.is_err()); }
+        }
+        let state = StageWithState::pre_run(stage.as_ref(), 0).await?.unwrap();
+        let actual = Arc::clone(&stage).do_run_with_state(&input, state, &ctx)?;
+        assert!(actual.as_ref().f_allclose(expected.as_ref(), 0., 0., false)?);
+        Ok(())
+    }
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
