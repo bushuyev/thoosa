@@ -60,7 +60,7 @@ cargo build --release
 
 For a faster compile check, use `cargo check --workspace --all-targets` from `crates/`. Build one package with `cargo build --release -p thoosa_hbac` (or another package name from the tables above).
 
-- [OOM Handling] (docs/oom.md)
+- [OOM Handling](docs/oom.md)
 - [IPC subsystem](docs/ipc.md) 
 
 ## Run
