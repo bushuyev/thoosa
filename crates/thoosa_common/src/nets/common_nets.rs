@@ -2,6 +2,8 @@ use crate::dims::Dims;
 use crate::nets::batches::BatchLengths;
 use crate::nets::nodes::{BinaryHeadPool, ThoModule};
 use crate::nets::tho_varstore::clone_var_store_to;
+use crate::nets::state_transfer::{StateTensors, VarStoreState};
+use thoosa_shared::traits::StageStateInfo;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -45,8 +47,10 @@ type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModu
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
     id:SynKey,
-    module: Box<dyn ThoModule<DI, DO>>,
+    module: Option<Box<dyn ThoModule<DI, DO>>>,
     var_store: VarStore,
+    offloaded: Option<(VarStoreState, StateTensors)>,
+    quantized: bool,
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
 }
 
@@ -118,7 +122,8 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for
         };
         debug!("ThoModuleWithStore::tho_forward: t.id={:?}, t.as_ref().kind={:?}", t.id(), t.as_ref().kind());
 
-        self.module.tho_forward(t, lengths, train)
+        self.ensure_ready()?;
+        self.module().tho_forward(t, lengths, train)
     }
 }
 
@@ -136,9 +141,11 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     ) -> Self {
         Self {
             id: id.into(),
-            module,
+            module: Some(module),
             var_store,
             module_factory,
+            offloaded: None,
+            quantized: false,
         }
     }
 
@@ -171,7 +178,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
             module.quantize();
         }
 
-        Ok(Self::with_factory(id, module, vs, Some(builder)))
+        let mut result = Self::with_factory(id, module, vs, Some(builder));
+        result.quantized = quantize;
+        Ok(result)
     }
 
     #[allow(dead_code)]
@@ -185,11 +194,11 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
     #[allow(dead_code)]
     fn debug(&self) {
-        self.module.debug();
+        self.module().debug();
     }
 
     pub fn infer(&self, t: &ThoTensor<DI, DebugId>) -> ThoTensor<DO, DebugId> {
-        self.module.tho_forward(t, None, false).unwrap()
+        self.module().tho_forward(t, None, false).unwrap()
     }
 
     pub fn var_store(&self) -> &VarStore {
@@ -197,7 +206,71 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     }
 
     pub fn module(&self) -> &Box<dyn ThoModule<DI, DO>> {
-        &self.module
+        self.module.as_ref().expect("model state must be restored before accessing its module")
+    }
+
+    pub fn ensure_ready(&self) -> Result<(), ThoError> {
+        if self.module.is_none() {
+            return Err(ThoError::new("model state is offloaded or incompletely restored"));
+        }
+        Ok(())
+    }
+
+    pub fn has_gpu_data(&self, device: usize) -> bool {
+        device != 0 && (self.module.is_some() && self.tho_device_idx() == device
+            || self.offloaded.as_ref().is_some_and(|(_, tensors)| tensors.has_device(device)))
+    }
+
+    pub fn state_info(&self) -> Result<StageStateInfo, ThoError> {
+        self.ensure_ready()?;
+        let mut tensors = StateTensors::default();
+        VarStoreState::capture(&self.var_store, &mut tensors)?;
+        Ok(tensors.info())
+    }
+
+    pub fn state_tensor(&self, key: &str) -> Result<Tensor, ThoError> {
+        self.ensure_ready()?;
+        let variables = self.var_store.variables();
+        let tensor = key.strip_prefix("var/").and_then(|name| variables.get(name)).ok_or_else(|| ThoError::NotFound(Some(key.to_owned())))?;
+        Ok(tensor.f_detach()?)
+    }
+
+    pub fn drop_gpu(&mut self, device: usize) -> Result<(), ThoError> {
+        if !self.has_gpu_data(device) { return Ok(()); }
+        if let Some((_, tensors)) = &mut self.offloaded {
+            tensors.clear();
+            return Ok(());
+        }
+        if self.module_factory.is_none() {
+            return Err(ThoError::new("offloading a model requires its module factory"));
+        }
+        let mut tensors = StateTensors::default();
+        let variables = VarStoreState::capture(&self.var_store, &mut tensors)?;
+        if tensors.info().tensors.is_empty() { return Ok(()); }
+        tensors.clear();
+        // Both the module (including derived/quantized caches) and VarStore own
+        // GPU tensors. Drop both after the parent's D2H copies have completed.
+        self.module = None;
+        self.var_store = VarStore::new(Cpu);
+        self.offloaded = Some((variables, tensors));
+        Ok(())
+    }
+
+    pub fn set_state_tensor(&mut self, key: &str, tensor: Tensor, device: usize) -> Result<(), ThoError> {
+        let (variables, tensors) = self.offloaded.as_mut().ok_or_else(|| ThoError::new("model state is already loaded"))?;
+        tensors.set(key, tensor, device)?;
+        if tensors.complete() {
+            // Build from the restored store, so module and store share exactly
+            // the same parameters; never reload the original checkpoint.
+            let vs = variables.restore(tensors, device)?;
+            let builder = self.module_factory.as_ref().ok_or_else(|| ThoError::new("model has no module factory"))?;
+            let mut module = builder(&vs.root())?;
+            if self.quantized { module.quantize(); }
+            self.var_store = vs;
+            self.module = Some(module);
+            self.offloaded = None;
+        }
+        Ok(())
     }
 }
 
@@ -251,6 +324,7 @@ DO: Dims + Send + 'static {
 
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
+        self.ensure_ready()?;
         let var_store = clone_var_store_to(&self.var_store, tho_dst_device.into()).await?;
         // let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
         let builder = self
@@ -258,9 +332,11 @@ DO: Dims + Send + 'static {
             .as_ref()
             .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
 
-        let module = builder(&var_store.root())?;
-
-        Ok(Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder))))
+        let mut module = builder(&var_store.root())?;
+        if self.quantized { module.quantize(); }
+        let mut result = Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder)));
+        result.quantized = self.quantized;
+        Ok(result)
     }
 }
 

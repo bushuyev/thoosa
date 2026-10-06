@@ -771,13 +771,19 @@ where
     C: RunCtx + 'static
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.net.lock().await.tho_device_idx() !=0
+        self.net.lock().await.has_gpu_data(device_idx)
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         let mut guard = self.net.lock().await;
-        *guard = guard.copy_to_device(0).await?;
+        if guard.has_gpu_data(device_idx) {
+            *guard = guard.copy_to_device(0).await?;
+        }
         Ok(())
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
+        self.net.lock().await.drop_gpu(device_idx)
     }
 }
 
@@ -896,11 +902,25 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut net = self.net.lock().await;
+            net.ensure_ready()?;
             if net.tho_device_idx() != to_device_idx {
                 *net = net.copy_to_device(to_device_idx).await?;
             }
             Ok(Some(MutexGuard::map(net, |v|v)))
         }.boxed()
+    }
+
+    // The module owns the transfer schema and releases all parameter aliases.
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_shared::traits::StageStateInfo, ThoError>> {
+        async move { self.net.lock().await.state_info() }.boxed()
+    }
+
+    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move { self.net.lock().await.state_tensor(&tensor_id) }.boxed()
+    }
+
+    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move { self.net.lock().await.set_state_tensor(&tensor_id, tensor, device) }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
@@ -1441,3 +1461,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "apply_net_state_tests.rs"]
+mod state_tests;

@@ -563,7 +563,7 @@ impl CudaWorker {
                 Operation::GetStageStateInfo { endpoint_name, stage_id } => {
                     debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
 
-                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
+                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), stage_id.as_ref());
 
                     let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
 
@@ -571,7 +571,12 @@ impl CudaWorker {
                         
                         if let Some(with_state) = endpoint.as_with_state(){
 
-                            let state_info = with_state.get_state_info(&context.tho_device).await?;
+                            let mut state_info = with_state.get_state_info(&context.tho_device).await?;
+                            // The installation owns the routing identity. Shared model
+                            // state (notably TrainStep) only supplies tensor names.
+                            for tensor in &mut state_info.tensors {
+                                tensor.tensor_key = TensorKey::stage_state(&endpoint_name, stage_id.as_deref().unwrap_or(""), tensor.tensor_key.to_tensor_key());
+                            }
 
                             context.reply_tx.send(
                                 CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }
