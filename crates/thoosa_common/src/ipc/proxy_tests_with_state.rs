@@ -284,6 +284,9 @@ where
     }
 
 }
+
+const K_0: &'static str = "K_0";
+
 impl <P, C> StageWithState for TestStageB<P, C>
 where
     P:Debug,
@@ -308,12 +311,19 @@ where
             let k = &guard.as_ref().k_0;
             Ok(StageStateInfo::new(
                 HashMap::from([
-                    (format!("{}/{}", TEST_ENDPOINT, self.id),
-                     WorkerTensorInfoPayload::new(TensorKey::stage_state(
-                        TEST_ENDPOINT,
-                        &self.id,
-                        "n/a"
-                    ), k.kind().into(), k.size(), tensor_mem_size(k.kind(), &k.size())))
+                    (
+                        format!("{}/{}", TEST_ENDPOINT, self.id),
+                        WorkerTensorInfoPayload::new(
+                            TensorKey::stage_state(
+                                TEST_ENDPOINT,
+                                &self.id,
+                                K_0,
+                            ),
+                            k.kind().into(),
+                            k.size(),
+                            tensor_mem_size(k.kind(), &k.size()),
+                        )
+                    )
                 ]),
                 None, //Some(Box::new(TestStageStateScalars::new(guard.counter)))
             ))
@@ -385,7 +395,7 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
+        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{}", input.value.as_ref(), k.k_0.as_ref());
         Ok(TestOutputB {
             value: (input.value.as_ref() * k.k_0.as_ref()).into(),
         })
@@ -411,7 +421,7 @@ where
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TestStageB::drop_gpu");
-        *self.state.lock().await = StageState::OffLoaded(vec!["TestStageB/1".to_string()/*, "k_1".to_string()*/]);
+        *self.state.lock().await = StageState::OffLoaded(vec![K_0.to_string()/*, "k_1".to_string()*/]);
         Ok(())
     }
 
@@ -626,7 +636,7 @@ mod tests {
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
-        debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
+        debug!("test_with_state_target: 0. cuda_tensor={cuda_tensor:?}");
 
         let input = TestInputB {
             value: cuda_tensor,
@@ -642,12 +652,13 @@ mod tests {
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
         assert!(!GlobalCtx::global().is_all_on_cpu(1, true));
-        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-        // assert!(GlobalCtx::global().is_all_on_cpu(1, true)); //TODO it fails because proxies always return true from has_gpu_data
+        let dump_all_to_cpu_result = GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await;
+        debug!("test_with_state_target: dump_all_to_cpu_result={dump_all_to_cpu_result:?}");
+        assert!(dump_all_to_cpu_result.is_ok());
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU)*2)?, 1.into()).await?;
 
-        debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
+        debug!("test_with_state_target: 1. cuda_tensor={cuda_tensor:?}");
 
         let input = TestInputB {
             value: cuda_tensor,
@@ -662,7 +673,7 @@ mod tests {
         debug!("cpu_tensor={}", cpu_t);
         assert!(Tensor::from_slice(&[4., 4., 4.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
-
+        debug!("all ok");
         Ok(())
     }
 }

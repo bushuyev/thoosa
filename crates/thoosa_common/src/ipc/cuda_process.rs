@@ -109,7 +109,7 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
     }
 }
 
-
+//TODO CudaWorkerMsgIn::Operation variants used in CudaIPCActorMessage::PurgeStage and CudaIPCActorMessage::SendMsg must be moved into CudaIPCActorMessage to keep all in single enum. Current structure is left over from replacing json with postcard serialization.
 pub enum CudaIPCActorMessage {
     Copy{
         src:ThoTensor,
@@ -411,43 +411,59 @@ impl CudaIPCActor {
                         input,
                     ).await?;
 
-                    if let OpResult::Ok(Some(v)) = response.status {
-                        debug!("handle_message: Operation::PurgeStage: v={v:?}");
-                        let mut tensors:HashMap<String, ThoTensor> = HashMap::new();
-                        let Ok(info) = (v as Box<dyn Any>).downcast::<StageStateInfo>() else {
-                            panic!("");//TODO return err
-                        };
+                    match response.status {
+                        OpResult::Ok(None) => {
+                            respond_to.send(Err(ThoError::new("No value"))).unwrap();
+                        }
+                        OpResult::Failed(e) => {
+                            respond_to.send(Err(e.into())).unwrap();
+                        }
+                        OpResult::Ok(Some(v)) => {
+                            debug!("handle_message: Operation::PurgeStage: v={v:?}");
+                            let mut tensors:HashMap<String, ThoTensor> = HashMap::new();
+                            let Ok(info) = (v as Box<dyn Any>).downcast::<StageStateInfo>() else {
+                                panic!("");//TODO return err
+                            };
 
-                        for (key, tensor_info) in info.tensors {
-                            let t = Self::do_ref_d2h_copy(
-                                worker_id,
-                                next_id.fetch_add(1, Ordering::Relaxed),
+                            for (stage_key, tensor_info) in info.tensors {
+                                debug!("handle_message: Operation::PurgeStage: stage_key={stage_key:?}");
+                                let tensor_key = tensor_info.tensor_key.to_tensor_key();
+
+                                let t = Self::do_ref_d2h_copy(
+                                    worker_id,
+                                    next_id.fetch_add(1, Ordering::Relaxed),
+                                    Arc::clone(&pending),
+                                    tx.clone(),
+                                    tensor_info
+                                ).await?;
+
+
+                                tensors.insert(tensor_key, t);
+                            }
+
+                            let response = send_request_and_wait_msg(
+                                self_tx,
                                 Arc::clone(&pending),
-                                tx.clone(),
-                                tensor_info
+                                CudaWorkerMsgIn {
+                                    worker_id,
+                                    request_id: 0,
+                                    operation: Operation::PurgeStage {
+                                        endpoint_name,
+                                        stage_id,
+                                    },
+                                },
                             ).await?;
 
-                            tensors.insert(key, t);
-                        }
+                            debug!("handle_message: Operation::PurgeStage: response={response:?}");
 
-                        debug!("handle_message: Operation::PurgeStage: tensors={tensors:?}");
-                        let _ = respond_to.send(Ok(StageStateDump::new(info.scalars, tensors)));
+                            if let OpResult::Ok(None) = response.status {//TODO error handling
+                                debug!("handle_message: Operation::PurgeStage: tensors={tensors:?}");
+                                let _ = respond_to.send(Ok(StageStateDump::new(info.scalars, tensors)));
+                            }
+                        }
                     }
 
-
-                    let response = send_request_and_wait_msg(
-                        self_tx,
-                        Arc::clone(&pending),
-                        CudaWorkerMsgIn {
-                            worker_id,
-                            request_id: 0,
-                            operation: Operation::PurgeStage {
-                                endpoint_name,
-                                stage_id,
-                            },
-                        },
-                    ).await?;
-
+                 
                     Ok::<_, ThoError>(())
                 });
             }
