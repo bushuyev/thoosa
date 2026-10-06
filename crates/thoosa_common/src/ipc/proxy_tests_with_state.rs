@@ -45,13 +45,14 @@ use crate::cuda_utils::tensor_mem_size;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
-    k:i64,
+    k_0:i64,
+    k_1:i64,
     tho_device_idx:usize
 }
 
 impl TestStageInitB {
-    pub fn new(k: i64, tho_device_ids:usize) -> Self {
-        Self { k, tho_device_idx: tho_device_ids }
+    pub fn new(k_0: i64, k_1: i64, tho_device_ids:usize) -> Self {
+        Self { k_0, k_1, tho_device_idx: tho_device_ids }
     }
 }
 
@@ -183,15 +184,28 @@ impl RunCtx for TestRunCtx {
 
 #[derive(Debug)]
 pub struct TestStageBState {
-    k_0:ThoTensor,//tensors need to be dumped to CPU and removed from State when handling OOM in other stages
-    // k_1:ThoTensor,
+    //tensors need to be dumped to CPU and removed from State when handling OOM in other stages
+    k_0:ThoTensor,
+    k_1:ThoTensor,
 }
 
 impl TestStageBState {
-    pub fn new(k:i64, tho_device_idx:usize) -> Self {
+
+    pub fn new(k_0:i64, k_1: i64, tho_device_idx:usize) -> Self {
         Self {
-            k_0: Tensor::scalar_tensor(k, (Int, ThoDevice::from(tho_device_idx).into())).into(),
-            // k_1: Tensor::scalar_tensor(1, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+            k_0: Tensor::scalar_tensor(k_0, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+            k_1: Tensor::scalar_tensor(k_1, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+        }
+    }
+}
+
+impl From<HashMap<String, Tensor>> for TestStageBState {
+    fn from(mut map: HashMap<String, Tensor>) -> Self {
+        assert_eq!(map.len(), 2);
+
+        TestStageBState {
+            k_0: map.remove(K_0).expect("no K_0").into(),
+            k_1: map.remove(K_1).expect("no K_1").into(),
         }
     }
 }
@@ -232,7 +246,7 @@ where
     pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
             id: mono_key!(stage_id, "TestStageB").into(),
-            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k, init.tho_device_idx))),
+            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k_0, 0, init.tho_device_idx))),
             pd: PhantomData
         }
     }
@@ -284,6 +298,10 @@ where
     }
 
 }
+
+const K_0: &'static str = "K_0";
+const K_1: &'static str = "K_1";
+
 impl <P, C> StageWithState for TestStageB<P, C>
 where
     P:Debug,
@@ -305,27 +323,54 @@ where
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             let guard = self.state.lock().await;
-            let k = &guard.as_ref().k_0;
+            let k_0 = &guard.as_ref().k_0;
+            let k_1 = &guard.as_ref().k_1;
             Ok(StageStateInfo::new(
-                HashMap::from([
-                    (format!("{}/{}", TEST_ENDPOINT, self.id),
-                     WorkerTensorInfoPayload::new(TensorKey::stage_state(
-                        TEST_ENDPOINT,
-                        &self.id,
-                        "n/a"
-                    ), k.kind().into(), k.size(), tensor_mem_size(k.kind(), &k.size())))
-                ]),
+                vec![
+
+                        WorkerTensorInfoPayload::new(
+                            TensorKey::stage_state(
+                                TEST_ENDPOINT,
+                                &self.id,
+                                K_0,
+                            ),
+                            k_0.kind().into(),
+                            k_0.size(),
+                            tensor_mem_size(k_0.kind(), &k_0.size()),
+                        ),
+                        WorkerTensorInfoPayload::new(
+                            TensorKey::stage_state(
+                                TEST_ENDPOINT,
+                                &self.id,
+                                K_1,
+                            ),
+                            k_1.kind().into(),
+                            k_1.size(),
+                            tensor_mem_size(k_1.kind(), &k_1.size()),
+                        )
+
+                ],
                 None, //Some(Box::new(TestStageStateScalars::new(guard.counter)))
             ))
         }.boxed()
     }
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
-        async {
-            // Ok(self.state.lock().await.as_ref().expect("no state 4").k_0.as_ref().shallow_clone())
+        async move {
+
             match &*self.state.lock().await {
                 StageState::Ready(state) =>  {
-                    Ok(state.k_0.as_ref().shallow_clone())
+                    match tensor_id.as_str() {
+                        K_0 => {
+                            Ok(state.k_0.as_ref().shallow_clone())
+                        }
+                        K_1 => {
+                            Ok(state.k_1.as_ref().shallow_clone())
+                        }
+                        _=> {
+                            panic!("unexpected tensor_id={tensor_id}")
+                        }
+                    }
                 },
                 _=> {
                     panic!("no state")
@@ -361,20 +406,35 @@ where
 
                     debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
 
-                    if keys.len() == 0 {
-                        StageState::Ready(TestStageBState {
-                            k_0: t.into(),
-                            // k_1: t.into(),
-                        })
+                    if keys.len() == 0 {//state contains single tensor
+                        StageState::Ready(HashMap::from([(tensor_id, t)]).into())
                     } else {
                         StageState::BeingLoaded{ tensors: HashMap::from([(tensor_id, t)]), keys_to_load: keys }
                     }
                 },
-                StageState::BeingLoaded{ tensors: tensor, keys_to_load } => {
-                    StageState::Ready(TestStageBState {
-                        k_0: t.into(),
-                        // k_1: t.into(),
-                    })
+                StageState::BeingLoaded{ tensors, keys_to_load:keys } => {
+
+
+                    assert!(!keys.is_empty(), "no keys");
+
+                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys={keys:?}");
+
+                    let keys_len = keys.len();
+                    let mut keys = mem::take(keys);
+                    keys.retain(|v|!v.eq(&tensor_id));
+
+                    if keys_len -1 != keys.len() {
+                        return Err(ThoError::NotFound(Some(tensor_id)));
+                    }
+
+                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
+                    tensors.insert(tensor_id, t);
+                    if keys.len() == 0 {
+
+                        StageState::Ready(mem::take(tensors).into())
+                    } else {
+                        StageState::BeingLoaded { tensors:mem::take(tensors), keys_to_load: keys }
+                    }
                 }
             };
 
@@ -385,9 +445,9 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
+        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
         Ok(TestOutputB {
-            value: (input.value.as_ref() * k.k_0.as_ref()).into(),
+            value: (input.value.as_ref() * (k.k_0.as_ref() + k.k_1.as_ref())).into(),
         })
     }
 }
@@ -411,7 +471,7 @@ where
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TestStageB::drop_gpu");
-        *self.state.lock().await = StageState::OffLoaded(vec!["TestStageB/1".to_string()/*, "k_1".to_string()*/]);
+        *self.state.lock().await = StageState::OffLoaded(vec![K_0.to_string(), K_1.to_string()]);
         Ok(())
     }
 
@@ -499,13 +559,13 @@ mod tests {
                 let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
                 let retired = ipc.worker_id()?;
 
-                let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+                let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
                 let old_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 let old_key = old_tensor.ref_key().unwrap();
                 actor.purge_stage_state(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
                 actor.restart().await?;
 
-                let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 1)).await?;
+                let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
                 let fresh_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 // Deliberately collide numeric identities across generations.
                 assert_eq!(fresh_tensor.ref_key(), Some(old_key));
@@ -576,8 +636,8 @@ mod tests {
     async fn do_test_distinct_stateful_endpoints() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         // Reuse one initializer name with different ids to prove both worker-side state instances remain independently invokable.
-        let first_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
-        let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 1)).await?;
+        let first_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
+        let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
@@ -601,11 +661,11 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_secs(3)).await;
 
-         TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+         TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
 
 
         // A repeated stage_id must fail without replacing the already-installed stage.
-       let Err(e) = TestStageB::<(), TestRunCtx>::new( Some(2.to_string()),1,  TestStageInitB::new(4, 1)).await else {
+       let Err(e) = TestStageB::<(), TestRunCtx>::new( Some(2.to_string()),1,  TestStageInitB::new(4, 0, 1)).await else {
            panic!("should fail to install same endpoint")
        };
 
@@ -620,13 +680,13 @@ mod tests {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
-        let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+        let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
 
         GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
-        debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
+        debug!("test_with_state_target: 0. cuda_tensor={cuda_tensor:?}");
 
         let input = TestInputB {
             value: cuda_tensor,
@@ -642,12 +702,13 @@ mod tests {
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
         assert!(!GlobalCtx::global().is_all_on_cpu(1, true));
-        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-        // assert!(GlobalCtx::global().is_all_on_cpu(1, true)); //TODO it fails because proxies always return true from has_gpu_data
+        let dump_all_to_cpu_result = GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await;
+        debug!("test_with_state_target: dump_all_to_cpu_result={dump_all_to_cpu_result:?}");
+        assert!(dump_all_to_cpu_result.is_ok());
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU)*2)?, 1.into()).await?;
 
-        debug!("test_with_state_target: cuda_tensor={cuda_tensor:?}");
+        debug!("test_with_state_target: 1. cuda_tensor={cuda_tensor:?}");
 
         let input = TestInputB {
             value: cuda_tensor,
@@ -662,7 +723,7 @@ mod tests {
         debug!("cpu_tensor={}", cpu_t);
         assert!(Tensor::from_slice(&[4., 4., 4.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
-
+        debug!("all ok");
         Ok(())
     }
 }

@@ -84,7 +84,7 @@ impl From<IpcTensorKind> for Kind {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TensorKey {
     Data(u64),//all_cuda_tensors
-    StageState{endpoint_name:String, stage_id:String, tensor_id:String}
+    StageState{endpoint_name:String, stage_id:String, tensor_key:String}
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -100,11 +100,18 @@ impl From<u64> for TensorKey {
 }
 
 impl TensorKey {
-    pub fn stage_state<S0:ToString, S1:ToString, S2:ToString>(endpoint_name:S0, stage_id:S1, tensor_id:S2) -> Self {
+    pub fn stage_state<S0:ToString, S1:ToString, S2:ToString>(endpoint_name:S0, stage_id:S1, tensor_key:S2) -> Self {
         TensorKey::StageState {
             endpoint_name:endpoint_name.to_string(),
             stage_id:stage_id.to_string(),
-            tensor_id:tensor_id.to_string()
+            tensor_key: tensor_key.to_string()
+        }
+    }
+
+    pub fn to_tensor_key(&self)->String {
+        match self {
+            TensorKey::Data(v) => v.to_string(),
+            TensorKey::StageState { tensor_key, .. } => tensor_key.clone()
         }
     }
 }
