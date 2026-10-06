@@ -356,7 +356,19 @@ where
         }
     }
 
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn purge_gpu(self: Arc<Self>, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, _name: &str) -> Result<(), ThoError>
+    where St: Send + Sync + 'static
+    {
+        if self.tho_device_idx != tho_device_idx { return Ok(()); }
+        let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
+        let activity = actor.activity_for(self.worker_id)?;
+        // Cancellation must not lose a completed D2H dump after the worker drops
+        // its storage. Retain both the proxy and its device lease until commit.
+        tokio::spawn(activity.run(async move { self.purge_gpu_inner(tho_device_idx).await })).await?
+    }
+
+    async fn purge_gpu_inner(&self, tho_device_idx: usize) -> Result<(), ThoError> {
         debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx}", self);
 
         if self.tho_device_idx != tho_device_idx {//not our device is being purged
@@ -366,7 +378,15 @@ where
         // Keep the CPU dump across repeated purges and serialize offload with
         // restoration. The worker no longer owns its tensors after the first dump.
         let mut state = self.state.lock().await;
-        if state.is_some() { return Ok(()); }
+        if let Some(state) = state.as_mut() {
+            if state.restore_started {
+                let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
+                actor.discard_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
+                state.restore_started = false;
+            }
+            return Ok(());
+        }
 
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let state_out = actor.purge_stage_state(
@@ -384,24 +404,37 @@ where
         Ok(())
     }
 
-    async fn load_gpu(&self, tho_device_idx: usize) -> Result<(), ThoError> {
+    async fn load_gpu(self: Arc<Self>, tho_device_idx: usize) -> Result<(), ThoError>
+    where St: Send + Sync + 'static
+    {
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
+        let activity = actor.activity_for(self.worker_id)?;
+        // Await the whole transaction even if its caller is cancelled, so a
+        // subsequent purge cannot race an outstanding tensor upload.
+        tokio::spawn(activity.run(async move { self.load_gpu_inner(tho_device_idx).await })).await?
+    }
 
+    async fn load_gpu_inner(&self, tho_device_idx: usize) -> Result<(), ThoError> {
+        let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
         let mut guard = self.state.lock().await;
-        if let Some(state) = guard.take() {
-            debug!("ProxyStage::load_gpu: state={state:?}");
-
-            for (key, tensor) in state.tensors {
-                debug!("ProxyStage::load_gpu: key={key:?} tensor={tensor:?}");
+        if let Some(state) = guard.as_mut() {
+            if state.restore_started {
+                actor.discard_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
+            }
+            state.restore_started = true;
+            for (key, tensor) in &state.tensors {
                 let key = H2DTensorKey::StageState {
                     endpoint_name: self.endpoint_name.to_string(),
-                    stage_id: self.stage_id.as_ref().expect("no stage_id").clone(),
-                    tensor_id: key,
+                    stage_id: self.stage_id.as_ref().ok_or_else(|| ThoError::new("stateful IPC stage has no stage id"))?.clone(),
+                    tensor_id: key.clone(),
                 };
-                actor.copy_stage_state(tensor, tho_device_idx.into(), Some(key)).await?;
+                // Keep the CPU allocation until every upload and reconstruction
+                // succeeds. OOM recovery can then discard partial GPU state and retry.
+                actor.copy_stage_state(ThoTensor::new((), tensor.as_ref().f_alias()?)?, tho_device_idx.into(), Some(key)).await?;
             }
-            // Ok(state)
+            *guard = None;
         }
         Ok(())
     }
@@ -601,7 +634,7 @@ where
 
 impl <St, Init> SyncStage for DynSyncStageWithStateEnum<St, Init>
 where
-    St: SyncStage + StageWithState + Send + Sync,
+    St: SyncStage + StageWithState + Send + Sync + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
@@ -628,7 +661,7 @@ where
 ///
 impl <St, Init> StageWithState for DynSyncStageWithStateEnum<St, Init>
 where
-    St:SyncStage+StageWithState+Send+Sync,
+    St:SyncStage+StageWithState+Send+Sync + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
@@ -671,19 +704,20 @@ where
 #[derive(Debug)]
 pub struct StageStateDump {
     scalars:Option<Box<dyn WorkerOutput>>,
-    tensors:HashMap<String, ThoTensor> // = HashMap::new();
+    tensors:HashMap<String, ThoTensor>,
+    restore_started: bool,
 }
 
 impl StageStateDump {
     pub fn new(scalars: Option<Box<dyn WorkerOutput>>, tensors: HashMap<String, ThoTensor>) -> Self {
-        Self { scalars, tensors }
+        Self { scalars, tensors, restore_started: false }
     }
 }
 
 #[async_trait]
 impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum<St, Init>
 where
-    St:SyncStage+StageWithState + FuturesRunnerMapPurger,
+    St:SyncStage+StageWithState + FuturesRunnerMapPurger + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static,
@@ -695,7 +729,7 @@ where
                 stage.has_gpu_data(device_idx).await
             }
             DynSyncStageWithStateEnum::Proxy { stage, .. } => {
-                stage.tho_device_idx == device_idx && stage.state.lock().await.is_none()
+                stage.tho_device_idx == device_idx && stage.state.lock().await.as_ref().is_none_or(|state| state.restore_started)
             }
         }
     }
@@ -706,7 +740,7 @@ where
                 local.purge_gpu(ids_to_keep, tho_device_idx, name).await
             }
             DynSyncStageWithStateEnum::Proxy { stage, init, state, } => {
-               stage.purge_gpu(ids_to_keep, tho_device_idx, name).await?;
+               Arc::clone(stage).purge_gpu(ids_to_keep, tho_device_idx, name).await?;
                 Ok(())
             }
         }

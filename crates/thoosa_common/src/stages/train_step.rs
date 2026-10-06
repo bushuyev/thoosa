@@ -67,22 +67,25 @@ where
     C:RunCtx,
     Self:Send + Sync
 {
-    async fn has_gpu_data(&self, _device_idx: usize) -> bool {
-        true
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.train_module.lock().await.has_gpu_data(device_idx)
     }
 
-    async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         info!("TrainStep::purge_gpu");
         // Moving the complete state together preserves optimizer snapshots when
         // the OOM handler evicts this stage from a GPU.
         let mut guard = self.train_module.lock().await;
-        guard.opt().zero_grad();
-        guard.move_to_device(0).await
+        if guard.has_gpu_data(device_idx) {
+            guard.opt().zero_grad();
+            guard.move_to_device(0).await?;
+        }
+        Ok(())
     }
 
-    async fn drop_gpu(&self, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("TrainStep::drop_gpu");
-        todo!()
+        self.train_module.lock().await.drop_gpu(device_idx)
     }
 
     async fn purge_cpu(&self, _purge_until: u64) -> usize {
@@ -164,6 +167,18 @@ where
             guard.move_to_device(to_device_idx).await?;
             Ok(Some(MutexGuard::map(guard, |v|v)))
         }.boxed()
+    }
+
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_shared::traits::StageStateInfo, ThoError>> {
+        async move { self.train_module.lock().await.state_info() }.boxed()
+    }
+
+    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move { self.train_module.lock().await.state_tensor(&tensor_id) }.boxed()
+    }
+
+    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move { self.train_module.lock().await.set_state_tensor(&tensor_id, tensor, device) }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
@@ -583,3 +598,7 @@ impl WorkerStageOutput for TrainStepOutput {
         Ok(self)
     }
 }
+
+#[cfg(test)]
+#[path = "train_step_state_tests.rs"]
+mod state_tests;

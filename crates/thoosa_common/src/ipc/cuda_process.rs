@@ -109,13 +109,21 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
     }
 }
 
+// State uploads acknowledge installation; they do not allocate a Data key
+// whose lifetime can be represented by a worker tensor reference.
+#[derive(Debug)]
+pub enum IpcCopyResult {
+    Tensor(ThoTensor),
+    StateInstalled,
+}
+
 //TODO CudaWorkerMsgIn::Operation variants used in CudaIPCActorMessage::PurgeStage and CudaIPCActorMessage::SendMsg must be moved into CudaIPCActorMessage to keep all in single enum. Current structure is left over from replacing json with postcard serialization.
 pub enum CudaIPCActorMessage {
     Copy{
         src:ThoTensor,
         dst_device:ThoDevice,
         activity: thoosa_shared::CudaActivityScope,
-        respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>,
+        respond_to: oneshot::Sender<Result<IpcCopyResult, ThoError>>,
         dst_key: Option<H2DTensorKey>//TODO it's needed only for IPC d2h
     },
     DropThoTensor {
@@ -540,7 +548,7 @@ impl CudaIPCActor {
         }
     }
 
-    fn handle_ref_d2h_copy(&mut self, source: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
+    fn handle_ref_d2h_copy(&mut self, source: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<IpcCopyResult, ThoError>>) -> Result<(), ThoError> {
         if dst_device.tho_device_idx() != 0 { return Err(ThoError::new("worker reference copy requires a CPU destination")); }
         let tensor_key = source.ref_key().expect("worker reference");
         let gate = Arc::clone(&self.gate);
@@ -558,7 +566,7 @@ impl CudaIPCActor {
                     return Err(ThoError::new("worker returned inconsistent tensor metadata"));
                 }
 
-                Self::do_ref_d2h_copy(worker_id, transfer_id, pending, tx, info).await
+                Self::do_ref_d2h_copy(worker_id, transfer_id, pending, tx, info).await.map(IpcCopyResult::Tensor)
             }.await;
             let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
         }));
@@ -590,7 +598,7 @@ impl CudaIPCActor {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_h2d_copy"))]
-    fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>, dst_key: Option<H2DTensorKey>) -> Result<(), ThoError> {
+    fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, activity: thoosa_shared::CudaActivityScope, respond_to: oneshot::Sender<Result<IpcCopyResult, ThoError>>, dst_key: Option<H2DTensorKey>) -> Result<(), ThoError> {
         if dst_device.tho_device_idx() != self.tho_device_idx {
             let _ = respond_to.send(Err(ThoError::new("H2D destination belongs to another CUDA actor")));
             return Ok(());
@@ -627,7 +635,7 @@ impl CudaIPCActor {
                             shape: src_shape.clone(),
                             tensor_byte_len,
                             arena_offset,
-                            dst_key,
+                            dst_key: dst_key.clone(),
                         },
                     },
                     Some(Box::new(shared_source)),
@@ -638,11 +646,15 @@ impl CudaIPCActor {
                 if done.transfer_id != transfer_id {
                     return Err(ThoError::new(format!("worker H2D response transfer_id={} but expected {transfer_id}", done.transfer_id)));
                 }
-                let TensorKey::Data(tensor_ref ) = done.tensor_ref else {
-                    return Err(ThoError::new(format!("worker H2D got done.tensor_ref={:?} expecting data", done.tensor_ref)));
-                };
-                // The worker has completed its read before acknowledging, so the parent may now release the arena allocation.
-                Ok(ThoTensor::new_ref((), tensor_ref, src_shape, src_kind, None, worker_id))
+                match (dst_key, done.tensor_ref) {
+                    (Some(H2DTensorKey::StageState { endpoint_name, stage_id, tensor_id }), TensorKey::StageState { endpoint_name: returned_endpoint, stage_id: returned_stage, tensor_key })
+                        if endpoint_name == returned_endpoint && stage_id == returned_stage && tensor_id == tensor_key => Ok(IpcCopyResult::StateInstalled),
+                    (None | Some(H2DTensorKey::New), TensorKey::Data(tensor_ref)) => {
+                        // Only ordinary data copies own a worker tensor reference.
+                        Ok(IpcCopyResult::Tensor(ThoTensor::new_ref((), tensor_ref, src_shape, src_kind, None, worker_id)))
+                    }
+                    (expected, actual) => Err(ThoError::new(format!("worker H2D returned {actual:?} for destination {expected:?}"))),
+                }
             }.await;
             let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
         }));
@@ -944,7 +956,7 @@ impl CudaIPCActorHandle {
         Ok(CudaWorkerId { device_idx: self.tho_device_idx, generation: activity.generation(&self.gate).expect("worker lease") })
     }
 
-    fn activity_for(&self, worker_id: CudaWorkerId) -> Result<thoosa_shared::CudaActivityScope, ThoError> {
+    pub(crate) fn activity_for(&self, worker_id: CudaWorkerId) -> Result<thoosa_shared::CudaActivityScope, ThoError> {
         let activity = thoosa_shared::CudaActivityScope::for_operation(&self.gate)?;
         worker_id.check(CudaWorkerId { device_idx: self.tho_device_idx, generation: activity.generation(&self.gate).expect("worker lease") })?;
         Ok(activity)
@@ -1017,6 +1029,17 @@ impl CudaIPCActorHandle {
     }
 
 
+    /// Release a failed/partial restore without copying it over the intact CPU backup.
+    pub(crate) async fn discard_stage_state(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(CudaIPCActorMessage::SendMsg {
+            activity: self.activity_for(worker_id)?,
+            input: CudaWorkerMsgIn::new(worker_id, 0, Operation::PurgeStage { endpoint_name, stage_id }),
+            respond_to,
+        }).await.context("CUDA actor channel closed")?;
+        unit_reply(recv.await.context("CUDA actor response channel closed")??)
+    }
+
     pub async fn copy_stage_state(&self, src:ThoTensor, dst_device:ThoDevice, dst_key: Option<H2DTensorKey>) -> Result<(), ThoError> {
         let activity = thoosa_shared::CudaActivityScope::for_operation(&self.gate)?;
         if let Some(worker_id) = src.ref_worker_id() {
@@ -1054,7 +1077,10 @@ impl CudaIPCActorHandle {
 
         let r = recv.await.context("CUDA actor response channel closed")?;
         debug!("CudaIPCActorHandle::copy_stage_state:  get result: r={r:?}");
-        Ok(())
+        match r? {
+            IpcCopyResult::StateInstalled => Ok(()),
+            IpcCopyResult::Tensor(_) => Err(ThoError::new("state upload returned a data tensor")),
+        }
     }
 
 }
@@ -1109,7 +1135,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
         let r = recv.await.context("CUDA actor response channel closed")?;
         debug!("CudaIPCActorHandle::copy:  get result: r={r:?}");
-        r
+        match r? {
+            IpcCopyResult::Tensor(tensor) => Ok(tensor),
+            IpcCopyResult::StateInstalled => Err(ThoError::new("data copy returned a state acknowledgment")),
+        }
     }
 
     #[cfg(test)]

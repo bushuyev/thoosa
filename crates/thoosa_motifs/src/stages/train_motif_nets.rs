@@ -167,7 +167,9 @@ fn train_motif_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn Wor
             _ => None,
         };
         let params_for_module = init.params.clone();
-        let cosine_for_module = cosine_motif.clone();
+        // The seed is needed only for the initial construction. Retaining it
+        // in the factory would pin GPU memory after TrainStep is offloaded.
+        let cosine_for_module = std::sync::Mutex::new(cosine_motif);
         let learning_rate = init.run_config.common_training_args.lr;
         let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
         let (train_step, _): (SyncTrainMotifStep<WokerRunCtx>, ()) = TrainStep::new_local(
@@ -175,7 +177,7 @@ fn train_motif_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn Wor
             move |_run_config, device| async move {
                 let config = ModConfig::new(
                     AdamW::default().amsgrad(true).into(),
-                    move |var_store| params_for_module.motif_net(cosine_for_module.clone())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
+                    move |var_store| params_for_module.motif_net(cosine_for_module.lock().unwrap().take())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
                     learning_rate,
                 );
                 Ok((ThoTrainModule::new_on_device(config, device)?, ()))
@@ -252,7 +254,9 @@ where
                 _ => None,
             };
             let params_for_module = node_params.clone();
-            let cosine_for_module = cosine_motif.clone();
+            // The seed is needed only for the initial construction. Retaining it
+            // in the factory would pin GPU memory after TrainStep is offloaded.
+            let cosine_for_module = std::sync::Mutex::new(cosine_motif);
 
             let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
             let (train_step, _) = TrainStep::new_local(
@@ -261,7 +265,7 @@ where
 
                     let config = ModConfig::new(
                         run_config.common_training_args.tho_optimizer(),
-                        move |var_store| params_for_module.motif_net(cosine_for_module.clone())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
+                        move |var_store| params_for_module.motif_net(cosine_for_module.lock().unwrap().take())?.build_tch_module::<Batch<Slice>, Batch<MotifProbability>>(&var_store.root()),
                         run_config.common_training_args.lr,
                     );
                     Ok((ThoTrainModule::new_on_device(config, device)?, ()))
