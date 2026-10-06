@@ -418,7 +418,7 @@ impl CudaWorker {
                         TensorKey::StageState {
                             endpoint_name,
                             stage_id,
-                            tensor_id,
+                            tensor_key: tensor_id,
                         }
                     } else {
                         insert_worker_tensor(&context.all_cuda_tensors, cuda_t)?.into()
@@ -443,7 +443,7 @@ impl CudaWorker {
                         TensorKey::Data(tensor_key) => {
                             prepare_d2h_source(&context.all_cuda_tensors, tensor_key.clone(), kind, &shape, cuda_device)
                         }
-                        TensorKey::StageState{ endpoint_name, stage_id, tensor_id } => {
+                        TensorKey::StageState{ endpoint_name, stage_id, tensor_key: tensor_id } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(stage_id));
 
                             let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
@@ -568,11 +568,14 @@ impl CudaWorker {
                     let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
 
                     if let Some(endpoint) = endpoint {
-                        // endpoint.purge(context.tho_device.clone()).await?;
+                        
                         if let Some(with_state) = endpoint.as_with_state(){
 
                             let state_info = with_state.get_state_info(&context.tho_device).await?;
-                            context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }).await.context("worker response writer is closed")?;
+
+                            context.reply_tx.send(
+                                CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }
+                            ).await.context("worker response writer is closed")?;
                         } else {
                             error!("no state for: endpoint_key={endpoint_key:}");
                         }

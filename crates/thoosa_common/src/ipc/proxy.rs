@@ -74,7 +74,6 @@ where
     clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
 
     state: Mutex<Option<Box<StageStateDump>>>,
-    is_stage_installed: AtomicBool
 }
 
 impl<St> Debug for ProxyStage<St>
@@ -201,11 +200,11 @@ where
     type S = Option<Box<StageStateDump>>;
 
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<MappedMutexGuard<'_, Self::S>>, ThoError>> {
-
+        debug!("ProxyStage::pre_run: to_device_idx={to_device_idx}");
         async {
             let guard = self.state.lock().await;
             Ok(Some(MutexGuard::map(guard, |v|v)))
-            // Ok(MutexGuard::try_map(guard, |opt| opt.as_mut()).ok())
+
         }.boxed()
     }
 }
@@ -267,7 +266,6 @@ where
                             pd:PhantomData,
                             clone_refs,
                             state: Default::default(),
-                            is_stage_installed: true.into(),
                         })
 
                     }
@@ -325,7 +323,6 @@ where
         debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
 
 
-        self.is_stage_installed.store(false, Relaxed);
 
         *self.state.lock().await = Some(Box::new(state_out));
         debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx} done", self);
@@ -365,10 +362,8 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     fn drop(&mut self) {
-        debug!("ProxyStage2::drop: endpoint_name={:?} self.is_stage_installed={:?}", self.endpoint_name, self.is_stage_installed);
-        if !self.is_stage_installed.load(Relaxed) {
-            return;
-        }
+        debug!("ProxyStage2::drop: endpoint_name={:?}", self.endpoint_name);
+
         let endpoint_name = self.endpoint_name;
         let stage_id = self.stage_id.clone();
         let tho_device_idx = self.tho_device_idx;
