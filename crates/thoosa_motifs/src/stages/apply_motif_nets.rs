@@ -1009,12 +1009,12 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
 }
 
 #[derive(Debug)]
-struct ApplyMotifNetInputWrapper {
+pub(super) struct ApplyMotifNetInputWrapper {
     batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
 }
 
 impl ApplyMotifNetInputWrapper {
-    fn new(
+    pub(super) fn new(
         batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
     ) -> Self {
         Self { batch }
@@ -1079,13 +1079,19 @@ where
     C: RunCtx + 'static
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.motif_net.lock().await.data().tho_device_idx() !=0
+        self.motif_net.lock().await.data.has_gpu_data(device_idx)
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         let mut guard = self.motif_net.lock().await;
-        *guard = guard.copy_to_device(0).await?;
+        if guard.data.has_gpu_data(device_idx) {
+            *guard = guard.copy_to_device(0).await?;
+        }
         Ok(())
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
+        self.motif_net.lock().await.data.drop_gpu(device_idx)
     }
 
 }
@@ -1278,11 +1284,25 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut motif_net = self.motif_net.lock().await;
+            motif_net.data.ensure_ready()?;
             if motif_net.tho_device_idx() != to_device_idx {
                 *motif_net = motif_net.copy_to_device(to_device_idx).await?;
             }
             Ok(Some(MutexGuard::map(motif_net, |v|v)))
         }.boxed()
+    }
+
+    // The module owns the transfer schema and releases all parameter aliases.
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_shared::traits::StageStateInfo, ThoError>> {
+        async move { self.motif_net.lock().await.data.state_info() }.boxed()
+    }
+
+    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move { self.motif_net.lock().await.data.state_tensor(&tensor_id) }.boxed()
+    }
+
+    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move { self.motif_net.lock().await.data.set_state_tensor(&tensor_id, tensor, device) }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]

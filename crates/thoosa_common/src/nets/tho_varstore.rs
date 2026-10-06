@@ -2,6 +2,8 @@ use anyhow::Context as _;
 use crate::dims::{AnyDims, Batch, Dims};
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
+use crate::nets::state_transfer::{StateTensors, VarStoreState};
+use thoosa_shared::traits::StageStateInfo;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
@@ -134,7 +136,8 @@ where
     DI: Dims, DO: Dims
 {
     config:ModConfig<DI, DO>,
-    opt_state:OptSnapshot<DI, DO>
+    opt_state:OptSnapshot<DI, DO>,
+    ipc_export: Option<TrainingState>
 }
 
 #[derive(Debug)]
@@ -143,7 +146,8 @@ where
     DI: Dims, DO: Dims
 {
     Opt{opt:Pin<Box<Optimizer>>, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
-    Snapshot{ cpu_snap: OptimizerSnapshot, vs:VarStore}
+    Snapshot{ cpu_snap: OptimizerSnapshot, vs:VarStore},
+    Offloaded(TrainingState)
 }
 
 impl <DI, DO> OptSnapshot<DI, DO>
@@ -155,6 +159,7 @@ where
             OptSnapshot::Opt { vs,.. }| OptSnapshot::Snapshot { vs,.. } => {
                 vs.device().into()
             }
+            OptSnapshot::Offloaded(_) => Cpu.into(),
         }
     }
 }
@@ -164,6 +169,49 @@ enum OptimizerSnapshot {
     Adam(AdamOptimizerSnapshot),
     AdamW(AdamWOptimizerSnapshot),
     Sgd(SgdOptimizerSnapshot),
+}
+
+#[derive(Debug)]
+struct TrainingState {
+    variables: VarStoreState,
+    tensors: StateTensors,
+    optimizer: OptimizerSnapshot,
+}
+
+impl OptimizerSnapshot {
+    fn map_tensors(&self, device: usize, mut map: impl FnMut(&str, &Tensor) -> Result<Tensor, ThoError>) -> Result<Self, ThoError> {
+        fn adam(snapshot: &AdamOptimizerSnapshot, device: usize, map: &mut impl FnMut(&str, &Tensor) -> Result<Tensor, ThoError>) -> Result<AdamOptimizerSnapshot, ThoError> {
+            let mut groups = Vec::new();
+            for (g, group) in snapshot.groups.iter().enumerate() {
+                let mut states = Vec::new();
+                for (p, state) in group.states.iter().enumerate() {
+                    states.push(state.as_ref().map(|state| Ok::<_, ThoError>(AdamParamStateSnapshot {
+                        step: state.step,
+                        exp_avg: map(&format!("opt/{g}/{p}/exp_avg"), &state.exp_avg)?,
+                        exp_avg_sq: map(&format!("opt/{g}/{p}/exp_avg_sq"), &state.exp_avg_sq)?,
+                        max_exp_avg_sq: state.max_exp_avg_sq.as_ref().map(|tensor| map(&format!("opt/{g}/{p}/max_exp_avg_sq"), tensor)).transpose()?,
+                    })).transpose()?);
+                }
+                groups.push(AdamGroupSnapshot { options: group.options, states });
+            }
+            Ok(AdamOptimizerSnapshot { defaults: snapshot.defaults, groups, tho_device_idx: device })
+        }
+        Ok(match self {
+            Self::Adam(snapshot) => Self::Adam(adam(snapshot, device, &mut map)?),
+            Self::AdamW(snapshot) => Self::AdamW(adam(snapshot, device, &mut map)?),
+            Self::Sgd(snapshot) => {
+                let mut groups = Vec::new();
+                for (g, group) in snapshot.groups.iter().enumerate() {
+                    let mut states = Vec::new();
+                    for (p, state) in group.states.iter().enumerate() {
+                        states.push(state.as_ref().map(|state| map(&format!("opt/{g}/{p}/momentum"), &state.momentum_buffer).map(|momentum_buffer| SgdParamStateSnapshot { momentum_buffer })).transpose()?);
+                    }
+                    groups.push(SgdGroupSnapshot { options: group.options, states });
+                }
+                Self::Sgd(SgdOptimizerSnapshot { defaults: snapshot.defaults, groups, tho_device_idx: device })
+            }
+        })
+    }
 }
 
 impl <DI, DO> ThoTrainModule<DI, DO>
@@ -176,6 +224,7 @@ where
         Ok(Self {
             config,
             opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
+            ipc_export: None,
         })
     }
 
@@ -190,7 +239,7 @@ where
             OptSnapshot::Opt { opt, .. } => {
                 opt
             }
-            OptSnapshot::Snapshot { .. } => {
+            OptSnapshot::Snapshot { .. } | OptSnapshot::Offloaded(_) => {
                 panic!("wrong state")
             }
         }
@@ -201,7 +250,7 @@ where
             OptSnapshot::Opt { module, .. } => {
                 module
             }
-            OptSnapshot::Snapshot { .. } => {
+            OptSnapshot::Snapshot { .. } | OptSnapshot::Offloaded(_) => {
                 panic!("wrong state")
             }
         }
@@ -219,12 +268,14 @@ where
                 Ok(vs)
             }
             OptSnapshot::Snapshot { vs, .. } => Ok(vs),
+            OptSnapshot::Offloaded(_) => Err(anyhow::anyhow!("training state is offloaded")),
         }
     }
 
     pub fn save_var_store_to_stream(&self, output: &mut dyn std::io::Write) -> anyhow::Result<()> {
         match &self.opt_state {
             OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => Ok(vs.save_to_stream(output)?),
+            OptSnapshot::Offloaded(_) => Err(anyhow::anyhow!("training state is offloaded")),
         }
     }
 
@@ -238,8 +289,76 @@ where
             OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => {
                 Ok(panic_to_err!(vs.save(&path))?)
             },
+            OptSnapshot::Offloaded(_) => Err(anyhow::anyhow!("training state is offloaded")),
         }
 
+    }
+
+    pub fn has_gpu_data(&self, device: usize) -> bool {
+        device != 0 && match &self.opt_state {
+            OptSnapshot::Offloaded(state) => state.tensors.has_device(device),
+            _ => self.opt_state.device().tho_device_idx() == device,
+        }
+    }
+
+    fn capture_state(&self) -> Result<TrainingState, ThoError> {
+        let (vs, snapshot) = match &self.opt_state {
+            OptSnapshot::Opt { opt, vs, .. } => (vs, unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::from(vs.device()).tho_device_idx())? }),
+            _ => return Err(ThoError::new("training state is not ready for IPC export")),
+        };
+        let mut tensors = StateTensors::default();
+        let variables = VarStoreState::capture(vs, &mut tensors)?;
+        // Keep options, absent-state markers, and step counters in the worker,
+        // but move every optimizer tensor through the same IPC copy protocol.
+        let optimizer = snapshot.map_tensors(0, |key, tensor| {
+            tensors.insert(key.to_owned(), tensor.f_detach()?)?;
+            Ok(Tensor::new())
+        })?;
+        Ok(TrainingState { variables, tensors, optimizer })
+    }
+
+    pub fn state_info(&mut self) -> Result<StageStateInfo, ThoError> {
+        self.ipc_export = Some(self.capture_state()?);
+        Ok(self.ipc_export.as_ref().expect("captured state").tensors.info())
+    }
+
+    pub fn state_tensor(&mut self, key: &str) -> Result<Tensor, ThoError> {
+        if self.ipc_export.is_none() { self.ipc_export = Some(self.capture_state()?); }
+        self.ipc_export.as_ref().expect("captured state").tensors.get(key)
+    }
+
+    pub fn drop_gpu(&mut self, device: usize) -> Result<(), ThoError> {
+        if !self.has_gpu_data(device) { return Ok(()); }
+        if let OptSnapshot::Offloaded(state) = &mut self.opt_state {
+            state.tensors.clear();
+            return Ok(());
+        }
+        let mut state = match self.ipc_export.take() {
+            Some(state) => state,
+            None => self.capture_state()?,
+        };
+        if state.tensors.info().tensors.is_empty() { return Ok(()); }
+        state.tensors.clear();
+        // Drop the optimizer, module and store together; keeping any one of
+        // them alive would keep its parameter storage allocated on the GPU.
+        self.opt_state = OptSnapshot::Offloaded(state);
+        Ok(())
+    }
+
+    pub fn set_state_tensor(&mut self, key: &str, tensor: Tensor, device: usize) -> Result<(), ThoError> {
+        let OptSnapshot::Offloaded(state) = &mut self.opt_state else {
+            return Err(ThoError::new("training state is already loaded"));
+        };
+        state.tensors.set(key, tensor, device)?;
+        if state.tensors.complete() {
+            let vs = state.variables.restore(&state.tensors, device)?;
+            let module = (self.config.net)(&vs)?;
+            let opt = (self.config.optimizer_builder)(&vs)?;
+            let snapshot = state.optimizer.map_tensors(device, |key, _| state.tensors.get(key))?;
+            unsafe { self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?; }
+            self.opt_state = OptSnapshot::Opt { opt, vs, module };
+        }
+        Ok(())
     }
 
     pub fn set_lr(&mut self, lr: f64) {
@@ -270,6 +389,11 @@ where
     where
         Self:Sized
     {
+        if matches!(self.opt_state, OptSnapshot::Offloaded(_)) {
+            return Err(ThoError::new("training state is offloaded or incompletely restored"));
+        }
+        // An export snapshot must never survive another training step or move.
+        self.ipc_export = None;
         debug!("ThoTrainModule::move_to_device: tho_dst_device={tho_dst_device} opt_state.device={:?}", self.opt_state.device());
         if tho_dst_device == self.opt_state.device().tho_device_idx() {
             return Ok(())

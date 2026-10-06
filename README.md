@@ -43,7 +43,7 @@ The crates under [`crates/thoosa_macros/`](crates/thoosa_macros/) support config
 | `thoosa_named_derive` | `Named` derive. |
 | `cached_derive` | Cache-related derives. |
 | `thoosa_macros_utils` | Helpers shared by the derive crates. |
-| `macros_tests` | Fixtures and tests for macro expansion. |
+| `macros_tests` | Fixtures and tests for macro expansion. |~~~~
 
 ## Build
 
