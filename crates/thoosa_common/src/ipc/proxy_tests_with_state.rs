@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
@@ -227,8 +227,7 @@ where
     C:RunCtx
 {
     pub async fn new(stage_id: Option<String>, tho_device_idx: usize, init: TestStageInitB) -> Result<Arc<DynSyncStageWithStateEnum<TestStageB<u32, TestRunCtx>>>, ThoError> {
-        // static STAGE_ID:AtomicU32 = AtomicU32::new(0);
-        // let stage_id: String = STAGE_ID.fetch_add(1, Relaxed).to_string();
+
         let stage_id: String = stage_id.expect("stage_id");//TODO should be generated inside stage based on init data. Fix when WithID is changed to return Cow
         if GlobalCtx::global().is_ipc() {
 
@@ -387,56 +386,7 @@ where
             let mut guard = self.state.lock().await;
 
 
-            *guard = match &mut *guard {
-                StageState::Ready(state) =>  {
-                    panic!("unexpected state");
-                },
-                StageState::OffLoaded(keys) => {
-                    assert!(!keys.is_empty(), "no keys");
-
-                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys={keys:?}");
-
-                    let keys_len = keys.len();
-                    let mut keys = mem::take(keys);
-                    keys.retain(|v|!v.eq(&tensor_id));
-
-                    if keys_len -1 != keys.len() {
-                        return Err(ThoError::NotFound(Some(tensor_id)));
-                    }
-
-                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
-
-                    if keys.len() == 0 {//state contains single tensor
-                        StageState::Ready(HashMap::from([(tensor_id, t)]).into())
-                    } else {
-                        StageState::BeingLoaded{ tensors: HashMap::from([(tensor_id, t)]), keys_to_load: keys }
-                    }
-                },
-                StageState::BeingLoaded{ tensors, keys_to_load:keys } => {
-
-
-                    assert!(!keys.is_empty(), "no keys");
-
-                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys={keys:?}");
-
-                    let keys_len = keys.len();
-                    let mut keys = mem::take(keys);
-                    keys.retain(|v|!v.eq(&tensor_id));
-
-                    if keys_len -1 != keys.len() {
-                        return Err(ThoError::NotFound(Some(tensor_id)));
-                    }
-
-                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
-                    tensors.insert(tensor_id, t);
-                    if keys.len() == 0 {
-
-                        StageState::Ready(mem::take(tensors).into())
-                    } else {
-                        StageState::BeingLoaded { tensors:mem::take(tensors), keys_to_load: keys }
-                    }
-                }
-            };
+            StageState::set_state_tensor(tensor_id, t, guard).await?;
 
             Ok(())
         }.boxed()

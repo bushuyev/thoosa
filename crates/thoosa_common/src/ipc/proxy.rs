@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hasher;
 use std::marker::PhantomData;
+use std::mem;
 use std::string::ToString;
 use std::sync::{Arc, LazyLock};
 use std::sync::atomic::AtomicBool;
@@ -35,6 +36,68 @@ pub enum StageState<S> {
     Ready(S),
     OffLoaded(Vec<String>)
 }
+
+impl <S> StageState<S>
+where
+    S:From<HashMap<String, Tensor>>
+{
+    pub async fn set_state_tensor(tensor_id: String, t: Tensor, mut guard: MutexGuard<'_, StageState<S>>) ->  Result<(), ThoError>
+
+    {
+        *guard = match  &mut *guard {
+            StageState::Ready(state) => {
+                panic!("unexpected state");
+            },
+            StageState::OffLoaded(keys) => {
+                assert!(!keys.is_empty(), "no keys");
+
+                debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys={keys:?}");
+
+                let keys_len = keys.len();
+                let mut keys = mem::take(keys);
+                keys.retain(|v| !v.eq(&tensor_id));
+
+                if keys_len - 1 != keys.len() {
+                    return Err(ThoError::NotFound(Some(tensor_id)));
+                }
+
+                debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
+
+                if keys.len() == 0 { //state contains single tensor
+                    StageState::Ready(HashMap::from([(tensor_id, t)]).into())
+                } else {
+                    StageState::BeingLoaded { tensors: HashMap::from([(tensor_id, t)]), keys_to_load: keys }
+                }
+            },
+            StageState::BeingLoaded { tensors, keys_to_load: keys } => {
+                assert!(!keys.is_empty(), "no keys");
+
+                debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys={keys:?}");
+
+                let keys_len = keys.len();
+                let mut keys = mem::take(keys);
+                keys.retain(|v| !v.eq(&tensor_id));
+
+                if keys_len - 1 != keys.len() {
+                    return Err(ThoError::NotFound(Some(tensor_id)));
+                }
+
+                debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
+                tensors.insert(tensor_id, t);
+                if keys.len() == 0 {
+                    StageState::Ready(mem::take(tensors).into())
+                } else {
+                    StageState::BeingLoaded { tensors: mem::take(tensors), keys_to_load: keys }
+                }
+            }
+        };
+
+        Ok(())
+    }
+
+}
+
+
 
 impl <S> AsRef<S> for  StageState<S> {
     fn as_ref(&self) -> &S {
