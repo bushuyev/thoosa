@@ -45,13 +45,14 @@ use crate::cuda_utils::tensor_mem_size;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInitB {
-    k:i64,
+    k_0:i64,
+    k_1:i64,
     tho_device_idx:usize
 }
 
 impl TestStageInitB {
-    pub fn new(k: i64, tho_device_ids:usize) -> Self {
-        Self { k, tho_device_idx: tho_device_ids }
+    pub fn new(k_0: i64, k_1: i64, tho_device_ids:usize) -> Self {
+        Self { k_0, k_1, tho_device_idx: tho_device_ids }
     }
 }
 
@@ -183,15 +184,28 @@ impl RunCtx for TestRunCtx {
 
 #[derive(Debug)]
 pub struct TestStageBState {
-    k_0:ThoTensor,//tensors need to be dumped to CPU and removed from State when handling OOM in other stages
-    // k_1:ThoTensor,
+    //tensors need to be dumped to CPU and removed from State when handling OOM in other stages
+    k_0:ThoTensor,
+    k_1:ThoTensor,
 }
 
 impl TestStageBState {
-    pub fn new(k:i64, tho_device_idx:usize) -> Self {
+
+    pub fn new(k_0:i64, k_1: i64, tho_device_idx:usize) -> Self {
         Self {
-            k_0: Tensor::scalar_tensor(k, (Int, ThoDevice::from(tho_device_idx).into())).into(),
-            // k_1: Tensor::scalar_tensor(1, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+            k_0: Tensor::scalar_tensor(k_0, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+            k_1: Tensor::scalar_tensor(k_0, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+        }
+    }
+}
+
+impl From<HashMap<String, Tensor>> for TestStageBState {
+    fn from(mut map: HashMap<String, Tensor>) -> Self {
+        assert_eq!(map.len(), 2);
+
+        TestStageBState {
+            k_0: map.remove(K_0).expect("no K_0").into(),
+            k_1: map.remove(K_1).expect("no K_1").into(),
         }
     }
 }
@@ -232,7 +246,7 @@ where
     pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
             id: mono_key!(stage_id, "TestStageB").into(),
-            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k, init.tho_device_idx))),
+            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k_0, 0, init.tho_device_idx))),
             pd: PhantomData
         }
     }
@@ -286,6 +300,7 @@ where
 }
 
 const K_0: &'static str = "K_0";
+const K_1: &'static str = "K_1";
 
 impl <P, C> StageWithState for TestStageB<P, C>
 where
@@ -371,20 +386,35 @@ where
 
                     debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
 
-                    if keys.len() == 0 {
-                        StageState::Ready(TestStageBState {
-                            k_0: t.into(),
-                            // k_1: t.into(),
-                        })
+                    if keys.len() == 0 {//state contains single tensor
+                        StageState::Ready(HashMap::from([(tensor_id, t)]).into())
                     } else {
                         StageState::BeingLoaded{ tensors: HashMap::from([(tensor_id, t)]), keys_to_load: keys }
                     }
                 },
-                StageState::BeingLoaded{ tensors: tensor, keys_to_load } => {
-                    StageState::Ready(TestStageBState {
-                        k_0: t.into(),
-                        // k_1: t.into(),
-                    })
+                StageState::BeingLoaded{ tensors, keys_to_load:keys } => {
+
+
+                    assert!(!keys.is_empty(), "no keys");
+
+                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys={keys:?}");
+
+                    let keys_len = keys.len();
+                    let mut keys = mem::take(keys);
+                    keys.retain(|v|!v.eq(&tensor_id));
+
+                    if keys_len -1 != keys.len() {
+                        return Err(ThoError::NotFound(Some(tensor_id)));
+                    }
+
+                    debug!("TestStageB::set_state_tensor: StageState::OffLoaded keys_len={keys_len:?} keys.len={}", keys.len());
+                    tensors.insert(tensor_id, t);
+                    if keys.len() == 0 {
+
+                        StageState::Ready(mem::take(tensors).into())
+                    } else {
+                        StageState::BeingLoaded { tensors:mem::take(tensors), keys_to_load: keys }
+                    }
                 }
             };
 
@@ -509,13 +539,13 @@ mod tests {
                 let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
                 let retired = ipc.worker_id()?;
 
-                let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+                let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
                 let old_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 let old_key = old_tensor.ref_key().unwrap();
                 actor.purge_stage_state(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
                 actor.restart().await?;
 
-                let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 1)).await?;
+                let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
                 let fresh_tensor = actor.copy(Tensor::f_ones([1, 3], FLOAT_CPU)?.into(), 1.into()).await?;
                 // Deliberately collide numeric identities across generations.
                 assert_eq!(fresh_tensor.ref_key(), Some(old_key));
@@ -586,8 +616,8 @@ mod tests {
     async fn do_test_distinct_stateful_endpoints() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         // Reuse one initializer name with different ids to prove both worker-side state instances remain independently invokable.
-        let first_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
-        let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 1)).await?;
+        let first_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
+        let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
@@ -611,11 +641,11 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_secs(3)).await;
 
-         TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+         TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
 
 
         // A repeated stage_id must fail without replacing the already-installed stage.
-       let Err(e) = TestStageB::<(), TestRunCtx>::new( Some(2.to_string()),1,  TestStageInitB::new(4, 1)).await else {
+       let Err(e) = TestStageB::<(), TestRunCtx>::new( Some(2.to_string()),1,  TestStageInitB::new(4, 0, 1)).await else {
            panic!("should fail to install same endpoint")
        };
 
@@ -630,7 +660,7 @@ mod tests {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
-        let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 1)).await?;
+        let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
 
         GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 

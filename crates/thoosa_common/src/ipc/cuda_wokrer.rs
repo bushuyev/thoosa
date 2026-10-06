@@ -572,7 +572,10 @@ impl CudaWorker {
                         if let Some(with_state) = endpoint.as_with_state(){
 
                             let state_info = with_state.get_state_info(&context.tho_device).await?;
-                            context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }).await.context("worker response writer is closed")?;
+
+                            context.reply_tx.send(
+                                CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }
+                            ).await.context("worker response writer is closed")?;
                         } else {
                             error!("no state for: endpoint_key={endpoint_key:}");
                         }
