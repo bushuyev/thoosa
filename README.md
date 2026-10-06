@@ -28,7 +28,6 @@ The Cargo workspace is in [`crates/`](crates/), not at the repository root. Its 
 | [`thoosa_shims`](crates/thoosa_shims/) | Rust bindings and C++/CUDA code for tensor copies, streams, and LibTorch integration. |
 | [`thoosa_tui`](crates/thoosa_tui/) | Terminal viewer for run configurations and results in a workspace database. |
 | [`thoosa_hbac`](crates/thoosa_projects/thoosa_hbac/) | Active HBAC EEG application and dataset-specific import and pipeline commands. |
-| [`thoosa_bird_clef`](crates/thoosa_projects/thoosa_bird_clef/) | Older BirdCLEF audio application. |
 
 The crates under [`crates/thoosa_macros/`](crates/thoosa_macros/) support configuration and data types:
 
@@ -60,6 +59,9 @@ cargo build --release
 ```
 
 For a faster compile check, use `cargo check --workspace --all-targets` from `crates/`. Build one package with `cargo build --release -p thoosa_hbac` (or another package name from the tables above).
+
+
+- [IPC subsystem](docs/ipc.md) 
 
 ## Run
 
