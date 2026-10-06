@@ -194,7 +194,7 @@ impl TestStageBState {
     pub fn new(k_0:i64, k_1: i64, tho_device_idx:usize) -> Self {
         Self {
             k_0: Tensor::scalar_tensor(k_0, (Int, ThoDevice::from(tho_device_idx).into())).into(),
-            k_1: Tensor::scalar_tensor(k_0, (Int, ThoDevice::from(tho_device_idx).into())).into(),
+            k_1: Tensor::scalar_tensor(k_1, (Int, ThoDevice::from(tho_device_idx).into())).into(),
         }
     }
 }
@@ -323,34 +323,54 @@ where
     fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             let guard = self.state.lock().await;
-            let k = &guard.as_ref().k_0;
+            let k_0 = &guard.as_ref().k_0;
+            let k_1 = &guard.as_ref().k_1;
             Ok(StageStateInfo::new(
-                HashMap::from([
-                    (
-                        format!("{}/{}", TEST_ENDPOINT, self.id),
+                vec![
+
                         WorkerTensorInfoPayload::new(
                             TensorKey::stage_state(
                                 TEST_ENDPOINT,
                                 &self.id,
                                 K_0,
                             ),
-                            k.kind().into(),
-                            k.size(),
-                            tensor_mem_size(k.kind(), &k.size()),
+                            k_0.kind().into(),
+                            k_0.size(),
+                            tensor_mem_size(k_0.kind(), &k_0.size()),
+                        ),
+                        WorkerTensorInfoPayload::new(
+                            TensorKey::stage_state(
+                                TEST_ENDPOINT,
+                                &self.id,
+                                K_1,
+                            ),
+                            k_1.kind().into(),
+                            k_1.size(),
+                            tensor_mem_size(k_1.kind(), &k_1.size()),
                         )
-                    )
-                ]),
+
+                ],
                 None, //Some(Box::new(TestStageStateScalars::new(guard.counter)))
             ))
         }.boxed()
     }
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
-        async {
-            // Ok(self.state.lock().await.as_ref().expect("no state 4").k_0.as_ref().shallow_clone())
+        async move {
+
             match &*self.state.lock().await {
                 StageState::Ready(state) =>  {
-                    Ok(state.k_0.as_ref().shallow_clone())
+                    match tensor_id.as_str() {
+                        K_0 => {
+                            Ok(state.k_0.as_ref().shallow_clone())
+                        }
+                        K_1 => {
+                            Ok(state.k_1.as_ref().shallow_clone())
+                        }
+                        _=> {
+                            panic!("unexpected tensor_id={tensor_id}")
+                        }
+                    }
                 },
                 _=> {
                     panic!("no state")
@@ -425,9 +445,9 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{}", input.value.as_ref(), k.k_0.as_ref());
+        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
         Ok(TestOutputB {
-            value: (input.value.as_ref() * k.k_0.as_ref()).into(),
+            value: (input.value.as_ref() * (k.k_0.as_ref() + k.k_1.as_ref())).into(),
         })
     }
 }
@@ -451,7 +471,7 @@ where
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TestStageB::drop_gpu");
-        *self.state.lock().await = StageState::OffLoaded(vec![K_0.to_string()/*, "k_1".to_string()*/]);
+        *self.state.lock().await = StageState::OffLoaded(vec![K_0.to_string(), K_1.to_string()]);
         Ok(())
     }
 

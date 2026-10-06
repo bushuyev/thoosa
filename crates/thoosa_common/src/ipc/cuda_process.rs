@@ -425,8 +425,8 @@ impl CudaIPCActor {
                                 panic!("");//TODO return err
                             };
 
-                            for (stage_key, tensor_info) in info.tensors {
-                                debug!("handle_message: Operation::PurgeStage: stage_key={stage_key:?}");
+                            for tensor_info in info.tensors {
+                                debug!("handle_message: Operation::PurgeStage: tensor_info={tensor_info:?}");
                                 let tensor_key = tensor_info.tensor_key.to_tensor_key();
 
                                 let t = Self::do_ref_d2h_copy(

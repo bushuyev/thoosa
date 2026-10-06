@@ -1001,16 +1001,16 @@ where
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StageStateInfo {
     pub scalars:Option<Box<dyn WorkerOutput>>,
-    pub tensors:HashMap<String, WorkerTensorInfoPayload>
+    pub tensors:Vec<WorkerTensorInfoPayload>
 }
 
 impl StageStateInfo {
-    pub fn new(tensors: HashMap<String, WorkerTensorInfoPayload>, scalars: Option<Box<dyn WorkerOutput>>) -> Self {
+    pub fn new(tensors: Vec<WorkerTensorInfoPayload>, scalars: Option<Box<dyn WorkerOutput>>) -> Self {
         Self { scalars, tensors }
     }
 
     pub fn empty() -> Self {
-        Self { scalars: None, tensors:HashMap::new() }
+        Self { scalars: None, tensors:Vec::new() }
     }
 
 
