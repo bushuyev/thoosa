@@ -57,7 +57,7 @@ impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
     fn run_layers(&self, t: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.tho_device_idx(), self.layers[0]);
 
-        let output_t = self.layers[0].tho_forward(&t.as_ref().into(), lengths.as_deref_mut(), train)?;
+        let output_t = self.layers[0].tho_forward(&t.as_ref().f_alias()?.into(), lengths.as_deref_mut(), train)?;
 
         Ok(self.layers
             .iter()
@@ -68,7 +68,7 @@ impl<DI: Dims, DO: Dims> ThoSequential<DI, DO> {
 
                 layer.tho_forward(&output_t, lengths.as_deref_mut(), train)
             })?
-            .as_ref()
+            .t()
             .into())
     }
 }
@@ -108,7 +108,7 @@ impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModu
                                     }
                                     debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
 
-                                    Ok(r)
+                                    Ok(r.t())
                                 } else {
                                     //TODO ok skipping?
                                     debug!("MySequential::tho_forward skipping i={i} split.size={:?}",split.size());
@@ -182,7 +182,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for ThoParallel<D
         let original_lengths = lengths.as_deref().cloned();
         let mut updated_lengths: Option<BatchLengths> = None;
         let t = (self.join)(
-            (self.split)(t.as_ref())?
+            (self.split)(&t.as_ref())?
                 .into_iter()
                 .zip(self.layers.iter())
                 .map(|(t, net)| {
@@ -243,7 +243,7 @@ impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split1<DI, DO
         let original_lengths = lengths.as_deref().cloned();
         let mut updated_lengths: Option<BatchLengths> = None;
         let t = (self.join)(
-            (self.split)(t.as_ref())?
+            (self.split)(&t.as_ref())?
                 .into_iter()
                 .map(|split_t| {
                     let mut lengths_run = original_lengths.as_ref().map(|vals| vals.clone());
@@ -482,12 +482,10 @@ impl ThoBatchNorm1d {
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoBatchNorm1d {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyBatchNorm1d::tho_forward: t.size={:?}", t.size());
-        Ok(self.batch_norm.forward_t(t.as_ref(), train).into())
+        Ok(self.batch_norm.forward_t(&t.as_ref(), train).into())
     }
 }
 
-unsafe impl Send for ThoBatchNorm1d {}
-unsafe impl Sync for ThoBatchNorm1d {}
 
 #[derive(Debug)]
 pub struct ThoConv<ND> {
@@ -514,13 +512,13 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 1]> {
             }
         }
         debug!("MyConv::tho_forward lengths={lengths:?}");
-        Ok(panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(t.as_ref(), train).into()))?)//TODO custom conv for errors
+        Ok(panic_to_err!(Ok::<_, ThoError>(self.conv.forward_t(&t.as_ref(), train).into()))?)//TODO custom conv for errors
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoConv<[i64; 2]> {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
+        Ok(self.conv.forward_t(&t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
 
@@ -614,7 +612,7 @@ impl ThoCosineConv1d {
                         return Err(anyhow::anyhow!("MyCosineConv1d::new: provided l={} but init_slices width={}", l, init_len));
                     }
 
-                    let proto = Self::build_prototype(init_slices, init_mode)?;
+                    let proto = Self::build_prototype(&init_slices, init_mode)?;
                     debug!("MyCosineConv1d::new: proto={proto:?}");
 
                     // Final normalization for cosine matching:
@@ -840,7 +838,7 @@ impl ThoCosineConv1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-       Ok(self.forward(x_in.as_ref())?.into())
+       Ok(self.forward(&x_in.as_ref())?.into())
     }
 }
 
@@ -889,9 +887,9 @@ impl BinaryHead {
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for BinaryHead {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         let logits = match self.pool {
-            BinaryHeadPool::Max => self.forward_max(t.as_ref())?,
-            BinaryHeadPool::Mean => self.forward_mean(t.as_ref())?,
-            BinaryHeadPool::Lse { tau } => self.forward_lse(t.as_ref(), tau)?,
+            BinaryHeadPool::Max => self.forward_max(&t.as_ref())?,
+            BinaryHeadPool::Mean => self.forward_mean(&t.as_ref())?,
+            BinaryHeadPool::Lse { tau } => self.forward_lse(&t.as_ref(), tau)?,
         };
         Ok(logits.into())
     }
@@ -981,7 +979,7 @@ impl ThoSharpeningHead1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoSharpeningHead1d {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        self.forward_with_thp(t.as_ref()).map(|(logits, _thp)| logits.into())
+        self.forward_with_thp(&t.as_ref()).map(|(logits, _thp)| logits.into())
     }
 }
 
@@ -1070,7 +1068,8 @@ impl<T: Any> ThoModuleDowncast for T {
     }
 }
 
-pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send + ThoModuleDowncast {
+// Modules are moved between executors; their stage mutex serializes access to model state.
+pub trait ThoModule<DI: Dims, DO: Dims>: Debug + Send + ThoModuleDowncast {
     fn debug(&self) {}
 
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>>;
@@ -1101,20 +1100,31 @@ impl ThoFuncModule {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoFuncModule {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        (self.func)(t.as_ref()).map(|t|t.into())
+        (self.func)(&t.as_ref()).map(|t|t.into())
     }
 }
 
+// Shared closures must enforce the same thread-safety contract on their captures.
 pub struct ThoClosureModule {
     //TODO Tensor->ThoTensor
-    func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>,
+    func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>,
 }
 
-unsafe impl Send for ThoClosureModule {}
-unsafe impl Sync for ThoClosureModule {}
 
 impl ThoClosureModule {
-    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>) -> Self {
+    /// Captures shared by the module must be safe to move and share between threads.
+    /// ```compile_fail
+    /// use std::{cell::Cell, rc::Rc, sync::Arc};
+    /// use thoosa_common::nets::nodes::ThoClosureModule;
+    /// let state = Rc::new(Cell::new(0));
+    /// let retained = state.clone();
+    /// let module = ThoClosureModule::new(Arc::new(Box::new(move |tensor, _| {
+    ///     state.set(state.get() + 1);
+    ///     Ok(tensor.f_alias()?)
+    /// })));
+    /// retained.set(7);
+    /// ```
+    pub fn new(func: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>) -> Self {
         Self { func }
     }
 }
@@ -1128,7 +1138,7 @@ impl Debug for ThoClosureModule {
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for ThoClosureModule {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         (self.func)(
-            t.as_ref(),
+            &t.as_ref(),
             lengths.as_deref()
         ).map(|v|v.into())
     }
@@ -1147,8 +1157,6 @@ pub struct ThoLinear<DI: Dims, DO: Dims> {
     descr: String,
 }
 
-unsafe impl<DI: Dims, DO: Dims> Send for ThoLinear<DI, DO> {}
-unsafe impl<DI: Dims, DO: Dims> Sync for ThoLinear<DI, DO> {}
 
 
 impl<DI, DO> ThoLinear<DI, DO>
@@ -1361,7 +1369,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoAttnPool1d {
         let attn = scores.softmax(-1, Kind::Float);               // [B,T]
         let attn_unsqueezed = attn.unsqueeze(1);
         debug!("MyAttnPool1d::tho_forward: scores.size={:?} attn.size={:?} h.size={:?}, attn_unsqueezed.size={:?}",scores.size(), attn.size(), h.size(), attn_unsqueezed.size());
-        let pooled = (h * attn_unsqueezed).sum_dim_intlist(2, false, Kind::Float); // [B,C]
+        let pooled = h.f_mul(&attn_unsqueezed)?.f_sum_dim_intlist(2, false, Kind::Float)?; // [B,C]
 
         debug!("MyAttnPool1d::tho_forward: pooled.size={:?}", pooled.size());
         Ok(pooled.into())

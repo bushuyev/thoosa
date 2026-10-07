@@ -43,11 +43,11 @@ pub trait WithCommonTrainingRunConfig {
     fn config(&self)->&CommonTrainingRunConfig;
 }
 
-type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>>;
+type ModuleFactory<DI, DO> = dyn Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> + Send + Sync;
 
 pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Send> {
     id:SynKey,
-    module: Option<Box<dyn ThoModule<DI, DO>>>,
+    module: parking_lot::Mutex<Option<Box<dyn ThoModule<DI, DO>>>>,
     var_store: VarStore,
     offloaded: Option<(VarStoreState, StateTensors)>,
     quantized: bool,
@@ -86,10 +86,7 @@ where
     }
 }
 
-//TODO
-unsafe impl<DI: Dims + Send, DO: Dims + Send> Send for ThoModuleWithStore<DI, DO> {}
-
-unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO> {}
+// Auto traits follow the factory bounds and the mutex protecting the non-Sync module.
 
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
@@ -133,6 +130,22 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         Self::with_factory(id, module, VarStore::new(Cpu), None)
     }
 
+    /// The factory is shared when models are copied or rebuilt on another device.
+    /// ```compile_fail
+    /// use std::{cell::Cell, rc::Rc, sync::Arc};
+    /// use tch::{nn::VarStore, Device};
+    /// use thoosa_common::{dims::AnyDims, nets::{common_nets::ThoModuleWithStore, nodes::{ThoFuncModule, ThoModule}}};
+    /// use thoosa_shared::comp_id::SynKey;
+    /// let state = Rc::new(Cell::new(0));
+    /// let retained = state.clone();
+    /// let module: Box<dyn ThoModule<AnyDims, AnyDims>> = Box::new(ThoFuncModule::new(|t| Ok(t.f_alias()?)));
+    /// let factory = Arc::new(move |_: &tch::nn::Path<'_>| -> anyhow::Result<Box<dyn ThoModule<AnyDims, AnyDims>>> {
+    ///     state.set(state.get() + 1);
+    ///     Ok(Box::new(ThoFuncModule::new(|t| Ok(t.f_alias()?))))
+    /// });
+    /// let model = ThoModuleWithStore::with_factory(SynKey::new([]), module, VarStore::new(Device::Cpu), Some(factory));
+    /// retained.set(7);
+    /// ```
     pub fn with_factory<I:Into<SynKey>>(
         id: I,
         module: Box<dyn ThoModule<DI, DO>>,
@@ -141,7 +154,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     ) -> Self {
         Self {
             id: id.into(),
-            module: Some(module),
+            module: parking_lot::Mutex::new(Some(module)),
             var_store,
             module_factory,
             offloaded: None,
@@ -205,19 +218,20 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         &self.var_store
     }
 
-    pub fn module(&self) -> &Box<dyn ThoModule<DI, DO>> {
-        self.module.as_ref().expect("model state must be restored before accessing its module")
+    pub fn module(&self) -> parking_lot::MappedMutexGuard<'_, Box<dyn ThoModule<DI, DO>>> {
+        // Shared cached models must retain the lock for every access to the non-Sync module.
+        parking_lot::MutexGuard::map(self.module.lock(), |module| module.as_mut().expect("model state must be restored before accessing its module"))
     }
 
     pub fn ensure_ready(&self) -> Result<(), ThoError> {
-        if self.module.is_none() {
+        if self.module.lock().is_none() {
             return Err(ThoError::new("model state is offloaded or incompletely restored"));
         }
         Ok(())
     }
 
     pub fn has_gpu_data(&self, device: usize) -> bool {
-        device != 0 && (self.module.is_some() && self.tho_device_idx() == device
+        device != 0 && (self.module.lock().is_some() && self.tho_device_idx() == device
             || self.offloaded.as_ref().is_some_and(|(_, tensors)| tensors.has_device(device)))
     }
 
@@ -250,7 +264,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         tensors.clear();
         // Both the module (including derived/quantized caches) and VarStore own
         // GPU tensors. Drop both after the parent's D2H copies have completed.
-        self.module = None;
+        *self.module.get_mut() = None;
         self.var_store = VarStore::new(Cpu);
         self.offloaded = Some((variables, tensors));
         Ok(())
@@ -267,7 +281,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
             let mut module = builder(&vs.root())?;
             if self.quantized { module.quantize(); }
             self.var_store = vs;
-            self.module = Some(module);
+            *self.module.get_mut() = Some(module);
             self.offloaded = None;
         }
         Ok(())

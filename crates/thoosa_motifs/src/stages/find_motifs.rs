@@ -272,6 +272,8 @@ where
             let device_idx = ctx.tho_device_idx();
             let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
+            // The borrowed mask tensor must stay locked until the synchronous calculation finishes.
+            let precalculated;
             let mut mask_makers = match masks_ctx {
                 MasksCtx::AccumulatedMeanDist { k, ctx } => {
                     vec![
@@ -294,10 +296,11 @@ where
                     ]
                 }
                 MasksCtx::PrecalculatedDist { dists } => {
+                    precalculated = dists.t_ref();
                     vec![
                         LocalMin { dim: 1, radius },
                         Le {
-                            v: dists.t_ref(),
+                            v: &precalculated,
                         }
                     ]
                 }

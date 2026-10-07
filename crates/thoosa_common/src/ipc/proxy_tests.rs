@@ -237,7 +237,7 @@ where
         }
         debug("TestStage::do_run: input={input:?}");
         Ok(TestOutputA {
-            value: (input.value.as_ref() * self.k).into(),
+            value: input.value.as_ref().f_mul_scalar(self.k)?.into(),
         })
     }
 }

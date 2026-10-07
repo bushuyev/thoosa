@@ -29,7 +29,7 @@ where
     fn subview(&self, selector: S) -> Result<Self::Output, ThoError> {
         match &self.inner {
             ThoTensorInner::Val { t } => {
-                Self::local_subview(self.id(), t, selector)
+                Self::local_subview(self.id(), &t.lock(), selector)
             }
             ThoTensorInner::Ref { key, size, kind, .. } => {//TODO compose with 'parent' selector ?
                 debug!("ThoTensor::subview: key={key:?} size={size:?} kind={kind:?}");
