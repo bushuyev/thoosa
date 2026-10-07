@@ -1,52 +1,61 @@
+' Match run_with_runner_impl, including adjustment errors and preparation of each chunk.
+' Combine the two reasons to repeat an adjuster so the nested loops stay readable.
 @startuml
-title OOMHandler
-
+title OOM handling: main retry flow
 skinparam shadowing false
-skinparam linetype ortho
-skinparam nodesep 100
-skinparam ranksep 50
 
-(*) --> "Run stage" as initial_run
-
-initial_run --> if "Error?" as initial_error then
-    -left->[no] (*)
-else
-    -->[OOM] "Get next adjuster" as get_adjuster
+start
+:Create retry scope;
+:Run first attempt;
+if (Succeeded?) then (yes)
+  :Return output;
+  stop
+else (no)
+endif
+if (Retryable OOM?) then (no)
+  :Return error;
+  stop
+else (yes)
 endif
 
-
-get_adjuster --> "Apply current adjuster" as apply_adjuster
-
-note left
-The adjuster may modify:
-* Input
-* Stage
-* RunContext
-end note
-
-apply_adjuster --> "Run stage" as run_stage
-
-
-run_stage --> if "Error?" as run_error then
-
-    -left->[no] if "Need more runs?" as more_runs then
-        -up->[yes] run_stage
-    else
-        -left->[no] (*)
+while (More adjusters?) is (yes)
+  :Choose next adjuster;
+  repeat
+    :Apply current adjuster, then run\n(if adjustment succeeds);
+    note right
+      Count one adjustment step per visit.
+      Return an error before step 101.
+      Adjustment errors skip execution
+      and follow the failure branch.
+    end note
+    if (Succeeded?) then (yes)
+      :Collect output;
+      note right
+        InputContext collects chunk outputs.
+        Assembly errors return immediately.
+        Without an input adjuster, output is final.
+      end note
+      if (More chunks?) then (no)
+        :Build and return final output;
+        stop
+      else (yes)
+      endif
+    else (no)
+      if (Retryable OOM?) then (yes)
+        :Call current adjuster's degrade;
+      else (no)
+        :Return error;
+        stop
+      endif
     endif
+  repeat while (More chunks remain,\nor degrade returned true?) is (yes) ->no;
+endwhile (no)
+:Return error: all adjusters exhausted;
+stop
 
-else
-
-    -right->[OOM] if "Can current adjuster\ndegrade?" as can_degrade then
-
-        -up->[yes] apply_adjuster
-
-    else
-
-        -up->[no] get_adjuster
-
-    endif
-
-endif
-
+legend bottom
+  All attempts share one retry token.
+  Completion or cancellation releases the retry reservation.
+  CUDA recovery can invalidate the scope and stop the operation.
+endlegend
 @enduml
