@@ -432,7 +432,9 @@ where
                 };
                 // Keep the CPU allocation until every upload and reconstruction
                 // succeeds. OOM recovery can then discard partial GPU state and retry.
-                actor.copy_stage_state(ThoTensor::new((), tensor.as_ref().f_alias()?)?, tho_device_idx.into(), Some(key)).await?;
+                // Release the synchronous tensor guard before awaiting the upload.
+                let upload = ThoTensor::new((), tensor.as_ref().f_alias()?)?;
+                actor.copy_stage_state(upload, tho_device_idx.into(), Some(key)).await?;
             }
             *guard = None;
         }

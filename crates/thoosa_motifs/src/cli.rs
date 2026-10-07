@@ -1585,7 +1585,7 @@ where
                     ws,
                     &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
                     &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_config_id={find_motifs_run_config_id} net={net_path:?}"),
-                    out.t_ref(),
+                    &out.t_ref(),
                     resolution,
                     print_to_stdout,
                 )?;
@@ -2366,8 +2366,8 @@ mod cli_tests {
                 let pulse_triangle_t = SelectRef::select_ref(&pulse_triangle_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let pulse_sin_t = SelectRef::select_ref(&pulse_sin_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
 
-                debug_plot!(pulse_triangle_t.as_ref().as_ref(), "pulse_triangle_{freq}_filtered_t")?;
-                debug_plot!(pulse_sin_t.as_ref().as_ref(), "pulse_sin_{freq}_filtered_t")?;
+                debug_plot!(&pulse_triangle_t.as_ref().as_ref(), "pulse_triangle_{freq}_filtered_t")?;
+                debug_plot!(&pulse_sin_t.as_ref().as_ref(), "pulse_sin_{freq}_filtered_t")?;
 
                 Ok::<_, anyhow::Error>(())
             }?;

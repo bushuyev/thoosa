@@ -45,20 +45,7 @@ pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     pd: PhantomData<C>,
 }
 
-unsafe impl <F, DI, DO, C> Send for TrainStep<F, DI, DO, C>
-where
-    DI:Dims,
-    DO:Dims,
-    C:RunCtx
-{}
-
-unsafe impl <F, DI, DO, C> Sync for TrainStep<F, DI, DO, C>
-where
-    DI:Dims,
-    DO:Dims,
-    C:RunCtx
-{}
-
+// Auto traits also check the captured input transform, rather than bypassing its bounds.
 #[async_trait]
 impl <F, DI, DO, C> FuturesRunnerMapPurger for TrainStep<F, DI, DO, C>
 where
@@ -209,7 +196,7 @@ where
             debug!("TrainStep::do_run: x_t={x_t:?} predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
 
 
-            let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
+            let loss = (self.loss_fn)(&predicted_y.as_ref(), &expected_y.as_ref())?;
 
             trace!("TrainStep::do_run: x_t=\n{x_t} predicted_y=\n{predicted_y} expected_y=\n{expected_y} loss=\n{loss}");
 
@@ -363,7 +350,7 @@ fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) 
     let selected_len = (range.end - range.start) as i64;
 
     match &tensor.inner {
-        ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), t.f_narrow(0, range.start as i64, selected_len)?),
+        ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), t.lock().f_narrow(0, range.start as i64, selected_len)?),
         ThoTensorInner::Ref { key, size, kind, selector } => {
             let mut ranges = match selector {
                 Some(selector) => selector.tensor_ranges()?,

@@ -229,7 +229,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SyncStft::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let spectrogram = self.build_spectrogram(input.t_ref())?;
+        let spectrogram = self.build_spectrogram(&input.t_ref())?;
         debug!("SyncStft::do_run: input_id={:?} input_size={:?} output_size={:?} run_config={:?}", input.id(), input.size(), spectrogram.size(), self.run_config);
         ThoTensor::new(self.out_id(input.id()), spectrogram)
     }

@@ -226,7 +226,7 @@ mod tests {
         let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())?
             .sum_dim_intlist(1, false, out.t_ref().kind())
             .view((-1, 1));
-        let ok = expected.allclose(out.t_ref(), 0.1, 0.1, false);
+        let ok = expected.allclose(&out.t_ref(), 0.1, 0.1, false);
         debug!("check_sum_result: resource={resource} expected=\n{expected} actual=\n{}", out.t_ref());
         assert!(ok);
 
@@ -547,7 +547,7 @@ mod tests {
                 assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
 
                 let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
-                assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
+                assert!(expected_smoke.allclose(&cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
 
                 Ok(())
             },

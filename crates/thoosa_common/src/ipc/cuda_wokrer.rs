@@ -82,18 +82,16 @@ impl WorkerSharedArena {
 #[derive(Debug)]
 pub struct AllTensors {
     pub worker_id: CudaWorkerId,
-    // Tensor values and their aliases are treated as read-only while stored; the write lock only protects map membership.
-    tensors: RwLock<HashMap<u64, Tensor>>,
+    // Exclusive access protects Tensor handles, which are Send but not Sync.
+    tensors: Mutex<HashMap<u64, Tensor>>,
 }
 
 impl AllTensors {
     pub fn new(worker_id: CudaWorkerId) -> Self {
-        Self { worker_id, tensors: RwLock::new(HashMap::new()) }
+        Self { worker_id, tensors: Mutex::new(HashMap::new()) }
     }
 }
 
-// SAFETY: every map access is synchronized, no mutable tensor reference is exposed, and callers preserve the read-only-storage invariant when using aliases.
-unsafe impl Sync for AllTensors {}
 struct WorkerRequestContext<W: ?Sized> {
     ws: Arc<RwLock<Box<W>>>,
     endpoint_inits: Arc<HashMap<String, InitFn<W>>>,
@@ -138,7 +136,7 @@ fn validate_arena_tensor_metadata(kind: IpcTensorKind, shape: &[i64], tensor_byt
 }
 
 fn prepare_d2h_source(all_cuda_tensors: &AllTensors, tensor_key: u64, kind: IpcTensorKind, shape: &[i64], cuda_device: usize) -> Result<Tensor, ThoError> {
-    let tensors = all_cuda_tensors.tensors.read();
+    let tensors = all_cuda_tensors.tensors.lock();
     let source = tensors.get(&tensor_key).ok_or_else(|| ThoError::new(format!("worker tensor tensor_key={tensor_key} not found")))?;
     let tensor_kind = kind.into();
     if source.kind() != tensor_kind || source.size() != shape {
@@ -384,7 +382,7 @@ impl CudaWorker {
             match request.operation {
                 Operation::DescribeRef { tensor_key } => {
                     let status = {
-                        let tensors = context.all_cuda_tensors.tensors.read();
+                        let tensors = context.all_cuda_tensors.tensors.lock();
                         match tensors.get(&tensor_key) {
                             None => OpResult::failed(format!("worker tensor tensor_key={tensor_key} not found")),
                             Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key.into(), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
@@ -603,9 +601,9 @@ impl CudaWorker {
                 }
                 Operation::Debug => {
 
-                    info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.tensors.read().len());
+                    info!("run_worker: Operation::Debug context.tho_device={:?} all_cuda_tensors.len={}", context.tho_device, context.all_cuda_tensors.tensors.lock().len());
 
-                    for (key, tensor) in context.all_cuda_tensors.tensors.read().iter() {
+                    for (key, tensor) in context.all_cuda_tensors.tensors.lock().iter() {
                         info!("run_worker: key={key:?} tensor={tensor:?}");
                     }
 
@@ -630,7 +628,7 @@ impl CudaWorker {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaWorker::drop_tensor"))]
     async fn drop_tensor<W: Workspace + ?Sized>(context: &WorkerRequestContext<W>, request_id: u64, tensor_key: &u64) -> anyhow::Result<()>{
-        let removed = context.all_cuda_tensors.tensors.write().remove(&tensor_key);
+        let removed = context.all_cuda_tensors.tensors.lock().remove(&tensor_key);
         debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
         let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
         context.reply_tx.send(CudaWorkerMsgOut { worker_id: context.all_cuda_tensors.worker_id, request_id, status }).await.context("worker response writer is closed")
@@ -694,7 +692,7 @@ where
         debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} selector={:?} remove={remove}", input_ref.selector());
 
         if remove {
-            let mut tensors = all_cuda_tensors.tensors.write();
+            let mut tensors = all_cuda_tensors.tensors.lock();
             debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
             let tensor  = tensors
                 .remove(&input_key)
@@ -702,7 +700,7 @@ where
 
             ThoTensor::new(input_ref.id().clone(), tensor)
         } else {
-            let tensors = all_cuda_tensors.tensors.read();
+            let tensors = all_cuda_tensors.tensors.lock();
             debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
             let source = tensors
                 .get(&input_key)
@@ -769,7 +767,7 @@ where
 }
 
 pub fn insert_worker_tensor(all_cuda_tensors: &AllTensors, tensor: Tensor) -> anyhow::Result<u64> {
-    let mut tensors = all_cuda_tensors.tensors.write();
+    let mut tensors = all_cuda_tensors.tensors.lock();
     loop {
         let key = match NEXT_WORKER_TENSOR_KEY.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1)) {
             Ok(key) => key,
@@ -838,7 +836,7 @@ mod generation_tests {
         installed.expect().return_const(false);
         let current = CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(3) };
         let tensors = AllTensors::new(current);
-        tensors.tensors.write().insert(42, Tensor::f_from_slice(&[7f32]).unwrap());
+        tensors.tensors.lock().insert(42, Tensor::f_from_slice(&[7f32]).unwrap());
         for worker_id in [
             CudaWorkerId { generation: CudaDeviceGeneration(2), ..current },
             CudaWorkerId { device_idx: 1, ..current },
@@ -846,12 +844,12 @@ mod generation_tests {
             let stale: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, worker_id);
             for consume in [false, true] {
                 assert!(matches!(stale.ref_to_tensor(&tensors, consume).unwrap_err().what(), ThoError::ContextReset));
-                assert!(tensors.tensors.read().contains_key(&42), "stale consume must not remove the replacement tensor");
+                assert!(tensors.tensors.lock().contains_key(&42), "stale consume must not remove the replacement tensor");
             }
         }
         let valid: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, current);
         assert_eq!(valid.ref_to_tensor(&tensors, false).unwrap().t_ref().double_value(&[0]), 7.);
         valid.ref_to_tensor(&tensors, true).unwrap();
-        assert!(!tensors.tensors.read().contains_key(&42));
+        assert!(!tensors.tensors.lock().contains_key(&42));
     }
 }

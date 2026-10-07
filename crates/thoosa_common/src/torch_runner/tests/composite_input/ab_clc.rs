@@ -356,7 +356,7 @@ impl ABClcSyncStage {
         let call_nr = self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         debug!("ABClcSyncStage::do_run: from_a={from_a:?} from_b={from_b:?} call_nr={call_nr}");
 
-        let value = (from_a.as_ref()+ from_b.as_ref()).mean_dim(0, false, None).double_value(&[]) as f32;
+        let value = from_a.as_ref().f_add(&from_b.as_ref())?.f_mean_dim(0, false, None)?.f_double_value(&[])? as f32;
 
         debug!("ABClcSyncStage::do_run: value={value}");
 

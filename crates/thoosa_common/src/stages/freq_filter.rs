@@ -966,7 +966,7 @@ mod tests {
                     assert!(matches!(padding, Padding::Zero(_)));
                     let kernel = kernel.ready()?;
                     let width = kernel.size()[2];
-                    output.f_constant_pad_nd([width / 2, width / 2])?.f_unfold(1, width, *stride as i64)?.f_mul(kernel.as_ref())?.f_sum_dim_intlist(&[2i64][..], false, Kind::Float)?
+                    output.f_constant_pad_nd([width / 2, width / 2])?.f_unfold(1, width, *stride as i64)?.f_mul(&kernel.as_ref())?.f_sum_dim_intlist(&[2i64][..], false, Kind::Float)?
                 }
                 PreparedFilter::Median { window } => median(&output, *window)?,
                 _ => panic!("unexpected filter in state-transfer fixture"),
@@ -1087,7 +1087,7 @@ mod tests {
         }
         let state = StageWithState::pre_run(stage.as_ref(), 0).await?.unwrap();
         let actual = Arc::clone(&stage).do_run_with_state(&input, state, &ctx)?;
-        assert!(actual.as_ref().f_allclose(expected.as_ref(), 0., 0., false)?);
+        assert!(actual.as_ref().f_allclose(&expected.as_ref(), 0., 0., false)?);
         Ok(())
     }
 
@@ -1098,7 +1098,7 @@ mod tests {
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
         let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })], 2, 100.0, 1, 1))?).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
-        let expected = median(input.as_ref(), 5)?;
+        let expected = median(&input.as_ref(), 5)?;
         let output_flat = output.as_ref().f_view([-1])?;
         let expected_flat = expected.f_view([-1])?;
 
@@ -1114,7 +1114,7 @@ mod tests {
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
         let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0, 1) )?).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
-        let expected = moving_average(input.as_ref(), 4, 1)?;
+        let expected = moving_average(&input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));
 

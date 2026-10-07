@@ -489,23 +489,23 @@ impl DistsMask {
 
     fn tensor_mem_size(tensor: &DistsMaskTensor) -> u64 {
         match &tensor.inner {
-            ThoTensorInner::Val { t } => tensor_mem_size(t) as u64,
+            ThoTensorInner::Val { t } => tensor_mem_size(&t.lock()) as u64,
             ThoTensorInner::Ref { .. } => Data::mem_size(tensor),
         }
     }
 
     fn into_local_tensor(tensor: DistsMaskTensor, label: &str) -> Result<Tensor, ThoError> {
         match tensor.inner {
-            ThoTensorInner::Val { t } => Ok(t),
+            ThoTensorInner::Val { t } => Ok(t.into_inner()),
             ThoTensorInner::Ref { key, .. } => {
                 panic!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}")
             },
         }
     }
 
-    fn local_tensor_ref<'a>(tensor: &'a DistsMaskTensor, label: &str) -> Result<&'a Tensor, ThoError> {
+    fn local_tensor_ref<'a>(tensor: &'a DistsMaskTensor, label: &str) -> Result<thoosa_common::tho_tensor::TensorRef<'a>, ThoError> {
         match &tensor.inner {
-            ThoTensorInner::Val { t } => Ok(t),
+            ThoTensorInner::Val { .. } => Ok(tensor.t_ref()),
             ThoTensorInner::Ref { key, .. } => {
                 panic!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}")
             },
@@ -523,8 +523,9 @@ impl DistsMask {
     async fn copy_tensor_to_cpu(tensor: DistsMaskTensor, label: &'static str) -> Result<Tensor, ThoError> {
 
         match tensor.inner {
-            ThoTensorInner::Val { t } if t.device().eq(&Cpu) => Ok(t),
+            ThoTensorInner::Val { t } if t.lock().device().eq(&Cpu) => Ok(t.into_inner()),
             ThoTensorInner::Val { t } => {
+                let t = t.into_inner();
                 let t = if t.is_contiguous() {
                     t
                 } else {
@@ -804,7 +805,7 @@ impl DistsMask {
                 "DistsMask::unpack_mask_device: mask is indices",
             )),
             DistsMaskType::MaskPacked(mask_size, _) => {
-                let bits = unpack_packed_mask(Self::local_tensor_ref(&self.mask, "unpack_mask_device")?, mask_size)?;
+                let bits = unpack_packed_mask(&*Self::local_tensor_ref(&self.mask, "unpack_mask_device")?, mask_size)?;
                 if &bits.device() == device {
                     Ok(bits)
                 } else {

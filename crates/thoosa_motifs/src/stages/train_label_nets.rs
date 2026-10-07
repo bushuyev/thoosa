@@ -347,8 +347,12 @@ where
             .max()
             .ok_or_else(|| ThoError::new(format!("batch resources are empty for {}", input.label)))?;
 
-        let x_1_refs = x_1.iter().map(|value| value.data()).collect::<Vec<_>>();
-        let x_0_refs = x_0.iter().map(|value| value.data()).collect::<Vec<_>>();
+        // Borrow one handle at a time: collecting guards could lock shared inputs in opposite orders.
+        // These aliases stay in this synchronous call and are copied into the padded batches.
+        let x_1_tensors = x_1.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>()?;
+        let x_0_tensors = x_0.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>()?;
+        let x_1_refs = x_1_tensors.iter().collect::<Vec<_>>();
+        let x_0_refs = x_0_tensors.iter().collect::<Vec<_>>();
 
         let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), input.num_nets, max_input)?;
         let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), input.num_nets, max_input)?;

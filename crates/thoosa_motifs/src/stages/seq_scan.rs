@@ -238,7 +238,7 @@ where
 
                     {
                         let tensor = loaded.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                        assign_resource_to_buckets_chunked(resource, tensor.t_ref(), &configured_stage.run_config, max_chunk_len, &mut buckets)
+                        assign_resource_to_buckets_chunked(resource, &tensor.t_ref(), &configured_stage.run_config, max_chunk_len, &mut buckets)
                     }?;
                     continue;
                 }
@@ -301,7 +301,7 @@ where
     let tensors = futures_util::future::try_join_all(batch_tensors.iter().map(|tensor| tensor.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
     {
         for (resource, tensor) in batch_resources.iter().zip(tensors.iter()) {
-            assign_resource_to_buckets(resource, tensor.t_ref(), run_config, buckets)?;
+            assign_resource_to_buckets(resource, &tensor.t_ref(), run_config, buckets)?;
         }
         Ok::<_, ThoError>(())
     }?;

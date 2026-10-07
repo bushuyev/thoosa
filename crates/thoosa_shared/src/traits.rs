@@ -786,7 +786,8 @@ pub trait SyncStage: Stage + Debug {
 }
 
 pub trait StageWithState: SyncStage + Sync {
-    type S: Debug + Send + Sync;//State
+    // State is accessed exclusively through a mutex guard, so it need only be Send.
+    type S: Debug + Send;//State
 
     ///returns Option::None in IPC mode when it's used from ProxyStage where instead of copying from CPU to GPU it uploads StageState to the worker
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>>;

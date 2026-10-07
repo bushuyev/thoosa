@@ -299,7 +299,7 @@ async fn do_test_loaded(
 
     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
-    assert_eq!(tensor_data_0_0.t_ref(), tensor_data_0_1.as_ref().t_ref());
+    assert!(tensor_data_0_0.t_ref().f_equal(&tensor_data_0_1.as_ref().t_ref())?);
 
     // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
 

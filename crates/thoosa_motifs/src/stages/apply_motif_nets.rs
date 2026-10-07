@@ -830,31 +830,22 @@ where
         };
 
         for (row_i, motif_net_applied) in motif_nets_applied.iter().enumerate() {
-            let size = motif_net_applied.t_ref().size();
-            let stretched;
-            let src = if size[0] == max_match_len {
-                motif_net_applied.t_ref()
-            } else {
-                stretched = match stretch(motif_net_applied.t_ref(), max_match_len as usize, 0) {
-                    Ok(stretched) => stretched,
-                    Err(error) => {
-                        input.motif_nets_applied = motif_nets_applied;
-                        return ConsumeResult::Failed { input, error: error.into() };
-                    }
+            // Keep the guard inside this synchronous operation so error paths can return ownership of all inputs.
+            let copied = (|| -> Result<(), ThoError> {
+                let source = motif_net_applied.t_ref();
+                let stretched;
+                let src = if source.size()[0] == max_match_len {
+                    &*source
+                } else {
+                    stretched = stretch(&source, max_match_len as usize, 0)?;
+                    &stretched
                 };
-                &stretched
-            };
-
-            let mut dst = match res_t.f_get(row_i as i64) {
-                Ok(dst) => dst,
-                Err(error) => {//TODO it's not rally recoverable, returning input only wastes memory
-                    input.motif_nets_applied = motif_nets_applied;
-                    return ConsumeResult::Failed { input, error: error.into() };
-                }
-            };
-            if let Err(error) = dst.f_copy_(src) {
+                res_t.f_get(row_i as i64)?.f_copy_(src)?;
+                Ok(())
+            })();
+            if let Err(error) = copied {
                 input.motif_nets_applied = motif_nets_applied;
-                return ConsumeResult::Failed { input, error: error.into() };
+                return ConsumeResult::Failed { input, error };
             }
         }
 
@@ -2028,7 +2019,7 @@ pub mod tests {
             false
         ).await?);
 
-        debug_plot!(motif_0_0.t_ref(), "motif_test")?;
+        debug_plot!(&motif_0_0.t_ref(), "motif_test")?;
 
         let channels_patterns = vec![vec![motif_0_0.t_ref().i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;

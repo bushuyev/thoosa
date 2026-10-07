@@ -159,7 +159,7 @@ fn train_motif_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn Wor
             MotifNetTypeParams::CosineNet2DParams(_) => {
                 let stft_config = init.stft_config.clone().ok_or_else(|| ThoError::new("TrainMotifStepIpcInit missing STFT config for Cosine2DNet"))?;
                 let stft = SyncStft::<RunCtxImpl, MotifSlices, MotifSlices>::new(SynKey::new([mono_key!("TrainMotifStepIpc", "stft")]), stft_config)?;
-                let motif_specs = stft.build_spectrogram(motif.t_ref())?;
+                let motif_specs = stft.build_spectrogram(&motif.t_ref())?;
                 let mut copied = motif_specs.f_zeros_like()?;
                 copied.f_copy_(&motif_specs)?;
                 Some(Arc::new(ThoTensor::new(motif.id().clone(), copied)?))
@@ -248,7 +248,7 @@ where
                     let motif_id = motif_specs.id().clone();
                     let cosine_motif = motif_specs.as_ref();
                     let mut copied = cosine_motif.f_zeros_like()?;
-                    copied.f_copy_(cosine_motif)?;
+                    copied.f_copy_(&cosine_motif)?;
                     Some(Arc::new(ThoTensor::new(motif_id, copied)?))
                 }
                 _ => None,
@@ -409,7 +409,7 @@ impl TrainMotifNetInput {
 
 fn copy_motif(input: &ThoTensor<MotifSlices, SynKey>) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
     let mut copied = input.t_ref().f_zeros_like()?;
-    copied.f_copy_(input.t_ref())?;
+    copied.f_copy_(&input.t_ref())?;
     ThoTensor::new(input.id().clone(), copied)
 }
 
@@ -983,8 +983,8 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("SyncMotifBatch::do_run: descr={} num_slices={}", input.descr, input.num_slices);
 
-        let motifs = make_batch_with(input.motifs.t_ref(), input.num_slices, None)?;
-        let random = make_batch_with(input.random_slices.t_ref(), input.num_slices, None)?;
+        let motifs = make_batch_with(&input.motifs.t_ref(), input.num_slices, None)?;
+        let random = make_batch_with(&input.random_slices.t_ref(), input.num_slices, None)?;
 
         #[cfg(tho_debug_plots)]
         plot_spectrogram(&motifs.i((0, .., ..)), format!("/tmp/plots/spectrogram_motif_{}.png", input.id), 1200, 600)?;

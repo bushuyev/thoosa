@@ -366,19 +366,7 @@ where
     }
 }
 
-unsafe impl <DI, DO> Send for OptSnapshot<DI, DO>
-where
-DI: Dims, DO: Dims
-{}
-
-unsafe impl <DI, DO> Send for ThoTrainModule<DI, DO> where
-    DI: Dims, DO: Dims
-{}
-unsafe impl <DI, DO> Sync for ThoTrainModule<DI, DO>
-where
-    DI: Dims, DO: Dims
-{}
-
+// The stage mutex owns training state; Tensor and Optimizer are Send, but not Sync.
 #[async_trait]
 impl <DI, DO> MoveToDevice for ThoTrainModule<DI, DO>
 where
