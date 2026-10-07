@@ -1,0 +1,18 @@
+
+@startuml
+'https://plantuml.com/sequence-diagram
+
+title CudaIPCActor::do_ref_d2h_copy
+
+autonumber
+
+== main process ==
+
+Alice -> Bob: Authentication Request
+Bob --> Alice: Authentication Response
+
+== worker ==
+
+Alice -> Bob: Another authentication Request
+Alice <-- Bob: another authentication Response
+@enduml

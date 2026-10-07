@@ -1,0 +1,44 @@
+@startuml
+
+participant "copy/handle_ref_d2h_copy" as Copy
+participant "activity : CudaActivityScope" as Activity
+participant CudaActivityGate as Gate
+
+== CudaIPCActorHandle::copy ==
+
+Copy -> Activity: for_operation(&gate)
+activate Activity
+
+Activity -> Gate: request activity approval
+
+alt activity approved
+    Gate --> Activity: approved
+    Activity --> Copy: activity
+else context reset / recovery
+    Gate --> Activity: rejected
+    Activity --> Copy: ContextReset
+end
+
+deactivate Activity
+
+note right of Copy
+sends message to
+CudaIPCActor::handle_message
+end note
+
+
+== CudaIPCActor::handle_h2d_copy ==
+
+Copy -> Activity: generation(gate)
+Activity --> Copy: generation
+Copy -> Activity: run(gate, generation, worker_id, ...)
+Copy -> Copy: ensure_parent_shared_arena_tensor
+Copy -> Worker:Operation::H2dCopy
+note right of Copy
+sends message Operation::H2dCopy to the worker
+ containing source tensor arena_offset
+end note
+Worker -> Worker:validate_arena_tensor_metadata
+Worker -> WorkerSharedArena:address (arena_offset)
+WorkerSharedArena --> Worker: source_address
+@enduml

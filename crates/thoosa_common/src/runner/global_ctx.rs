@@ -346,6 +346,7 @@ impl GlobalCtx {
         self.num_devices
     }
 
+    #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn is_all_on_cpu(&self, device_idx: usize, force_check: bool) -> bool {
         if !force_check {
             return self.is_all_on_cpu[device_idx].load(Relaxed);

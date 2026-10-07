@@ -9,7 +9,7 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use anyhow::Context as _;
 use async_trait::async_trait;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::backtrace::Backtrace;
@@ -813,6 +813,7 @@ fn ensure_parent_shared_arena_tensor(source: Tensor, tensor_byte_len: usize) -> 
     }
 
     // Tensors created before IPC initialization still use LibTorch's old CPU allocator; migrate them without reintroducing per-transfer memfds.
+    warn!("ensure_parent_shared_arena_tensor: got tensor created out of arena: source={source:?}");
     let mut shared_source = Tensor::f_empty(source.size().as_slice(), (source.kind(), Cpu))?;
     shared_source.f_copy_(&source)?;
     let arena_offset = parent_shared_arena_offset(&shared_source, tensor_byte_len, "staged H2D source")?;
