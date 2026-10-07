@@ -310,7 +310,8 @@ pub trait SyncStageIpcWrapper: Send + Sync + Debug {
 }
 
 pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
-    type S: Debug + Send + Sync;
+    // The stage mutex grants exclusive access; the state itself need not be Sync.
+    type S: Debug + Send;
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<tokio::sync::MappedMutexGuard<'a, Self::S>, ThoError>>;
 

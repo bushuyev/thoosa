@@ -170,7 +170,7 @@ pub enum Node {
         p: f64,
     },
     Closure {
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>
     },
 }
 
@@ -797,7 +797,7 @@ impl SeqBuilder {
 
     pub fn closure(
         &mut self,
-        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor>>>,
+        cl: Arc<Box<dyn Fn(&Tensor, Option<&BatchLengths>) -> anyhow::Result<Tensor> + Send + Sync>>,
         num_features: Option<u32>,
     ) -> anyhow::Result<&mut Self> {
         self.elts.push(Node::Closure { cl });

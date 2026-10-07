@@ -1929,7 +1929,7 @@ mod tests {
         .branch(false);
         let t = slices.select_ref(0, Some(SyncStftSelector)).await?;
 
-        let dist = average_euclidean_distance(t.t_ref())?;
+        let dist = average_euclidean_distance(&t.t_ref())?;
 
         trace!("random slices: \t{} dist={dist}", t.t_ref());
 

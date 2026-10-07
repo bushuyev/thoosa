@@ -970,12 +970,12 @@ where
         debug!("MotifStatsSyncStage::do_run: input.id={:?}", input.id);
         let output = (match input.data() {
             MotifStatsCalcInputData::Managed(motif) => {
-                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), motif.as_ref().data().t_ref())
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &motif.as_ref().data().t_ref())
             },
             MotifStatsCalcInputData::Motifs(motifs) => {
                 let motifs = motifs.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
                 let channels_motifs_slices = merged_motifs_tensor(input.id(), motifs.as_slice())?;
-                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &channels_motifs_slices.t_ref())
             }
         })?;
         debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
@@ -1096,7 +1096,7 @@ where
 
     fn run_input(&self, input: &MotifStatsLoadedChannelsInput) -> Result<MotifStatsOutput, ThoError> {
         let channels_motifs_slices = merged_channels_tensor(input.id(), input.channels_motifs_slices())?;
-        calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
+        calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &channels_motifs_slices.t_ref())
     }
 }
 
@@ -1574,7 +1574,7 @@ mod tests {
 
         let t = output.channels_motifs_dists(&metric)?;
         debug!("t=\n{}", t.as_ref());
-        assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
+        assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(&t.as_ref(), 0.02, 0.02, false));
         let size = t.t_ref().size();
 
         assert_eq!(size, vec![3, 1]);

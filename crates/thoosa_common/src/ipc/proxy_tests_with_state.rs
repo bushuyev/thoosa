@@ -213,7 +213,7 @@ impl From<HashMap<String, Tensor>> for TestStageBState {
 #[derive(Debug)]
 pub struct TestStageB<P, C>
 where
-    P:Debug,
+    P:Debug + Send + Sync,
     C:RunCtx
 {
     id:SynKey,
@@ -223,7 +223,7 @@ where
 
 impl <P, C> TestStageB<P, C>
 where
-    P:Debug,
+    P:Debug + Send + Sync,
     C:RunCtx
 {
     pub async fn new(stage_id: Option<String>, tho_device_idx: usize, init: TestStageInitB) -> Result<Arc<DynSyncStageWithStateEnum<TestStageB<u32, TestRunCtx>>>, ThoError> {
@@ -268,15 +268,10 @@ pub fn with_state_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, 
     }.boxed()
 }
 
-unsafe impl <P, C> Sync for TestStageB<P, C>
-where
-    P:Debug,
-    C:RunCtx
-{}
-
+// Test stages must obey the same auto-trait bounds as production stages.
 impl <P, C> Stage for TestStageB<P, C>
 where
-    P:Debug,
+    P:Debug + Send + Sync,
     C:RunCtx
 {
     type Ctx = C;
@@ -286,7 +281,7 @@ where
 
 impl <P, C> SyncStage for TestStageB<P, C>
 where
-    P:Debug,
+    P:Debug + Send + Sync,
     C:RunCtx
 {
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
@@ -303,7 +298,7 @@ const K_1: &'static str = "K_1";
 
 impl <P, C> StageWithState for TestStageB<P, C>
 where
-    P:Debug,
+    P:Debug + Send + Sync,
     C:RunCtx
 {
     type S = TestStageBState;//can be a struct containing a tensor, module etc
@@ -397,7 +392,7 @@ where
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
         Ok(TestOutputB {
-            value: (input.value.as_ref() * (k.k_0.as_ref() + k.k_1.as_ref())).into(),
+            value: input.value.as_ref().f_mul(&k.k_0.as_ref().f_add(&k.k_1.as_ref())?)?.into(),
         })
     }
 }
@@ -541,7 +536,7 @@ mod tests {
                 for _ in 0..2 {
                     let result = actor.run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, &TestRunCtx).await?;
                     let cpu = actor.copy(result.value, 0.into()).await?;
-                    assert!(Tensor::f_full([1, 3], 3., FLOAT_CPU)?.f_allclose(cpu.t_ref(), 0.01, 0.01, false)?);
+                    assert!(Tensor::f_full([1, 3], 3., FLOAT_CPU)?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false)?);
                 }
                 assert_eq!(ipc.worker_id()?.generation.0, retired.generation.0 + 1);
                 Ok::<_, ThoError>(())
@@ -596,14 +591,14 @@ mod tests {
         let first_cpu = cuda_actor.copy(first_result.value.shallow_clone(), 0.into()).await?;//shallow_clone to avoid id being dropped before copy starts
 
         debug!("do_test_distinct_stateful_endpoints: first_cpu=\n{}", first_cpu.t_ref());
-        assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(first_cpu.t_ref(), 0.01, 0.01, false)?);
+        assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(&first_cpu.t_ref(), 0.01, 0.01, false)?);
 
         let second_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
         let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
 
         debug!("do_test_distinct_stateful_endpoints: second_cpu=\n{}", second_cpu.t_ref());
-        assert!(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0])?.f_view([1, 3])?.f_allclose(second_cpu.t_ref(), 0.01, 0.01, false)?);
+        assert!(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0])?.f_view([1, 3])?.f_allclose(&second_cpu.t_ref(), 0.01, 0.01, false)?);
 
 
         // Dropping the last proxy reference must asynchronously release its worker key so that the same id can be installed again.

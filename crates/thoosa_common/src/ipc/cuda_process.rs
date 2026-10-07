@@ -1848,7 +1848,7 @@ mod tests {
 
             debug!("run_main: cpu_tensor={cpu_tensor:?}");
 
-            let actual_digest = tensor_digest(cpu_tensor.t_ref())?;
+            let actual_digest = tensor_digest(&cpu_tensor.t_ref())?;
             if actual_digest.hex != expected_digest.hex {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }

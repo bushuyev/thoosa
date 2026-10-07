@@ -465,14 +465,17 @@ where
                 }
                 Some(selector) => {
                     let tensor = track_await(self.tensor.load_from_any_device_(0)).await?;
-                    let audio = tensor.t_ref();
-                    let audio_size = audio.size();
-                    if audio_size.len() != 2 {
-                        return Err(ThoError::new(format!("BucketingTensorInput::borrow_to: expected audio shape [channels, samples], got {audio_size:?}")));
-                    }
-                    let sample_range = bucket_selector_sample_range(&selector, audio_size[1], self.bucket_window_samples, self.bucket_step_samples)?;
-                    let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::borrow_to: invalid sample_range={sample_range:?}")))?;
-                    let selected_audio = audio.f_narrow(1, sample_range.start, sample_len)?;
+                    // Keep the synchronous guard in its own scope before copying to another device.
+                    let (selected_audio, sample_range) = {
+                        let audio = tensor.t_ref();
+                        let audio_size = audio.size();
+                        if audio_size.len() != 2 {
+                            return Err(ThoError::new(format!("BucketingTensorInput::borrow_to: expected audio shape [channels, samples], got {audio_size:?}")));
+                        }
+                        let sample_range = bucket_selector_sample_range(&selector, audio_size[1], self.bucket_window_samples, self.bucket_step_samples)?;
+                        let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::borrow_to: invalid sample_range={sample_range:?}")))?;
+                        (audio.f_narrow(1, sample_range.start, sample_len)?, sample_range)
+                    };
                     let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
                     drop(tensor);
                     let selected_tensor = if to_tho_device_idx == 0 { selected_tensor } else { track_await(selected_tensor.copy_to_device(to_tho_device_idx)).await? };
@@ -600,7 +603,7 @@ where
     }
 
     fn save_resource_mel_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
-        let patches = audio_to_log_mel_patches(input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
+        let patches = audio_to_log_mel_patches(&input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
         let patch_ranges = patch_sample_ranges_flat(&patches, mel_config, self.window, self.step)?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
 
