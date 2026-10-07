@@ -1,0 +1,420 @@
+' Document the static relationships separately from oom_handler.puml's retry flow.
+' Source: crates/thoosa_common/src/runner/oom_handler.rs
+' Syntax: https://plantuml.com/class-diagram
+' Two views keep test scaffolding from obscuring the production types.
+@startuml oom_handler_classes
+title OOM handler: production traits and structs
+left to right direction
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+hide empty members
+
+legend bottom left
+  Interfaces represent Rust traits; classes represent Rust structs.
+  <<external>> types are defined outside oom_handler.rs.
+  <<impl target>> boxes denote existing Rust trait-object types, not new structs.
+  Dashed triangles represent trait implementations; dotted arrows represent dependencies.
+  Method signatures omit self and routine bounds; async methods are marked explicitly.
+  Context and adjustment bounds are shown on relationships and in notes.
+endlegend
+
+package "Adjustment dispatch" {
+  interface "Adjuster<AC>" as Adjuster {
+    {field} +type A: Adjustable
+    +async adjust(adjustable: A, adjust_context: &mut AC): Result<A, AdjusterError<A>>
+    +degrade(adjust_context: &mut AC): bool
+  }
+  enum "AdjusterError<A: Adjustable>" as AdjusterError {
+    AdjustFailed(A)
+    SomethingElse(ThoError)
+  }
+  enum "Adjusters<IA = NoInputAdjuster, SA = NoStageAdjuster, CA = NoRunCtxAdjuster>" as Adjusters {
+    Input(IA)
+    Stage(SA)
+    RunContext(CA)
+    --
+    -async apply(task, run_context, input_select_adjusted, contexts): Result<(), ThoError>
+    -degrade(contexts): bool
+  }
+  interface "InputAdjustment<'a, R, C, S>" as InputAdjustment <<doc hidden>> {
+    +async adjust_input(input_select_adjusted: &mut Option<S>, contexts: &mut C): Result<(), ThoError>
+    +degrade_input(contexts: &mut C): bool
+    {static} +async handle_success(out: R::Out, contexts: C): Result<InputAdjustedRun<C, R::Out>, ThoError>
+  }
+  interface "StageAdjustment<'a, R, C>" as StageAdjustment <<doc hidden>> {
+    +async adjust_task(task: &mut Option<Arc<R>>, contexts: &mut C): Result<(), ThoError>
+    +degrade_task(contexts: &mut C): bool
+  }
+  interface "RunContextAdjustment<Ctx, C>" as RunContextAdjustment <<doc hidden>> {
+    +async adjust_run_ctx(run_context: &mut Option<Ctx>, contexts: &mut C): Result<(), ThoError>
+    +degrade_run_ctx(contexts: &mut C): bool
+  }
+  interface "InputRun<R, W, S>" as InputRun {
+    {static} +async run_stage(task: Arc<R>, input: Arc<W>, selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>): Result<R::Out, ThoError>
+  }
+  enum "InputAdjustedRun<C, O>" as InputAdjustedRun <<doc hidden>> {
+    Done(O)
+    Continue(C)
+  }
+  enum NoInputAdjuster <<uninhabited>>
+  enum NoStageAdjuster <<uninhabited>>
+  enum NoRunCtxAdjuster <<uninhabited>>
+  class "Box<dyn Adjuster<IC, A = S> + 'adjuster>" as BoxInputAdjuster <<impl target>>
+  class "Box<dyn Adjuster<RC, A = Arc<R>> + 'adjuster>" as BoxStageAdjuster <<impl target>>
+  class "Box<dyn Adjuster<RCC, A = Ctx> + 'adjuster>" as BoxRunCtxAdjuster <<impl target>>
+}
+
+Adjuster ..> AdjusterError : adjustment result
+Adjusters ..> InputAdjustment : IA bound
+Adjusters ..> StageAdjustment : SA bound
+Adjusters ..> RunContextAdjustment : CA bound
+InputAdjustment ..> InputAdjustedRun : success result
+NoInputAdjuster ..|> InputAdjustment
+NoInputAdjuster ..|> InputRun
+NoStageAdjuster ..|> StageAdjustment
+NoRunCtxAdjuster ..|> RunContextAdjustment
+BoxInputAdjuster ..|> InputAdjustment
+BoxInputAdjuster ..|> InputRun
+BoxStageAdjuster ..|> StageAdjustment
+BoxRunCtxAdjuster ..|> RunContextAdjustment
+BoxInputAdjuster ..> Adjuster : trait object (IC, S)
+BoxStageAdjuster ..> Adjuster : trait object (RC, Arc<R>)
+BoxRunCtxAdjuster ..> Adjuster : trait object (RCC, Ctx)
+
+note bottom of NoInputAdjuster
+  Empty enums disable their respective adjustment branches.
+  NoInputAdjuster::handle_success returns Done(out).
+  Its InputRun implementation uses BorrowRef without selection.
+  The boxed input adjuster uses SelectRef<S> for chunk selection.
+end note
+
+package "Adjustment contexts" {
+  interface "InputContext<'a, R: Stage>" as InputContext {
+    +async add_partial_output(out: R::Out)
+    +all_done(): bool
+    +async build_final_output(): Result<R::Out, ThoError>
+  }
+  interface RunnableContext
+  interface RunCtxContext
+  interface "HasInputContext<IC>" as HasInputContext {
+    +input_context(): &mut IC
+    +into_input_context(): IC
+  }
+  interface "HasRunnableContext<RC>" as HasRunnableContext {
+    +runnable_context(): &mut RC
+  }
+  interface "HasRunCtxContext<RCC>" as HasRunCtxContext {
+    +run_ctx_context(): &mut RCC
+  }
+  class NoContexts
+  class "WithInputContext<IC, Rest = NoContexts>" as WithInputContext {
+    -input: IC
+    -rest: Rest
+    {static} +new(input: IC): Self
+    {static} +with_rest(input: IC, rest: Rest): Self
+  }
+  class "WithRunnableContext<RC, Rest = NoContexts>" as WithRunnableContext {
+    -runnable: RC
+    -rest: Rest
+    {static} +new(runnable: RC): Self
+    {static} +with_rest(runnable: RC, rest: Rest): Self
+  }
+  class "WithRunCtxContext<RCC, Rest = NoContexts>" as WithRunCtxContext {
+    -run_ctx: RCC
+    -rest: Rest
+    {static} +new(run_ctx: RCC): Self
+    {static} +with_rest(run_ctx: RCC, rest: Rest): Self
+  }
+  class "Contexts<'a, R, IC, RC, RCC>" as Contexts {
+    -input: IC
+    -runnable: RC
+    -run_ctx: RCC
+    -pd: PhantomData<&'a R>
+    {static} +new(input: IC, runnable: RC, run_ctx: RCC): Self
+  }
+  class "NoopInputContext<R: Stage + 'static>" as NoopInputContext {
+    +0: Option<R::Out>
+  }
+  class NoopRunnableContext
+  class NoopRunCtxContext
+}
+
+NoopInputContext ..|> InputContext
+NoopRunnableContext ..|> RunnableContext
+NoopRunCtxContext ..|> RunCtxContext
+Contexts ..|> HasInputContext
+Contexts ..|> HasRunnableContext
+Contexts ..|> HasRunCtxContext
+Contexts *-- InputContext : input: IC
+Contexts *-- RunnableContext : runnable: RC
+Contexts *-- RunCtxContext : run_ctx: RCC
+WithInputContext ..|> HasInputContext : own IC
+WithRunnableContext ..|> HasRunnableContext : own RC
+WithRunCtxContext ..|> HasRunCtxContext : own RCC
+WithInputContext ..|> HasRunnableContext : if Rest implements it
+WithInputContext ..|> HasRunCtxContext : if Rest implements it
+WithRunnableContext ..|> HasInputContext : if Rest implements it
+WithRunnableContext ..|> HasRunCtxContext : if Rest implements it
+WithRunCtxContext ..|> HasInputContext : if Rest implements it
+WithRunCtxContext ..|> HasRunnableContext : if Rest implements it
+WithInputContext ..> NoContexts : default Rest
+WithRunnableContext ..> NoContexts : default Rest
+WithRunCtxContext ..> NoContexts : default Rest
+BoxInputAdjuster ..> HasInputContext : C bound
+BoxInputAdjuster ..> InputContext : IC bound
+BoxStageAdjuster ..> HasRunnableContext : C bound
+BoxStageAdjuster ..> RunnableContext : RC bound
+BoxRunCtxAdjuster ..> HasRunCtxContext : C bound
+BoxRunCtxAdjuster ..> RunCtxContext : RCC bound
+
+note bottom of WithInputContext
+  Each With*Context owns its context and Rest by value.
+  Other Has*Context implementations forward to Rest when its bounds hold.
+  Unlike Contexts, these wrappers do not require their own context
+  to implement InputContext, RunnableContext, or RunCtxContext.
+end note
+
+package "Execution and initialization" {
+  class "OOMHandler<'a, 'z, IA = NoInputAdjuster, TA = NoStageAdjuster, CA = NoRunCtxAdjuster, S = ()>" as OOMHandler {
+    -adjusters: Vec<Adjusters<IA, TA, CA>>
+    -statistics: Option<&'a Arc<Statistics>>
+    -pd_rc: PhantomData<(&'z (), S)>
+    {static} +new(adjusters, statistics): Self
+    +async run<R, W, C>(task: &Arc<R>, input: Arc<W>, run_context: R::Ctx, contexts: C): Result<R::Out, ThoError>
+    +async consume<R, W, C>(task: &Arc<R>, input: W, run_context: R::Ctx, contexts: C): Result<R::Out, ThoError>
+    +async new_stage<I, RC, St, C, W>(sync_init: I, run_context: RC, contexts: C, ws: &Arc<RwLock<Box<W>>>): Result<Arc<St>, ThoError>
+  }
+  interface "SyncStageInit<RC, St, W: Workspace + ?Sized = dyn Workspace>" as SyncStageInit {
+    +async init(run_context: RC, ws: Arc<RwLock<Box<W>>>): Result<Arc<St>, ThoError>
+  }
+  interface "RunnerRetryAdapter<'z, R: Stage, S>" as RunnerRetryAdapter <<private>> {
+    +async run(task: Arc<R>, selector: Option<S>, device_idx: usize, run_ctx: R::Ctx, retry: Option<RetryToken>): Result<R::Out, ThoError>
+  }
+  class SyncStageInitInput <<private>>
+  class "SyncStageInitOutput<St>" as SyncStageInitOutput <<private>> {
+    -0: Arc<St>
+  }
+  class "SyncStageInitImpl<I, RC, St, W: ?Sized>" as SyncStageInitImpl <<private>> {
+    -init: I
+    -ws: Arc<RwLock<Box<W>>>
+    -pd: PhantomData<fn(RC) -> St>
+    {field} +type Ctx = RC
+    {field} +type In<'a> = SyncStageInitInput
+    {field} +type Out = SyncStageInitOutput<St>
+  }
+  class SyncStageInitRetryAdapter <<private>>
+  class "SharedRunnerRetryAdapter<W, Run>" as SharedRunnerRetryAdapter <<private>> {
+    -input: Arc<W>
+    -runner: Run
+  }
+  class "ConsumeRunnerRetryAdapter<W, Run>" as ConsumeRunnerRetryAdapter <<private>> {
+    -input: Option<W>
+    -runner: Run
+  }
+  class OomFastPathKey <<private>> {
+    -task: TypeId
+    -input: TypeId
+    -selector: TypeId
+    -device_idx: usize
+  }
+}
+
+package "External types (selected dependencies)" {
+  interface Stage <<external>>
+  interface SyncStage <<external>>
+  interface "applicables_runner::Input" as StageInput <<external>>
+  interface "applicables_runner::Output" as StageOutput <<external>>
+  interface Workspace <<external>>
+  class Statistics <<external>>
+  class SyncStageRunner <<external>>
+  class RetryToken <<external, reexported>>
+}
+
+OOMHandler *-- "0..*" Adjusters : adjusters
+OOMHandler o-- "0..1" Statistics : borrowed statistics
+OOMHandler ..> InputAdjustment : IA bound
+OOMHandler ..> InputRun : run: IA bound
+OOMHandler ..> StageAdjustment : TA bound
+OOMHandler ..> RunContextAdjustment : CA bound
+OOMHandler ..> SharedRunnerRetryAdapter : run
+OOMHandler ..> ConsumeRunnerRetryAdapter : consume
+OOMHandler ..> SyncStageInitImpl : new_stage constructs
+OOMHandler ..> SyncStageInitRetryAdapter : new_stage
+SyncStageInitImpl ..|> Stage
+SyncStageInitImpl *-- SyncStageInit : init: I (new_stage bound)
+SyncStageInitImpl o-- Workspace : ws: Arc<RwLock<Box<W>>>
+SyncStageInitImpl ..> SyncStageInitInput : associated input
+SyncStageInitImpl ..> SyncStageInitOutput : associated output
+SyncStageInitInput ..|> StageInput
+SyncStageInitOutput ..|> StageOutput : St: Debug
+SyncStageInitOutput o-- SyncStage : Arc<St> (new_stage bound)
+SyncStageInit ..> SyncStage : St bound
+SyncStageInit ..> Workspace : W bound
+SyncStageInitRetryAdapter ..|> RunnerRetryAdapter
+SharedRunnerRetryAdapter ..|> RunnerRetryAdapter
+ConsumeRunnerRetryAdapter ..|> RunnerRetryAdapter
+SyncStageInitRetryAdapter ..> SyncStageInitImpl : task
+SyncStageInitRetryAdapter ..> SyncStageRunner : submits initialization
+InputRun ..> SyncStage : R bound
+InputRun ..> SyncStageRunner : implementations submit execution
+RunnerRetryAdapter ..> RetryToken : retry argument
+InputRun ..> RetryToken : retry argument
+
+note bottom of OOMHandler
+  run, consume, and GPU new_stage share run_with_runner_impl.
+  That free function owns the retry scope and invokes RunnerRetryAdapter.
+  new_stage is available only with NoInputAdjuster, NoStageAdjuster, S = ().
+  CPU run and CPU new_stage bypass the OOM retry loop.
+end note
+
+note bottom of OomFastPathKey
+  Used by module-level OOM_FAST_PATH_DISABLED:
+  OnceLock<DashSet<OomFastPathKey>>.
+  Keys identify task, input, selector types, and device.
+  The handler does not own this global set.
+end note
+
+note bottom of ConsumeRunnerRetryAdapter
+  Takes owned input for each attempt.
+  On ConsumeResult::Failed, restores it with W::burp(input).
+end note
+@enduml
+
+' Include explicit cfg(test) structs and the mock types declared by this module's macros.
+@startuml oom_handler_test_classes
+title OOM handler: test-only structs and generated mocks
+left to right direction
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+hide empty members
+
+package "test_types (cfg(test))" {
+  class TestId {
+    -0: &'static str
+  }
+  class TestInput {
+    +id: TestId
+    +data: DummyTensor
+    {static} +new(n: u32): Self
+  }
+  class TestOutput {
+    +id: TestId
+    +v: TestData
+    {static} +new(v: f32): Self
+  }
+  class TestData {
+    +0: f32
+  }
+}
+package "tests (cfg(test))" {
+  class AsyncTestStage <<private>> {
+    -results: Arc<Mutex<VecDeque<Result<TestOutput, ThoError>>>>
+    {static} -new(results): Self
+    {field} +type In<'a> = Arc<DevicesWrap<TestInput>>
+    {field} +type Out = Arc<DevicesWrap<TestOutput>>
+    {field} +type Ctx = MockRunCtx
+  }
+  class AsyncInputCtx <<private>> {
+    -outputs: Vec<Arc<DevicesWrap<TestOutput>>>
+  }
+  class BorrowOnlyInput <<private>> {
+    -inner: TestInput
+    {static} -new(inner: TestInput): Self
+    {field} +type Out<'a> = &'a TestInput
+  }
+}
+package "Mocks declared in oom_handler.rs" {
+  class InputContextBuilder {
+    -mock: MockInputContext
+    +with_partial_output(inp: TestOutput): Self
+    +with_build_final_output(inp: TestOutput): Self
+    +with_all_done(out: &[bool]): Self
+    +finish(): MockInputContext
+  }
+  class MockInputContext <<mockall>>
+  class MockRunnableContext <<automock>>
+  class MockRunCtxContext <<automock>>
+  class MockRunnable <<mockall>> {
+    {field} +type In<'a> = TestInput
+    {field} +type Out = TestOutput
+    {field} +type Ctx = MockRunCtx
+  }
+  class MockInputAdjuster <<mockall>> {
+    {field} +type A = RangeSelector
+  }
+  class MockStageAdjuster <<mockall>> {
+    {field} +type A = Arc<MockRunnable>
+  }
+  class MockContextAdjuster <<mockall>> {
+    {field} +type A = MockRunCtx
+  }
+}
+package "Traits from production view" {
+  interface "InputContext<'a, R>" as InputContext
+  interface RunnableContext
+  interface RunCtxContext
+  interface "Adjuster<AC>" as Adjuster
+}
+package "External traits" {
+  interface Stage <<external>>
+  interface SyncStage <<external>>
+  interface AsyncStage <<external>>
+  interface BorrowRef <<external>>
+  interface Data <<external>>
+  interface WithId <<external>>
+  interface CopyToDevice <<external>>
+  interface Adjustable <<external>>
+  interface OutId <<external>>
+  interface "Select<RangeSelector>" as Select <<external>>
+  interface "applicables_runner::Input" as StageInput <<external>>
+  interface "applicables_runner::Output" as StageOutput <<external>>
+}
+
+TestInput *-- TestId : id
+TestOutput *-- TestId : id
+TestOutput *-- TestData : v
+TestInput ..|> Data
+TestInput ..|> WithId
+TestInput ..|> CopyToDevice
+TestInput ..|> Adjustable
+TestInput ..|> Select
+TestInput ..|> StageInput
+TestOutput ..|> Data
+TestOutput ..|> WithId
+TestOutput ..|> CopyToDevice
+TestOutput ..|> StageOutput
+TestData ..|> CopyToDevice
+BorrowOnlyInput *-- TestInput : inner
+BorrowOnlyInput ..|> BorrowRef
+AsyncTestStage ..|> Stage
+AsyncTestStage ..|> AsyncStage
+AsyncTestStage ..|> Adjustable
+AsyncTestStage ..|> OutId
+AsyncTestStage ..> TestInput : wrapped input
+AsyncTestStage ..> TestOutput : queued results / wrapped output
+AsyncInputCtx ..|> InputContext : R = AsyncTestStage
+AsyncInputCtx o-- "0..*" TestOutput : outputs via Arc<DevicesWrap<_>>
+InputContextBuilder *-- MockInputContext : mock
+MockInputContext ..|> InputContext : R = MockRunnable
+MockRunnableContext ..|> RunnableContext
+MockRunCtxContext ..|> RunCtxContext
+MockRunnable ..|> Stage
+MockRunnable ..|> SyncStage
+MockRunnable ..|> Adjustable
+MockRunnable ..|> OutId
+MockRunnable ..> TestInput : associated input
+MockRunnable ..> TestOutput : associated output
+MockInputAdjuster ..|> Adjuster : AC = MockInputContext
+MockStageAdjuster ..|> Adjuster : AC = MockRunnableContext
+MockContextAdjuster ..|> Adjuster : AC = MockRunCtxContext
+MockInputAdjuster ..> MockInputContext : adjustment context
+MockStageAdjuster ..> MockRunnable : adjustable Arc<R>
+MockContextAdjuster ..> MockRunCtxContext : adjustment context
+
+legend bottom left
+  All concrete types in this view are test scaffolding.
+  mockall / automock classes are generated by macros declared in oom_handler.rs.
+  MockRunCtx, DummyTensor, DevicesWrap, and RangeSelector are defined elsewhere.
+  Traits from the production view are repeated here for standalone rendering.
+endlegend
+@enduml
