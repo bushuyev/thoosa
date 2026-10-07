@@ -401,7 +401,7 @@ impl CudaWorker {
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "H2D source")?;
 
                     let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
-                    let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, 1, kind.into()).await?;
+                    let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, context.tho_device.tho_device_idx(), kind.into()).await?;
 
                     let tensor_ref = if let Some(H2DTensorKey::StageState { endpoint_name, stage_id, tensor_id }) = dst_key {
                         let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(&stage_id));
