@@ -21,15 +21,15 @@ Data (run  resources, labels, configuration parameters etc) is kept in sqlite da
 - Always add comments explaining why changes were made, especially for new code.
 
 ## Project Structure & Module Organization
-- Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).
+- Workspace root with `crates/Cargo.toml` (Rust 2024, nightly toolchain).
 - Crates:
-  - `thoosa_common/`: tch-dependent common stuff 
-  - `thoosa_shared/`: tch-independent common stuff (tch is added as dependency as temporary workaround, keep its use minimal)
-  - `thoosa_projects/`: sample projects - thoosa_hbac is active, thoosa_bird_clef is obsolete
-  - `thoosa_store/`: sqlite for keeping run configuration and tracking results 
-  - `thoosa_shims/`: couple of cuda shims for gpu-cpu tensors copy
+  - `crates/thoosa_common`: tch-dependent common stuff 
+  - `crates/thoosa_shared`: tch-independent common stuff (tch is added as dependency as temporary workaround, keep its use minimal)
+  - `crates/thoosa_projects`: sample projects - thoosa_hbac is active, thoosa_bird_clef is obsolete
+  - `crates/thoosa_store`: sqlite for keeping run configuration and tracking results 
+  - `crates/thoosa_shims`: couple of cuda shims for gpu-cpu tensors copy
   - `thoosa_motifs`: time series classification stages and motif search related stuff
-- Build artifacts in `target/`. Optional GPU libs configured via `env.sh`.
+- Build artifacts in `crates/target`. Optional GPU libs configured via `env.sh`.
 
 ## Build, Test, and Development Commands
 - Build workspace: `cargo build`
@@ -39,7 +39,7 @@ Data (run  resources, labels, configuration parameters etc) is kept in sqlite da
 - Run tests for a crate: `cargo nextest run --profile codex -p [crate]`
 - Lint (if installed): `cargo clippy --all-targets -- -D warnings`
 Notes:
-- Requires nightly toolchain (`rust-toolchain.toml` is pinned). Install via `rustup toolchain install nightly`.
+- Requires nightly toolchain (`crates/rust-toolchain.toml` is pinned). Install via `rustup toolchain install nightly`.
 - GPU/Torch runs may require `source ./env.sh` to set `LD_PRELOAD`.
 - The effective workspace root for cargo commands in this repo is `/home/bu/dvl/rust/thoosa/crates`.
 - For repeated CLI experiments, running the release binary directly is much faster than `cargo run`:
