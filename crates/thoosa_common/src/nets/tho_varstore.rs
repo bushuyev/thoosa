@@ -950,11 +950,11 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
                 start += len;
             }
 
-            let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.into();
+            let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.shallow_clone().into();
             let train_logits = tho_train_mod.module().tho_forward(&train_images, None, false)?;
             let train_loss = train_logits.as_ref().f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
 
-            let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.into();
+            let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.shallow_clone().into();
             let test_logits = tho_train_mod.module().tho_forward(&test_images, None, false)?;
             let test_accuracy = test_logits.as_ref().f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
 

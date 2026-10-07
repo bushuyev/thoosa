@@ -321,16 +321,6 @@ impl From<Tensor> for ThoTensor {
     }
 }
 
-impl<D: Dims> From<&Tensor> for ThoTensor<D, DebugId> {
-    fn from(tensor: &Tensor) -> Self {
-        Self {
-            id: debug_id!("2"),
-            inner: ThoTensorInner::Val { t: ReentrantMutex::new(tensor.shallow_clone()) },
-            pd: PhantomData,
-        }
-    }
-}
-
 impl<D: Dims, Id: Named + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
 #[async_trait]
