@@ -430,7 +430,7 @@ where
     }
 }
 
-
+#[cfg(test)]
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};

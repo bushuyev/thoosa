@@ -397,7 +397,7 @@ async fn copy_h2d_from_ptr_admitted(
                             let stream = Arc::clone(&buf_stream.1);
                             let _guard = ThoStreamGuard::new(stream.as_ref())?;
 
-                        // for chunk in chunk_group {
+
                             let src_off_ptr = src_ptr.add(chunk.offset);
                             let dst_off_ptr = dst_base + chunk.offset as u64;
 
@@ -437,7 +437,7 @@ async fn copy_h2d_from_ptr_admitted(
                             }
                             stream.synchronize()?;
                             debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={} thread_name={:?} done", chunk.len, os_thread_id());
-                        // }
+
 
                             drop(buf_stream); // return buffer/stream to pool
 
