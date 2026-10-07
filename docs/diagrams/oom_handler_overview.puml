@@ -1,0 +1,61 @@
+' Show only the roles needed to follow docs/oom.md; detailed types remain in oom_handler_classes.puml.
+@startuml
+title OOM handling: main roles
+top to bottom direction
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+hide empty members
+
+class OOMHandler {
+  -adjusters: Vec<Adjusters>
+  +run()
+  +consume()
+  +new_stage()
+}
+
+interface RunnerRetryAdapter {
+  +async run()
+}
+class SharedRunnerRetryAdapter
+class ConsumeRunnerRetryAdapter
+class SyncStageInitRetryAdapter
+
+enum Adjusters {
+  Input
+  Stage
+  RunContext
+}
+interface Adjuster {
+  +async adjust()
+  +degrade(): bool
+}
+interface InputContext {
+  +async add_partial_output()
+  +all_done(): bool
+  +async build_final_output()
+}
+
+OOMHandler *-- "0..*" Adjusters : ordered adjustments
+OOMHandler ..> RunnerRetryAdapter : shared retry loop calls
+SharedRunnerRetryAdapter ..|> RunnerRetryAdapter
+ConsumeRunnerRetryAdapter ..|> RunnerRetryAdapter
+SyncStageInitRetryAdapter ..|> RunnerRetryAdapter
+Adjusters ..> Adjuster : dispatches through adjustment traits
+OOMHandler ..> InputContext : input adjustment collects chunks
+
+note bottom of SharedRunnerRetryAdapter
+  Keeps shared input for run.
+end note
+note bottom of ConsumeRunnerRetryAdapter
+  Restores owned input after
+  a failed consume attempt.
+end note
+note bottom of SyncStageInitRetryAdapter
+  Constructs a stage for new_stage.
+end note
+
+legend bottom
+  Simplified view of oom_handler.rs; generic parameters and context wrappers are omitted.
+  Interfaces represent Rust traits. Dashed triangles show trait implementations.
+endlegend
+@enduml
