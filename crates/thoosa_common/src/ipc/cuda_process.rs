@@ -401,79 +401,24 @@ impl CudaIPCActor {
                 });
             }
 
-            CudaIPCActorMessage::PurgeStage {mut input, activity, respond_to} => {
-                let self_tx = self.worker().tx.clone();
+            CudaIPCActorMessage::PurgeStage { input, activity, respond_to } => {
+                // Admission must be checked before borrowing the live worker transport.
+                if let Err(error) = input.worker_id.check(self.worker().worker_id).and_then(|_| activity.check_operation(&self.gate)) {
+                    let _ = respond_to.send(Err(error));
+                    return Ok(());
+                }
+                let Operation::GetStageStateInfo { endpoint_name, stage_id } = input.operation else {
+                    let _ = respond_to.send(Err(ThoError::new("invalid stage export operation")));
+                    return Ok(());
+                };
                 let pending = Arc::clone(&self.worker().pending);
                 let worker_id = self.worker().worker_id;
                 let next_id = Arc::clone(&self.next_id);
                 let tx = self.worker().tx.clone();
-                tokio::spawn(async move {
-                    let Operation::GetStageStateInfo { endpoint_name, stage_id } = &input.operation else {
-                        panic!("not Operation::GetStageStateInfo");
-                    };
-                    let endpoint_name= endpoint_name.clone();
-                    let stage_id= stage_id.clone();
-                    let response = send_request_and_wait_msg(
-                        self_tx.clone(),
-                        Arc::clone(&pending),
-                        input,
-                    ).await?;
-
-                    match response.status {
-                        OpResult::Ok(None) => {
-                            respond_to.send(Err(ThoError::new("No value"))).unwrap();
-                        }
-                        OpResult::Failed(e) => {
-                            respond_to.send(Err(e.into())).unwrap();
-                        }
-                        OpResult::Ok(Some(v)) => {
-                            debug!("handle_message: Operation::PurgeStage: v={v:?}");
-                            let mut tensors:HashMap<String, ThoTensor> = HashMap::new();
-                            let Ok(info) = (v as Box<dyn Any>).downcast::<StageStateInfo>() else {
-                                panic!("");//TODO return err
-                            };
-
-                            for tensor_info in info.tensors {
-                                debug!("handle_message: Operation::PurgeStage: tensor_info={tensor_info:?}");
-                                let tensor_key = tensor_info.tensor_key.to_tensor_key();
-
-                                let t = Self::do_ref_d2h_copy(
-                                    worker_id,
-                                    next_id.fetch_add(1, Ordering::Relaxed),
-                                    Arc::clone(&pending),
-                                    tx.clone(),
-                                    tensor_info
-                                ).await?;
-
-
-                                tensors.insert(tensor_key, t);
-                            }
-
-                            let response = send_request_and_wait_msg(
-                                self_tx,
-                                Arc::clone(&pending),
-                                CudaWorkerMsgIn {
-                                    worker_id,
-                                    request_id: 0,
-                                    operation: Operation::PurgeStage {
-                                        endpoint_name,
-                                        stage_id,
-                                    },
-                                },
-                            ).await?;
-
-                            debug!("handle_message: Operation::PurgeStage: response={response:?}");
-
-                            if let OpResult::Ok(None) = response.status {//TODO error handling
-                                debug!("handle_message: Operation::PurgeStage: tensors={tensors:?}");
-                                let _ = respond_to.send(Ok(StageStateDump::new(info.scalars, tensors)));
-                            }
-                        }
-                    }
-
-                 
-                    Ok::<_, ThoError>(())
-                });
+                let gate = Arc::clone(&self.gate);
+                tokio::spawn(activity.run(async move {
+                    Self::export_stage(worker_id, endpoint_name, stage_id, next_id, pending, tx, gate, respond_to).await;
+                }));
             }
             CudaIPCActorMessage::SendMsg { mut input, activity, respond_to } => {
 
@@ -566,14 +511,70 @@ impl CudaIPCActor {
                     return Err(ThoError::new("worker returned inconsistent tensor metadata"));
                 }
 
-                Self::do_ref_d2h_copy(worker_id, transfer_id, pending, tx, info).await.map(IpcCopyResult::Tensor)
+                Self::do_ref_d2h_copy(worker_id, transfer_id, pending, tx, info, None).await.map(IpcCopyResult::Tensor)
             }.await;
             let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
         }));
         Ok(())
     }
 
-    async fn do_ref_d2h_copy(worker_id: CudaWorkerId, transfer_id: u64, pending: Arc<PendingRequests>, tx: Sender<CudaWorkerMsgIn>, info: WorkerTensorInfoPayload) -> Result<ThoTensor, ThoError> {
+    // The actor owns the transaction even when its caller disappears. Preparing
+    // only freezes/copies; the proxy authorizes purge after storing the CPU dump.
+    async fn export_stage(worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, next_id: Arc<AtomicU64>, pending: Arc<PendingRequests>, tx: Sender<CudaWorkerMsgIn>, gate: Arc<thoosa_shared::CudaActivityGate>, respond_to: oneshot::Sender<Result<StageStateDump, ThoError>>) {
+        use futures_util::FutureExt;
+        let export_id = next_id.fetch_add(1, Ordering::Relaxed);
+        let mut begun = false;
+        let prepare = async {
+            let response = send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, export_id, Operation::BeginStageExport { endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone() })).await?;
+            if matches!(response.status, OpResult::Ok(_)) { begun = true; }
+            let info = match response.status {
+                OpResult::Failed(error) => return Err(error.into()),
+                OpResult::Ok(Some(value)) => (value as Box<dyn Any>).downcast::<StageStateInfo>().map_err(|_| ThoError::new("invalid stage export description"))?,
+                OpResult::Ok(None) => return Err(ThoError::new("missing stage export description")),
+            };
+            let mut tensors = HashMap::new();
+            for tensor_info in info.tensors {
+                let key = tensor_info.tensor_key.to_tensor_key();
+                let tensor = Self::do_ref_d2h_copy(worker_id, next_id.fetch_add(1, Ordering::Relaxed), Arc::clone(&pending), tx.clone(), tensor_info, Some(export_id)).await?;
+                tensors.insert(key, tensor);
+            }
+            Ok(StageStateDump::new(info.scalars, tensors))
+        };
+        // Catch polling panics as well as ordinary errors so every accepted actor
+        // operation resolves its sender and attempts to release the worker lease.
+        let prepared = std::panic::AssertUnwindSafe(prepare).catch_unwind().await.unwrap_or_else(|_| Err(ThoError::new("stage export preparation panicked")));
+        let finish = |commit| send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), Operation::FinishStageExport { endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone(), export_id, commit }));
+        match prepared {
+            Err(error) => {
+                if begun {
+                    let cleanup = finish(false).await.and_then(unit_reply);
+                    // A failed abort must not leave a frozen endpoint in normal use.
+                    if let Err(cleanup_error) = cleanup { pending.transport_failed(cleanup_error); }
+                }
+                let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
+            }
+            Ok(mut dump) => {
+                let (decision, decided) = oneshot::channel();
+                let (completed, completion) = oneshot::channel();
+                dump.export = Some(crate::ipc::proxy::PreparedStageExport { decision, completed: completion });
+                // A dropped response or dump closes decided, selecting abort.
+                let _ = respond_to.send(Ok(dump));
+                let commit = tokio::select! {
+                    decision = decided => decision.is_ok(),
+                    _ = pending.failed.cancelled() => {
+                        let _ = completed.send(Err(pending.failure()));
+                        return;
+                    }
+                };
+                let result = finish(commit).await.and_then(unit_reply);
+                if let Err(error) = &result { pending.transport_failed(error.clone()); }
+                let result = crate::copy_ctx::report_cuda_copy_result(result, &gate, worker_id.generation);
+                let _ = completed.send(result);
+            }
+        }
+    }
+
+    async fn do_ref_d2h_copy(worker_id: CudaWorkerId, transfer_id: u64, pending: Arc<PendingRequests>, tx: Sender<CudaWorkerMsgIn>, info: WorkerTensorInfoPayload, export_id: Option<u64>) -> Result<ThoTensor, ThoError> {
 
 
         let destination = Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?;
@@ -582,6 +583,7 @@ impl CudaIPCActor {
         // The registry retains this allocation even if this task aborts
         // or transport fails while the worker is still writing to it.
         let response = send_request(tx, pending, CudaWorkerMsgIn::new(worker_id, transfer_id, Operation::D2hCopy {
+            export_id,
             tensor_key:info.tensor_key.clone(),
             kind: info.kind,
             shape: info.shape,
@@ -1887,4 +1889,114 @@ mod tests {
         )
     }
 
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use futures_util::FutureExt;
+
+    fn reply(pending: &PendingRequests, request: CudaWorkerMsgIn, status: OpResult) {
+        pending.complete(CudaWorkerMsgOut { worker_id: request.worker_id, request_id: request.request_id, status }).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_exports_have_unique_requests_and_wait_for_backup_commit() {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let worker = CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+        let pending = Arc::new(PendingRequests::new(worker));
+        let next_id = Arc::new(AtomicU64::new(1));
+        let (tx, mut requests) = mpsc::channel(8);
+        let mut results = Vec::new();
+        let mut tasks = Vec::new();
+        for name in ["a", "b"] {
+            let (send, receive) = oneshot::channel();
+            let activity = thoosa_shared::CudaActivityScope::for_operation(&gate).unwrap();
+            tasks.push(tokio::spawn(activity.run(CudaIPCActor::export_stage(worker, name.into(), Some("1".into()), Arc::clone(&next_id), Arc::clone(&pending), tx.clone(), Arc::clone(&gate), send))));
+            results.push(receive);
+        }
+        let mut ids = std::collections::HashSet::new();
+        let mut exports = HashMap::new();
+        for _ in 0..2 {
+            let request = requests.recv().await.unwrap();
+            let Operation::BeginStageExport { endpoint_name, .. } = &request.operation else { panic!("expected begin") };
+            exports.insert(endpoint_name.clone(), request.request_id);
+            assert!(ids.insert(request.request_id));
+            reply(&pending, request, OpResult::Ok(Some(Box::new(StageStateInfo::empty()))));
+        }
+        let mut commits = Vec::new();
+        for result in results {
+            let mut backup = result.await.unwrap().unwrap();
+            assert!(requests.try_recv().is_err(), "worker state must survive until the CPU backup is committed");
+            commits.push(backup.export.take().unwrap().commit());
+        }
+        let commits = tokio::spawn(futures_util::future::join_all(commits));
+        for _ in 0..2 {
+            let request = requests.recv().await.unwrap();
+            let Operation::FinishStageExport { endpoint_name, export_id, commit: true, .. } = &request.operation else { panic!("expected commit") };
+            assert_eq!(*export_id, exports[endpoint_name]);
+            assert!(ids.insert(request.request_id), "every wire message needs a fresh request ID");
+            reply(&pending, request, OpResult::Ok(None));
+        }
+        assert!(commits.await.unwrap().into_iter().all(|result| result.is_ok()));
+        for task in tasks { task.await.unwrap(); }
+        assert_eq!(ids.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_export_aborts_before_releasing_activity() {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let worker = CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+        let pending = Arc::new(PendingRequests::new(worker));
+        let (tx, mut requests) = mpsc::channel(8);
+        let (send, receive) = oneshot::channel();
+        let activity = thoosa_shared::CudaActivityScope::for_operation(&gate).unwrap();
+        let task = tokio::spawn(activity.run(CudaIPCActor::export_stage(worker, "a".into(), Some("1".into()), Arc::new(AtomicU64::new(1)), Arc::clone(&pending), tx, Arc::clone(&gate), send)));
+        let request = requests.recv().await.unwrap();
+        drop(receive);
+        reply(&pending, request, OpResult::Ok(Some(Box::new(StageStateInfo::empty()))));
+        let abort = requests.recv().await.unwrap();
+        assert!(matches!(abort.operation, Operation::FinishStageExport { commit: false, .. }));
+        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        assert!(gate.wait_until_idle().now_or_never().is_none(), "the transaction must retain activity through the abort reply");
+        reply(&pending, abort, OpResult::Ok(None));
+        task.await.unwrap();
+        gate.wait_until_idle().await;
+        gate.finish_pause(ticket);
+    }
+
+    #[tokio::test]
+    async fn test_export_description_error_replies_without_starting_an_abort() {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let worker = CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+        let pending = Arc::new(PendingRequests::new(worker));
+        let (tx, mut requests) = mpsc::channel(8);
+        let (send, receive) = oneshot::channel();
+        let task = tokio::spawn(CudaIPCActor::export_stage(worker, "missing".into(), None, Arc::new(AtomicU64::new(1)), Arc::clone(&pending), tx, Arc::clone(&gate), send));
+        let error = ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "description failed".into() };
+        reply(&pending, requests.recv().await.unwrap(), error.into());
+        assert!(receive.await.unwrap().unwrap_err().is_oom());
+        task.await.unwrap();
+        assert!(requests.try_recv().is_err(), "failed begin has no transaction to abort");
+        assert!(!pending.failed.is_cancelled(), "ordinary begin errors must not retire a healthy worker");
+    }
+
+    #[tokio::test]
+    async fn test_export_commit_failure_is_typed_and_retires_frozen_transport() {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let worker = CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+        let pending = Arc::new(PendingRequests::new(worker));
+        let (tx, mut requests) = mpsc::channel(8);
+        let (send, receive) = oneshot::channel();
+        let task = tokio::spawn(CudaIPCActor::export_stage(worker, "a".into(), Some("1".into()), Arc::new(AtomicU64::new(1)), Arc::clone(&pending), tx, Arc::clone(&gate), send));
+        reply(&pending, requests.recv().await.unwrap(), OpResult::Ok(Some(Box::new(StageStateInfo::empty()))));
+        let mut dump = receive.await.unwrap().unwrap();
+        let commit = tokio::spawn(dump.export.take().unwrap().commit());
+        let request = requests.recv().await.unwrap();
+        let error = ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "purge failed".into() };
+        reply(&pending, request, error.into());
+        assert!(commit.await.unwrap().unwrap_err().is_oom(), "the final worker error must reach the offload caller");
+        assert!(pending.failed.is_cancelled(), "failed commit cannot leave a frozen endpoint in ordinary use");
+        task.await.unwrap();
+    }
 }
