@@ -757,7 +757,7 @@ where
         };
         let borrowed = track_await(BorrowRef::borrow_ref(&input, 0)).await?;
         return match state {
-            Some(state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
+            Some(mut state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
             None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
         };
     }
@@ -831,7 +831,7 @@ where
         };
         let borrowed = track_await(SelectRef::select_ref(&input, 0, selector)).await?;
         return match state {
-            Some(state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
+            Some(mut state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
             None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
         };
     }

@@ -810,7 +810,9 @@ pub trait StageWithState: SyncStage + Sync {
     }
 
 
-    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    // The execution wrapper owns the guard until GPU synchronization completes;
+    // stage implementations may borrow the state but must not release its lock.
+    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         unimplemented!()
     }
 }
@@ -819,7 +821,7 @@ pub trait ErasedStageState<S>: Send
 where
     S: SyncStage,
 {
-    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
+    fn do_run_with_state<'f>(&mut self, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
 }
 
 //for switching between ipc proxy and local
@@ -991,9 +993,9 @@ impl<S> ErasedStageState<S> for StageStateGuard<'_, S>
 where
     S: StageWithState,
 {
-    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
-        let Self { state } = *self;
-        StageWithState::do_run_with_state(stage, input, state, ctx)
+    fn do_run_with_state<'f>(&mut self, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
+        // Keep ownership of the erased guard in the caller through synchronization.
+        StageWithState::do_run_with_state(stage, input, &mut *self.state, ctx)
     }
 }
 

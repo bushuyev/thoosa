@@ -691,7 +691,7 @@ where
         }
     }
 
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
             Self::Proxy { stage, .. } => {

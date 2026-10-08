@@ -923,7 +923,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
-    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data().t_ref());
         debug!("ApplyLabelNet::do_run_with_state: id={:?} input={:?}", self.id, input);
         let out_id = self.out_id(input.id());
