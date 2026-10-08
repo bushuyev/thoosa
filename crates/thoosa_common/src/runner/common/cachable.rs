@@ -812,7 +812,7 @@ where
         to_tho_device_idx: usize,
     ) -> Result<RwLockReadGuard<'_, O>, ThoError>
     {
-        //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
+        //purge shouldn't happen here since it requires MAX max_parallel and if this is being executed other runs can't have MAX max_parallel,
         debug!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
         trace!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
         assert!(self.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", self.cached_data.len(), self.id);
@@ -1092,8 +1092,7 @@ pub trait ConsumeData {
     fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
+        run_ctx: P,
         do_run: F,
     ) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
     where

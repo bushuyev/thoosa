@@ -125,7 +125,7 @@ where
     fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::consume: input={input:?}");
 
-        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());//TODO fixit
+        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
 
 
@@ -142,8 +142,6 @@ where
         }
     }
 
-
-
     fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
 
     {
@@ -152,8 +150,8 @@ where
         let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());
         let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
 
-        let a = (self.inpf)(input.as_ref());
-        let out = Arc::clone(&self.base).do_run(&a.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
+        let input_ref = (self.inpf)(input.as_ref());
+        let out = Arc::clone(&self.base).do_run(&input_ref.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
 
         debug!("SyncStageIpcWrapper::do_run: out={out:?}");
 

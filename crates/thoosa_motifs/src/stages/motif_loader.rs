@@ -354,10 +354,9 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
     fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
-        ctx: P,
-        _trace_ctx: Option<&'static str>,
+        run_ctx: P,
         do_run: F,
-    ) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
+    ) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
     where
         F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx,
@@ -404,7 +403,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                 descr,
             );
 
-            do_run(input, ctx)
+            do_run(input, run_ctx)
         }
     }
 
