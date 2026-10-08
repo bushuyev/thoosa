@@ -147,10 +147,12 @@ impl dyn CudaActorHandle + '_ {
 
         // Synchronize while the stream remains installed and the result (or
         // recoverable input) is still owned by this admitted operation.
-        let result = stage.consume(input, ctx);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stage.consume(input, ctx)));
         let sync = handle_ctx.on_after_run();//synchronizes exec stream
         drop(sync_ctx);
-        match result {
+        // Retain owned failures, but synchronize a panicking consume before
+        // unwinding its execution lease just like borrowed execution.
+        match finish_cuda_panic(result, &sync)? {
             ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
             ConsumeResult::Failed { input, error } => Ok(ConsumeResult::Failed { input, error: finish_cuda_error(error, sync) }),
         }
@@ -255,15 +257,19 @@ impl dyn CudaActorHandle + '_ {
 pub(crate) fn run_cuda_stage<T>(run: impl FnOnce() -> Result<T, ThoError>, synchronize: impl FnOnce() -> Result<(), ThoError>) -> Result<T, ThoError> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
     let sync = synchronize();
+    finish_cuda_run(finish_cuda_panic(result, &sync)?, sync)
+}
+
+fn finish_cuda_panic<T>(result: std::thread::Result<T>, sync: &Result<(), ThoError>) -> Result<T, ThoError> {
     match result {
-        Ok(result) => finish_cuda_run(result, sync),
+        Ok(result) => Ok(result),
         Err(panic) => match sync {
             Ok(()) => std::panic::resume_unwind(panic),
             // Fatal CUDA errors must still reach recovery. A nonfatal sync
             // error must not turn a host panic into a retryable OOM instead.
             Err(error) if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() => {
                 let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("non-string panic payload");
-                Err(error.context(format!("stage panicked before stream synchronization: {message}")))
+                Err(error.clone().context(format!("stage panicked before stream synchronization: {message}")))
             }
             Err(error) => {
                 debug!("stream synchronization also failed while unwinding a stage: {error:?}");
@@ -386,8 +392,11 @@ impl CudaLocalActor {
                 tokio::spawn(async move {
                     // The response owns the lease too: caller cancellation must
                     // not let recovery replace a stream still being acquired.
-                    let stream = copy_ctx.read().await.acquire_exec_stream().await;
-                    respond_to.send(Ok(LocalHandleCtx { stream, _activity: activity }))
+                    let result = match copy_ctx.read().await.acquire_exec_stream().await {
+                        Ok(stream) => Ok(LocalHandleCtx { stream, _activity: activity }),
+                        Err(error) => Err(error),
+                    };
+                    respond_to.send(result)
                 });
             }
         }
@@ -478,8 +487,73 @@ impl CudaLocalActorHandle {
 
 }
 
+// A synchronization error leaves completion unknown. Quarantine that lease and
+// close this pool before publishing the error; queued acquisitions must wake too.
+pub(crate) struct ExecutionStreamPool {
+    pool: Pool<ThoCudaStream>,
+    failure: tokio::sync::watch::Sender<Option<ThoError>>,
+    quarantined: parking_lot::Mutex<Vec<Guard<ThoCudaStream>>>,
+}
+
+impl ExecutionStreamPool {
+    pub(crate) fn new(streams: Vec<ThoCudaStream>) -> Arc<Self> {
+        Arc::new(Self { pool: Pool::from_vec(streams), failure: tokio::sync::watch::channel(None).0, quarantined: parking_lot::Mutex::new(Vec::new()) })
+    }
+
+    pub(crate) fn check(&self) -> Result<(), ThoError> {
+        match self.failure.borrow().as_ref() { Some(error) => Err(error.clone()), None => Ok(()) }
+    }
+
+    pub(crate) async fn acquire(self: &Arc<Self>) -> Result<ExecutionStream, ThoError> {
+        let mut failure = self.failure.subscribe();
+        self.check()?;
+        let lease = tokio::select! {
+            biased;
+            _ = failure.changed() => return Err(failure.borrow().clone().expect("poisoned execution pool")),
+            lease = self.pool.acquire() => lease,
+        };
+        self.check()?;
+        Ok(ExecutionStream { lease: Some(lease), pool: Arc::clone(self) })
+    }
+}
+
+pub struct ExecutionStream {
+    lease: Option<Guard<ThoCudaStream>>,
+    pool: Arc<ExecutionStreamPool>,
+}
+
+impl ExecutionStream {
+    fn complete(&mut self, result: Result<(), ThoError>) -> Result<(), ThoError> {
+        if let Err(error) = result {
+            // Even a nonfatal-looking synchronization error cannot authorize
+            // reuse. Keep its typed cause but require backend recovery.
+            let error = if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() { error } else {
+                error.context(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "CUDA stream completion could not be established".into() })
+            };
+            self.pool.failure.send_if_modified(|failure| {
+                if failure.is_some() { false } else { *failure = Some(error.clone()); true }
+            });
+            if let Some(lease) = self.lease.take() { self.pool.quarantined.lock().push(lease); }
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+impl HandleCtx for ExecutionStream {
+    fn sync_ctx(&self) -> Result<Box<dyn SyncCtx>, ThoError> {
+        self.pool.check()?;
+        Ok(Box::new(ThoStreamGuard::new(self.lease.as_ref().expect("execution lease"))?))
+    }
+
+    fn on_after_run(&mut self) -> Result<(), ThoError> {
+        let result = self.lease.as_ref().expect("execution lease").synchronize();
+        self.complete(result)
+    }
+}
+
 struct LocalHandleCtx {
-    stream: Guard<ThoCudaStream>,
+    stream: ExecutionStream,
     _activity: CudaActivityScope,
 }
 
@@ -488,11 +562,11 @@ impl SyncCtx for ThoStreamGuard {}
 impl HandleCtx for LocalHandleCtx {
 
     fn sync_ctx(&self) -> Result<Box<dyn SyncCtx>, ThoError> {
-        Ok(Box::new(ThoStreamGuard::new(&self.stream)?))
+        self.stream.sync_ctx()
     }
 
     fn on_after_run(&mut self) -> Result<(), ThoError> {
-        self.stream.synchronize()
+        self.stream.on_after_run()
     }
 }
 
@@ -535,7 +609,7 @@ pub struct CopyCtx {
 
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
-    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
+    exec_stream_pool: Arc<ExecutionStreamPool>,
     bufs_pool_d2h: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     bufs_pool_h2d: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 }
@@ -571,7 +645,7 @@ impl CopyCtx {
                 .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
                 .collect::<Result<Vec<_>, _>>()?;
 
-                Arc::new(Pool::from_vec(exec_streams))
+                ExecutionStreamPool::new(exec_streams)
         };
 
         Ok(Self {
@@ -624,10 +698,8 @@ impl CopyCtx {
         Ok(())
     }
 
-    pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
-        track_await(self.exec_stream_pool.as_ref()
-            .acquire())
-            .await
+    pub async fn acquire_exec_stream(&self) -> Result<ExecutionStream, ThoError> {
+        track_await(self.exec_stream_pool.acquire()).await
     }
 
     pub fn restart(&mut self) -> Result<(), ThoError> {
@@ -642,7 +714,7 @@ impl CopyCtx {
             .collect::<Result<Vec<_>, _>>()?;
         self.bufs_pool_h2d = h2d;
         self.bufs_pool_d2h = d2h;
-        self.exec_stream_pool = Arc::new(Pool::from_vec(exec_streams));
+        self.exec_stream_pool = ExecutionStreamPool::new(exec_streams);
 
         Ok(())
     }
@@ -885,6 +957,7 @@ mod tests {
     enum SetupFailure { Handle, Stream }
 
     struct MockConsumeCallBuilder {
+        panics: bool,
         execution: Result<TestOutput, ThoError>,
         synchronization: Result<(), ThoError>,
         setup_failure: Option<SetupFailure>,
@@ -913,9 +986,12 @@ mod tests {
                 let mut guard = MockStreamScope::new();
                 guard.expect_release().times(1).return_once(move || { dropped.store(false, std::sync::atomic::Ordering::SeqCst); });
                 install.return_once(move || Ok(Box::new(guard)));
-                stage.expect_consume().times(1).in_sequence(&mut sequence).return_once(move |input, _| match self.execution {
-                    Ok(output) => ConsumeResult::Ok(output),
-                    Err(error) => ConsumeResult::Failed { input, error },
+                stage.expect_consume().times(1).in_sequence(&mut sequence).return_once(move |input, _| {
+                    if self.panics { std::panic::panic_any("consume panic"); }
+                    match self.execution {
+                        Ok(output) => ConsumeResult::Ok(output),
+                        Err(error) => ConsumeResult::Failed { input, error },
+                    }
                 });
                 ctx.expect_on_after_run().times(1).in_sequence(&mut sequence).return_once(move || {
                     assert!(alive.load(std::sync::atomic::Ordering::SeqCst), "stream guard must remain installed during synchronization");
@@ -932,6 +1008,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_consume_panic_synchronizes_before_unwinding() {
+        use futures_util::FutureExt;
+        for fatal_sync in [false, true] {
+            // Builder expectations require synchronization while the installed
+            // stream guard is still alive, including the unwinding callback.
+            let (stage, actor) = MockConsumeCallBuilder {
+                panics: true, execution: Ok(TestOutput::new(7.)), setup_failure: None,
+                synchronization: if fatal_sync { Err(fatal_consume_error()) } else { Ok(()) },
+            }.build();
+            let ctx = crate::runner::common::mock_run_ctx::build().finish();
+            let result = std::panic::AssertUnwindSafe(actor.consume_stage(stage, TestInput::new(1), 0, ctx)).catch_unwind().await;
+            if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_ctx_reset()); }
+            else { assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"consume panic")); }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_execution_stream_is_quarantined_and_wakes_waiters() -> Result<(), ThoError> {
+        let context = ThoCudaContext::new(0)?;
+        context.bind_to_thread()?;
+        let pool = ExecutionStreamPool::new(vec![ThoCudaStream::from_pool(0, false)?, ThoCudaStream::from_pool(0, false)?]);
+        let mut failed = pool.acquire().await?;
+        let healthy = pool.acquire().await?;
+        let mut waiter = Box::pin(pool.acquire());
+        assert!(futures::poll!(waiter.as_mut()).is_pending());
+        // Inject an uncertain completion result without poisoning real CUDA.
+        assert!(failed.complete(Err(ThoError::oom())).unwrap_err().needs_cuda_ctx_reset());
+        assert!(matches!(timeout(Duration::from_secs(3), waiter).await.unwrap(), Err(error) if error.needs_cuda_ctx_reset()));
+        drop(failed);
+        assert_eq!(pool.quarantined.lock().len(), 1);
+        assert_eq!(pool.pool.remaining_capacity(), 0, "failed stream returned to ordinary reuse");
+        assert!(healthy.sync_ctx().is_err(), "a previously acquired stream must not begin new work in a poisoned pool");
+        drop(healthy);
+        assert!(pool.acquire().await.is_err(), "pool must stay closed even when healthy leases return");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_consume_stream_lifecycle_and_error_precedence() {
         // Exercise the real actor entry point, rather than just the error-merging helper.
         for execution in [Ok(TestOutput::new(7.)), Err(ThoError::oom()), Err(fatal_consume_error())] {
@@ -939,7 +1053,7 @@ mod tests {
                 let preserves_input = execution.is_err();
                 let fatal = execution.as_ref().err().is_some_and(ThoError::needs_cuda_ctx_reset) || synchronization.as_ref().err().is_some_and(ThoError::needs_cuda_ctx_reset);
                 let failed = execution.is_err() || synchronization.is_err();
-                let (stage, actor) = MockConsumeCallBuilder { execution: execution.clone(), synchronization, setup_failure: None }.build();
+                let (stage, actor) = MockConsumeCallBuilder { panics: false, execution: execution.clone(), synchronization, setup_failure: None }.build();
                 let input = TestInput::new(3);
                 let original_allocation = input.data.0.as_ptr();
                 let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(1).finish();
@@ -971,7 +1085,7 @@ mod tests {
     #[tokio::test]
     async fn test_consume_setup_failure_preserves_owned_input() {
         for setup_failure in [SetupFailure::Handle, SetupFailure::Stream] {
-            let (stage, actor) = MockConsumeCallBuilder { execution: Ok(TestOutput::new(7.)), synchronization: Ok(()), setup_failure: Some(setup_failure) }.build();
+            let (stage, actor) = MockConsumeCallBuilder { panics: false, execution: Ok(TestOutput::new(7.)), synchronization: Ok(()), setup_failure: Some(setup_failure) }.build();
             let input = TestInput::new(3);
             let original_allocation = input.data.0.as_ptr();
             let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(1).finish();

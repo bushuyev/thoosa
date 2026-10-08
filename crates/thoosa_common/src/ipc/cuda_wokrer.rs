@@ -1,4 +1,4 @@
-use crate::copy_ctx::CopyCtx;
+use crate::copy_ctx::{CopyCtx, ExecutionStreamPool};
 use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
@@ -41,16 +41,129 @@ use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStateInfo, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
+use thoosa_shims::stream::ThoCudaStream;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::field::debug;
-use tub::Pool;
 
 
 
 const WORKER_EXEC_STREAMS: usize = 32;
+
+// Metadata requests use the same result/reply contract as execution. Absence
+// is a request error, not a successful operation with no response.
+async fn stage_state_operation(stages: &InstalledStages, operation: Operation, device: ThoDevice) -> Result<OpResult, ThoError> {
+    let (endpoint_name, stage_id, purge) = match operation {
+        Operation::PurgeStage { endpoint_name, stage_id } => (endpoint_name, stage_id, true),
+        Operation::GetStageStateInfo { endpoint_name, stage_id } => (endpoint_name, stage_id, false),
+        _ => unreachable!("state metadata operation"),
+    };
+    let key = cuda_process::endpoint_stage_key(endpoint_name.clone(), stage_id.as_ref());
+    let endpoint = stages.get(&key).and_then(|entry| entry.value().as_ref().map(Arc::clone))
+        .ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={key}")))?;
+    if purge {
+        endpoint.purge(device).await?;
+        return Ok(OpResult::Ok(None));
+    }
+    let with_state = endpoint.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={key}")))?;
+    let mut state_info = with_state.get_state_info(&device).await?;
+    // Installation owns routing identity; model state supplies tensor names.
+    for tensor in &mut state_info.tensors {
+        tensor.tensor_key = TensorKey::stage_state(&endpoint_name, stage_id.as_deref().unwrap_or(""), tensor.tensor_key.to_tensor_key());
+    }
+    Ok(OpResult::Ok(Some(Box::new(state_info))))
+}
+
+// Socket tasks must not survive their supervisor on error or cancellation.
+struct AbortSocketTask(tokio::task::AbortHandle);
+impl Drop for AbortSocketTask {
+    fn drop(&mut self) { self.0.abort(); }
+}
+
+// Framing has a single owner. Task completion must never cancel read_exact
+// halfway through a frame, nor wait for another frame to report a failed task.
+async fn serve_worker_requests<R, W, F, Fut>(reader: R, writer: W, worker_id: CudaWorkerId, dispatch: F) -> anyhow::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    F: Fn(CudaWorkerMsgIn) -> Fut,
+    Fut: std::future::Future<Output = Result<OpResult, ThoError>> + Send + 'static,
+{
+    let (frame_tx, mut frames) = mpsc::channel(32);
+    let reader_task = tokio::spawn(async move {
+        let mut reader = reader;
+        loop {
+            let request = match cuda_process::read_frame(&mut reader, "worker requests", cuda_process::MAX_FRAME_LEN).await {
+                Ok(payload) => PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload),
+                Err(error) => Err(error.into()),
+            };
+            let failed = request.is_err();
+            if frame_tx.send(request).await.is_err() || failed { return; }
+        }
+    });
+    let reader_abort = AbortSocketTask(reader_task.abort_handle());
+    let (reply_tx, reply_rx) = mpsc::channel(1024);
+    // Aborting on every exceptional exit closes the transport even if request
+    // contexts are still unwinding. Never detach a reader or response writer.
+    let mut writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
+    let _writer_abort = AbortSocketTask(writer_task.abort_handle());
+    let mut request_tasks: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    let shutdown_request_id = loop {
+        tokio::select! {
+            biased;
+            writer = &mut writer_task => {
+                writer.context("worker response writer task failed")??;
+                anyhow::bail!("worker response writer stopped before shutdown");
+            }
+            joined = request_tasks.join_next(), if !request_tasks.is_empty() => {
+                joined.expect("nonempty request tasks").context("worker request task failed")??;
+            }
+            frame = frames.recv() => {
+                let request = frame.context("worker frame reader stopped")??;
+                if request.worker_id == worker_id && matches!(&request.operation, Operation::Shutdown { .. }) {
+                    break request.request_id;
+                }
+                let request_id = request.request_id;
+                let identity = request.worker_id.check(worker_id);
+                let run = if identity.is_ok() { Some(dispatch(request)) } else { None };
+                let replies = reply_tx.clone();
+                request_tasks.spawn(async move {
+                    let result = match (identity, run) {
+                        (Ok(()), Some(run)) => run.await,
+                        (Err(error), _) => Err(error),
+                        _ => unreachable!("validated request must be dispatched"),
+                    };
+                    // This is the only send for an ordinary request. A panic
+                    // instead fails this task and the supervisor closes transport.
+                    let status = match result { Ok(status) => status, Err(error) => error.into() };
+                    replies.send(CudaWorkerMsgOut { worker_id, request_id, status }).await.context("worker response writer is closed")
+                });
+            }
+        }
+    };
+    drop(reader_abort);
+    // Reap the cancelled reader, rather than leaving even its cleanup detached.
+    let _ = reader_task.await;
+    // Preserve graceful shutdown: drain accepted requests, then flush the ack.
+    // Writer failures must remain observable while request tasks are draining.
+    while !request_tasks.is_empty() {
+        tokio::select! {
+            writer = &mut writer_task => {
+                writer.context("worker response writer task failed during shutdown")??;
+                anyhow::bail!("worker response writer stopped during shutdown");
+            }
+            joined = request_tasks.join_next() => {
+                joined.expect("nonempty request tasks").context("worker request task failed during shutdown")??;
+            }
+        }
+    }
+    reply_tx.send(CudaWorkerMsgOut { worker_id, request_id: shutdown_request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+    drop(reply_tx);
+    writer_task.await.context("worker response writer task failed")??;
+    Ok(())
+}
+
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1_000_000);//if starts from 0 it's difficult to find them in logs
 
 
@@ -95,14 +208,13 @@ impl AllTensors {
 struct WorkerRequestContext<W: ?Sized> {
     ws: Arc<RwLock<Box<W>>>,
     endpoint_inits: Arc<HashMap<String, InitFn<W>>>,
-    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
+    exec_stream_pool: Arc<ExecutionStreamPool>,
     all_cuda_tensors: Arc<AllTensors>,
     // Retaining the mapping in every request context keeps all arena-derived pointers valid until in-flight copies finish.
     shared_arena: Arc<WorkerSharedArena>,
     // CUDA copies still use the worker's pinned-buffer implementation; only the old per-transfer IPC memfds are replaced by arena offsets.
     copy_ctx: Arc<tokio::sync::RwLock<CopyCtx>>,
     installed_stages: InstalledStages,
-    reply_tx: mpsc::Sender<CudaWorkerMsgOut>,
     tho_device: ThoDevice,
 }
 
@@ -116,7 +228,6 @@ impl<W: ?Sized> Clone for WorkerRequestContext<W> {
             shared_arena: Arc::clone(&self.shared_arena),
             copy_ctx: Arc::clone(&self.copy_ctx),
             installed_stages: Arc::clone(&self.installed_stages),
-            reply_tx: self.reply_tx.clone(),
             tho_device: self.tho_device,
         }
     }
@@ -262,11 +373,11 @@ impl CudaWorker {
         let worker_id: CudaWorkerId = serde_json::from_str(&std::env::var(cuda_process::WORKER_ID_ENV).context("missing CUDA worker identity")?)?;
         let cuda_device = tho_device.gpu_ordinal();
 
-        let exec_stream_pool = Arc::new(Pool::from_iter(
+        let exec_stream_pool = ExecutionStreamPool::new(
             (0..WORKER_EXEC_STREAMS)
                 .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
                 .collect::<Result<Vec<_>, _>>()?,
-        ));
+        );
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
         debug!("run_worker: worker connected");
@@ -305,9 +416,6 @@ impl CudaWorker {
             "DeviceInfo/worker"
         ).await?;
 
-        let (reply_tx, reply_rx) = mpsc::channel::<CudaWorkerMsgOut>(1024);
-
-        let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
         let all_cuda_tensors = Arc::new(AllTensors::new(worker_id));
         let request_context = WorkerRequestContext {
             ws: Arc::clone(ws),
@@ -317,67 +425,22 @@ impl CudaWorker {
             shared_arena,
             copy_ctx,
             installed_stages: Arc::new(DashMap::new()),
-            reply_tx: reply_tx.clone(),
             tho_device,
         };
-        let mut request_tasks = JoinSet::new();
-
-        // Always finish each frame read once started: read_exact is not cancellation-safe, so selecting it against a completed request task can leave the stream cursor inside a frame.
-        let shutdown_request_id = loop {
-            let payload = cuda_process::read_frame(&mut reader, "run_worker", cuda_process::MAX_FRAME_LEN).await?;
-            let request = match PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload) {
-                Ok(request) => request,
-                Err(error) => {
-                    error!("postcard: e={error:?}");
-                    continue;
-                }
-            };
-            debug!("run_worker: postcard: ok={request:?}");
-
-            if let Err(error) = request.worker_id.check(worker_id) {
-                reply_tx.send(CudaWorkerMsgOut { worker_id, request_id: request.request_id, status: error.into() }).await?;
-                continue;
-            }
-
-            // Shutdown is loop control rather than a request task: stop accepting frames, then drain all work accepted before it.
-            if matches!(&request.operation, Operation::Shutdown { .. }) {
-                let request_id = request.request_id;
-                info!("run_worker: Operation::Shutdown request_id={request_id}");
-                info!("run_worker: break loop on shutdown");
-                break request_id;
-            }
-
-            let task_context = request_context.clone();
-            request_tasks.spawn(async move { Self::process_worker_request(request, task_context).await });
-
-            // Reap stages only between complete frames so doing so can never cancel an in-progress socket read.
-            while let Some(joined) = request_tasks.try_join_next() {
-                joined.context("worker request task failed")??;
-            }
-        };
-
-        // A shutdown response means every request accepted before shutdown has finished, not merely that shutdown was decoded.
-        while let Some(joined) = request_tasks.join_next().await {
-            joined.context("worker request task failed during shutdown")??;
-        }
-
-        reply_tx
-            .send(CudaWorkerMsgOut { worker_id, request_id: shutdown_request_id, status: OpResult::Ok(None) })
-            .await
-            .context("worker response writer is closed")?;
-
-        // Close the response channel and wait for the writer so the shutdown acknowledgement is on the socket before returning.
-        drop(request_context);
-        drop(reply_tx);
-        writer_task.await.context("worker response writer task failed")??;
+        serve_worker_requests(reader, writer, worker_id, move |request| {
+            Self::process_worker_request(request, request_context.clone())
+        }).await?;
         info!("worker finished");
         Ok(())
     }
 
-    async fn process_worker_request<W: Workspace + ?Sized + 'static>(request: CudaWorkerMsgIn, context: WorkerRequestContext<W>) -> anyhow::Result<()> {
+    async fn process_worker_request<W: Workspace + ?Sized + 'static>(request: CudaWorkerMsgIn, context: WorkerRequestContext<W>) -> Result<OpResult, ThoError> {
         let request_id = request.request_id;
         let worker_id = context.all_cuda_tensors.worker_id;
-        let op_r: Result<(), ThoError> = (async || {
+        // Every normal request returns exactly one status. Sending is owned by
+        // the supervisor, so missing endpoints and operation errors cannot omit replies.
+        context.exec_stream_pool.check()?;
+        (async || {
             request.worker_id.check(worker_id)?;
             match request.operation {
                 Operation::DescribeRef { tensor_key } => {
@@ -388,9 +451,7 @@ impl CudaWorker {
                             Some(tensor) => OpResult::Ok(Some(Box::new(WorkerTensorInfoPayload::new(tensor_key.into(), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))) as Box<dyn WorkerOutput>)),
                         }
                     };
-                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status }).await.context("worker response writer is closed")?;
-                    debug!("run_worker: DescribeRef response {request_id} sent");
-                    Ok(())
+                    Ok(status)
                 }
                 Operation::H2dCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
                     debug!("run_worker: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
@@ -408,9 +469,9 @@ impl CudaWorker {
 
 
                         endpoint
-                            .expect(&format!("no endpoint {endpoint_name:?}"))
+                            .ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?
                             .as_with_state()
-                            .unwrap()
+                            .ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?
                             .set_state_tensor(&context.tho_device, tensor_id.clone(), cuda_t).await?;
 
                         TensorKey::StageState {
@@ -424,13 +485,7 @@ impl CudaWorker {
 
                     debug!("process_worker_request: Operation::H2dCopy: tensor_ref={tensor_ref:?} request.request_id={:?}", request.request_id);
 
-                    context.reply_tx.send(CudaWorkerMsgOut {
-                        worker_id,
-                        request_id,
-                        status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)),
-                    }).await.context("worker response writer is closed")?;
-                    debug!("run_worker: Operation::H2dCopy done");
-                    Ok(())
+                    Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)))
                 }
                 Operation::D2hCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
                     debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
@@ -446,17 +501,9 @@ impl CudaWorker {
 
                             let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
 
-                            if let Some(endpoint) = endpoint {
-                                // endpoint.purge(context.tho_device.clone()).await?;
-                                if let Some(with_state) = endpoint.as_with_state(){
-
-                                    with_state.get_state_tensor(&context.tho_device, tensor_id.clone()).await
-                                } else {
-                                    panic!("no state for: endpoint_key={endpoint_key:}");
-                                }
-                            } else {
-                                panic!("no endpoint found: endpoint_key={endpoint_key:}");
-                            }
+                            let endpoint = endpoint.ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
+                            let with_state = endpoint.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?;
+                            with_state.get_state_tensor(&context.tho_device, tensor_id.clone()).await
                         }
                     }?;
                     let source_ptr = source.data_ptr() as usize;
@@ -464,17 +511,11 @@ impl CudaWorker {
                     context.copy_ctx.read().await.copy_to_cpu_ptr(source_ptr, &shape, kind.into(), destination_address).await?;
                     // The alias protects worker CUDA storage until every chunk has synchronized and written the parent mapping.
                     drop(source);
-                    context.reply_tx.send(CudaWorkerMsgOut {
-                        worker_id,
-                        request_id,
-                        status: OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)),
-                    }).await.context("worker response writer is closed")?;
-                    Ok(())
+                    Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)))
                 }
                 Operation::DropThoTensor { tensor_key } => {
                     debug!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
-                    Self::drop_tensor(&context, request_id, &tensor_key).await?;
-                    Ok(())
+                    Ok(Self::drop_tensor(&context, &tensor_key))
                 }
                 Operation::InstallStage { endpoint_name, stage_id, init_data } => {
                     debug!("run_worker: install endpoint endpoint_name={endpoint_name} stage_id={stage_id:?}");
@@ -491,8 +532,7 @@ impl CudaWorker {
                         }
                     };
                     if is_duplicate {
-                        context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")) }).await.context("worker response writer is closed")?;
-                        return Ok(());
+                        return Ok(OpResult::failed(format!("endpoint {endpoint_key:?} is already installed")));
                     }
                     let endpoint_wrapper = match init_fn(stage_id, init_data, Arc::clone(&context.ws), &context.all_cuda_tensors, &context.tho_device).await {
                         Ok(endpoint_wrapper) => endpoint_wrapper,
@@ -503,8 +543,7 @@ impl CudaWorker {
                     };
                     debug!("run_worker: install endpoint endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
                     context.installed_stages.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
-                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
-                    Ok(())
+                    Ok(OpResult::Ok(None))
                 }
                 Operation::InvokeStage { endpoint_name, stage_id, input, consume } => {
                     debug!("run_worker: Operation::InvokeStage: endpoint_name={endpoint_name} stage_id={stage_id:?} input={input:?} consume={consume}");
@@ -513,88 +552,30 @@ impl CudaWorker {
 
                     let endpoint = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone)).ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
                     let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
-                    let stream = context.exec_stream_pool.acquire().await;
+                    let mut stream = context.exec_stream_pool.acquire().await?;
                     let result = match endpoint.as_with_state() {
                         Some(with_state) => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} as_with_state");
                             // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
-                            panic_to_err_async!(with_state.do_run_with_state(&input, &context.all_cuda_tensors, &context.tho_device, &stream, &run_ctx))
+                            panic_to_err_async!(with_state.do_run_with_state(&input, &context.all_cuda_tensors, &context.tho_device, &mut stream, &run_ctx))
                         }
                         None => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
-                            panic_to_err!({
-                            let _guard = ThoStreamGuard::new(&stream)?;
-                            let response = if consume {
-                                endpoint.consume(input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)?
-                            } else {
-                                endpoint.do_run(&input, &context.all_cuda_tensors, &context.tho_device, &run_ctx)?
-                            };
-                            stream.synchronize()?;
-                            Ok::<_, ThoError>(response)
-                        })
+                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
                         }
                     }?;
                     debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
-                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(result)) }).await.context("worker response writer is closed")?;
-                    Ok(())
+                    Ok(OpResult::Ok(Some(result)))
                 }
-                //rename to DescribeStageState[Tensors]
-                Operation::PurgeStage {endpoint_name, stage_id } => {
-                    debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
-
-                    let stage_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
-
-                    let stage: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&stage_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
-
-                    if let Some(stage) = stage {
-                        stage.purge(context.tho_device.clone()).await?;
-
-                        context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
-
-                    } else {
-                        error!("no endpoint found: endpoint_key={stage_key:}");
-                    }
-
-
-                    Ok(())
+                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. }) => {
+                    stage_state_operation(&context.installed_stages, operation, context.tho_device).await
                 }
-                Operation::GetStageStateInfo { endpoint_name, stage_id } => {
-                    debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} stage_id={stage_id:?}");
 
-                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), stage_id.as_ref());
-
-                    let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
-
-                    if let Some(endpoint) = endpoint {
-                        
-                        if let Some(with_state) = endpoint.as_with_state(){
-
-                            let mut state_info = with_state.get_state_info(&context.tho_device).await?;
-                            // The installation owns the routing identity. Shared model
-                            // state (notably TrainStep) only supplies tensor names.
-                            for tensor in &mut state_info.tensors {
-                                tensor.tensor_key = TensorKey::stage_state(&endpoint_name, stage_id.as_deref().unwrap_or(""), tensor.tensor_key.to_tensor_key());
-                            }
-
-                            context.reply_tx.send(
-                                CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(Box::new(state_info))) }
-                            ).await.context("worker response writer is closed")?;
-                        } else {
-                            error!("no state for: endpoint_key={endpoint_key:}");
-                        }
-                    } else {
-                        error!("no endpoint found: endpoint_key={endpoint_key:}");
-                    }
-
-
-                    Ok(())
-                }
                 Operation::DropStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
                     let removed = context.installed_stages.remove(&endpoint_key).is_some();
                     debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_stages.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
-                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
-                    Ok(())
+                    Ok(OpResult::Ok(None))
                 }
                 Operation::Shutdown { dummy: _ } => {
                     Err(ThoError::new(format!("worker shutdown request {request_id} escaped the reader loop")))
@@ -608,30 +589,17 @@ impl CudaWorker {
                     }
 
                     let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));
-                    context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: OpResult::Ok(Some(out)) }).await.context("worker response writer is closed")?;
-
-
-                    Ok(())
+                    Ok(OpResult::Ok(Some(out)))
                 }
             }
-        })().await;
-
-        match op_r {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                error!("run_worker: e={error:?}");
-                context.reply_tx.send(CudaWorkerMsgOut { worker_id, request_id, status: error.into() }).await.context("worker response writer is closed")?;
-                Ok(())
-            }
-        }
+        })().await
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaWorker::drop_tensor"))]
-    async fn drop_tensor<W: Workspace + ?Sized>(context: &WorkerRequestContext<W>, request_id: u64, tensor_key: &u64) -> anyhow::Result<()>{
-        let removed = context.all_cuda_tensors.tensors.lock().remove(&tensor_key);
+    fn drop_tensor<W: Workspace + ?Sized>(context: &WorkerRequestContext<W>, tensor_key: &u64) -> OpResult {
+        let removed = context.all_cuda_tensors.tensors.lock().remove(tensor_key);
         debug!("run_worker: Operation::DropThoTensor: removed={removed:?}");
-        let status = if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) };
-        context.reply_tx.send(CudaWorkerMsgOut { worker_id: context.all_cuda_tensors.worker_id, request_id, status }).await.context("worker response writer is closed")
+        if removed.is_none() { OpResult::failed("Not found".to_string()) } else { OpResult::Ok(None) }
     }
 }
 
@@ -822,6 +790,151 @@ impl RunCtx for WokerRunCtx {
     }
 
     fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
+    }
+}
+
+#[cfg(test)]
+mod mock_request_handler {
+    use super::*;
+    mockall::mock! {
+        pub RequestHandler {
+            pub fn run(&self, request: CudaWorkerMsgIn) -> BoxFuture<'static, Result<OpResult, ThoError>>;
+        }
+    }
+    mockall::mock! {
+        #[derive(Debug)]
+        pub StatelessEndpoint {}
+        impl SyncStageIpcWrapper for StatelessEndpoint {}
+    }
+
+    pub struct MockRequestHandlerBuilder<F> {
+        pub run: F,
+        pub calls: usize,
+    }
+    impl<F> MockRequestHandlerBuilder<F>
+    where F: FnMut(CudaWorkerMsgIn) -> BoxFuture<'static, Result<OpResult, ThoError>> + Send + 'static {
+        pub fn build(self) -> MockRequestHandler {
+            let mut handler = MockRequestHandler::new();
+            handler.expect_run().times(self.calls).returning(self.run);
+            handler
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+    use super::mock_request_handler::{MockRequestHandlerBuilder, MockStatelessEndpoint};
+    use futures_util::FutureExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use std::time::Duration;
+
+    fn worker_id() -> CudaWorkerId { CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) } }
+
+    async fn send<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, request_id: u64, operation: Operation) {
+        let request = CudaWorkerMsgIn { worker_id: worker_id(), request_id, operation };
+        cuda_process::write_frame(writer, &PostcardToFromBytes::to_bytes(&request).unwrap(), "test request").await.unwrap();
+    }
+
+    async fn receive<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> CudaWorkerMsgOut {
+        let payload = tokio::time::timeout(Duration::from_secs(3), cuda_process::read_frame(reader, "test reply", cuda_process::MAX_FRAME_LEN)).await.unwrap().unwrap();
+        PostcardToFromBytes::from_bytes(&payload).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_last_request_panic_closes_transport_without_another_frame() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(server);
+        let handler = MockRequestHandlerBuilder { calls: 1, run: |_| async { panic!("last request panic"); #[allow(unreachable_code)] Ok(OpResult::Ok(None)) }.boxed() }.build();
+        let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
+        send(&mut client, 1, Operation::Debug).await;
+        let error = tokio::time::timeout(Duration::from_secs(3), worker).await.unwrap().unwrap().unwrap_err();
+        assert!(error.downcast_ref::<tokio::task::JoinError>().unwrap().is_panic());
+        // Keeping the client write half open reproduces the original mutual wait.
+        assert_eq!(tokio::time::timeout(Duration::from_secs(3), client.read(&mut [0u8; 1])).await.unwrap().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_partial_frame_survives_request_completion() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(server);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let first = Arc::clone(&release);
+        let handler = MockRequestHandlerBuilder { calls: 2, run: move |request: CudaWorkerMsgIn| {
+            let first = Arc::clone(&first);
+            async move {
+                if request.request_id == 1 { first.notified().await; }
+                Ok(OpResult::Ok(None))
+            }.boxed()
+        }}.build();
+        let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
+        send(&mut client, 1, Operation::Debug).await;
+        let bytes = PostcardToFromBytes::to_bytes(&CudaWorkerMsgIn { worker_id: worker_id(), request_id: 2, operation: Operation::Debug }).unwrap();
+        let header = (bytes.len() as u32).to_le_bytes();
+        client.write_all(&header[..2]).await.unwrap();
+        release.notify_one();
+        assert_eq!(receive(&mut client).await.request_id, 1);
+        // Completing a request while only half a frame header exists must not
+        // discard those bytes or restart read_exact on the remaining bytes.
+        client.write_all(&header[2..]).await.unwrap();
+        client.write_all(&bytes).await.unwrap();
+        assert_eq!(receive(&mut client).await.request_id, 2);
+        send(&mut client, 3, Operation::Shutdown { dummy: String::new() }).await;
+        assert_eq!(receive(&mut client).await.request_id, 3);
+        tokio::time::timeout(Duration::from_secs(3), worker).await.unwrap().unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_missing_state_requests_reply_once_and_shutdown_drains_them() {
+        let stages: InstalledStages = Arc::new(DashMap::new());
+        stages.insert("stateless".into(), Some(Arc::new(MockStatelessEndpoint::new())));
+        stages.insert("initializing".into(), None);
+        let (mut client, server) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(server);
+        let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| {
+            let stages = Arc::clone(&stages);
+            async move { stage_state_operation(&stages, request.operation, 1usize.into()).await }
+        }));
+        send(&mut client, 1, Operation::PurgeStage { endpoint_name: "missing".into(), stage_id: None }).await;
+        for (id, name) in [(2, "missing"), (3, "stateless"), (4, "initializing")] {
+            send(&mut client, id, Operation::GetStageStateInfo { endpoint_name: name.into(), stage_id: None }).await;
+        }
+        send(&mut client, 5, Operation::Shutdown { dummy: String::new() }).await;
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..4 {
+            let reply = receive(&mut client).await;
+            assert!(matches!(reply.status, OpResult::Failed { .. }));
+            assert!(ids.insert(reply.request_id), "duplicate request response");
+        }
+        assert_eq!(ids, std::collections::HashSet::from([1, 2, 3, 4]));
+        let shutdown = receive(&mut client).await;
+        assert_eq!(shutdown.request_id, 5);
+        assert!(matches!(shutdown.status, OpResult::Ok(None)));
+        tokio::time::timeout(Duration::from_secs(3), worker).await.unwrap().unwrap().unwrap();
+        assert_eq!(client.read(&mut [0u8; 1]).await.unwrap(), 0, "unexpected extra response");
+    }
+
+    #[tokio::test]
+    async fn test_writer_failure_is_supervised_while_other_requests_wait() {
+        // Separate pipes let the response writer fail while the request reader
+        // remains open and another accepted request has not completed.
+        let (mut input, reader) = tokio::io::duplex(4096);
+        let (output, writer) = tokio::io::duplex(4096);
+        let pending = Arc::new(tokio::sync::Notify::new());
+        let started = Arc::clone(&pending);
+        let handler = MockRequestHandlerBuilder { calls: 2, run: move |request: CudaWorkerMsgIn| {
+            let started = Arc::clone(&started);
+            async move {
+                if request.request_id == 1 { started.notify_one(); return std::future::pending().await; }
+                Ok(OpResult::Ok(None))
+            }.boxed()
+        }}.build();
+        let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| handler.run(request)));
+        send(&mut input, 1, Operation::Debug).await;
+        pending.notified().await;
+        drop(output);
+        send(&mut input, 2, Operation::Debug).await;
+        assert!(tokio::time::timeout(Duration::from_secs(3), worker).await.unwrap().unwrap().is_err());
     }
 }
 
