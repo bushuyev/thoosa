@@ -790,7 +790,7 @@ where
     debug!("consume_stage_owned: task={task:?} input={input:?} tho_device_idx={tho_device_idx}");
 
     if tho_device_idx == 0 {
-        return Ok(track_await(input.consume(0, run_ctx, None, |input, run_ctx| task.consume(input, run_ctx))).await);
+        return Ok(track_await(input.consume(0, run_ctx, |input, run_ctx| task.consume(input, run_ctx))).await);
     }
 
     track_await(oom_executor(tho_device_idx).submit_consume(

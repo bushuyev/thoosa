@@ -325,12 +325,12 @@ mod tests {
     impl ConsumeData for ConsumeTestInput {
         type O = ThoTensor<LoadedTensor, SynKey>;
 
-        fn consume<R: Send, F, P>(self, _to_device_idx: usize, ctx: P, _trace_ctx: std::option::Option<&'static str>, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
+        fn consume<R: Send, F, P>(self, to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
         where
             F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
             P: RunCtx,
         {
-            async move { do_run(self.input, ctx) }
+            async move { do_run(self.input, run_ctx) }
         }
 
         fn burp(input: Self::O) -> impl Future<Output=Self> + Send {
