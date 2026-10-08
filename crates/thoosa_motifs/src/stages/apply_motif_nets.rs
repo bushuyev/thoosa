@@ -683,10 +683,9 @@ impl ConsumeData for StackAppliedMotifNetsInputWrapper {
     fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
-        ctx: P,
-        _trace_ctx: Option<&'static str>,
+        run_ctx: P,
         do_run: F,
-    ) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
+    ) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
     where
         F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx,
@@ -696,7 +695,7 @@ impl ConsumeData for StackAppliedMotifNetsInputWrapper {
 
             match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
                 Ok(motif_nets_applied) => {
-                    do_run(StackAppliedMotifNetsInput::new(id, motif_nets_applied, to_device_idx), ctx)
+                    do_run(StackAppliedMotifNetsInput::new(id, motif_nets_applied, to_device_idx), run_ctx)
                 }
                 Err(err) => {
                     let input = StackAppliedMotifNetsInput::new(id, err.data, to_device_idx);

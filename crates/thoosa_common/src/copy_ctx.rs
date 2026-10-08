@@ -110,7 +110,9 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError>;
 }
-
+/// the methods here ensure that copy and exec streams are handled properly in consume/run_stage/run_*select cases in Local mode.
+/// In IPC modes the streams are handles in the CudaWorker so IPCHanldeCTx is empty.
+// TODO Extract A template function with streams handling (acquires exec stream/create guard/synchronizes) and use from consume/run_stage/run_*select
 impl dyn CudaActorHandle + '_ {
 
     pub async fn consume_stage<'z, S, W>(
@@ -129,15 +131,16 @@ impl dyn CudaActorHandle + '_ {
         debug!("CudaActorHandle::consume_stage: to_device_idx={to_device_idx} input={input:?}");
         // Materialize first, without reserving a pooled stream or installing a
         // thread-affine guard across the input's asynchronous device copies.
-        let (input, ctx) = match input.consume(to_device_idx, ctx, None, |input, ctx| ConsumeResult::Ok((input, ctx))).await {
+        // TODO it doesn't really consume the input here by running state - used for calling stage in thoosa_common::runner::oom_handler::consume_stage_owned for CPU
+        let (input, ctx) = match input.consume(to_device_idx, ctx, |input, ctx| ConsumeResult::Ok((input, ctx))).await {//syncs copy stream
             ConsumeResult::Ok(prepared) => prepared,
             ConsumeResult::Failed { input, error } => return Ok(ConsumeResult::Failed { input, error }),
         };
-        let mut handle_ctx = match self.init_handle_ctx().await {
+        let mut handle_ctx = match self.init_handle_ctx().await {//acquires exec stream
             Ok(handle_ctx) => handle_ctx,
             Err(error) => return Ok(ConsumeResult::Failed { input, error }),
         };
-        let sync_ctx = match handle_ctx.sync_ctx() {
+        let sync_ctx = match handle_ctx.sync_ctx() {//creates guard
             Ok(sync_ctx) => sync_ctx,
             Err(error) => return Ok(ConsumeResult::Failed { input, error }),
         };
@@ -145,7 +148,7 @@ impl dyn CudaActorHandle + '_ {
         // Synchronize while the stream remains installed and the result (or
         // recoverable input) is still owned by this admitted operation.
         let result = stage.consume(input, ctx);
-        let sync = handle_ctx.on_after_run();
+        let sync = handle_ctx.on_after_run();//synchronizes exec stream
         drop(sync_ctx);
         match result {
             ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
@@ -179,11 +182,11 @@ impl dyn CudaActorHandle + '_ {
 
         debug!("CudaActorHandle::run_stage: stage={stage:?} with_state={}", state.is_some());
 
-        let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;
+        let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;//syncs copy stream
 
-        let mut handle_ctx = self.init_handle_ctx().await?;
+        let mut handle_ctx = self.init_handle_ctx().await?;//acquires exec stream
 
-        let sync_ctx = handle_ctx.sync_ctx()?;
+        let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
 
         let out =  match state {
             None => {
@@ -195,7 +198,7 @@ impl dyn CudaActorHandle + '_ {
         };
 
 
-        finish_cuda_run(out, handle_ctx.on_after_run())
+        finish_cuda_run(out, handle_ctx.on_after_run())//synchronizes exec stream
     }
 
     pub async fn run_stage_with_select<S, W, SL>(
@@ -222,13 +225,13 @@ impl dyn CudaActorHandle + '_ {
             None
         };
         let has_selector = selector.is_some();
-        let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;
+        let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;//syncs copy stream
 
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
 
-        let mut handle_ctx = self.init_handle_ctx().await?;
+        let mut handle_ctx = self.init_handle_ctx().await?;//acquires exec stream
 
-        let sync_ctx = handle_ctx.sync_ctx()?;
+        let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
 
         let out = match state {
             Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx),
@@ -236,7 +239,7 @@ impl dyn CudaActorHandle + '_ {
         };
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} out={out:?}");
 
-        let sync_result  = handle_ctx.on_after_run();
+        let sync_result  = handle_ctx.on_after_run();//synchronizes exec stream
         drop(sync_ctx);
         drop(borrowed);
 
@@ -707,14 +710,14 @@ mod tests {
     impl ConsumeData for TestInput {
         type O = Self;
 
-        fn consume<R: Send, F, P>(self, _device: usize, ctx: P, _trace: Option<&'static str>, do_run: F) -> impl Future<Output = ConsumeResult<Self, R>> + Send
+        fn consume<R: Send, F, P>(self, to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
         where
             F: FnOnce(Self, P) -> ConsumeResult<Self, R> + Send,
             P: RunCtx,
         {
             async move {
                 tokio::task::yield_now().await;
-                do_run(self, ctx)
+                do_run(self, run_ctx)
             }
         }
 

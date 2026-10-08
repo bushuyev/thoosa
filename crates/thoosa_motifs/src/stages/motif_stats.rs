@@ -298,7 +298,7 @@ impl MotifStatsCalcInputWrapper {
         Self { id, data: MotifStatsCalcInputDataWrapper::Motifs(motifs), metrics, quantiles }
     }
 
-    async fn with_calc_input<'a, R, F, P, FF>(&'a self, permits_ctx: P, do_run: F) -> Result<R, ThoError>
+    async fn with_calc_input<'a, R, F, P, FF>(&'a self, run_ctx: P, do_run: F) -> Result<R, ThoError>
     where
         for<'f> F: FnOnce(&MotifStatsCalcInput<'f>, &P) -> FF + Send + 'a,
         FF: Future<Output = Result<R, ThoError>> + Send + 'a,
@@ -307,19 +307,19 @@ impl MotifStatsCalcInputWrapper {
         let id = self.id.clone();
         let metrics = self.metrics.clone();
         let quantiles = self.quantiles.clone();
-        let to_device_idx = permits_ctx.tho_device_idx();
+        let to_device_idx = run_ctx.tho_device_idx();
 
         match &self.data {
             MotifStatsCalcInputDataWrapper::Managed(motif) => {
                 let motif = SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>).await?;
                 let input = MotifStatsCalcInput::from_managed(id, motif.as_ref(), metrics, quantiles);
-                track_await(do_run(&input, &permits_ctx)).await
+                track_await(do_run(&input, &run_ctx)).await
             }
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
                 let motif_refs = try_join_all(motifs.iter().map(|motif| SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>))).await?;
                 let motifs = motif_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
                 let input = MotifStatsCalcInput::from_motifs(id, motifs, metrics, quantiles);
-                track_await(do_run(&input, &permits_ctx)).await
+                track_await(do_run(&input, &run_ctx)).await
             }
         }
     }
@@ -455,10 +455,9 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
     fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
-        ctx: P,
-        _trace_ctx: Option<&'static str>,
+        run_ctx: P,
         do_run: F,
-    ) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
+    ) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
     where
         F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx,
@@ -483,7 +482,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
 
             let input = MotifStatsLoadedChannelsInput::new(id, channels_motifs_slices, metrics, quantiles);
 
-            do_run(input, ctx)
+            do_run(input, run_ctx)
         }
     }
 

@@ -384,7 +384,7 @@ where
 // {
 //     type O<'o> = BucketingSyncInput<'o, D, Id>;
 //
-//     fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+//     fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, run_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
 //     where
 //         for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
 //         FF: Future<Output = Result<R, ThoError>> + Send + 'a,
@@ -393,7 +393,7 @@ where
 //         async move {
 //             let resource_id = self.resource_id;
 //
-//             track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
+//             track_await(self.tensor.with_data_ref(to_device_idx, run_ctx, trace_ctx, move |tensor, ctx| {
 //                 let input = BucketingSyncInput::new(resource_id, tensor, 0);
 //                 let future = do_run(&input, ctx);
 //                 async move { track_await(future).await }

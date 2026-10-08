@@ -453,8 +453,7 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
-        ctx: P,
-        _trace_ctx: Option<&'static str>,
+        run_ctx: P,
         do_run: F,
     ) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
     where
@@ -465,7 +464,7 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
             let StackAppliedLabelNetsInputWrapper { id, tmp_cache } = self;
 
             match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
-                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, to_device_idx), ctx),
+                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, to_device_idx), run_ctx),
                 Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, to_device_idx), error: err.error },
             }
         }
