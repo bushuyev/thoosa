@@ -245,7 +245,8 @@ where
     pub fn new_local(stage_id: String, init: TestStageInitB) -> Self {
         Self {
             id: mono_key!(stage_id, "TestStageB").into(),
-            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k_0, 0, init.tho_device_idx))),
+            // Preserve both configured tensors so export tests can detect losing either one.
+            state: tokio::sync::Mutex::new(StageState::Ready(TestStageBState::new(init.k_0, init.k_1, init.tho_device_idx))),
             pd: PhantomData
         }
     }
@@ -541,6 +542,44 @@ mod tests {
                 assert_eq!(ipc.worker_id()?.generation.0, retired.generation.0 + 1);
                 Ok::<_, ThoError>(())
             }).await?
+        }, async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+        })
+    }
+
+    #[test]
+    fn test_concurrent_state_offload_and_invocation_ipc() -> Result<(), ThoError> {
+        run_ipc_test(module_path!(), async {
+            // Exercise real multi-tensor export, restore and invocation on two
+            // endpoints; neither global OOM ordering nor a shared request ID can
+            // serialize this direct-purge workload for us.
+            tokio::time::timeout(Duration::from_secs(60), async {
+                let mut tasks = tokio::task::JoinSet::new();
+                for id in 1..=2 {
+                    let stage = TestStageB::<(), TestRunCtx>::new(Some(id.to_string()), 1, TestStageInitB::new(id + 1, 3, 1)).await?;
+                    let purge = Arc::clone(&stage);
+                    tasks.spawn(async move {
+                        for _ in 0..12 {
+                            purge.purge_gpu(None, 1, "concurrent export test").await?;
+                            tokio::task::yield_now().await;
+                        }
+                        Ok::<_, ThoError>(())
+                    });
+                    tasks.spawn(async move {
+                        let actor = GlobalCtx::global().cuda_actor(1);
+                        for _ in 0..12 {
+                            let value = actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1usize.into()).await?;
+                            let output = actor.run_stage(Arc::clone(&stage), TestInputB { value }, 1, &TestRunCtx).await?;
+                            let cpu = actor.copy(output.value, 0usize.into()).await?;
+                            assert!(Tensor::f_full([1, 3], (id + 4) as f64, FLOAT_CPU)?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false)?, "offload must preserve both tensors of the endpoint state");
+                        }
+                        Ok::<_, ThoError>(())
+                    });
+                }
+                while let Some(result) = tasks.join_next().await { result??; }
+                Ok::<_, ThoError>(())
+            }).await.map_err(|_| ThoError::new("concurrent endpoint export timed out"))?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await

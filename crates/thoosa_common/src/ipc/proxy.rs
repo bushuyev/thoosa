@@ -7,6 +7,7 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
+use anyhow::Context as _;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, error};
@@ -136,6 +137,8 @@ where
     // Generic inputs can supply the concrete typetag conversion that a blanket WorkerStageInput implementation cannot express.
     clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
 
+    // Invocations share admission; offload owns it exclusively until CPU commit.
+    execution: tokio::sync::RwLock<()>,
     state: Mutex<Option<Box<StageStateDump>>>,
 }
 
@@ -183,23 +186,7 @@ where
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
-                let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
-
-
-                debug!("ProxyStage2::do_run: input={input:?}");
-
-                let rs = ipc_actor.invoke_stage(
-                    self.worker_id,
-                    self.endpoint_name.to_string(),
-                    self.stage_id.clone(),
-                    self.clone_refs(input)?, //clones refs
-                    false,
-                ).await?;
-
-                debug!("ProxyStage2::do_run: rs={rs:?}");
-
-
+                let rs = self.invoke(self.clone_refs(input)?, ctx.tho_device_idx(), false).await?;
                 Self::handle_rs(rs)
 
             })
@@ -217,19 +204,7 @@ where
             tokio::runtime::Handle::current().block_on(async {
 
 
-                let actor:&dyn Any = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref();
-                let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
-
-
-                let rs = ipc_actor.invoke_stage(
-                    self.worker_id,
-                    self.endpoint_name.to_string(),
-                    self.stage_id.clone(),
-                    self.clone_refs(&input)?, //clones refs
-                    true,
-                ).await?;
-
-                debug!("ProxyStage2::consume: rs={rs:?}");
+                let rs = self.invoke(self.clone_refs(&input)?, ctx.tho_device_idx(), true).await?;
                 Self::handle_rs(rs)
             })
         });
@@ -314,6 +289,7 @@ where
                             worker_id,
                             pd:PhantomData,
                             clone_refs,
+                            execution: Default::default(),
                             state: Default::default(),
                         })
 
@@ -356,6 +332,24 @@ where
         }
     }
 
+    async fn invoke(&self, input: Box<dyn WorkerInput>, device: usize, consume: bool) -> Result<CudaWorkerMsgOut, ThoError> {
+        let actor = GlobalCtx::global().cuda_actor(device);
+        let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
+        let activity = actor.activity_for(self.worker_id)?;
+        // Keep admission from restoration through the completed invocation, even
+        // for direct actor users without a runner scope. This future is driven by
+        // the synchronous callback's block_on and cannot be cancelled mid-request.
+        activity.run(async {
+            // Invocations share the endpoint lease. The worker never needs the
+            // parent lock to reply; offload takes it exclusively through CPU commit.
+            let _execution = self.execution.read().await;
+            let mut state = self.state.lock().await;
+            self.load_gpu_inner(device, &mut state).await?;
+            drop(state);
+            Ok(actor.invoke_stage(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), input, consume).await?)
+        }).await
+    }
+
     async fn purge_gpu(self: Arc<Self>, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, _name: &str) -> Result<(), ThoError>
     where St: Send + Sync + 'static
     {
@@ -377,6 +371,7 @@ where
 
         // Keep the CPU dump across repeated purges and serialize offload with
         // restoration. The worker no longer owns its tensors after the first dump.
+        let _execution = self.execution.write().await;
         let mut state = self.state.lock().await;
         if let Some(state) = state.as_mut() {
             if state.restore_started {
@@ -399,26 +394,23 @@ where
 
 
         *state = Some(Box::new(state_out));
+        // Publish the CPU backup before authorizing destruction of worker state.
+        // On a failed commit, keep the backup and discard any remaining GPU state
+        // before a restore or another purge.
+        let dump = state.as_mut().expect("CPU backup just installed");
+        dump.restore_started = true;
+        if let Some(export) = dump.export.take() {
+            export.commit().await?;
+        }
+        dump.restore_started = false;
         debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx} done", self);
 
         Ok(())
     }
 
-    async fn load_gpu(self: Arc<Self>, tho_device_idx: usize) -> Result<(), ThoError>
-    where St: Send + Sync + 'static
-    {
+    async fn load_gpu_inner(&self, tho_device_idx: usize, guard: &mut Option<Box<StageStateDump>>) -> Result<(), ThoError> {
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
-        let activity = actor.activity_for(self.worker_id)?;
-        // Await the whole transaction even if its caller is cancelled, so a
-        // subsequent purge cannot race an outstanding tensor upload.
-        tokio::spawn(activity.run(async move { self.load_gpu_inner(tho_device_idx).await })).await?
-    }
-
-    async fn load_gpu_inner(&self, tho_device_idx: usize) -> Result<(), ThoError> {
-        let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-        let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
-        let mut guard = self.state.lock().await;
         if let Some(state) = guard.as_mut() {
             if state.restore_started {
                 actor.discard_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
@@ -682,7 +674,8 @@ where
                 async move {
                     debug!("SyncStage>::pre_run: stage={stage:?}");
 
-                    stage.load_gpu(to_device_idx).await?;
+                    // Restoration is part of do_run's endpoint lease; preparing it
+                    // here would leave an offload window before invocation.
 
                     Ok(None)
 
@@ -703,16 +696,32 @@ where
 ///
 ///
 ///
+// Dropping an uncommitted dump closes decision and makes the actor abort the
+// worker transaction. The actor owns activity until that cleanup has replied.
+#[derive(Debug)]
+pub(crate) struct PreparedStageExport {
+    pub decision: tokio::sync::oneshot::Sender<()>,
+    pub completed: tokio::sync::oneshot::Receiver<Result<(), ThoError>>,
+}
+
+impl PreparedStageExport {
+    pub(crate) async fn commit(self) -> Result<(), ThoError> {
+        let _ = self.decision.send(());
+        self.completed.await.context("stage export completion channel closed")?
+    }
+}
+
 #[derive(Debug)]
 pub struct StageStateDump {
     scalars:Option<Box<dyn WorkerOutput>>,
     tensors:HashMap<String, ThoTensor>,
     restore_started: bool,
+    pub(crate) export: Option<PreparedStageExport>,
 }
 
 impl StageStateDump {
     pub fn new(scalars: Option<Box<dyn WorkerOutput>>, tensors: HashMap<String, ThoTensor>) -> Self {
-        Self { scalars, tensors, restore_started: false }
+        Self { scalars, tensors, restore_started: false, export: None }
     }
 }
 

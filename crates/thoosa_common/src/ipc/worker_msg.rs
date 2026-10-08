@@ -71,6 +71,8 @@ pub enum Operation {
         dst_key: Option<H2DTensorKey>
     },
     D2hCopy {
+        // State reads must belong to the export that froze this endpoint.
+        export_id: Option<u64>,
         tensor_key: TensorKey,
         kind: IpcTensorKind,
         shape: Vec<i64>,
@@ -83,6 +85,9 @@ pub enum Operation {
     InvokeStage { endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume: bool },
     GetStageStateInfo { endpoint_name: String, stage_id: Option<String> },
     PurgeStage { endpoint_name: String, stage_id: Option<String> },
+    // Begin uses its request ID as the transaction identity; finish has its own request ID.
+    BeginStageExport { endpoint_name: String, stage_id: Option<String> },
+    FinishStageExport { endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool },
     DropStage { endpoint_name: String, stage_id: Option<String> },
     Debug,
     Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?
