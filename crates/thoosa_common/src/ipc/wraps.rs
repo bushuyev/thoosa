@@ -1,5 +1,5 @@
 use crate::ipc::cuda_process::CudaIPCActorHandle;
-use crate::copy_ctx::{HandleCtx, SyncCtx, run_cuda_stage};
+use crate::copy_ctx::{HandleCtx, run_cuda_stage};
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
@@ -25,7 +25,6 @@ use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::{MappedMutexGuard, MutexGuard};
 use thoosa_shared::ipc_types::WorkerOutput;
 
@@ -324,22 +323,24 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
 pub trait ErasedWithState: Sync + Debug {
 
-    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
+    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, handle_ctx: &'a mut dyn HandleCtx, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
     fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
     fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
     fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>>;
 }
 
-// Reuse the local execution lifecycle contract so worker state ownership can
-// be verified independently of CUDA while production uses the actual stream.
-struct WorkerHandleCtx<'a>(&'a ThoCudaStream);
-
-impl HandleCtx for WorkerHandleCtx<'_> {
-    fn sync_ctx(&self) -> Result<Box<dyn SyncCtx>, ThoError> {
-        Ok(Box::new(ThoStreamGuard::new(self.0)?))
-    }
-
-    fn on_after_run(&mut self) -> Result<(), ThoError> { self.0.synchronize() }
+// Stateless execution shares the same error/panic boundary as stateful and local
+// execution, including synchronization after failed submissions.
+pub(crate) fn run_worker_stage(
+    stage: &dyn SyncStageIpcWrapper, input: Box<dyn WorkerInput>, consume: bool,
+    all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx,
+    handle_ctx: &mut dyn HandleCtx,
+) -> Result<Box<dyn WorkerOutput>, ThoError> {
+    let _guard = handle_ctx.sync_ctx()?;
+    run_cuda_stage(|| {
+        if consume { stage.consume(input, all_cuda_tensors, tho_device, run_ctx) }
+        else { stage.do_run(&input, all_cuda_tensors, tho_device, run_ctx) }
+    }, || handle_ctx.on_after_run())
 }
 
 async fn run_worker_stage_with_state<T: SyncStageIpcWrapperWithState>(
@@ -361,9 +362,9 @@ where
     T: SyncStageIpcWrapperWithState + 'static,
 {
 
-    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, stream: &'a ThoCudaStream, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
+    fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, handle_ctx: &'a mut dyn HandleCtx, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> {
         async move {
-            run_worker_stage_with_state(self, input, all_cuda_tensors, tho_device, run_ctx, &mut WorkerHandleCtx(stream)).await
+            run_worker_stage_with_state(self, input, all_cuda_tensors, tho_device, run_ctx, handle_ctx).await
         }.boxed()
     }
 
@@ -398,7 +399,14 @@ mod mock_stateful_worker {
         }
     }
 
-    impl SyncStageIpcWrapper for MockStatefulWorker {}
+    impl SyncStageIpcWrapper for MockStatefulWorker {
+        fn do_run(&self, _: &Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+            self.execute(&mut 0)
+        }
+        fn consume(&self, _: Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+            self.execute(&mut 0)
+        }
+    }
 
     impl SyncStageIpcWrapperWithState for MockStatefulWorker {
         type S = usize;
@@ -441,6 +449,32 @@ mod tests {
     use super::mock_stateful_worker::MockStatefulWorkerBuilder;
     use crate::copy_ctx::MockHandleCtx;
     use crate::ipc::worker_msg::CudaWorkerId;
+
+    #[tokio::test]
+    async fn test_stateless_worker_synchronizes_errors_and_panics() {
+        let tensors = AllTensors::new(CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) });
+        let device: ThoDevice = tch::Device::Cuda(0).into();
+        let ctx = WokerRunCtx::new(1);
+        for consume in [false, true] {
+            for outcome in 0..3 {
+                for fatal_sync in [false, true] {
+                    let stage = MockStatefulWorkerBuilder { state: Arc::new(tokio::sync::Mutex::new(0)), panics: outcome == 2, fails: outcome == 1 }.build();
+                    let mut handle = MockHandleCtx::new();
+                    handle.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
+                    handle.expect_on_after_run().times(1).return_once(move || {
+                        if fatal_sync { Err(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "stateless sync failure".into() }) } else { Ok(()) }
+                    });
+                    // Exercise the actual worker dispatch boundary for both
+                    // borrowed and consuming endpoints, without CUDA timing.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_worker_stage(&stage, Box::new(()), consume, &tensors, &device, &ctx, &mut handle)));
+                    if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_ctx_reset()); }
+                    else if outcome == 2 { assert!(result.is_err()); }
+                    else if outcome == 1 { assert!(result.unwrap().unwrap_err().is_oom()); }
+                    else { assert!(result.unwrap().is_ok()); }
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_worker_state_guard_survives_synchronization_on_success_error_and_panic() {
