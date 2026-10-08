@@ -119,15 +119,38 @@ impl dyn CudaActorHandle + '_ {
         input: W,
         to_device_idx: usize,
         ctx: S::Ctx,
-    ) -> ConsumeResult<S::In<'z>, S::Out>
+    ) -> Result<ConsumeResult<S::In<'z>, S::Out>, ThoError>
     where
         S: SyncStage + Send + Sync + 'static,
         S::Out: Send,
         W: ConsumeData<O = S::In<'z>> + Debug,
-        S::In<'z>: 'static,
+        S::In<'z>: Send + 'static,
     {
         debug!("CudaActorHandle::consume_stage: to_device_idx={to_device_idx} input={input:?}");
-        input.consume(to_device_idx, ctx, None, |input, ctx| stage.consume(input, ctx)).await
+        // Materialize first, without reserving a pooled stream or installing a
+        // thread-affine guard across the input's asynchronous device copies.
+        let (input, ctx) = match input.consume(to_device_idx, ctx, None, |input, ctx| ConsumeResult::Ok((input, ctx))).await {
+            ConsumeResult::Ok(prepared) => prepared,
+            ConsumeResult::Failed { input, error } => return Ok(ConsumeResult::Failed { input, error }),
+        };
+        let mut handle_ctx = match self.init_handle_ctx().await {
+            Ok(handle_ctx) => handle_ctx,
+            Err(error) => return Ok(ConsumeResult::Failed { input, error }),
+        };
+        let sync_ctx = match handle_ctx.sync_ctx() {
+            Ok(sync_ctx) => sync_ctx,
+            Err(error) => return Ok(ConsumeResult::Failed { input, error }),
+        };
+
+        // Synchronize while the stream remains installed and the result (or
+        // recoverable input) is still owned by this admitted operation.
+        let result = stage.consume(input, ctx);
+        let sync = handle_ctx.on_after_run();
+        drop(sync_ctx);
+        match result {
+            ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
+            ConsumeResult::Failed { input, error } => Ok(ConsumeResult::Failed { input, error: finish_cuda_error(error, sync) }),
+        }
     }
 
 
@@ -225,19 +248,28 @@ impl dyn CudaActorHandle + '_ {
 
 }
 
-// Both stage entry points must retain a fatal execution error even if stream
+// All stage entry points must retain a fatal execution error even if stream
 // synchronization also fails, and must propagate a fatal synchronization error.
 fn finish_cuda_run<T>(result: Result<T, ThoError>, sync: Result<(), ThoError>) -> Result<T, ThoError> {
     match (result, sync) {
-        (Err(original), Err(sync)) => {
+        (Err(original), sync) => Err(finish_cuda_error(original, sync)),
+        (_, Err(error)) => Err(error),
+        (Ok(output), Ok(())) => Ok(output),
+    }
+}
+
+// Consume failures retain their owned input, but use the same error precedence
+// as borrowed execution so the runner sees fatal stream errors through either API.
+fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) -> ThoError {
+    match sync {
+        Err(sync) => {
             if sync.is_cuda_recovery_failed() || (!original.is_cuda_recovery_failed() && sync.needs_cuda_ctx_reset() && !original.needs_cuda_ctx_reset()) {
-                Err(sync.context(format!("stage also failed: {original}")))
+                sync.context(format!("stage also failed: {original}"))
             } else {
-                Err(original.context(format!("stream synchronization also failed: {sync}")))
+                original.context(format!("stream synchronization also failed: {sync}"))
             }
         }
-        (Err(error), _) | (_, Err(error)) => Err(error),
-        (Ok(output), Ok(())) => Ok(output),
+        Ok(()) => original,
     }
 }
 
@@ -665,6 +697,140 @@ mod tests {
             let mut actor = MockCudaActorHandle::new();
             actor.expect_init_handle_ctx().times(1).return_once(move || Ok(Box::new(ctx)));
             Box::new(actor)
+        }
+    }
+
+    use crate::runner::oom_handler::{mock_runnable::MockRunnable, test_types::{TestInput, TestOutput}};
+
+    // Adapt the existing owned test data through the actual ConsumeData callback
+    // contract, including a suspension during materialization.
+    impl ConsumeData for TestInput {
+        type O = Self;
+
+        fn consume<R: Send, F, P>(self, _device: usize, ctx: P, _trace: Option<&'static str>, do_run: F) -> impl Future<Output = ConsumeResult<Self, R>> + Send
+        where
+            F: FnOnce(Self, P) -> ConsumeResult<Self, R> + Send,
+            P: RunCtx,
+        {
+            async move {
+                tokio::task::yield_now().await;
+                do_run(self, ctx)
+            }
+        }
+
+        fn burp(input: Self) -> impl Future<Output = Self> + Send {
+            async move { input }
+        }
+    }
+
+    mockall::mock! {
+        pub StreamScope {
+            fn release(&mut self);
+        }
+    }
+    impl SyncCtx for MockStreamScope {}
+    impl Drop for MockStreamScope {
+        fn drop(&mut self) { self.release(); }
+    }
+
+    #[derive(Clone, Copy)]
+    enum SetupFailure { Handle, Stream }
+
+    struct MockConsumeCallBuilder {
+        execution: Result<TestOutput, ThoError>,
+        synchronization: Result<(), ThoError>,
+        setup_failure: Option<SetupFailure>,
+    }
+
+    impl MockConsumeCallBuilder {
+        fn build(self) -> (Arc<MockRunnable>, Box<dyn CudaActorHandle>) {
+            let mut sequence = mockall::Sequence::new();
+            let mut actor = MockCudaActorHandle::new();
+            let init = actor.expect_init_handle_ctx().times(1).in_sequence(&mut sequence);
+            let mut stage = MockRunnable::new();
+            if matches!(self.setup_failure, Some(SetupFailure::Handle)) {
+                init.return_once(|| Err(ThoError::oom()));
+                stage.expect_consume().times(0);
+                return (Arc::new(stage), Box::new(actor));
+            }
+            let mut ctx = MockHandleCtx::new();
+            let install = ctx.expect_sync_ctx().times(1).in_sequence(&mut sequence);
+            if matches!(self.setup_failure, Some(SetupFailure::Stream)) {
+                install.return_once(|| Err(ThoError::oom()));
+                stage.expect_consume().times(0);
+            } else {
+                // A separate liveness check verifies the guard survives synchronization.
+                let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let dropped = Arc::clone(&alive);
+                let mut guard = MockStreamScope::new();
+                guard.expect_release().times(1).return_once(move || { dropped.store(false, std::sync::atomic::Ordering::SeqCst); });
+                install.return_once(move || Ok(Box::new(guard)));
+                stage.expect_consume().times(1).in_sequence(&mut sequence).return_once(move |input, _| match self.execution {
+                    Ok(output) => ConsumeResult::Ok(output),
+                    Err(error) => ConsumeResult::Failed { input, error },
+                });
+                ctx.expect_on_after_run().times(1).in_sequence(&mut sequence).return_once(move || {
+                    assert!(alive.load(std::sync::atomic::Ordering::SeqCst), "stream guard must remain installed during synchronization");
+                    self.synchronization
+                });
+            }
+            init.return_once(move || Ok(Box::new(ctx)));
+            (Arc::new(stage), Box::new(actor))
+        }
+    }
+
+    fn fatal_consume_error() -> ThoError {
+        ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "consume stream illegal address".into() }
+    }
+
+    #[tokio::test]
+    async fn test_consume_stream_lifecycle_and_error_precedence() {
+        // Exercise the real actor entry point, rather than just the error-merging helper.
+        for execution in [Ok(TestOutput::new(7.)), Err(ThoError::oom()), Err(fatal_consume_error())] {
+            for synchronization in [Ok(()), Err(ThoError::oom()), Err(fatal_consume_error())] {
+                let preserves_input = execution.is_err();
+                let fatal = execution.as_ref().err().is_some_and(ThoError::needs_cuda_ctx_reset) || synchronization.as_ref().err().is_some_and(ThoError::needs_cuda_ctx_reset);
+                let failed = execution.is_err() || synchronization.is_err();
+                let (stage, actor) = MockConsumeCallBuilder { execution: execution.clone(), synchronization, setup_failure: None }.build();
+                let input = TestInput::new(3);
+                let original_allocation = input.data.0.as_ptr();
+                let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(1).finish();
+                let result = actor.consume_stage(stage, input, 1, ctx).await;
+                let error = match result {
+                    Ok(ConsumeResult::Failed { input, error }) => {
+                        assert!(preserves_input);
+                        assert_eq!(input.data.0.as_ptr(), original_allocation, "failure must return the exact owned input allocation");
+                        assert_eq!(input.data.0, vec![0., 1., 2.]);
+                        error
+                    }
+                    Ok(ConsumeResult::Ok(output)) => {
+                        assert!(!failed);
+                        assert_eq!(output.v.0, 7.);
+                        continue;
+                    }
+                    Err(error) => {
+                        assert!(!preserves_input, "a failed consume must retain its input even when synchronization fails");
+                        error
+                    }
+                };
+                assert!(failed);
+                assert_eq!(error.needs_cuda_ctx_reset(), fatal);
+                assert_eq!(error.is_oom(), !fatal);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_consume_setup_failure_preserves_owned_input() {
+        for setup_failure in [SetupFailure::Handle, SetupFailure::Stream] {
+            let (stage, actor) = MockConsumeCallBuilder { execution: Ok(TestOutput::new(7.)), synchronization: Ok(()), setup_failure: Some(setup_failure) }.build();
+            let input = TestInput::new(3);
+            let original_allocation = input.data.0.as_ptr();
+            let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(1).finish();
+            let result = actor.consume_stage(stage, input, 1, ctx).await.unwrap();
+            let ConsumeResult::Failed { input, error } = result else { panic!("setup failure must preserve the input") };
+            assert_eq!(input.data.0.as_ptr(), original_allocation);
+            assert!(error.is_oom());
         }
     }
 

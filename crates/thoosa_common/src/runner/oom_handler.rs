@@ -797,7 +797,9 @@ where
         run_ctx.max_other_parallel().into(),
         async move {
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            Ok(cuda_actor.consume_stage(task, input, tho_device_idx, run_ctx).await)
+            // A sync failure after consumption has no recoverable input; let
+            // submit_consume classify both that outer error and owned failures.
+            cuda_actor.consume_stage(task, input, tho_device_idx, run_ctx).await
         },
         retry,
     )).await
@@ -1080,6 +1082,7 @@ where
         retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError>;
 
+    fn can_retry(&self) -> bool { true }
 }
 
 struct SyncStageInitRetryAdapter;
@@ -1154,6 +1157,11 @@ where
     Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<RetryToken>) -> Fut,
     Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
+    fn can_retry(&self) -> bool {
+        // A synchronization error after successful consumption has no input to replay.
+        self.input.is_some()
+    }
+
     async fn run(
         &mut self,
         task: Arc<R>,
@@ -1232,6 +1240,7 @@ where
             Some(retry_scope.token()),
         )).await {
         Err(te) => {
+            if !runner.can_retry() { return Err(te); }
 
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
@@ -1311,6 +1320,7 @@ where
                                 }
                             }
                             Err(te) => {
+                                if !runner.can_retry() { return Err(te); }
 
                                 debug!("OOMHandler::run, error: err is_retryable_oom={} te={te:?}", te.is_retryable_oom());
 
@@ -1599,7 +1609,10 @@ pub mod mock_runnable {
 
     mock! {
         #[derive(Clone, Debug)]
-        pub Runnable {}
+        pub Runnable {
+            pub fn do_run(&self, input: &TestInput, ctx: &MockRunCtx) -> Result<TestOutput, ThoError>;
+            pub fn consume(&self, input: TestInput, ctx: MockRunCtx) -> ConsumeResult<TestInput, TestOutput>;
+        }
 
         impl Stage for Runnable {
             type In<'a> = TestInput;
@@ -1607,10 +1620,18 @@ pub mod mock_runnable {
             type Ctx = MockRunCtx;
         }
 
-        impl SyncStage for Runnable {
-            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: &<Self as Stage>::Ctx) -> Result<<Self as Stage>::Out, ThoError>;
+    }
+
+    // Forward the GAT-based stage interface to concrete mock methods; mockall
+    // cannot erase an owned GAT input's lifetime in consume expectations.
+    impl SyncStage for MockRunnable {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            MockRunnable::do_run(self.as_ref(), input, ctx)
         }
 
+        fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
+            MockRunnable::consume(self.as_ref(), input, ctx)
+        }
     }
 
     impl Adjustable for MockRunnable {}
@@ -1882,6 +1903,56 @@ mod tests {
             async move { Ok(&self.inner) }
         }
 
+    }
+
+    #[tokio::test]
+    async fn test_consume_without_recoverable_input_stops_retry_and_releases_runner() {
+        use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
+        use crate::runner::syn_stage_runner::SyncStageRunner;
+        use thoosa_shared::traits::ConsumeResult;
+        let global_context = MockGlobalCtx::global_context();
+        let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(
+            SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))
+        ).finish()));
+        global_context.expect().return_const(&*mock);
+        let (task, _) = mock_runnable([]);
+        let run_ctx = crate::runner::common::mock_run_ctx::build()
+            .with_id(0).with_device_idx(1).with_max_other_parallel(0).with_branch(1).finish();
+        let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster>> = Vec::new();
+        // An outer synchronization error means consume succeeded and its input
+        // cannot be replayed. Preserve that error instead of exhausting adjusters.
+        let error = super::run_with_runner_consume(
+            &adjusters, Arc::new(task), TestInput::new(1), run_ctx, NoContexts,
+            |_, _, _: Option<()>, device_idx, _, retry| async move {
+                super::oom_executor(device_idx).submit_consume(0, async {
+                    Err::<ConsumeResult<TestInput, TestOutput>, _>(ThoError::oom().context("consume synchronization"))
+                }, retry).await
+            },
+        ).await.unwrap_err();
+        assert!(error.is_oom());
+        assert!(format!("{error:?}").contains("consume synchronization"));
+        // Leaving the retry chain must release the exclusive OOM reservation.
+        tokio::time::timeout(std::time::Duration::from_secs(2), super::oom_executor(1).submit(0, async { Ok(()) }, None)).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_consume_retry_adapter_preserves_failed_input() {
+        use super::RunnerRetryAdapter;
+        use thoosa_shared::traits::ConsumeResult;
+        let (task, _) = mock_runnable([]);
+        let input = TestInput::new(3);
+        let original_allocation = input.data.0.as_ptr();
+        let mut adapter = super::ConsumeRunnerRetryAdapter {
+            input: Some(input),
+            runner: |_: Arc<super::mock_runnable::MockRunnable>, input, _: Option<()>, _, _, _| async move {
+                Ok(ConsumeResult::Failed { input, error: ThoError::oom() })
+            },
+        };
+        let run_ctx = crate::runner::common::mock_run_ctx::build().finish();
+        let error = adapter.run(Arc::new(task), None, 1, run_ctx, None).await.unwrap_err();
+        assert!(error.is_oom());
+        assert!(adapter.can_retry());
+        assert_eq!(adapter.input.unwrap().data.0.as_ptr(), original_allocation);
     }
 
     #[tokio::test]
