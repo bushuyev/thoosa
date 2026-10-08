@@ -173,7 +173,7 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
 
-        let state = if let Some(with_state) = stage.as_with_state() {
+        let mut state = if let Some(with_state) = stage.as_with_state() {
             // Select stateful execution before preparation so only stateful stages run pre_run.
             with_state.pre_run(to_device_idx).await?
         } else {
@@ -188,17 +188,19 @@ impl dyn CudaActorHandle + '_ {
 
         let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
 
-        let out =  match state {
+        // Borrow the erased guard so it remains locked even if submission fails
+        // or panics; run_cuda_stage synchronizes before releasing that borrow.
+        let out = run_cuda_stage(|| match state.as_mut() {
             None => {
                 Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
             }
             Some(state) => {
                 state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx)
             }
-        };
-
-
-        finish_cuda_run(out, handle_ctx.on_after_run())//synchronizes exec stream
+        }, || handle_ctx.on_after_run());
+        drop(sync_ctx);
+        drop(state);
+        out
     }
 
     pub async fn run_stage_with_select<S, W, SL>(
@@ -218,7 +220,7 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
-        let state = if let Some(with_state) = stage.as_with_state() {
+        let mut state = if let Some(with_state) = stage.as_with_state() {
             // Keep selector-based execution consistent with the primary stateful runner path.
             with_state.pre_run(to_device_idx).await?
         } else {
@@ -233,22 +235,42 @@ impl dyn CudaActorHandle + '_ {
 
         let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
 
-        let out = match state {
+        // Selected execution has the same state/stream lifetime as the full input.
+        let out = run_cuda_stage(|| match state.as_mut() {
             Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx),
             None => Arc::clone(&stage).do_run(borrowed.borrow(), ctx),
-        };
+        }, || handle_ctx.on_after_run());
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} out={out:?}");
 
-        let sync_result  = handle_ctx.on_after_run();//synchronizes exec stream
         drop(sync_ctx);
+        drop(state);
         drop(borrowed);
-
-        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} sync_result={sync_result:?}");
-
-
-        finish_cuda_run(out, sync_result)
+        out
     }
 
+}
+
+// Catch submission panics inside the wrapper's guard lifetime. CUDA work can
+// already be queued when submission errors or panics, so always synchronize.
+pub(crate) fn run_cuda_stage<T>(run: impl FnOnce() -> Result<T, ThoError>, synchronize: impl FnOnce() -> Result<(), ThoError>) -> Result<T, ThoError> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let sync = synchronize();
+    match result {
+        Ok(result) => finish_cuda_run(result, sync),
+        Err(panic) => match sync {
+            Ok(()) => std::panic::resume_unwind(panic),
+            // Fatal CUDA errors must still reach recovery. A nonfatal sync
+            // error must not turn a host panic into a retryable OOM instead.
+            Err(error) if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() => {
+                let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("non-string panic payload");
+                Err(error.context(format!("stage panicked before stream synchronization: {message}")))
+            }
+            Err(error) => {
+                debug!("stream synchronization also failed while unwinding a stage: {error:?}");
+                std::panic::resume_unwind(panic)
+            }
+        },
+    }
 }
 
 // All stage entry points must retain a fatal execution error even if stream
@@ -685,8 +707,80 @@ impl CopyCtx {
 }
 
 #[cfg(test)]
+mod mock_stateful_stage {
+    use super::*;
+    use crate::runner::common::MockRunCtx;
+    use crate::runner::oom_handler::test_types::{TestInput, TestOutput};
+    use futures_util::FutureExt;
+    use thoosa_shared::traits::{ErasedStageWithState, StageWithState};
+
+    mockall::mock! {
+        #[derive(Debug)]
+        pub StatefulStage {
+            pub fn state(&self) -> &Arc<tokio::sync::Mutex<usize>>;
+            pub fn execute(&self, input: &TestInput, state: &mut usize, ctx: &MockRunCtx) -> Result<TestOutput, ThoError>;
+        }
+        impl Stage for StatefulStage {
+            type In<'a> = TestInput;
+            type Out = TestOutput;
+            type Ctx = MockRunCtx;
+        }
+    }
+
+    impl SyncStage for MockStatefulStage {
+        fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> { Some(self) }
+    }
+
+    impl StageWithState for MockStatefulStage {
+        type S = usize;
+        fn pre_run(&self, _: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, usize>>, ThoError>> {
+            async move { Ok(Some(tokio::sync::MutexGuard::map(self.state().lock().await, |state| state))) }.boxed()
+        }
+        fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: &mut usize, ctx: &MockRunCtx) -> Result<TestOutput, ThoError> {
+            self.execute(input, state, ctx)
+        }
+    }
+
+    pub struct MockStatefulStageBuilder {
+        pub state: Arc<tokio::sync::Mutex<usize>>,
+        pub panics: bool,
+        pub result: Result<TestOutput, ThoError>,
+    }
+
+    impl MockStatefulStageBuilder {
+        pub fn build(self) -> Arc<MockStatefulStage> {
+            let mut stage = MockStatefulStage::new();
+            stage.expect_state().return_const(self.state);
+            stage.expect_execute().times(1).return_once(move |_, state, _| {
+                // Mutating before failure models a submission that has already
+                // begun using state when it errors or unwinds.
+                *state += 1;
+                if self.panics { std::panic::panic_any("stateful submission panic"); }
+                self.result
+            });
+            Arc::new(stage)
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_submission_panic_is_not_retried_as_a_synchronization_oom() {
+        // Synchronization still runs, but its OOM cannot make an arbitrary
+        // partially completed host operation safe to replay.
+        let mut synchronized = false;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_cuda_stage::<()>(|| std::panic::panic_any("submission panic"), || {
+                synchronized = true;
+                Err(ThoError::oom())
+            })
+        }));
+        assert!(synchronized);
+        assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"submission panic"));
+    }
 
     struct MockCudaActorHandleBuilder {
         sync_result: Result<(), ThoError>,
@@ -700,6 +794,57 @@ mod tests {
             let mut actor = MockCudaActorHandle::new();
             actor.expect_init_handle_ctx().times(1).return_once(move || Ok(Box::new(ctx)));
             Box::new(actor)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_state_guard_survives_synchronization_on_success_error_and_panic() {
+        use super::mock_stateful_stage::MockStatefulStageBuilder;
+        use crate::runner::common::cachable::DevicesWrap;
+        use futures_util::FutureExt;
+        use thoosa_shared::traits::RangeSelector;
+        let _global = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        for selected in [false, true] {
+            for outcome in 0..3 {
+                for sync_fails in [false, true] {
+                    let state = Arc::new(tokio::sync::Mutex::new(0));
+                    let stage = MockStatefulStageBuilder {
+                        state: Arc::clone(&state), panics: outcome == 2,
+                        result: if outcome == 1 { Err(ThoError::oom()) } else { Ok(TestOutput::new(7.)) },
+                    }.build();
+                    let mut handle = MockHandleCtx::new();
+                    handle.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
+                    let during_sync = Arc::clone(&state);
+                    handle.expect_on_after_run().times(1).return_once(move || {
+                        // A competing exporter/trainer must remain unable to
+                        // acquire the real mutex until synchronization returns.
+                        assert!(during_sync.try_lock().is_err(), "state unlocked before stream synchronization");
+                        if sync_fails { Err(fatal_consume_error()) } else { Ok(()) }
+                    });
+                    let mut actor = MockCudaActorHandle::new();
+                    actor.expect_init_handle_ctx().times(1).return_once(move || Ok(Box::new(handle)));
+                    let actor: Box<dyn CudaActorHandle> = Box::new(actor);
+                    let input = Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1)));
+                    let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(0).finish();
+                    let result = std::panic::AssertUnwindSafe(async {
+                        if selected {
+                            actor.run_stage_with_select(stage, input, None::<RangeSelector>, 0, &ctx).await
+                        } else {
+                            actor.run_stage(stage, input, 0, &ctx).await
+                        }
+                    }).catch_unwind().await;
+                    assert_eq!(*state.try_lock().expect("state must unlock after synchronization"), 1);
+                    if sync_fails {
+                        assert!(result.unwrap().unwrap_err().needs_cuda_ctx_reset());
+                    } else if outcome == 2 {
+                        assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"stateful submission panic"));
+                    } else if outcome == 1 {
+                        assert!(result.unwrap().unwrap_err().is_oom());
+                    } else {
+                        assert_eq!(result.unwrap().unwrap().v.0, 7.);
+                    }
+                }
+            }
         }
     }
 

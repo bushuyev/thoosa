@@ -789,7 +789,7 @@ where
         }.boxed()
     }
     
-    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
     }
 }
@@ -1085,8 +1085,8 @@ mod tests {
             assert!(stage.set_state_tensor(0, key, tensor).await.is_err());
             if !tensors.is_empty() { assert!(StageWithState::pre_run(stage.as_ref(), 0).await.is_err()); }
         }
-        let state = StageWithState::pre_run(stage.as_ref(), 0).await?.unwrap();
-        let actual = Arc::clone(&stage).do_run_with_state(&input, state, &ctx)?;
+        let mut state = StageWithState::pre_run(stage.as_ref(), 0).await?.unwrap();
+        let actual = Arc::clone(&stage).do_run_with_state(&input, &mut *state, &ctx)?;
         assert!(actual.as_ref().f_allclose(&expected.as_ref(), 0., 0., false)?);
         Ok(())
     }

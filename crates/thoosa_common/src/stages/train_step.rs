@@ -169,7 +169,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, train_module: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("TrainStep::do_run: input={input:?}");
         // Save inside the state owner so IPC training never exports a VarStore.
         if input.save_var_store {

@@ -389,7 +389,7 @@ where
 
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
         Ok(TestOutputB {
             value: input.value.as_ref().f_mul(&k.k_0.as_ref().f_add(&k.k_1.as_ref())?)?.into(),
