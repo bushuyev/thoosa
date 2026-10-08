@@ -274,7 +274,7 @@ impl StageWithState for SyncClcStage {
         }.boxed()
     }
 
-    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, k: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
 
         DEBUG_DATA.lock().push(format!("SyncClcStage::do_run_with_state: input.size={:?}", input.size()));
@@ -356,7 +356,7 @@ impl StageWithState for ClcDynSyncStage {
         StageWithState::pre_run(self.stage.as_ref(), to_device_idx)
     }
 
-    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, state: tokio::sync::MappedMutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, state: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         StageWithState::do_run_with_state(Arc::clone(&self.stage), input, state, ctx)
     }
 }

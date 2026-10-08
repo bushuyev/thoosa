@@ -1296,7 +1296,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: tokio::sync::MappedMutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = motif_net.extra().motif_id();
 
         debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input={:?}", self.id, input);
