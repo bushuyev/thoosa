@@ -53,26 +53,46 @@ const WORKER_EXEC_STREAMS: usize = 32;
 
 // Metadata requests use the same result/reply contract as execution. Absence
 // is a request error, not a successful operation with no response.
-async fn stage_state_operation(stages: &InstalledStages, operation: Operation, device: ThoDevice) -> Result<OpResult, ThoError> {
-    let (endpoint_name, stage_id, purge) = match operation {
-        Operation::PurgeStage { endpoint_name, stage_id } => (endpoint_name, stage_id, true),
-        Operation::GetStageStateInfo { endpoint_name, stage_id } => (endpoint_name, stage_id, false),
+async fn stage_state_operation(stages: &InstalledStages, operation: Operation, device: ThoDevice, request_id: u64) -> Result<OpResult, ThoError> {
+    let (endpoint_name, stage_id, purge, begin_export) = match operation {
+        Operation::PurgeStage { endpoint_name, stage_id } => (endpoint_name, stage_id, true, false),
+        Operation::GetStageStateInfo { endpoint_name, stage_id } => (endpoint_name, stage_id, false, false),
+        Operation::BeginStageExport { endpoint_name, stage_id } => (endpoint_name, stage_id, false, true),
         _ => unreachable!("state metadata operation"),
     };
     let key = cuda_process::endpoint_stage_key(endpoint_name.clone(), stage_id.as_ref());
-    let endpoint = stages.get(&key).and_then(|entry| entry.value().as_ref().map(Arc::clone))
-        .ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={key}")))?;
+    let endpoint = installed_endpoint(stages, &key)?;
+    let lease = Arc::clone(&endpoint.lease).write_owned().await;
     if purge {
-        endpoint.purge(device).await?;
+        endpoint.stage.purge(device).await?;
         return Ok(OpResult::Ok(None));
     }
-    let with_state = endpoint.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={key}")))?;
+    let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={key}")))?;
     let mut state_info = with_state.get_state_info(&device).await?;
     // Installation owns routing identity; model state supplies tensor names.
     for tensor in &mut state_info.tensors {
         tensor.tensor_key = TensorKey::stage_state(&endpoint_name, stage_id.as_deref().unwrap_or(""), tensor.tensor_key.to_tensor_key());
     }
+    if begin_export {
+        // All execution and state writes take lease, so metadata and every D2H
+        // tensor below belong to this same completed training step.
+        *endpoint.export.lock().await = Some(FrozenExport { id: request_id, _lease: lease });
+    }
     Ok(OpResult::Ok(Some(Box::new(state_info))))
+}
+
+async fn finish_stage_export(stages: &InstalledStages, endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool, device: ThoDevice) -> Result<OpResult, ThoError> {
+    let key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
+    let endpoint = installed_endpoint(stages, &key)?;
+    let mut export = endpoint.export.lock().await;
+    if export.as_ref().map(|export| export.id) != Some(export_id) {
+        return Err(ThoError::new("finish does not belong to the active state export"));
+    }
+    // Purge completes before releasing admission. Abort leaves the
+    // original state intact so a failed backup can be retried.
+    if commit { endpoint.stage.purge(device).await?; }
+    *export = None;
+    Ok(OpResult::Ok(None))
 }
 
 // Socket tasks must not survive their supervisor on error or cancellation.
@@ -176,7 +196,31 @@ pub struct CudaWorker;
 //stage_id - None for stateless stages, init_data, ctx, all_tensors, device
 pub type InitFn<W = dyn Workspace> = Box<dyn for <'a> Fn(Option<String>, Box<dyn WorkerInput>, Arc<RwLock<Box<W>>>, &'a AllTensors, &'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> + Send + Sync>;
 
-type InstalledStages = Arc<DashMap<String, Option<Arc<dyn SyncStageIpcWrapper>>>>;
+// A worker endpoint owns its execution/export lease. An export retains the
+// owned guard across wire requests; unrelated endpoints remain runnable.
+struct InstalledEndpoint {
+    stage: Arc<dyn SyncStageIpcWrapper>,
+    lease: Arc<tokio::sync::RwLock<()>>,
+    export: tokio::sync::Mutex<Option<FrozenExport>>,
+}
+
+struct FrozenExport {
+    id: u64,
+    _lease: tokio::sync::OwnedRwLockWriteGuard<()>,
+}
+
+impl InstalledEndpoint {
+    fn new(stage: Arc<dyn SyncStageIpcWrapper>) -> Self {
+        Self { stage, lease: Arc::new(tokio::sync::RwLock::new(())), export: tokio::sync::Mutex::new(None) }
+    }
+}
+
+type InstalledStages = Arc<DashMap<String, Option<Arc<InstalledEndpoint>>>>;
+
+fn installed_endpoint(stages: &InstalledStages, key: &str) -> Result<Arc<InstalledEndpoint>, ThoError> {
+    stages.get(key).and_then(|entry| entry.value().as_ref().map(Arc::clone))
+        .ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={key}")))
+}
 
 struct WorkerSharedArena {
     mapping: MmapMut,
@@ -465,12 +509,11 @@ impl CudaWorker {
                     let tensor_ref = if let Some(H2DTensorKey::StageState { endpoint_name, stage_id, tensor_id }) = dst_key {
                         let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(&stage_id));
 
-                        let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+                        let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
 
 
-                        endpoint
-                            .ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?
-                            .as_with_state()
+                        let _lease = endpoint.lease.write().await;
+                        endpoint.stage.as_with_state()
                             .ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?
                             .set_state_tensor(&context.tho_device, tensor_id.clone(), cuda_t).await?;
 
@@ -487,11 +530,27 @@ impl CudaWorker {
 
                     Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref }) as Box<dyn WorkerOutput>)))
                 }
-                Operation::D2hCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
+                Operation::D2hCopy { export_id, tensor_key, kind, shape, tensor_byte_len, arena_offset } => {
                     debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "D2H destination")?;
 
                     let cuda_device = context.tho_device.gpu_ordinal();
+                    // Hold the transaction record until the copy synchronizes; a
+                    // concurrent finish cannot release/purge its source tensors.
+                    let export_endpoint = match &tensor_key {
+                        TensorKey::StageState { endpoint_name, stage_id, .. } => Some(installed_endpoint(&context.installed_stages, &cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(stage_id)))?),
+                        TensorKey::Data(_) => None,
+                    };
+                    let _export = if let Some(endpoint) = &export_endpoint {
+                        let guard = endpoint.export.lock().await;
+                        if guard.as_ref().map(|export| export.id) != export_id || export_id.is_none() {
+                            return Err(ThoError::new("state copy does not belong to the active export"));
+                        }
+                        Some(guard)
+                    } else {
+                        if export_id.is_some() { return Err(ThoError::new("data copy cannot use a state export identity")); }
+                        None
+                    };
                     let source = match &tensor_key {
                         TensorKey::Data(tensor_key) => {
                             prepare_d2h_source(&context.all_cuda_tensors, tensor_key.clone(), kind, &shape, cuda_device)
@@ -499,10 +558,9 @@ impl CudaWorker {
                         TensorKey::StageState{ endpoint_name, stage_id, tensor_key: tensor_id } => {
                             let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(stage_id));
 
-                            let endpoint: Option<Arc<dyn SyncStageIpcWrapper>> = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+                            let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
 
-                            let endpoint = endpoint.ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
-                            let with_state = endpoint.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?;
+                            let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?;
                             with_state.get_state_tensor(&context.tho_device, tensor_id.clone()).await
                         }
                     }?;
@@ -542,7 +600,7 @@ impl CudaWorker {
                         }
                     };
                     debug!("run_worker: install endpoint endpoint_key={endpoint_key:?} endpoint_wrapper={endpoint_wrapper:?}");
-                    context.installed_stages.insert(endpoint_key, Some(Arc::from(endpoint_wrapper)));
+                    context.installed_stages.insert(endpoint_key, Some(Arc::new(InstalledEndpoint::new(Arc::from(endpoint_wrapper)))));
                     Ok(OpResult::Ok(None))
                 }
                 Operation::InvokeStage { endpoint_name, stage_id, input, consume } => {
@@ -550,10 +608,11 @@ impl CudaWorker {
 
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
 
-                    let endpoint = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone)).ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={endpoint_key}")))?;
+                    let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
+                    let _lease = endpoint.lease.read().await;
                     let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
                     let mut stream = context.exec_stream_pool.acquire().await?;
-                    let result = match endpoint.as_with_state() {
+                    let result = match endpoint.stage.as_with_state() {
                         Some(with_state) => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} as_with_state");
                             // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
@@ -561,18 +620,23 @@ impl CudaWorker {
                         }
                         None => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
-                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
+                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
                         }
                     }?;
                     debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
                     Ok(OpResult::Ok(Some(result)))
                 }
-                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. }) => {
-                    stage_state_operation(&context.installed_stages, operation, context.tho_device).await
+                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. } | Operation::BeginStageExport { .. }) => {
+                    stage_state_operation(&context.installed_stages, operation, context.tho_device, request_id).await
                 }
 
+                Operation::FinishStageExport { endpoint_name, stage_id, export_id, commit } => {
+                    finish_stage_export(&context.installed_stages, endpoint_name, stage_id, export_id, commit, context.tho_device).await
+                }
                 Operation::DropStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
+                    let endpoint = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
+                    let _lease = if let Some(endpoint) = &endpoint { Some(endpoint.lease.write().await) } else { None };
                     let removed = context.installed_stages.remove(&endpoint_key).is_some();
                     debug!("run_worker: drop endpoint: endpoint key={endpoint_key} removed={removed} installed_endpoints keys={:?}", context.installed_stages.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>());
                     Ok(OpResult::Ok(None))
@@ -796,6 +860,7 @@ impl RunCtx for WokerRunCtx {
 #[cfg(test)]
 mod mock_request_handler {
     use super::*;
+    use futures_util::FutureExt;
     mockall::mock! {
         pub RequestHandler {
             pub fn run(&self, request: CudaWorkerMsgIn) -> BoxFuture<'static, Result<OpResult, ThoError>>;
@@ -805,6 +870,49 @@ mod mock_request_handler {
         #[derive(Debug)]
         pub StatelessEndpoint {}
         impl SyncStageIpcWrapper for StatelessEndpoint {}
+    }
+
+    mockall::mock! {
+        #[derive(Debug)]
+        pub ExportEndpoint {
+            pub fn describe(&self) -> Result<StageStateInfo, ThoError>;
+            pub fn purge_state(&self) -> Result<(), ThoError>;
+        }
+    }
+
+    impl SyncStageIpcWrapper for MockExportEndpoint {
+        fn as_with_state(&self) -> Option<&dyn crate::ipc::wraps::ErasedWithState> { Some(self) }
+        fn purge(&self, _: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>> {
+            async move { self.purge_state() }.boxed()
+        }
+    }
+
+    impl crate::ipc::wraps::ErasedWithState for MockExportEndpoint {
+        fn do_run_with_state<'a>(&'a self, _: &'a Box<dyn WorkerInput>, _: &'a AllTensors, _: &'a ThoDevice, _: &'a mut dyn crate::copy_ctx::HandleCtx, _: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> { unreachable!("export metadata test") }
+        fn get_state_info<'a>(&'a self, _: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {
+            async move { self.describe() }.boxed()
+        }
+        fn get_state_tensor<'a>(&'a self, _: &'a ThoDevice, _: String) -> BoxFuture<'a, Result<Tensor, ThoError>> { unreachable!("export metadata test") }
+        fn set_state_tensor<'a>(&'a self, _: &'a ThoDevice, _: String, _: Tensor) -> BoxFuture<'a, Result<(), ThoError>> { unreachable!("export metadata test") }
+    }
+
+    pub struct MockExportEndpointBuilder {
+        pub describe_fails: bool,
+        pub purge_result: Option<Result<(), ThoError>>,
+    }
+    impl MockExportEndpointBuilder {
+        pub fn build(self) -> MockExportEndpoint {
+            let mut endpoint = MockExportEndpoint::new();
+            endpoint.expect_describe().times(1).return_once(move || {
+                if self.describe_fails { Err(ThoError::new("description failed")) } else { Ok(StageStateInfo::empty()) }
+            });
+            if let Some(result) = self.purge_result {
+                endpoint.expect_purge_state().times(1).return_once(|| result);
+            } else {
+                endpoint.expect_purge_state().never();
+            }
+            endpoint
+        }
     }
 
     pub struct MockRequestHandlerBuilder<F> {
@@ -839,6 +947,44 @@ mod request_tests {
     async fn receive<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> CudaWorkerMsgOut {
         let payload = tokio::time::timeout(Duration::from_secs(3), cuda_process::read_frame(reader, "test reply", cuda_process::MAX_FRAME_LEN)).await.unwrap().unwrap();
         PostcardToFromBytes::from_bytes(&payload).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_export_freezes_only_its_endpoint_until_matching_commit_or_abort() {
+        for commit in [false, true] {
+            let stages: InstalledStages = Arc::new(DashMap::new());
+            let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
+                describe_fails: false, purge_result: if commit { Some(Ok(())) } else { None },
+            }.build())));
+            stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
+            let other = InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new()));
+            // Begin waits for a previously admitted invocation, including its GPU synchronization.
+            let invocation = endpoint.lease.read().await;
+            let begin = stage_state_operation(&stages, Operation::BeginStageExport { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7);
+            tokio::pin!(begin);
+            assert!(futures::poll!(&mut begin).is_pending());
+            drop(invocation);
+            begin.await.unwrap();
+            assert!(endpoint.lease.try_read().is_err(), "no invocation can mutate the frozen state");
+            assert!(other.lease.try_read().is_ok(), "other endpoints must remain runnable");
+            assert!(finish_stage_export(&stages, "stateful".into(), None, 8, commit, 1usize.into()).await.is_err());
+            assert!(endpoint.lease.try_read().is_err(), "a mismatched transaction must not release the freeze");
+            finish_stage_export(&stages, "stateful".into(), None, 7, commit, 1usize.into()).await.unwrap();
+            assert!(endpoint.lease.try_write().is_ok(), "matching finish must admit waiting work");
+            assert!(finish_stage_export(&stages, "stateful".into(), None, 7, commit, 1usize.into()).await.is_err(), "a transaction can finish only once");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_export_description_releases_endpoint_lease() {
+        let stages: InstalledStages = Arc::new(DashMap::new());
+        let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
+            describe_fails: true, purge_result: None,
+        }.build())));
+        stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
+        assert!(stage_state_operation(&stages, Operation::BeginStageExport { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.is_err());
+        assert!(endpoint.export.lock().await.is_none());
+        assert!(endpoint.lease.try_write().is_ok(), "failed preparation must not strand waiting work");
     }
 
     #[tokio::test]
@@ -887,13 +1033,13 @@ mod request_tests {
     #[tokio::test]
     async fn test_missing_state_requests_reply_once_and_shutdown_drains_them() {
         let stages: InstalledStages = Arc::new(DashMap::new());
-        stages.insert("stateless".into(), Some(Arc::new(MockStatelessEndpoint::new())));
+        stages.insert("stateless".into(), Some(Arc::new(InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new())))));
         stages.insert("initializing".into(), None);
         let (mut client, server) = tokio::io::duplex(4096);
         let (reader, writer) = tokio::io::split(server);
         let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| {
             let stages = Arc::clone(&stages);
-            async move { stage_state_operation(&stages, request.operation, 1usize.into()).await }
+            async move { stage_state_operation(&stages, request.operation, 1usize.into(), request.request_id).await }
         }));
         send(&mut client, 1, Operation::PurgeStage { endpoint_name: "missing".into(), stage_id: None }).await;
         for (id, name) in [(2, "missing"), (3, "stateless"), (4, "initializing")] {
