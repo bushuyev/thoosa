@@ -3,7 +3,7 @@ use crate::nets::common_nets::OptConfig;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-use log::{debug, trace};
+use log::{debug, info, trace};
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
@@ -675,7 +675,7 @@ where
                 bad_evals += 1;
             }
 
-            // Keep observation-update failures best-effort as before.
+            // Keep observation-update failures best-effort.
             let _ = self.tpe_samplers
                 .get_mut(Self::LOSS_METRIC)
                 .expect("loss sampler missing")
@@ -693,7 +693,7 @@ where
             collect_eta_record_completion(grids_eta_guard.id());
 
             if self.config.patience > 0 && early_stopping_started && bad_evals >= self.config.patience {
-                debug!("AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}", self.descr, self.config.patience, self.config.min_delta);
+                info!("AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}", self.descr, self.config.patience, self.config.min_delta);
                 break;
             }
             debug!("AsyncTPEOptimizerImpl::optimize:sample done  i={i} ");

@@ -1305,7 +1305,8 @@ where
 
                         match run_result {
                             Ok(v) => {
-                                info!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                                info!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                                debug!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?}");
 
                                 match track_await(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
                                     InputAdjustedRun::Done(out) => {
