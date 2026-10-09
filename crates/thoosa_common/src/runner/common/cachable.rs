@@ -20,6 +20,7 @@ use crate::data_with_extra::DataWithExtra;
 use parking_lot::Mutex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Formatter};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -55,7 +56,7 @@ where
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
-    fn dump_to_cpu_if_last_ref<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
+    fn cleanup_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
     fn drop_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
@@ -65,7 +66,6 @@ pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
 
     fn is_on_cpu_before(&self, purge_until: u64) -> bool;
 
-    fn is_uniquely_held(&self) -> bool;
 
     fn mem_size(&self) -> u64;
 }
@@ -79,13 +79,10 @@ where
         DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
     }
 
-    fn dump_to_cpu_if_last_ref<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
-        async move {
-            if Arc::strong_count(self) == 1 {
-                track_await(self.dump_to_cpu(device_idx)).await?;
-            }
-            Ok(())
-        }.boxed()
+    fn cleanup_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        // The cache and cleanup job intentionally both own handles. Actual
+        // borrowers are represented by residency read guards, not Arc counts.
+        DevicesWrap::cleanup_device(self.as_ref(), device_idx).boxed()
     }
 
     fn drop_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
@@ -104,10 +101,6 @@ where
         DevicesWrap::is_on_cpu_before(self.as_ref(), purge_until)
     }
 
-    fn is_uniquely_held(&self) -> bool {
-        Arc::strong_count(self) == 1
-    }
-
     fn mem_size(&self) -> u64 {
         DevicesWrap::mem_size(self.as_ref())
     }
@@ -122,7 +115,7 @@ where
         async { Ok(()) }.boxed()
     }
 
-    fn dump_to_cpu_if_last_ref<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+    fn cleanup_device<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async { Ok(()) }.boxed()
     }
 
@@ -140,13 +133,38 @@ where
         true
     }
 
-    fn is_uniquely_held(&self) -> bool {
-        Arc::strong_count(self) == 1
-    }
-
     fn mem_size(&self) -> u64 {
         self.as_ref().mem_size()
     }
+}
+
+/// Explicit cache-area users, shared by clones of one cached computation.
+/// Counts control retention, while device-slot guards protect actual borrowers.
+/// Registration must not wait for cleanup: a caller can already hold a residency
+/// read guard when it requests another cached handle.
+#[derive(Default)]
+struct CacheResidency {
+    users: AtomicUsize,
+}
+
+struct CacheUse {
+    residency: Arc<CacheResidency>,
+    released: AtomicBool,
+}
+
+impl CacheUse {
+    fn acquire(residency: Arc<CacheResidency>) -> Self {
+        residency.users.fetch_add(1, Ordering::AcqRel);
+        Self { residency, released: AtomicBool::new(false) }
+    }
+
+    fn release(&self) -> bool {
+        !self.released.swap(true, Ordering::AcqRel) && self.residency.users.fetch_sub(1, Ordering::AcqRel) == 1
+    }
+}
+
+impl Drop for CacheUse {
+    fn drop(&mut self) { self.release(); }
 }
 
 /// Shared computations retain the device generation that started them. Recovery
@@ -155,6 +173,7 @@ pub struct CachedFuture<O: Clone> {
     inner: Shared<BoxFuture<'static, Result<O, ThoError>>>,
     origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>,
     invalidated: Arc<AtomicBool>,
+    users: Arc<Mutex<HashMap<usize, Arc<CacheResidency>>>>,
 }
 
 impl<O: Clone> CachedFuture<O> {
@@ -211,7 +230,36 @@ impl<O: Clone> CachedFuture<O> {
     }
 
     fn with_origin(inner: Shared<BoxFuture<'static, Result<O, ThoError>>>, origin: Option<(Arc<thoosa_shared::CudaActivityGate>, thoosa_shared::CudaDeviceGeneration)>, invalidated: Arc<AtomicBool>) -> Self {
-        Self { inner, origin, invalidated }
+        Self { inner, origin, invalidated, users: Arc::new(Mutex::new(HashMap::new())) }
+    }
+
+    pub(crate) fn has_cache_users(&self) -> bool {
+        self.users.lock().values().any(|residency| residency.users.load(Ordering::Acquire) != 0)
+    }
+
+    fn cleanup_registration(&self, device_idx: usize) -> Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>
+    where O: CachedPurgeOutput,
+    {
+        let residency = self.users.lock().entry(device_idx).or_default().clone();
+        let lease = Arc::new(CacheUse::acquire(residency));
+        // A strong Shared here would create a cycle through the computation's
+        // RunCtx. Weak identity also prevents stale cleanup purging a replacement.
+        let weak = self.inner.downgrade();
+        Box::new(move || {
+            let last = lease.release();
+            let residency = Arc::clone(&lease.residency);
+            let future = weak.as_ref().and_then(|weak| weak.upgrade());
+            async move {
+                if !last || device_idx == 0 || GlobalCtx::is_shutting_down() { return Ok(()); }
+                if residency.users.load(Ordering::Acquire) != 0 { return Ok(()); }
+                if let Some(future) = future {
+                    // The last RunCtx may drop just before Shared publishes its
+                    // output. Await completion instead of silently skipping it.
+                    if let Ok(data) = future.await { data.cleanup_device(device_idx).await?; }
+                }
+                Ok(())
+            }.boxed()
+        })
     }
 
     pub fn peek(&self) -> Option<&Result<O, ThoError>> { self.inner.peek() }
@@ -228,7 +276,7 @@ impl<O: Clone> CachedFuture<O> {
 
 impl<O: Clone> Clone for CachedFuture<O> {
     fn clone(&self) -> Self {
-        Self::with_origin(self.inner.clone(), self.origin.clone(), Arc::clone(&self.invalidated))
+        Self { inner: self.inner.clone(), origin: self.origin.clone(), invalidated: Arc::clone(&self.invalidated), users: Arc::clone(&self.users) }
     }
 }
 
@@ -293,54 +341,26 @@ where
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let cache = track_await(Self::cache()).await;
-        let key_for_purger = key.clone();
-
-        ctx.add_purge_gpu_closure(
-            Box::new( move || {
-
-                let key_for_purger = key_for_purger.clone();
-                trace!("Cached::purge_gpu_cache_area: 1  key={key_for_purger:?}");
-
-                async move {
-                    if GlobalCtx::is_shutting_down(){
-                        return Ok(());
-                    }
-
-                    // Release the map guard before awaiting cleanup: recovery
-                    // may concurrently remove this generation's cache entry.
-                    let Some(shared_fut) = track_await(Self::cache()).await.get(&key_for_purger).map(|entry| entry.value().clone()) else {
-                        debug!("Cached::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
-                        return Ok(());
-                    };
-
-                    trace!("Cached::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
-
-                    if let Some(data) = shared_fut
-                        .peek()  //to avoid locking on itself
-                        .and_then(|peeked| peeked.as_ref().ok())
-                        .cloned() {
-                        track_await(data.dump_to_cpu_if_last_ref(device_idx)).await?;
-
-                        debug!("Cached::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
-                    }
-
-                    Ok(())
-                }.boxed()
-            })
-
-       );
-
         GlobalCtx::global().do_age();
 
-        let shared = match cache.entry(key.clone()) {
-            Entry::Occupied(slot) => slot.get().clone(),
+        let (shared, cleanup) = match cache.entry(key.clone()) {
+            Entry::Occupied(slot) => {
+                let future = slot.get().clone();
+                let cleanup = future.cleanup_registration(device_idx);
+                (future, cleanup)
+            },
             Entry::Vacant(slot) => {
                 let gate = GlobalCtx::global().cuda_activity_gate(device_idx);
-                let future = CachedFuture::for_device(Arc::clone(&self).run(input, ctx).boxed().shared(), gate);
+                let future = CachedFuture::for_device(Arc::clone(&self).run(input, ctx.branch(false)).boxed().shared(), gate);
+                let cleanup = future.cleanup_registration(device_idx);
                 slot.insert(future.clone());
-                future
+                (future, cleanup)
             }
         };
+        // Register under the map's entry guard so CPU eviction cannot remove
+        // an entry between cache lookup and acquiring its explicit user lease.
+        // Keep this context through completion; computation uses the same area.
+        ctx.add_purge_gpu_closure(cleanup);
         let result = track_await(shared.clone()).await;
         if result.as_ref().is_err_and(|error| matches!(error.what(), ThoError::ContextReset) || error.is_cuda_recovery_failed()) {
             // Compare identity: another caller may already have installed a new
@@ -696,6 +716,29 @@ where
         &self.size
     }
 
+    async fn cleanup_device(&self, device_idx: usize) -> Result<(), ThoError> {
+        if device_idx == 0 || GlobalCtx::is_shutting_down() { return Ok(()); }
+        // Wait for real borrowers, then hold exclusive residency through backup
+        // and removal. Cache handles and incidental clones do not prevent cleanup.
+        if let Some(slot) = self.cached_data.get(device_idx) {
+            let mut source = slot.write().await;
+            self.offload_locked(device_idx, &mut source).await?;
+        }
+        Ok(())
+    }
+
+    async fn offload_locked(&self, device_idx: usize, source: &mut Option<O>) -> Result<(), ThoError> {
+        if let Some(data) = source.as_ref() {
+            // Release the CPU read guard before ensure_copied takes its write lock.
+            let backed_up = self.cached_data[0].read().await.is_some();
+            if !backed_up { self.ensure_copied(0, data, false).await?; }
+            source.take();
+            self.mark_not_resident_on_device(device_idx);
+        }
+        self.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
+        Ok(())
+    }
+
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError>
     {
         if GlobalCtx::is_shutting_down(){
@@ -714,27 +757,10 @@ where
         debug!("DevicesWrap::dump_to_cpu: 0.  id={:?} device_idx={device_idx}", self.id);
 
         if let Some(Ok(mut lock)) = self.cached_data.get(device_idx).map(|v| v.try_write()) {
-            if track_await(self.cached_data[0].read()).await.is_none() {
-                if let Some(data) = lock.as_ref() {
-                    track_await(self.ensure_copied(0, data, false)).await?;
-                }
-                let o = lock.take().expect(&format!("no locked {:?}", self.id));
-                debug!("DevicesWrap::dump_to_cpu: id={:?} dropping {o:?} after copied", self.id);
-                drop(o);
-
-
-                self.mark_not_resident_on_device(device_idx);
-
-            } else {
-                let o = lock.take().expect(&format!("no locked {:?}", self.id));
-                debug!("DevicesWrap::dump_to_cpu: id={:?} dropping {o:?}", self.id);
-                drop(o);
-
-                self.mark_not_resident_on_device(device_idx);
-            }
+            self.offload_locked(device_idx, &mut lock).await?;
         } else {
-            // If it's locked, assume it's the current task's input. DumpToCpu only runs with
-            // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other stages should be running; skipping avoids deadlock.
+            // OOM eviction may be called while its own input is borrowed, so it
+            // must skip busy slots. Cache-area cleanup instead waits in cleanup_device.
             warn!("DevicesWrap::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data);
             debug!("DevicesWrap::dump_to_cpu: id={:?} trace: {}", self.id, n_trace_line(&Backtrace::capture(), 50));
         }
@@ -812,47 +838,49 @@ where
         to_tho_device_idx: usize,
     ) -> Result<RwLockReadGuard<'_, O>, ThoError>
     {
-        //purge shouldn't happen here since it requires MAX max_parallel and if this is being executed other runs can't have MAX max_parallel,
         debug!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
         trace!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
         assert!(self.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", self.cached_data.len(), self.id);
 
-        //dump_to_cpu can only be executed either from DumpToCpu::adjust, but it's running with set_max_other_parallel(0) so nobody should be loading anything at the momemnt, or from run_cached clean-up at thoosa_common/src/runner/common/cachable.rs:95 when the context being dropped is the last one holding
-        //reference to the cached object. And in the latter case it can indeed happen so that read_guard is obtained when device data is dropped by dump_to_cpu but then it will be copied back from CPU (0 device) in cycle below.
-        if self.is_resident_on_device(to_tho_device_idx) {
-            let lock = &self.cached_data[to_tho_device_idx];
-            let read_guard = track_await(lock.read()).await;
-            if read_guard.is_some() {
-                return Ok(tokio::sync::RwLockReadGuard::map(
-                    read_guard,
-                    |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-                ));
-            }
-            drop(read_guard);
-            self.mark_not_resident_on_device(to_tho_device_idx);
-        }
-
-        debug!("DevicesWrap::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
-
-        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-            if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
-                continue;
+        // Cleanup can move a GPU source to CPU after a scan passed CPU. Retry
+        // both destination and source lookup to observe the committed backup.
+        for _attempt in 0..2 {
+            // Residency guards serialize materialized borrows with cache-area cleanup.
+            if self.is_resident_on_device(to_tho_device_idx) {
+                let lock = &self.cached_data[to_tho_device_idx];
+                let read_guard = track_await(lock.read()).await;
+                if read_guard.is_some() {
+                    return Ok(tokio::sync::RwLockReadGuard::map(
+                        read_guard,
+                        |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+                    ));
+                }
+                self.mark_not_resident_on_device(to_tho_device_idx);
+                drop(read_guard);
             }
 
-            let source_read_guard = track_await(op.read()).await;
+            debug!("DevicesWrap::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
 
-            if source_read_guard.is_some() && self.copy_to_device.is_none() {
-                return Ok(RwLockReadGuard::map(
-                    source_read_guard,
-                    |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-                ));
-            }
+            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+                if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
+                    continue;
+                }
 
-            if let Some(src) = source_read_guard.as_ref() {
-                return track_await(self.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
+                let source_read_guard = track_await(op.read()).await;
+
+                if source_read_guard.is_some() && self.copy_to_device.is_none() {
+                    return Ok(RwLockReadGuard::map(
+                        source_read_guard,
+                        |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+                    ));
+                }
+
+                if let Some(src) = source_read_guard.as_ref() {
+                    return track_await(self.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
+                }
+                self.mark_not_resident_on_device(source_device_idx);
+                drop(source_read_guard);
             }
-            drop(source_read_guard);
-            self.mark_not_resident_on_device(source_device_idx);
         }
 
         Err(ThoError::NotFound(Some(format!("load_from_any_device_: id={:?}", self.id))))
@@ -956,8 +984,8 @@ where
                         return Ok(None);
                     }
                 }
-                drop(dst_read);
                 self.mark_not_resident_on_device(dst_idx);
+                drop(dst_read);
             }
 
             // ---- Try to join or become the leader
@@ -986,8 +1014,8 @@ where
                     inflight_guard.clear();
                     continue;
                 }
-                drop(dst_read);
                 self.mark_not_resident_on_device(dst_idx);
+                drop(dst_read);
             }
 
             let Some(copy_to_device) = &self.copy_to_device else {
@@ -1331,6 +1359,102 @@ mod tests {
         assert_eq!(timeout(Duration::from_secs(5), follower).await.expect("follower timed out").expect("follower task panicked")?, 1);
         assert_eq!(state.calls.load(Ordering::SeqCst), 2);
         assert!(tested.inflights[1].lock().is_none());
+        Ok(())
+    }
+
+    fn cached_mock_output() -> (super::CachedFuture<Arc<DevicesWrap<MockDataWithId>>>, Arc<DevicesWrap<MockDataWithId>>) {
+        use futures_util::FutureExt;
+        let data = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device(1)));
+        let value = Arc::clone(&data);
+        let cached = super::CachedFuture::from(async move { Ok(value) }.boxed().shared());
+        (cached, data)
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_tracks_areas_not_output_clones() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let (cached, data) = cached_mock_output();
+        let cleanup_first = cached.cleanup_registration(1);
+        let cleanup_last = cached.clone().cleanup_registration(1);
+        let borrowed_handle = cached.clone().await?;
+        cleanup_first().await?;
+        assert!(data.is_on_device(1), "another area is still active");
+        assert!(cached.has_cache_users());
+        cleanup_last().await?;
+        assert!(!cached.has_cache_users());
+        assert!(!data.is_on_device(1), "cache and external handles must not suppress cleanup");
+        assert!(borrowed_handle.is_on_device(0));
+        cleanup_last().await?; // callback replay must not decrement the users twice.
+        assert!(!cached.has_cache_users());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_waits_for_pending_result_and_uses_original_identity() -> Result<(), ThoError> {
+        use futures_util::FutureExt;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let old_data = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device(1)));
+        let cached = super::CachedFuture::from(async move { receive.await.unwrap() }.boxed().shared());
+        let cleanup = cached.cleanup_registration(1);
+        let map = dashmap::DashMap::new();
+        map.insert(0, cached.clone());
+        let task = tokio::spawn(cleanup());
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        let (replacement, new_data) = cached_mock_output();
+        map.insert(0, replacement);
+        send.send(Ok(Arc::clone(&old_data))).unwrap();
+        timeout(Duration::from_secs(5), task).await.unwrap().unwrap()?;
+        assert!(!old_data.is_on_device(1));
+        assert!(new_data.is_on_device(1), "stale cleanup must not look up a replacement by key");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_waits_for_borrow_and_allows_new_cached_user() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let (cached, data) = cached_mock_output();
+        let cleanup = cached.cleanup_registration(1);
+        cached.clone().await?;
+        let borrowed = data.load_from_any_device_(1).await?;
+        let task = cleanup();
+        futures_util::pin_mut!(task);
+        // Poll to the residency lock so this race does not depend on scheduling.
+        assert!(futures_util::poll!(&mut task).is_pending());
+        let next_cleanup = cached.cleanup_registration(1);
+        let new_handle = timeout(Duration::from_secs(5), cached.clone()).await.unwrap()?;
+        assert_eq!(borrowed.device(), &1);
+        drop(borrowed);
+        timeout(Duration::from_secs(5), task).await.unwrap()?;
+        let restored = new_handle.load_from_any_device_(1).await?;
+        assert_eq!(restored.device(), &1);
+        drop(restored);
+        next_cleanup().await?;
+        assert!(new_handle.is_on_device(0));
+        assert!(!new_handle.is_on_device(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_restore_race_observes_cpu_backup() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let (data, state) = ControlledCopyData::new(1, CopyBehavior::BlockFirst);
+        let data = Arc::new(DevicesWrap::wrap(data));
+        let cleanup = tokio::spawn({
+            let data = Arc::clone(&data);
+            async move { data.cleanup_device(1).await }
+        });
+        state.entered.acquire().await.unwrap().forget();
+        let cpu_reader = data.load_from_any_device_(0);
+        let gpu_reader = data.load_from_any_device_(1);
+        futures_util::pin_mut!(cpu_reader, gpu_reader);
+        assert!(futures_util::poll!(&mut cpu_reader).is_pending());
+        assert!(futures_util::poll!(&mut gpu_reader).is_pending());
+        state.release.add_permits(1);
+        timeout(Duration::from_secs(5), cleanup).await.unwrap().unwrap()?;
+        assert_eq!(timeout(Duration::from_secs(5), cpu_reader).await.unwrap()?.tho_device_idx(), 0);
+        assert_eq!(timeout(Duration::from_secs(5), gpu_reader).await.unwrap()?.tho_device_idx(), 1);
         Ok(())
     }
 

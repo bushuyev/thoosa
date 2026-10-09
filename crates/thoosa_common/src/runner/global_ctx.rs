@@ -759,6 +759,16 @@ pub mod mock_global_ctx {
             self
         }
 
+        #[cfg(test)]
+        pub fn with_run_purge_gpu_handler<F>(mut self, handler: F) -> Self
+        where
+            F: Fn(Vec<Box<dyn Fn() -> futures_util::future::BoxFuture<'static, Result<(), thoosa_shared::ThoError>> + Send + Sync>>) -> Result<(), thoosa_shared::ThoError> + Send + Sync + 'static,
+        {
+            // Tests observe the real owner's submissions without a background worker.
+            self.mock.expect_run_purge_gpu().returning(handler);
+            self
+        }
+
         pub fn with_run_purge_gpu(mut self) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_run_purge_gpu().times(0..).returning({
