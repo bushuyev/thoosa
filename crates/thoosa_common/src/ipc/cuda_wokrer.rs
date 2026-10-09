@@ -20,6 +20,7 @@ use anyhow::Context as _;
 use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
 use log::{LevelFilter, debug, error, info, trace};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Mutex, RwLock};
@@ -39,7 +40,7 @@ use tch::{Device, Tensor};
 use thoosa_shared::ipc_types::{H2DTensorKey, IpcTensorKind, TensorKey, WorkerOutput, WorkerTensorInfoPayload};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, StageStateInfo, WithId};
-use thoosa_shared::{CopyToDevice, ThoError, panic_to_err, panic_to_err_async};
+use thoosa_shared::{CopyToDevice, ThoError, panic_to_err};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
 use tokio::net::UnixStream;
@@ -64,9 +65,10 @@ async fn stage_state_operation(stages: &InstalledStages, operation: Operation, d
     let endpoint = installed_endpoint(stages, &key)?;
     let lease = Arc::clone(&endpoint.lease).write_owned().await;
     if purge {
-        endpoint.stage.purge(device).await?;
+        endpoint.purge(device).await?;
         return Ok(OpResult::Ok(None));
     }
+    endpoint.check_state()?;
     let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={key}")))?;
     let mut state_info = with_state.get_state_info(&device).await?;
     // Installation owns routing identity; model state supplies tensor names.
@@ -88,10 +90,11 @@ async fn finish_stage_export(stages: &InstalledStages, endpoint_name: String, st
     if export.as_ref().map(|export| export.id) != Some(export_id) {
         return Err(ThoError::new("finish does not belong to the active state export"));
     }
-    // Purge completes before releasing admission. Abort leaves the
-    // original state intact so a failed backup can be retried.
-    if commit { endpoint.stage.purge(device).await?; }
-    *export = None;
+    // Take ownership before any fallible work: errors and panics must release
+    // the freeze too. Failed purge invalidates only this endpoint, and the
+    // parent's committed CPU backup can be restored after a successful purge.
+    let _frozen = export.take().expect("validated export transaction");
+    if commit { endpoint.purge(device).await?; }
     Ok(OpResult::Ok(None))
 }
 
@@ -202,6 +205,7 @@ struct InstalledEndpoint {
     stage: Arc<dyn SyncStageIpcWrapper>,
     lease: Arc<tokio::sync::RwLock<()>>,
     export: tokio::sync::Mutex<Option<FrozenExport>>,
+    state_failure: Mutex<Option<ThoError>>,
 }
 
 struct FrozenExport {
@@ -211,8 +215,43 @@ struct FrozenExport {
 
 impl InstalledEndpoint {
     fn new(stage: Arc<dyn SyncStageIpcWrapper>) -> Self {
-        Self { stage, lease: Arc::new(tokio::sync::RwLock::new(())), export: tokio::sync::Mutex::new(None) }
+        Self { stage, lease: Arc::new(tokio::sync::RwLock::new(())), export: tokio::sync::Mutex::new(None), state_failure: Mutex::new(None) }
     }
+
+    fn check_state(&self) -> Result<(), ThoError> {
+        // A failed purge or panicking invocation may leave partial state. Never
+        // invoke or export it until an exclusive purge completes successfully.
+        match self.state_failure.lock().as_ref() { Some(error) => Err(error.clone()), None => Ok(()) }
+    }
+
+    async fn purge(&self, device: ThoDevice) -> Result<(), ThoError> {
+        // Mark before awaiting so cancellation also leaves the endpoint closed.
+        // Callers retain its write lease until this transaction finishes.
+        *self.state_failure.lock() = Some(ThoError::new("stage state purge did not complete"));
+        // Catch polling as well as construction. Catching only creation of a
+        // future lets its panic escape to the transport supervisor.
+        let result = std::panic::AssertUnwindSafe(async { self.stage.purge(device).await }).catch_unwind().await.unwrap_or_else(|panic| Err(worker_stage_panic(panic)));
+        if result.is_ok() { *self.state_failure.lock() = None; }
+        result
+    }
+
+    async fn run_with_state(&self, stage: &dyn ErasedWithState, input: &Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, stream: &mut dyn crate::copy_ctx::HandleCtx, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+        // The caller holds the endpoint's write lease. The wrapper synchronizes
+        // before unwinding; invalidate partial state before another caller enters.
+        match std::panic::AssertUnwindSafe(async { stage.do_run_with_state(input, tensors, device, stream, ctx).await }).catch_unwind().await {
+            Ok(result) => result,
+            Err(panic) => {
+                let error = worker_stage_panic(panic);
+                *self.state_failure.lock() = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+}
+
+fn worker_stage_panic(panic: Box<dyn std::any::Any + Send>) -> ThoError {
+    let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("non-string panic payload");
+    ThoError::new(format!("worker stage panicked; state must be purged before reuse: {message}"))
 }
 
 type InstalledStages = Arc<DashMap<String, Option<Arc<InstalledEndpoint>>>>;
@@ -524,6 +563,7 @@ impl CudaWorker {
 
 
                         let _lease = endpoint.lease.write().await;
+                        endpoint.check_state()?;
                         endpoint.stage.as_with_state()
                             .ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?
                             .set_state_tensor(&context.tho_device, tensor_id.clone(), cuda_t).await?;
@@ -624,14 +664,19 @@ impl CudaWorker {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
 
                     let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
-                    let _lease = endpoint.lease.read().await;
+                    let with_state = endpoint.stage.as_with_state();
+                    // Stateful stages already serialize on their state mutex.
+                    // Extend that exclusion through panic invalidation as well.
+                    let _state_lease = if with_state.is_some() { Some(endpoint.lease.write().await) } else { None };
+                    let _shared_lease = if with_state.is_none() { Some(endpoint.lease.read().await) } else { None };
+                    endpoint.check_state()?;
                     let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
                     let mut stream = context.exec_stream_pool.acquire().await?;
-                    let result = match endpoint.stage.as_with_state() {
+                    let result = match with_state {
                         Some(with_state) => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} as_with_state");
                             // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
-                            panic_to_err_async!(with_state.do_run_with_state(&input, &context.all_cuda_tensors, &context.tho_device, &mut stream, &run_ctx))
+                            endpoint.run_with_state(with_state, &input, &context.all_cuda_tensors, &context.tho_device, &mut stream, &run_ctx).await
                         }
                         None => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
@@ -916,13 +961,26 @@ mod mock_request_handler {
         pub purge_result: Option<Result<(), ThoError>>,
     }
     impl MockExportEndpointBuilder {
+        pub fn build_with_purge_retry(self, panics: bool) -> MockExportEndpoint {
+            let mut endpoint = self.build_inner(panics);
+            endpoint.expect_purge_state().times(1).return_once(|| Ok(()));
+            endpoint
+        }
+
         pub fn build(self) -> MockExportEndpoint {
+            self.build_inner(false)
+        }
+
+        fn build_inner(self, panics: bool) -> MockExportEndpoint {
             let mut endpoint = MockExportEndpoint::new();
             endpoint.expect_describe().times(1).return_once(move || {
                 if self.describe_fails { Err(ThoError::new("description failed")) } else { Ok(StageStateInfo::empty()) }
             });
             if let Some(result) = self.purge_result {
-                endpoint.expect_purge_state().times(1).return_once(|| result);
+                endpoint.expect_purge_state().times(1).return_once(move || {
+                    if panics { panic!("purge polling panic"); }
+                    result
+                });
             } else {
                 endpoint.expect_purge_state().never();
             }
@@ -987,6 +1045,50 @@ mod request_tests {
             finish_stage_export(&stages, "stateful".into(), None, 7, commit, 1usize.into()).await.unwrap();
             assert!(endpoint.lease.try_write().is_ok(), "matching finish must admit waiting work");
             assert!(finish_stage_export(&stages, "stateful".into(), None, 7, commit, 1usize.into()).await.is_err(), "a transaction can finish only once");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_export_commit_releases_lease_and_allows_state_purge_retry() {
+        for panics in [false, true] {
+            let stages: InstalledStages = Arc::new(DashMap::new());
+            let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
+                describe_fails: false, purge_result: Some(Err(ThoError::oom())),
+            }.build_with_purge_retry(panics))));
+            stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
+            stage_state_operation(&stages, Operation::BeginStageExport { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.unwrap();
+            let error = finish_stage_export(&stages, "stateful".into(), None, 7, true, 1usize.into()).await.unwrap_err();
+            assert_eq!(error.is_oom(), !panics);
+            assert!(!error.needs_cuda_ctx_reset() && !error.is_cuda_recovery_failed());
+            assert!(endpoint.export.lock().await.is_none());
+            assert!(endpoint.lease.try_write().is_ok(), "failed commit must release its export freeze");
+            assert!(endpoint.check_state().is_err(), "partially purged state must not be invoked or exported");
+            // This is the same request used by ProxyStage before restoring its CPU
+            // backup after a failed commit; recovery stays within this endpoint.
+            stage_state_operation(&stages, Operation::PurgeStage { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 8).await.unwrap();
+            assert!(endpoint.check_state().is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stateful_panic_invalidates_only_endpoint_after_synchronization() {
+        for fatal_sync in [false, true] {
+            let state = Arc::new(tokio::sync::Mutex::new(0));
+            let stage = crate::ipc::wraps::mock_stateful_worker::MockStatefulWorkerBuilder { state: Arc::clone(&state), panics: true, fails: false }.build();
+            let endpoint = InstalledEndpoint::new(Arc::new(stage));
+            let _lease = endpoint.lease.write().await;
+            let mut stream = crate::copy_ctx::MockHandleCtx::new();
+            stream.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
+            let during_sync = Arc::clone(&state);
+            stream.expect_on_after_run().times(1).return_once(move || {
+                assert!(during_sync.try_lock().is_err(), "panicking execution must keep state locked until synchronization");
+                if fatal_sync { Err(ThoError::from_cuda_error("injected fatal synchronization", 700)) } else { Ok(()) }
+            });
+            let input: Box<dyn WorkerInput> = Box::new(());
+            let error = endpoint.run_with_state(endpoint.stage.as_with_state().unwrap(), &input, &AllTensors::new(worker_id()), &1usize.into(), &mut stream, &WokerRunCtx::new(1)).await.unwrap_err();
+            assert_eq!(error.needs_cuda_ctx_reset(), fatal_sync);
+            assert_eq!(endpoint.check_state().is_err(), !fatal_sync);
+            assert_eq!(*state.try_lock().unwrap(), 1, "the panic occurred after mutating state");
         }
     }
 
