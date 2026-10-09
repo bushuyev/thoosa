@@ -743,12 +743,13 @@ where
         debug!("TrainMotifNets::run: futures.len={}", futures.len());
 
 
+        // Every selected motif is required; never publish a partial training result.
         let results = track_await(collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
             FuturesOrdering::Unordered,
             "train motif",
-        )).await;
+        )).await?;
 
         debug!("TrainMotifNets::run: results={results:?}");
 
@@ -1495,6 +1496,27 @@ mod tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         do_train_motif_nets().await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_motif_nets_propagates_parallel_load_failure() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let ws = Arc::new(RwLock::new(crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, 900).build()));
+        // Both required motifs fail inside the parallel work, not in stage setup.
+        // The builder's one-call expectations also prove the collection drains.
+        let store = MockMotifsStoreBuilder::new()
+            .with_list_selected_motifs([(vec![2], Ok(HashMap::from([(2, vec![vec![(10, 1.0), (11, 1.0)]])])) )])
+            .with_list_output_run_config_ids([(2, Ok(vec![]))])
+            .with_list_motif_slices(10, Some(vec![2]), None, None, Err(ThoError::ContextReset))
+            .with_list_motif_slices(11, Some(vec![2]), None, None, Err(ThoError::ContextReset))
+            .build();
+        let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
+        let stage = Arc::new(TrainMotifNets::new(loader, &ws, &store, cosine_net_run_configs(), 10, None).await?);
+        let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![2] }, Arc::new(OptConfig::new(3, 2)), None);
+        let error = stage.run(input, mock_run_ctx::default(1)).await.unwrap_err();
+        assert!(matches!(error.what(), ThoError::ContextReset), "parallel interruption must remain typed: {error:#}");
+        Ok(())
     }
 
     async fn do_train_motif_nets() -> Result<(), ThoError> {

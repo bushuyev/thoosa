@@ -229,18 +229,10 @@ where
                 async move {
                     let motif_id_wrap = Arc::new(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone());//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
 
-                    match track_await(motif_loader_clone.run_cached(
-                        motif_id_wrap, ctx.branch(false)
-                    )).await {
-                        Ok(motif) => {
-                            debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
-                            Ok::<_, ThoError>(Some(motif))
-                        }
-                        Err(e) => {
-                            warn!("Can't load motif: {e:?}");
-                            Ok::<_, ThoError>(None)
-                        }
-                    }
+                    // Each requested motif contributes to the stack; a failed load is not an absent motif.
+                    let motif = track_await(motif_loader_clone.run_cached(motif_id_wrap, ctx.branch(false))).await?;
+                    debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
+                    Ok::<_, ThoError>(motif)
                 }
             });
 
@@ -249,10 +241,7 @@ where
             motif_ids_len,
             FuturesOrdering::Ordered,
             "StackedMotifsLoader::run",
-        )).await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        )).await?;
 
         let data_refs = try_join_all(loaded_motifs.iter().map(|motif| motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
         let data = data_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();

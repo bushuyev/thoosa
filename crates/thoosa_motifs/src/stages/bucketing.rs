@@ -1002,7 +1002,7 @@ where
             resources_len,
             FuturesOrdering::Unordered,
             "BucketingStage/resources",
-        )).await
+        )).await?
         .into_iter()
         .collect::<Vec<_>>();
 

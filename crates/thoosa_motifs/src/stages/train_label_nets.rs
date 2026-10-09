@@ -753,7 +753,7 @@ where
                 labels_train_and_valid_sets_len,
                 FuturesOrdering::Unordered,
                 "train labels",
-            )).await;
+            )).await?;
 
             Ok(Arc::new(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results)))
         }
@@ -945,7 +945,7 @@ where
                     batch_len,
                     FuturesOrdering::Ordered,
                     "ResourcesBatch::build_batch_stream",
-                )).await
+                )).await?
                     .into_iter()
                     .collect::<Result<Vec<_>, ThoError>>()?
                     .into_iter()
