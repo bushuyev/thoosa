@@ -760,7 +760,7 @@ impl CachedPurgeOutput for MotifStatsOutput {
         Box::pin(async { Ok(()) })
     }
 
-    fn dump_to_cpu_if_last_ref<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
+    fn cleanup_device<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
         Box::pin(async { Ok(()) })
     }
 
@@ -773,10 +773,6 @@ impl CachedPurgeOutput for MotifStatsOutput {
     }
 
     fn is_on_cpu_before(&self, _purge_until: u64) -> bool {
-        true
-    }
-
-    fn is_uniquely_held(&self) -> bool {
         true
     }
 

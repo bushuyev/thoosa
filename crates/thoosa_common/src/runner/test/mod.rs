@@ -1115,13 +1115,50 @@ mod tests {
         assert_eq!(0, purged);
         assert_eq!(1, DummyLoader::cache().await.len());
 
-        drop(loaded_tensor_0_0);
+        // Retention follows the cache area, not incidental output handles.
+        drop(ctx_device_0);
 
         let purged = DummyLoader::cache().await.purge_cpu(0).await;
 
         assert_eq!(1, purged);
         assert_eq!(0, DummyLoader::cache().await.len());
+        assert!(loaded_tensor_0_0.is_all_on_cpu().await);
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_cached_cleanup_runs_after_last_area_with_live_output_handles() -> Result<(), ThoError> {
+        use crate::runner::global_ctx::MockGlobalCtx;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let global = Box::leak(Box::new(mock_global_ctx::build()
+            .with_age(0).with_device_count(2).with_get_runner(2).with_register_cache()
+            .with_run_purge_gpu_handler(move |closures| { tx.send(closures).unwrap(); Ok(()) })
+            .finish()));
+        let global_context = MockGlobalCtx::global_context();
+        global_context.expect().return_const(&*global);
+        let shutdown_context = MockGlobalCtx::is_shutting_down_context();
+        shutdown_context.expect().return_const(false);
+        let mut first_area = RunCtxImpl::new(1, "first area");
+        let mut second_area = RunCtxImpl::new(1, "second area");
+        let loader = Arc::new(DummyLoader::new(3));
+        let first = Arc::clone(&loader).run_cached(DLoaderInput { id: DLoaderInputId("resource_1") }, first_area.branch(false)).await?;
+        let second = Arc::clone(&loader).run_cached(DLoaderInput { id: DLoaderInputId("resource_1") }, second_area.branch(false)).await?;
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(loader.run_count.load(Relaxed), 1);
+        drop(first.load_from_any_device_(1).await?);
+
+        // Exercise the actual Cached::run_cached registrations and shared-owner
+        // Drop. Neither the cache nor the two returned handles should block eviction.
+        drop(first_area);
+        for cleanup in rx.recv().await.unwrap() { cleanup().await?; }
+        assert!(!first.is_all_on_cpu().await, "the second area still uses this entry");
+        drop(second_area);
+        for cleanup in rx.recv().await.unwrap() { cleanup().await?; }
+        assert!(first.is_all_on_cpu().await);
+        assert!(second.is_on_device(0));
+        assert_eq!(DummyLoader::cache().await.len(), 1);
+        assert!(rx.try_recv().is_err());
         Ok(())
     }
 
