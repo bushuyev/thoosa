@@ -285,20 +285,33 @@ impl CopyTransfer {
     }
 }
 
-// Completion failures (including an unwind after submission) cannot certify that
-// DMA stopped. Keep allocations and the pinned-buffer/stream checkout out of
-// reuse for process lifetime. Activity is separate so recovery can still drain.
+// An unwind must drain submitted DMA before releasing allocation owners. Only
+// an unsuccessful drain quarantines storage; a host panic is not a CUDA fault.
 struct CopyCompletion<T> {
     resources: Option<T>,
     submitted: bool,
     pool: Arc<CopyBufferPool>,
+    stream: Arc<ThoCudaStream>,
+}
+
+impl<T> CopyCompletion<T> {
+    fn finish(&mut self, completion: crate::copy_ctx::StreamCompletion) -> Result<(), ThoError> {
+        self.submitted = false;
+        if !completion.confirmed {
+            self.pool.fail(completion.result.as_ref().unwrap_err().clone());
+            // Keep all DMA allocations, including a worker mapping, alive when
+            // neither synchronization attempt establishes physical completion.
+            if let Some(resources) = self.resources.take() { std::mem::forget(resources); }
+        }
+        completion.result
+    }
 }
 
 impl<T> Drop for CopyCompletion<T> {
     fn drop(&mut self) {
         if self.submitted {
-            self.pool.fail(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "copy unwound or failed before completion was established".into() });
-            if let Some(resources) = self.resources.take() { std::mem::forget(resources); }
+            let completion = crate::copy_ctx::complete_cuda_stream(self.stream.synchronize(), || self.stream.synchronize());
+            if let Err(error) = self.finish(completion) { log::debug!("CUDA copy unwind synchronization failed: {error:#}"); }
         }
     }
 }
@@ -338,11 +351,11 @@ async fn copy_transfer(
                 let buffer = pool.acquire().await?;
                 let copy_pool = Arc::clone(&pool);
                 let result = spawn_copy_chunk(transfer, buffer, move |transfer, buffer| {
-                    let mut completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: false, pool: copy_pool };
+                    let stream = Arc::clone(&buffer.1);
+                    let mut completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
                     let buffer = &completion.resources.as_ref().expect("copy resources").1;
                     if chunk.len > buffer.0.len() { return Err(ThoError::new("copy chunk exceeds pinned buffer")); }
                     let pinned = buffer.0.as_mut_ptr();
-                    let stream = Arc::clone(&buffer.1);
                     let _guard = ThoStreamGuard::new(stream.as_ref())?;
                     let source = transfer.source.address + chunk.offset;
                     let destination = transfer.destination.address + chunk.offset;
@@ -359,14 +372,9 @@ async fn copy_transfer(
                             unsafe { thoosa_shims::memcpy::tho_cu_memcpy_htod_async(destination as _, pinned.cast(), chunk.len, stream.as_mut_ptr()) }
                         }
                     };
-                    // Synchronize even when enqueue reports an error; a failed sync
-                    // takes precedence and quarantines all potentially live storage.
-                    let sync = stream.synchronize().map_err(|error| {
-                        if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() { error }
-                        else { ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: format!("copy completion could not be established: {error}") } }
-                    });
-                    completion.submitted = sync.is_err();
-                    if let Err(error) = &sync { completion.pool.fail(error.clone()); }
+                    // Drain even after a failed submission. Preserve the original
+                    // CUDA action when a second synchronization establishes completion.
+                    let sync = completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()));
                     crate::copy_ctx::finish_cuda_run(check_cuda_status(submitted, "CUDA copy submission"), sync)?;
                     if matches!(direction, CopyDirection::ToCpu) {
                         unsafe { std::ptr::copy_nonoverlapping(pinned, destination as *mut u8, chunk.len); }
@@ -1154,7 +1162,7 @@ mod transfer_lifetime_tests {
     }
 
     #[tokio::test]
-    async fn test_unconfirmed_copy_completion_quarantines_storage_and_wakes_pool_waiters() -> Result<(), ThoError> {
+    async fn test_copy_panic_drains_and_reuses_pool_without_restart() -> Result<(), ThoError> {
         let context = ThoCudaContext::new(0)?;
         context.bind_to_thread()?;
         let pool = Arc::new(CopyBufferPool::new([(PinnedHostBuffer::new(8, 0)?, Arc::new(ThoCudaStream::from_pool(0, true)?))]));
@@ -1166,20 +1174,42 @@ mod transfer_lifetime_tests {
         let weak = Arc::downgrade(&transfer);
         let failed_pool = Arc::clone(&pool);
         let result = spawn_copy_chunk(transfer, buffer, move |transfer, buffer| {
-            // Simulate unwinding after submission at the same completion guard
-            // used by real DMA. These tiny allocations intentionally remain
-            // quarantined until this test process exits.
-            let _completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: true, pool: failed_pool };
+            // Unwinding after submission still owns both allocations until the
+            // completion guard has drained the real CUDA stream.
+            let stream = Arc::clone(&buffer.1);
+            let _completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: true, pool: failed_pool, stream };
             panic!("copy panicked after submitting DMA")
         }).await;
         assert!(result.unwrap_err().is_panic());
+        assert!(weak.upgrade().is_none(), "successful drain must release storage despite the host panic");
+        drop(tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap()?);
+        pool.check()?;
+        assert_eq!(pool.remaining_capacity(), 1, "drained stream must return to the pool");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unconfirmed_copy_completion_quarantines_storage_and_wakes_pool_waiters() -> Result<(), ThoError> {
+        let context = ThoCudaContext::new(0)?;
+        context.bind_to_thread()?;
+        let pool = Arc::new(CopyBufferPool::new([(PinnedHostBuffer::new(8, 0)?, Arc::new(ThoCudaStream::from_pool(0, true)?))]));
+        let buffer = pool.acquire().await?;
+        let waiting = pool.acquire();
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        let transfer = tensor_transfer()?;
+        let weak = Arc::downgrade(&transfer);
+        let stream = Arc::clone(&buffer.1);
+        let mut completion = CopyCompletion { resources: Some((transfer, buffer)), submitted: true, pool: Arc::clone(&pool), stream };
+        // Both drain attempts fail without a fatal code. Do not invent one, but
+        // still retain potentially live storage and reject ordinary reuse.
+        let drained = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom()));
+        let error = completion.finish(drained).unwrap_err();
+        assert!(error.is_cuda_recovery_failed() && !error.needs_cuda_ctx_reset());
+        drop(completion);
         assert!(weak.upgrade().is_some(), "unknown completion must not release storage");
-        let error = match tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap() {
-            Err(error) => error,
-            Ok(_) => panic!("failed pool must not return a buffer"),
-        };
-        assert!(error.needs_cuda_ctx_reset());
-        assert!(pool.check().unwrap_err().needs_cuda_ctx_reset());
+        assert!(tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().is_err());
+        assert!(pool.check().unwrap_err().is_cuda_recovery_failed());
         assert_eq!(pool.remaining_capacity(), 0, "quarantined stream must never return to the pool");
         Ok(())
     }

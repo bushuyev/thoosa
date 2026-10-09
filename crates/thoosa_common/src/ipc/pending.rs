@@ -183,6 +183,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_failed_stream_drain_keeps_storage_until_exit_without_fabricating_fatal_code() {
+        let pending = PendingRequests::new(worker());
+        let (tx, _rx) = mpsc::channel(1);
+        let storage = Arc::new(vec![0u8; 8]);
+        let weak = Arc::downgrade(&storage);
+        let (reply, response) = oneshot::channel();
+        pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker(), 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
+        // A failed drain is the last-resort transport failure, even though both
+        // underlying errors are recoverable in isolation. DMA may still be live.
+        let error = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
+        pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: error.into() }).unwrap();
+        assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
+        assert!(pending.failed.is_cancelled());
+        assert!(pending.failure().is_cuda_recovery_failed() && !pending.failure().needs_cuda_ctx_reset());
+        assert!(weak.upgrade().is_some());
+        pending.exited(ThoError::ContextReset);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
     async fn test_unconfirmed_exit_wakes_callers_without_releasing_storage() {
         let pending = PendingRequests::new(worker());
         let (tx, _rx) = mpsc::channel(1);

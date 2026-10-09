@@ -388,7 +388,7 @@ where
 }
 
 #[cfg(test)]
-mod mock_stateful_worker {
+pub(crate) mod mock_stateful_worker {
     use super::*;
 
     mockall::mock! {
@@ -400,6 +400,7 @@ mod mock_stateful_worker {
     }
 
     impl SyncStageIpcWrapper for MockStatefulWorker {
+        fn as_with_state(&self) -> Option<&dyn ErasedWithState> { Some(self) }
         fn do_run(&self, _: &Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
             self.execute(&mut 0)
         }
