@@ -180,11 +180,13 @@ where
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         let mut purged_count = 0usize;
+        // Removing a cache entry only releases cache ownership. External handles
+        // and residency guards retain their allocations without Arc-count guesses.
         self.retain(|k, v| {
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
-            if v.peek()
+            if !v.has_cache_users() && v.peek()
                 .and_then(|v| v.as_ref().map(|r| {
-                    r.is_on_cpu_before(purge_until) && r.is_uniquely_held()
+                    r.is_on_cpu_before(purge_until)
                 }).ok())
                 .unwrap_or(false)
             {

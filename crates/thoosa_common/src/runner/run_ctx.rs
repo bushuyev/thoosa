@@ -1,7 +1,7 @@
 use thoosa_shared::traits::MaxParallelCtx;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
-use log::{debug, warn};
+use log::debug;
 use mockall_double::double;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
@@ -11,7 +11,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
 use thoosa_shared::traits::{Adjustable, RunCtx, WithId};
-use thoosa_shared::{ThoError, perf_log, sync_mutex_lock};
+use thoosa_shared::ThoError;
 use tracing::error;
 
 use crate as thoosa_common;
@@ -22,7 +22,25 @@ use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel};
 use thoosa_shared::mono_key;
 
 type PurgeGpuClosure = Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>;
-type SharedPurgeGpuClosures = Arc<Mutex<Vec<PurgeGpuClosure>>>;
+// Arc drops this owner exactly once, after every branch has submitted its
+// pending callbacks. A snapshot of strong_count cannot elect the final branch.
+#[derive(Default)]
+struct CacheAreaCleanup {
+    closures: Mutex<Vec<PurgeGpuClosure>>,
+}
+
+impl Drop for CacheAreaCleanup {
+    fn drop(&mut self) {
+        let closures = std::mem::take(self.closures.get_mut());
+        if !closures.is_empty() {
+            if let Err(error) = GlobalCtx::global().run_purge_gpu(closures) {
+                error!("cache-area cleanup submission failed: {error:?}");
+            }
+        }
+    }
+}
+
+type SharedPurgeGpuClosures = Arc<CacheAreaCleanup>;
 
 
 #[derive(Named)]
@@ -70,7 +88,7 @@ impl RunCtxImpl {
         Self {
             id,
             tho_device_idx,
-            purge_gpu_closures: Some(Arc::new(Mutex::new(vec![]))),
+            purge_gpu_closures: Some(Arc::new(CacheAreaCleanup::default())),
             pending_purge_gpu_closures: vec![],
             max_other_parallel: MAX_PARALLEL,
             branches: AtomicU32::new(0)
@@ -114,7 +132,6 @@ impl RunCtx for RunCtxImpl {
 
             debug!("RunCtxImpl::branch: branch_name={:?}", branched_ctx.id);
 
-            branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//Arc::strong_count == 1 causes it to purge gpu caches on Drop
 
             branched_ctx
 
@@ -150,34 +167,76 @@ impl RunCtx for RunCtxImpl {
 
 impl Drop for RunCtxImpl {
     fn drop(&mut self) {
-
-        if let Some(purge_gpu_closures) = self.purge_gpu_closures.take() {
-            let count = Arc::strong_count(&purge_gpu_closures);
-            let mut pending = std::mem::take(&mut self.pending_purge_gpu_closures);
-
-            debug!("Drop for RunCtxImpl::drop: id={:?} count={count} pending_purge_gpu_closures.len={}", self.id, pending.len());
-
-            if count == 1 {// it's topmost ctx
-                match Arc::into_inner(purge_gpu_closures) {
-                    None => {
-                        warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtxImpl");
-                    }
-                    Some(m) => {
-
-                        let mut inner = m.into_inner();
-                        inner.append(&mut pending);
-                        if !inner.is_empty() {
-                            if let Err(e) = GlobalCtx::global().run_purge_gpu(inner) {
-                                error!("run_purge_gpu failed: {e:?} ");
-                            }
-                        }
-                    }
-                }
-            } else if !pending.is_empty() {
-                perf_log!(
-                    sync_mutex_lock!(purge_gpu_closures).append(&mut pending)
-                );
-            }
+        if let Some(owner) = self.purge_gpu_closures.take() {
+            // Append before releasing this branch's ownership. The owner's Drop
+            // cannot run until all concurrent branches have finished appending.
+            owner.closures.lock().append(&mut self.pending_purge_gpu_closures);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::FutureExt;
+    use std::sync::{Barrier, mpsc};
+    use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
+
+    #[tokio::test]
+    async fn test_concurrent_final_branches_submit_all_cleanup_exactly_once() {
+        let (tx, rx) = mpsc::channel();
+        let global = Box::leak(Box::new(mock_global_ctx::build().with_run_purge_gpu_handler(move |closures| {
+            tx.send(closures).unwrap();
+            Ok(())
+        }).finish()));
+        let global_context = MockGlobalCtx::global_context();
+        global_context.expect().return_const(&*global);
+        let executed = Arc::new(AtomicU32::new(0));
+
+        for _ in 0..64 {
+            let mut first = RunCtxImpl::new(1, "concurrent cleanup");
+            let mut second = first.branch(false);
+            for ctx in [&mut first, &mut second] {
+                let executed = Arc::clone(&executed);
+                ctx.add_purge_gpu_closure(Box::new(move || {
+                    let executed = Arc::clone(&executed);
+                    async move { executed.fetch_add(1, Ordering::SeqCst); Ok(()) }.boxed()
+                }));
+            }
+            let barrier = Barrier::new(2);
+            std::thread::scope(|scope| {
+                let barrier = &barrier;
+                scope.spawn(move || { barrier.wait(); drop(first); });
+                scope.spawn(move || { barrier.wait(); drop(second); });
+            });
+            let closures = rx.try_recv().expect("final owner must submit cleanup");
+            assert_eq!(closures.len(), 2);
+            assert!(rx.try_recv().is_err(), "one submission per area");
+            for cleanup in closures { cleanup().await.unwrap(); }
+        }
+        assert_eq!(executed.load(Ordering::SeqCst), 128);
+    }
+
+    #[test]
+    fn test_new_cache_area_cleans_up_independently_of_parent() {
+        let (tx, rx) = mpsc::channel();
+        let global = Box::leak(Box::new(mock_global_ctx::build().with_run_purge_gpu_handler(move |closures| {
+            tx.send(closures.len()).unwrap();
+            Ok(())
+        }).finish()));
+        let global_context = MockGlobalCtx::global_context();
+        global_context.expect().return_const(&*global);
+        let mut parent = RunCtxImpl::new(1, "parent");
+        let mut shared = parent.branch(false);
+        let mut independent = parent.branch(true);
+        shared.add_purge_gpu_closure(Box::new(|| async { Ok(()) }.boxed()));
+        independent.add_purge_gpu_closure(Box::new(|| async { Ok(()) }.boxed()));
+        drop(shared);
+        assert!(rx.try_recv().is_err());
+        drop(independent);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+        drop(parent);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert!(rx.try_recv().is_err());
     }
 }
