@@ -422,7 +422,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
             grid_runs_len,
             FuturesOrdering::Unordered,
             "FindAndSelectMotifsStage::run",
-        )).await;
+        )).await?;
 
 
         let best_configs = indexed_best_configs

@@ -99,7 +99,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId, 
 use thoosa_shared::traits::AsyncStage;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MaxParallelCtx, OutId, RunCtx, Select, DebugId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, RangeOrValue, collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, debug_id};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, RangeOrValue, collect_futures_best_effort_with_progress, mono_key, panic_to_err_async, parse_resources, debug_id};
 use thoosa_shared::{ResourceType, ThoError, cdt, cdt_for_dir};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::{Handle, Runtime};
@@ -1257,9 +1257,7 @@ where
             async move {
                 debug!("run_plot: motif_id={motif_id}");
 
-                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).await {
-                    error!("motif {motif_id} failed: e={e:?}");
-                };
+                let result = track_await(plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).await;
                 track_await(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
@@ -1267,11 +1265,12 @@ where
                     info!("done {done} from  {motifs_len}");
                 }
 
-                Ok::<_, ThoError>(())
+                result.map_err(|error| ThoError::from(error).context(format!("plot motif {motif_id}")))
             }
         });
 
-    let _ = track_await(collect_futures_with_progress(
+    // Plot exports are independent; deliberately keep successful plots if another fails.
+    let _ = track_await(collect_futures_best_effort_with_progress(
         futures,
         motifs_len,
         FuturesOrdering::Unordered,
@@ -1326,9 +1325,7 @@ where
             let ctx = ctx.branch(true);
             async move {
                 debug!("plot_selected_motifs: motif_id={motif_id}");
-                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout)).await {
-                    error!("motif {motif_id} failed: e={e:?}");
-                };
+                let result = track_await(plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout)).await;
                 //MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
@@ -1336,11 +1333,12 @@ where
                     info!("done {done} from  {motifs_len}");
                 }
 
-                Ok::<_, ThoError>(())
+                result.map_err(|error| ThoError::from(error).context(format!("plot motif {motif_id}")))
             }
         });
 
-    let _ = track_await(collect_futures_with_progress(
+    // Plot exports are independent; deliberately keep successful plots if another fails.
+    let _ = track_await(collect_futures_best_effort_with_progress(
         futures,
         motifs_len,
         FuturesOrdering::Unordered,

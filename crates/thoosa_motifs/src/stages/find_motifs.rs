@@ -519,7 +519,7 @@ where
             run_configs_len,
             FuturesOrdering::Unordered,
             "FindMotifsStage::new",
-        )).await
+        )).await?
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -587,7 +587,7 @@ where
             run_config_stages_len,
             FuturesOrdering::Unordered,
             "FindMotifsStage::run",
-        )).await;
+        )).await?;
 
         //FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
         Ok(Arc::new(FindMotifsSavableResult::new()))

@@ -207,14 +207,9 @@ where
                 async move {
                     let stacked_motifs_input = Arc::new(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?);
 
-                    match track_await(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await {
-                        Ok(motif_data) => Ok::<_, ThoError>(Some((find_motifs_run_config, motif_data))),
-                        Err(e) => {
-                            //TODO switch to CPU if OOM ctx.to_cpu...
-                            error!("Can't load select_motifs_run_config: e={e:?} select_motifs_run_config={find_motifs_run_config:?}");
-                            Ok::<_, ThoError>(None)
-                        }
-                    }
+                    // Missing required source data must fail extension instead of shrinking the run.
+                    let motif_data = track_await(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await?;
+                    Ok::<_, ThoError>((find_motifs_run_config, motif_data))
                 }
             });
 
@@ -223,10 +218,7 @@ where
             find_motifs_run_configs_len,
             FuturesOrdering::Ordered,
             "SelectMotifsStage::load_stacked_motifs",
-        )).await
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        )).await?;
         Ok(run_configs__stacked_motifs)
     }
 
@@ -270,7 +262,7 @@ where
                         let motif_stat = motif_stats.channel_value(&slices_selector_metric, 0)?;
                         Ok::<_, ThoError>((motif_id, motif_stat))
                     }).await;
-                    Ok::<_, ThoError>(result)
+                    result
                 }
             });
 
@@ -279,9 +271,7 @@ where
             motif_ids_len,
             FuturesOrdering::Unordered,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
-        )).await
-            .into_iter()
-            .collect::<Result<Vec<_>, ThoError>>()?
+        )).await?
             .into_iter()
             .collect::<HashMap<_, _>>();
 
@@ -357,7 +347,6 @@ where
         let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>> =
             Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
-        let run_configs__stacked_motifs_dbg = Arc::new(run_configs__stacked_motifs.clone());
         let run_configs__stacked_motifs_len = run_configs__stacked_motifs.len();
         let futures = run_configs__stacked_motifs
             .into_iter()
@@ -372,10 +361,10 @@ where
                 let mut ctx_to_move = ctx.branch(true);
                 let clc_dist = Arc::clone(&self.motif_stats);
                 let slices_selector_metric = slices_selector_metric.clone();
-                let run_configs__stacked_motifs_dbg = Arc::clone(&run_configs__stacked_motifs_dbg);
 
                 async move {
-                    match track_await(async {
+                    // Propagate errors before publishing the accumulated slice set.
+                    track_await(async {
                         let motifs_stats = track_await(Self::clc_stacked_motifs_statistics(
                             clc_dist,
                             Arc::clone(&motif_data),
@@ -396,13 +385,7 @@ where
                             total_size,
                             ctx_to_move.branch(false),
                         )).await
-                    }).await {
-                        Ok(v) => Ok::<_, ThoError>(Some(v)),
-                        Err(e) => {
-                            error!("SelectMotifsStage::run: got error={e:?} while selecting slices for {run_configs__stacked_motifs_dbg:?}:");
-                            Ok::<_, ThoError>(None)
-                        }
-                    }
+                    }).await
                 }
             });
 
@@ -411,8 +394,7 @@ where
             run_configs__stacked_motifs_len,
             FuturesOrdering::Unordered,
             "SelectMotifsStage::extend_motifs_for_run_config",
-        )).await;
-        //gpt TODO!! per-run errors are swallowed; channels_motifs_added_slices may be incomplete with no signal to caller.
+        )).await?;
 
         if Arc::strong_count(&channels_motifs_added_slices) != 1 {
             return Err(ThoError::new(format!("can't unwrap motif_added_slices for {:?}", extend_motifs_run_config)))
@@ -598,7 +580,7 @@ where
                             }
                             Ok::<_, ThoError>(())
                         }).await;
-                        Ok::<_, ThoError>(result)
+                        result
                     }
                 });
 
@@ -607,9 +589,7 @@ where
                 channel_masks_dists_ids_len,
                 FuturesOrdering::Unordered,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
-            )).await
-                .into_iter()
-                .collect::<Result<Vec<_>, ThoError>>()?;
+            )).await?;
 
             debug!("SelectMotifsStage::run: 2. find_motifs_run_config={find_motifs_run_config:?}");
 
@@ -679,7 +659,7 @@ where
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await;
+        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await?;
         Ok(Arc::new(ExtendMotifsSavableResult::new()))
     }
 }
