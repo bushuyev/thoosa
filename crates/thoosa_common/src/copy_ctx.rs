@@ -291,7 +291,7 @@ pub(crate) fn finish_cuda_run<T>(result: Result<T, ThoError>, sync: Result<(), T
 
 // Consume failures retain their owned input, but use the same error precedence
 // as borrowed execution so the runner sees fatal stream errors through either API.
-fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) -> ThoError {
+pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) -> ThoError {
     match sync {
         Err(sync) => {
             if sync.is_cuda_recovery_failed() || (!original.is_cuda_recovery_failed() && sync.needs_cuda_ctx_reset() && !original.needs_cuda_ctx_reset()) {
@@ -308,7 +308,7 @@ fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) -> ThoError
 // The captured lease generation prevents a late copy error restarting a successor.
 pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc<CudaActivityGate>, generation: CudaDeviceGeneration) -> Result<T, ThoError> {
     result.map_err(|error| {
-        if error.needs_cuda_ctx_reset() {
+        if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
             GlobalCtx::global().get_runner(gate.device_idx()).request_cuda_reset_for_generation(generation, error)
                 .err().unwrap_or(ThoError::ContextReset)
         } else { error }
@@ -479,8 +479,41 @@ impl CudaLocalActorHandle {
 
 }
 
-// A synchronization error leaves completion unknown. Quarantine that lease and
-// close this pool before publishing the error; queued acquisitions must wake too.
+// A nonfatal CUDA error can be reported by synchronization without making the
+// context unusable. Try to drain the stream once more before quarantining it.
+// Even a successful drain must not publish the failed operation's output.
+pub(crate) struct StreamCompletion {
+    pub(crate) result: Result<(), ThoError>,
+    pub(crate) confirmed: bool,
+}
+
+pub(crate) fn complete_cuda_stream(result: Result<(), ThoError>, retry: impl FnOnce() -> Result<(), ThoError>) -> StreamCompletion {
+    let error = match result {
+        Ok(()) => return StreamCompletion { result: Ok(()), confirmed: true },
+        Err(error) => error,
+    };
+    if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
+        return StreamCompletion { result: Err(error), confirmed: false };
+    }
+    match retry() {
+        Ok(()) => StreamCompletion { result: Err(error), confirmed: true },
+        Err(recovery) => {
+            let error = if recovery.needs_cuda_ctx_reset() || recovery.is_cuda_recovery_failed() {
+                finish_cuda_error(error, Err(recovery))
+            } else {
+                // Last resort: completion is still unknown, so ordinary reuse
+                // and OOM retries are unsafe. Keep both original classifications;
+                // this is a failed drain, not a fabricated fatal CUDA code.
+                ThoError::CudaRecoveryFailed(Arc::new(thoosa_shared::CudaRecoveryFailure { original: error, recovery: Some(recovery) }))
+                    .context("CUDA stream could not be drained after synchronization failed")
+            };
+            StreamCompletion { result: Err(error), confirmed: false }
+        }
+    }
+}
+
+// Only unconfirmed completion closes the pool. Wake queued acquisitions too,
+// so quarantine cannot strand callers waiting for an unavailable stream.
 pub(crate) struct ExecutionStreamPool {
     pool: Pool<ThoCudaStream>,
     failure: tokio::sync::watch::Sender<Option<ThoError>>,
@@ -516,19 +549,15 @@ pub struct ExecutionStream {
 
 impl ExecutionStream {
     fn complete(&mut self, result: Result<(), ThoError>) -> Result<(), ThoError> {
-        if let Err(error) = result {
-            // Even a nonfatal-looking synchronization error cannot authorize
-            // reuse. Keep its typed cause but require backend recovery.
-            let error = if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() { error } else {
-                error.context(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "CUDA stream completion could not be established".into() })
-            };
+        let completion = complete_cuda_stream(result, || self.lease.as_ref().expect("execution lease").synchronize());
+        if !completion.confirmed {
+            let error = completion.result.as_ref().unwrap_err();
             self.pool.failure.send_if_modified(|failure| {
                 if failure.is_some() { false } else { *failure = Some(error.clone()); true }
             });
             if let Some(lease) = self.lease.take() { self.pool.quarantined.lock().push(lease); }
-            return Err(error);
         }
-        Ok(())
+        completion.result
     }
 }
 
@@ -1014,7 +1043,7 @@ mod tests {
         let mut waiter = Box::pin(pool.acquire());
         assert!(futures::poll!(waiter.as_mut()).is_pending());
         // Inject an uncertain completion result without poisoning real CUDA.
-        assert!(failed.complete(Err(ThoError::oom())).unwrap_err().needs_cuda_ctx_reset());
+        assert!(failed.complete(Err(ThoError::from_cuda_error("injected synchronization failure", 700))).unwrap_err().needs_cuda_ctx_reset());
         assert!(matches!(timeout(Duration::from_secs(3), waiter).await.unwrap(), Err(error) if error.needs_cuda_ctx_reset()));
         drop(failed);
         assert_eq!(pool.quarantined.lock().len(), 1);
@@ -1022,6 +1051,50 @@ mod tests {
         assert!(healthy.sync_ctx().is_err(), "a previously acquired stream must not begin new work in a poisoned pool");
         drop(healthy);
         assert!(pool.acquire().await.is_err(), "pool must stay closed even when healthy leases return");
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_drain_preserves_cuda_classification() {
+        // Recoverable synchronization errors remain operation errors after a
+        // successful drain; only an actual fatal code requests CUDA recovery.
+        for code in [2, 1, 400] {
+            let completion = complete_cuda_stream(Err(ThoError::from_cuda_error("first sync", code)), || Ok(()));
+            assert!(completion.confirmed);
+            let error = completion.result.unwrap_err();
+            assert!(!error.needs_cuda_ctx_reset() && !error.is_cuda_recovery_failed());
+            assert_eq!(error.is_oom(), code == 2);
+        }
+        let completion = complete_cuda_stream(Err(ThoError::from_cuda_error("first sync", 700)), || panic!("fatal CUDA errors must not be retried"));
+        assert!(!completion.confirmed && completion.result.unwrap_err().needs_cuda_ctx_reset());
+        let completion = complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::from_cuda_error("drain", 700)));
+        assert!(!completion.confirmed && completion.result.unwrap_err().needs_cuda_ctx_reset());
+        let completion = complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::from_cuda_error("drain", 400)));
+        assert!(!completion.confirmed);
+        let error = completion.result.unwrap_err();
+        assert!(!error.needs_cuda_ctx_reset() && !error.is_retryable_oom());
+        let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("failed drain must retain its typed errors") };
+        assert!(failure.original.is_oom());
+        assert!(!failure.recovery.as_ref().unwrap().needs_cuda_ctx_reset());
+    }
+
+    #[tokio::test]
+    async fn test_nonfatal_execution_sync_error_keeps_stream_pool_usable() -> Result<(), ThoError> {
+        let context = ThoCudaContext::new(0)?;
+        context.bind_to_thread()?;
+        let pool = ExecutionStreamPool::new(vec![ThoCudaStream::from_pool(0, false)?]);
+        let mut stream = pool.acquire().await?;
+        let mut waiter = Box::pin(pool.acquire());
+        assert!(futures::poll!(waiter.as_mut()).is_pending());
+        // The injected error takes the same second-drain path as a real error,
+        // while CUDA itself stays healthy for subsequent execution.
+        let error = stream.complete(Err(ThoError::oom())).unwrap_err();
+        assert!(error.is_oom() && !error.needs_cuda_ctx_reset());
+        assert!(pool.check().is_ok() && pool.quarantined.lock().is_empty());
+        drop(stream);
+        let mut next = timeout(Duration::from_secs(3), waiter).await.unwrap()?;
+        let _guard = next.sync_ctx()?;
+        next.on_after_run()?;
         Ok(())
     }
 

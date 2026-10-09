@@ -548,8 +548,13 @@ impl CudaIPCActor {
             Err(error) => {
                 if begun {
                     let cleanup = finish(false).await.and_then(unit_reply);
-                    // A failed abort must not leave a frozen endpoint in normal use.
-                    if let Err(cleanup_error) = cleanup { pending.transport_failed(cleanup_error); }
+                    // Request errors do not break transport. The worker releases
+                    // its transaction lease even when finishing fails.
+                    if let Err(cleanup_error) = cleanup {
+                        let error = crate::copy_ctx::finish_cuda_error(error, Err(cleanup_error));
+                        let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
+                        return;
+                    }
                 }
                 let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
             }
@@ -567,7 +572,6 @@ impl CudaIPCActor {
                     }
                 };
                 let result = finish(commit).await.and_then(unit_reply);
-                if let Err(error) = &result { pending.transport_failed(error.clone()); }
                 let result = crate::copy_ctx::report_cuda_copy_result(result, &gate, worker_id.generation);
                 let _ = completed.send(result);
             }
@@ -745,14 +749,12 @@ impl CudaIPCActor {
                             continue;
                         }
                     }
-                    // Transport loss is reported even if all callers cancelled.
-                    let cause = if error.needs_cuda_ctx_reset() {
-                        error.clone()
-                    } else {
-                        ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: format!("CUDA worker transport failed: {error}") }
-                    };
+                    // A broken transport cannot serve or safely release pending
+                    // requests. Replacing this IPC worker is the last resort,
+                    // independent of the original error's CUDA classification.
+                    let cause = error.clone().context("CUDA worker transport is unavailable");
                     if GlobalCtx::is_installed() {
-                        let _ = crate::copy_ctx::report_cuda_copy_result::<()>(Err(cause), &actor.gate, generation);
+                        let _ = GlobalCtx::global().get_runner(actor.gate.device_idx()).request_cuda_reset_for_generation(generation, cause);
                     } else {
                         // A worker can die while GlobalCtx is still constructing
                         // other devices. Close this gate without using the singleton.
@@ -1982,7 +1984,7 @@ mod export_tests {
     }
 
     #[tokio::test]
-    async fn test_export_commit_failure_is_typed_and_retires_frozen_transport() {
+    async fn test_export_commit_failure_is_typed_and_keeps_transport() {
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let worker = CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
         let pending = Arc::new(PendingRequests::new(worker));
@@ -1996,7 +1998,8 @@ mod export_tests {
         let error = ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "purge failed".into() };
         reply(&pending, request, error.into());
         assert!(commit.await.unwrap().unwrap_err().is_oom(), "the final worker error must reach the offload caller");
-        assert!(pending.failed.is_cancelled(), "failed commit cannot leave a frozen endpoint in ordinary use");
+        assert!(!pending.failed.is_cancelled(), "failed commit must not retire an otherwise healthy worker");
+        assert_eq!(gate.device_generation(), worker.generation);
         task.await.unwrap();
     }
 }

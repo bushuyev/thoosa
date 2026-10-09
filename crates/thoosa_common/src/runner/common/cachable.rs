@@ -362,7 +362,9 @@ where
         // Keep this context through completion; computation uses the same area.
         ctx.add_purge_gpu_closure(cleanup);
         let result = track_await(shared.clone()).await;
-        if result.as_ref().is_err_and(|error| matches!(error.what(), ThoError::ContextReset) || error.is_cuda_recovery_failed()) {
+        if result.is_err() {
+            // A failed computation has no reusable output. Evict it without
+            // requiring a device-generation change to permit a later attempt.
             // Compare identity: another caller may already have installed a new
             // generation's computation under this same logical cache key.
             cache.remove_if(&key, |_, current| current.ptr_eq(&shared));
