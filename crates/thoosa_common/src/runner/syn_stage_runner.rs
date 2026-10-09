@@ -2053,11 +2053,11 @@ mod tests {
                                             Ok::<_, ThoError>(i)
                                         }
                                     }), 3, ordering, "nested copy chunks",
-                                ).await;
+                                ).await?;
                                 assert_eq!(values.len(), 3);
                                 Ok::<_, ThoError>(values)
                             }), 1, ordering, "copy chunks",
-                        ).await;
+                        ).await?;
                         assert_eq!(results.len(), 1);
                         completed.store(true, Ordering::SeqCst);
                         Ok(())

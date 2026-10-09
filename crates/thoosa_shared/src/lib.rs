@@ -72,7 +72,7 @@ pub mod collect_futures_with_progress;
 pub mod futures_limits;
 pub mod ipc_types;
 
-pub use collect_futures_with_progress::collect_futures_with_progress;
+pub use collect_futures_with_progress::{collect_futures_with_progress, collect_futures_best_effort_with_progress};
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,
@@ -2378,7 +2378,7 @@ mod shared_tests {
         let results = tokio::time::timeout(Duration::from_secs(2), collect)
             .await
             .expect("unrelated recovery must not block the collector")
-            .expect("collector task should not panic");
+            .expect("collector task should not panic").expect("all work must succeed");
         assert_eq!(results.len(), 4);
         assert_eq!(started.load(Ordering::SeqCst), 4);
         assert!(gate.is_recovering());

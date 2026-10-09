@@ -272,7 +272,7 @@ where
             entries_len,
             FuturesOrdering::Unordered,
             "PurgeModelsStage::run",
-        )).await;
+        )).await?;
 
         if purged.len() != entries_len {
             return Err(ThoError::new(format!("PurgeModelsStage::run: purged {} of {entries_len} models", purged.len())));

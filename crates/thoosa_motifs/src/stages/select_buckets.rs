@@ -258,7 +258,7 @@ where
             motif_ids_len,
             FuturesOrdering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
-        )).await;
+        )).await?;
         if energies.len() != motif_ids_len {
             return Err(ThoError::new(format!("SelectBucketsStage::preload_bucket_mean_energies: preloaded {} of {motif_ids_len} motifs", energies.len())));
         }
@@ -537,7 +537,7 @@ where
             run_configs_len,
             FuturesOrdering::Unordered,
             "SelectBucketsStage::run",
-        )).await;
+        )).await?;
         if run_results.len() != run_configs_len {
             return Err(ThoError::new(format!("SelectBucketsStage::run: completed {} of {run_configs_len} run configs", run_results.len())));
         }

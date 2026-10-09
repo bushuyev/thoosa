@@ -322,7 +322,7 @@ where
             FuturesOrdering::Ordered,
             "ApplyLabelNets::run",
         )
-        .await
+        .await?
         .into_iter()
         .collect::<Vec<_>>();
 

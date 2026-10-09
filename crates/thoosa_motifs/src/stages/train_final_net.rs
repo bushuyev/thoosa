@@ -556,7 +556,7 @@ where
                     batch_len,
                     FuturesOrdering::Ordered,
                     "LogitsResourcesBatch::build_batch_stream",
-                )).await
+                )).await?
                 .into_iter()
                 .collect::<Vec<_>>()
                 .into_iter()

@@ -335,10 +335,7 @@ async fn copy_transfer(
             let transfer = Arc::clone(&transfer);
             let pool = Arc::clone(pool);
             async move {
-                let buffer = match pool.acquire().await {
-                    Ok(buffer) => buffer,
-                    Err(error) => return Ok(Err(error)),
-                };
+                let buffer = pool.acquire().await?;
                 let copy_pool = Arc::clone(&pool);
                 let result = spawn_copy_chunk(transfer, buffer, move |transfer, buffer| {
                     let mut completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: false, pool: copy_pool };
@@ -376,10 +373,11 @@ async fn copy_transfer(
                     }
                     Ok(())
                 }).await;
-                // Keep errors as values so the collector drains all other chunks.
-                Ok::<_, ThoError>(crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check()))
+                // The collector drains all chunks and prioritizes fatal failures,
+                // including a task panic alongside a failed stream completion.
+                crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
             }
-        }), count, FuturesOrdering::Unordered, label).await.into_iter().fold(Ok(()), crate::copy_ctx::finish_cuda_run)
+        }), count, FuturesOrdering::Unordered, label).await.map(|_| ())
     }).await
 }
 

@@ -245,7 +245,7 @@ where
             entries_len,
             FuturesOrdering::Unordered,
             "ConvertPrecisionStage::run",
-        )).await;
+        )).await?;
 
         if converted.len() != entries_len {
             return Err(ThoError::new(format!("ConvertPrecisionStage::run: converted {} of {entries_len} nets", converted.len())));

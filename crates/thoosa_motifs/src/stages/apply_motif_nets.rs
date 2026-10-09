@@ -520,15 +520,10 @@ where
                             )).await;
 
                     debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
-                    match r {
-                        Ok(r) => {
-                            // The wrapper exists only at the motif-owned IPC boundary; cache the ordinary tensor.
-                            tmp_cache.lock().insert(r.into_inner());
-                        }
-                        Err(e) => {
-                            error!("Failed to apply motif net for net_id={net_id}: e={e}");
-                        }
-                    }
+                    // A missing net output must fail the stage rather than publish a partial stack.
+                    let r = r.map_err(|error| error.context(format!("apply motif net {net_id}")))?;
+                    // The wrapper exists only at the motif-owned IPC boundary; cache the ordinary tensor.
+                    tmp_cache.lock().insert(r.into_inner());
 
 
                     Ok(())
@@ -541,7 +536,7 @@ where
             apply_motif_nets_len,
             FuturesOrdering::Unordered, //it's sorted in StackAppliedMotifNets
             "ApplyMotifNets::run",
-        )).await
+        )).await?
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -1626,6 +1621,30 @@ pub mod tests {
         assert_eq!(valid_partial_output_len(50, 25, 25, 100, 3), 0);
     }
 
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_nets_propagates_one_net_failure() -> Result<(), ThoError> {
+        use thoosa_common::nets::nodes::ThoFuncModule;
+        use thoosa_shared::traits::WithId;
+
+        // Keep two real nets successful while one model fails in its forward
+        // call. The former log-and-continue path would stack only two outputs.
+        let error = apply_motif_nets_3_channels_2_motifs(None, 4000, 10, new_apply_motif_nets, |device, motif| {
+            let (params, module) = motif_test_net_(device, Arc::clone(&motif), 10, 100);
+            if !motif.id().to_string().contains("motif_0_1") { return (params, module); }
+            let id = motif.id().clone();
+            (params, Box::new(move || {
+                ThoModuleWithStore::with_factory(
+                    id.clone(),
+                    Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure")))),
+                    VarStore::new(device),
+                    Some(Arc::new(|_| Ok(Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure"))))))),
+                )
+            }))
+        }, Default::default(), 100, 100).await.unwrap_err();
+        assert!(format!("{error:#}").contains("injected motif forward failure"), "must propagate the failed net rather than stack partial outputs: {error:#}");
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
