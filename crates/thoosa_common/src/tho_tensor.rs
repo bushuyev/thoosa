@@ -216,7 +216,7 @@ impl Clone for KeyHolder {
 impl Drop for KeyHolder {
     fn drop(&mut self) {
         debug!("KeyHolder::drop: self={self:?} self.worker_id.device_idx={} strong_count={:?} GlobalCtx::is_installed()={}", self.worker_id.device_idx, Arc::strong_count(&self.count), GlobalCtx::is_installed() );
-        if self.do_drop && self.worker_id.device_idx != 0 && GlobalCtx::is_installed() && Arc::strong_count(&self.count) == 2 {
+        if GlobalCtx::is_installed() && !GlobalCtx::is_shutting_down() &&  self.do_drop && self.worker_id.device_idx != 0 && Arc::strong_count(&self.count) == 2 {
             debug!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
 
             let device_idx = self.worker_id.device_idx;
