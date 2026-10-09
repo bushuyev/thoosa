@@ -1,4 +1,4 @@
-use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_d2h_from_ptr, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device};
+use crate::cuda_utils::{CopyBufferPool, PinnedHostBuffer, copy_d2h, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device};
 use crate::dims::Dims;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::runner::global_ctx::GlobalCtx;
@@ -281,7 +281,7 @@ fn finish_cuda_panic<T>(result: std::thread::Result<T>, sync: &Result<(), ThoErr
 
 // All stage entry points must retain a fatal execution error even if stream
 // synchronization also fails, and must propagate a fatal synchronization error.
-fn finish_cuda_run<T>(result: Result<T, ThoError>, sync: Result<(), ThoError>) -> Result<T, ThoError> {
+pub(crate) fn finish_cuda_run<T>(result: Result<T, ThoError>, sync: Result<(), ThoError>) -> Result<T, ThoError> {
     match (result, sync) {
         (Err(original), sync) => Err(finish_cuda_error(original, sync)),
         (_, Err(error)) => Err(error),
@@ -352,17 +352,9 @@ impl CudaLocalActor {
                 let generation = activity.generation(&gate).expect("copy device lease");
                 tokio::spawn(activity.run(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
-                    let src_ptr = src.t_ref().data_ptr() as usize;
-                    let src_size = src.t_ref().size();
-                    let src_kind = src.t_ref().kind();
-                    let _src_keepalive = src;
-
-                    let result = copy_ctx.read().await.copy_from_ptr(
-                        src_ptr,
-                        &src_size,
-                        dst_device.tho_device_idx(),
-                        src_kind,
-                    ).await;
+                    // Move the allocation into the low-level transfer; retaining it
+                    // only in this async task is insufficient during shutdown.
+                    let result = copy_ctx.read().await.copy(src.t(), dst_device.tho_device_idx()).await;
 
                     let result = report_cuda_copy_result(result, &gate, generation);
                     let _ = respond_to.send(result);
@@ -610,8 +602,8 @@ pub struct CopyCtx {
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
     exec_stream_pool: Arc<ExecutionStreamPool>,
-    bufs_pool_d2h: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-    bufs_pool_h2d: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+    bufs_pool_d2h: Arc<CopyBufferPool>,
+    bufs_pool_h2d: Arc<CopyBufferPool>,
 }
 
 impl Debug for CopyCtx {
@@ -665,14 +657,14 @@ impl CopyCtx {
         buf_size: usize,
         cuda_device:usize,
         flags: u32
-    ) -> Result<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>, ThoError> {
+    ) -> Result<Arc<CopyBufferPool>, ThoError> {
         let buffers = (0..num_buffs).map(|_| {
             Ok((
                 PinnedHostBuffer::new(buf_size, flags)?,
                 Arc::new(ThoCudaStream::from_pool(cuda_device as i32, true)?),//TODO check if streams do not repeat
             ))
         }).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Arc::new(Pool::from_vec(buffers)))
+        Ok(Arc::new(CopyBufferPool::new(buffers)))
     }
 
     #[cfg(test)]
@@ -686,7 +678,7 @@ impl CopyCtx {
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool_h2d,
-            Arc::new(Pool::from_vec(vec![(
+            Arc::new(CopyBufferPool::new(vec![(
                 PinnedHostBuffer::new(1, 0).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(self.cuda_device as i32, true)?),
             )])),
@@ -736,44 +728,32 @@ impl CopyCtx {
         buf_size
     }
 
-    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
+    /// The transfer takes ownership of the source and of its new destination.
+    /// Already-running blocking chunks retain both if this future is cancelled.
+    pub async fn copy(&self, source: Tensor, dst_tho_device: usize) -> Result<Tensor, ThoError> {
         if dst_tho_device == 0 {
-            track_await(copy_d2h(&self.gate, kind, src_t, self.buf_size, &self.bufs_pool_h2d)).await
+            copy_d2h(&self.gate, source, self.buf_size, &self.bufs_pool_d2h).await
         } else {
-            track_await(copy_h2d(&self.gate, kind, src_t, self.buf_size, &self.bufs_pool_h2d, dst_tho_device)).await
+            copy_h2d(&self.gate, source, self.buf_size, &self.bufs_pool_h2d, dst_tho_device).await
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_from_ptr"))]
-    pub async fn copy_from_ptr(
-        &self,
-        src_ptr: usize,
-        src_size: &[i64],
-        dst_tho_device_idx: usize,
-        kind: Kind,
-    ) -> Result<Tensor, ThoError> {
-
-        if dst_tho_device_idx == 0 {
-            track_await(copy_d2h_from_ptr(
-                &self.gate, kind, self.buf_size,
-                &self.bufs_pool_d2h, src_ptr, src_size
-            )).await
-
-        } else {
-            track_await(copy_h2d_from_ptr(
-                &self.gate, kind,
-                self.buf_size,
-                &self.bufs_pool_h2d,
-                dst_tho_device_idx,
-                src_ptr,
-                src_size,
-            )).await
-        }
+    /// # Safety
+    /// source_owner must retain the readable CPU range implied by size/kind
+    /// without concurrent mutation, even after this future is cancelled. The IPC
+    /// peer must retain its allocation until reply or worker exit.
+    pub(crate) async unsafe fn copy_from_ptr(&self, source: usize, size: &[i64], dst_device: usize, kind: Kind, source_owner: impl Send + 'static) -> Result<Tensor, ThoError> {
+        // SAFETY: ownership and range obligations are forwarded to the chunk engine.
+        unsafe { copy_h2d_from_ptr(&self.gate, kind, self.buf_size, &self.bufs_pool_h2d, dst_device, source, size, source_owner).await }
     }
 
-    /// Copies CUDA storage into an already allocated CPU range, which lets an IPC worker fill a tensor owned by the parent shared allocator.
-    pub async fn copy_to_cpu_ptr(&self, src_ptr: usize, src_size: &[i64], kind: Kind, dst_ptr: usize) -> Result<(), ThoError> {
-        track_await(copy_d2h_to_ptr(&self.gate, kind, self.buf_size, &self.bufs_pool_d2h, src_ptr, src_size, dst_ptr)).await
+    /// # Safety
+    /// destination_owner must retain exclusive access to a writable CPU range
+    /// covering source's bytes until it is dropped, including after cancellation.
+    /// The IPC peer must retain its allocation until reply or worker exit.
+    pub(crate) async unsafe fn copy_to_cpu_ptr(&self, source: Tensor, destination: usize, destination_owner: impl Send + 'static) -> Result<(), ThoError> {
+        // SAFETY: ownership and range obligations are forwarded to the chunk engine.
+        unsafe { copy_d2h_to_ptr(&self.gate, source, self.buf_size, &self.bufs_pool_d2h, destination, destination_owner).await }
     }
 
 }

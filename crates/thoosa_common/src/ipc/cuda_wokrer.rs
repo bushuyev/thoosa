@@ -224,15 +224,23 @@ fn installed_endpoint(stages: &InstalledStages, key: &str) -> Result<Arc<Install
 
 struct WorkerSharedArena {
     mapping: MmapMut,
+    // Capture the writable address before sharing the mapping. D2H writes must
+    // not derive their destination from a shared slice reference.
+    address: usize,
 }
 
 impl WorkerSharedArena {
+    fn new(mut mapping: MmapMut) -> Self {
+        let address = mapping.as_mut_ptr() as usize;
+        Self { mapping, address }
+    }
+
     fn address(&self, arena_offset: usize, byte_len: usize, label: &str) -> Result<usize, ThoError> {
         let arena_end = arena_offset.checked_add(byte_len).ok_or_else(|| ThoError::new(format!("{label} arena range overflow")))?;
         if arena_end > self.mapping.len() {
             return Err(ThoError::new(format!("{label} arena range [{arena_offset}, {arena_end}) exceeds worker mapping length {}", self.mapping.len())));
         }
-        self.mapping.as_ptr().addr().checked_add(arena_offset).ok_or_else(|| ThoError::new(format!("{label} arena address overflow")))
+        self.address.checked_add(arena_offset).ok_or_else(|| ThoError::new(format!("{label} arena address overflow")))
     }
 }
 
@@ -445,7 +453,7 @@ impl CudaWorker {
 
 
         // The descriptor can close after mmap; the mapping itself remains shared and is retained by the request context.
-        let shared_arena = Arc::new(WorkerSharedArena { mapping: arena });
+        let shared_arena = Arc::new(WorkerSharedArena::new(arena));
         debug!("run_worker: mapped shared arena len={arena_size}");
 
         let copy_ctx = Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 32)?));
@@ -504,7 +512,10 @@ impl CudaWorker {
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "H2D source")?;
 
                     let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
-                    let cuda_t = context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, context.tho_device.tho_device_idx(), kind.into()).await?;
+                    // SAFETY: the checked arena range is retained by every chunk.
+                    // PendingRequests retains the parent's source allocation until
+                    // this reply or confirmed worker exit, including cancellation.
+                    let cuda_t = unsafe { context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, context.tho_device.tho_device_idx(), kind.into(), Arc::clone(&context.shared_arena)).await? };
 
                     let tensor_ref = if let Some(H2DTensorKey::StageState { endpoint_name, stage_id, tensor_id }) = dst_key {
                         let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(&stage_id));
@@ -564,11 +575,15 @@ impl CudaWorker {
                             with_state.get_state_tensor(&context.tho_device, tensor_id.clone()).await
                         }
                     }?;
-                    let source_ptr = source.data_ptr() as usize;
+                    if source.kind() != kind.into() || source.size() != shape {
+                        return Err(ThoError::new("D2H source does not match the destination allocation metadata"));
+                    }
                     let destination_address = context.shared_arena.address(arena_offset, tensor_byte_len, "D2H destination")?;
-                    context.copy_ctx.read().await.copy_to_cpu_ptr(source_ptr, &shape, kind.into(), destination_address).await?;
-                    // The alias protects worker CUDA storage until every chunk has synchronized and written the parent mapping.
-                    drop(source);
+                    // SAFETY: metadata and arena bounds were checked above. The
+                    // parent retains exclusive destination storage in PendingRequests
+                    // until reply or worker exit; chunks retain this worker's mapping
+                    // and the source tensor even if the request task is cancelled.
+                    unsafe { context.copy_ctx.read().await.copy_to_cpu_ptr(source, destination_address, Arc::clone(&context.shared_arena)).await?; }
                     Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)))
                 }
                 Operation::DropThoTensor { tensor_key } => {
