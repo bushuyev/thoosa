@@ -6,7 +6,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 #[cfg(test)]
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[cfg(test)]
-use thoosa_shared::traits::{Data, DummyCachableId, MockData, MockWithId, Select, WithId};
+use thoosa_shared::traits::{Data, DummyWithId as DummyCachableId, MockData, MockWithId, Select, WithId};
 use thoosa_shared::traits::RangeSelector;
 
 #[derive(Debug, Clone)]

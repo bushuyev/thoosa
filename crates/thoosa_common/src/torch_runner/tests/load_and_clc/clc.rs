@@ -28,7 +28,7 @@ use tch::Device::Cuda;
 use tch::{Device, Kind, Scalar, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, AsyncStage, AsyncStageDispatch, ConsumeResult, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
 use crate::runner::purge::FuturesRunnerMapPurger;
@@ -334,6 +334,11 @@ impl Stage for ClcDynSyncStage {
 }
 
 impl SyncStage for ClcDynSyncStage {
+    // Keep the adapter's OOM check without hiding the inner proxy's async dispatch.
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> {
+        self.stage.as_async().map(|_| self as &dyn AsyncStageDispatch<Self>)
+    }
+
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         match self.stage.as_ref() {
             DynSyncStageWithStateEnum::Local(_) => Some(self),
@@ -346,6 +351,26 @@ impl SyncStage for ClcDynSyncStage {
             return Err(ThoError::oom());
         }
         Arc::clone(&self.stage).do_run(input, ctx)
+    }
+}
+
+impl AsyncStageDispatch<ClcDynSyncStage> for ClcDynSyncStage {
+    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a ThoTensor<LoadedTensor, SynKey>, ctx: &'a RunCtxImpl) -> BoxFuture<'a, Result<ThoTensor<ClcStageOutput, SynKey>, ThoError>> {
+        async move {
+            if stage.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false) {
+                return Err(ThoError::oom());
+            }
+            AsyncStageDispatch::run(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx).await
+        }.boxed()
+    }
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: ThoTensor<LoadedTensor, SynKey>, ctx: RunCtxImpl) -> BoxFuture<'a, ConsumeResult<ThoTensor<LoadedTensor, SynKey>, ThoTensor<ClcStageOutput, SynKey>>> {
+        async move {
+            if stage.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false) {
+                return ConsumeResult::Failed { input, error: ThoError::oom() };
+            }
+            AsyncStageDispatch::consume(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx).await
+        }.boxed()
     }
 }
 

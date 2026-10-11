@@ -36,7 +36,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, AsyncStageDispatch, ConsumeResult, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use thoosa_shared::ipc_types::WorkerOutput;
 use tracing::debug;
@@ -502,9 +502,24 @@ impl Stage for ProxyABClcSyncStage {
 }
 
 impl SyncStage for ProxyABClcSyncStage {
+    // Instrumentation must not turn a remote invocation back into a sync call.
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> { Some(self) }
+
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Arc::clone(&self.stage).do_run(input, ctx)
+    }
+}
+
+impl AsyncStageDispatch<ProxyABClcSyncStage> for ProxyABClcSyncStage {
+    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a ABClcSyncStageInput<'i>, ctx: &'a RunCtxImpl) -> BoxFuture<'a, Result<ABClcStageOutput, ThoError>> {
+        stage.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        AsyncStageDispatch::run(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx)
+    }
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: ABClcSyncStageInput<'i>, ctx: RunCtxImpl) -> BoxFuture<'a, ConsumeResult<ABClcSyncStageInput<'i>, ABClcStageOutput>> {
+        stage.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        AsyncStageDispatch::consume(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx)
     }
 }
 

@@ -233,7 +233,12 @@ impl AsyncStage for TestTensorLoader {
     ) -> Result<Self::Out, ThoError> {
         let sync_loader = Arc::clone(&self.sync_loader);
 
-        let r = sync_loader.do_run(&input, &ctx)?;
+        // This async test loader can target a worker even when it bypasses OOMHandler.
+        let r = if let Some(remote) = sync_loader.as_async() {
+            remote.run(Arc::clone(&sync_loader), &input, &ctx).await?
+        } else {
+            sync_loader.do_run(&input, &ctx)?
+        };
 
         Ok(Arc::new(DevicesWrap::wrap(r)))
 

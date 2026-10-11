@@ -62,6 +62,16 @@ where
     FM:Future<Output=Result<(), ThoError>>,
     FW:AsyncFn(OsString)->anyhow::Result<()>,
 {
+    run_ipc_test_with_runtime(module_path, main_f, worker_f, tokio::runtime::Builder::new_multi_thread().worker_threads(32))
+}
+
+// Let dispatch regressions constrain parent runtime capacity independently of
+// the CUDA worker. Existing integration tests retain their original runtime.
+fn run_ipc_test_with_runtime<FM, FW>(module_path: &str, main_f: FM, worker_f: FW, main_builder: &mut tokio::runtime::Builder) -> Result<(), ThoError>
+where
+    FM: Future<Output = Result<(), ThoError>>,
+    FW: AsyncFn(OsString) -> anyhow::Result<()>,
+{
     if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
         init_test_logging();
 
@@ -104,8 +114,7 @@ where
         })?;
 
     } else {
-        let main_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(32)
+        let main_rt = main_builder
             .enable_all()
             .thread_name_fn(|| {
                 static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
@@ -281,6 +290,10 @@ mod tests {
     }
 
     impl SyncStage for SyncConsumeTestStage {
+        fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            self.consume_input(input)
+        }
+
         fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
             match self.consume_input(&input) {
                 Ok(output) => ConsumeResult::Ok(output),
@@ -343,6 +356,68 @@ mod tests {
             SYNC_CONSUME_TEST_ENDPOINT.to_string(),
             Box::new(sync_consume_test_endpoint_init) as InitFn,
         )])
+    }
+
+    #[test]
+    fn test_async_actor_dispatch_with_no_spare_runtime_threads_ipc() -> Result<(), ThoError> {
+        super::run_ipc_test_with_runtime(
+            module_path!(),
+            async {
+                let stage = Arc::new(new_sync_consume_test_stage(1).await?);
+                // H2D arena staging legitimately uses spawn_blocking. Finish
+                // input copies before exhausting that pool to isolate invocation.
+                let actor = GlobalCtx::global().cuda_actor(1);
+                let mut inputs = Vec::new();
+                for _ in 0..12 {
+                    let source: ThoTensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?.into();
+                    let reference = actor.copy(source, 1usize.into()).await?;
+                    inputs.push(ThoTensor::<LoadedTensor, SynKey>::new_ref(mono_key!("dispatch", "input").into(), reference.ref_key().unwrap(), reference.size(), reference.kind(), None, reference.ref_worker_id().unwrap()));
+                }
+                // Occupy the only blocking thread too. Every actor invocation,
+                // reader, and reply must progress on this single async thread.
+                let (release, blocked) = std::sync::mpsc::channel::<()>();
+                let (started, running) = tokio::sync::oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = blocked.recv_timeout(std::time::Duration::from_secs(30));
+                });
+                running.await.context("blocking-thread reservation failed")?;
+                let result = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+                    let mut jobs = JoinSet::new();
+                    for (index, input) in inputs.into_iter().enumerate() {
+                        let stage = Arc::clone(&stage);
+                        jobs.spawn(async move {
+                            let actor = GlobalCtx::global().cuda_actor(1);
+                            let output = GlobalCtx::global().get_runner(1).submit(12, async move {
+                                let ctx = RunCtxImpl::new(1, "async dispatch");
+                                match index % 3 {
+                                    0 => actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &ctx).await,
+                                    1 => actor.run_stage_with_select(stage, Arc::new(DevicesWrap::wrap(input)), None, 1, &ctx).await,
+                                    _ => match actor.consume_stage(stage, ConsumeTestInput::new(input), 1, ctx).await? {
+                                        ConsumeResult::Ok(output) => Ok(output),
+                                        ConsumeResult::Failed { error, .. } => Err(error),
+                                    },
+                                }
+                            }, None).await?;
+                            let output = actor.copy(output.strip_types(), 0usize.into()).await?;
+                            assert_eq!(output.t_ref().f_double_value(&[0, 0])?, 2.0);
+                            assert_eq!(output.t_ref().f_double_value(&[0, 1])?, 4.0);
+                            Ok::<_, ThoError>(())
+                        });
+                    }
+                    while let Some(result) = jobs.join_next().await { result??; }
+                    Ok::<_, ThoError>(())
+                }).await;
+                drop(release);
+                blocker.await?;
+                result.context("IPC dispatch stalled without spare runtime threads")?
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+            },
+            tokio::runtime::Builder::new_current_thread().max_blocking_threads(1),
+        )
     }
 
     #[test]
