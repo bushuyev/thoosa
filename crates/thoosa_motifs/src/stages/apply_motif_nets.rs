@@ -1055,6 +1055,17 @@ where
     fail_if_size_bigger_than:Option<usize>,
 }
 
+impl <C> WithId for ApplyMotifNet<C>
+where
+    C: RunCtx + 'static
+{
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
 // A trained network owns mutable inference state, so reuse one stage instance per context and net.
 static APPLY_MOTIF_NET_INSTANCES: InstanceCache = InstanceCache::new();
 
@@ -1154,12 +1165,16 @@ where
                 ],
                 None,
             );
-            oom_handler.new_stage(
+            let stage = oom_handler.new_stage(
                 sync_init,
                 run_context,
                 WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
                 &ws,
-            ).await
+            ).await?;
+
+            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+
+            Ok(stage)
         }).await
     }
 

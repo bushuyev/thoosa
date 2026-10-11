@@ -918,11 +918,14 @@ async fn reader_loop<R>(
             Ok(msg) => {
                 debug!("reader_loop: msg={msg:?}");
                 if let Err(error) = pending.complete(msg) {
+                    warn!("reader_loop: error={error:?}");
                     pending.transport_failed(error);
                     break;
                 }
             }
             Err(e) => {
+                warn!("reader_loop: e={e:?}");
+
                 pending.transport_failed(ThoError::new(format!("bad worker response frame: {e}")));
                 break;
             }
@@ -1003,9 +1006,9 @@ impl CudaIPCActorHandle {
             }
         )
         .instrument(tracing::debug_span!("CudaIPCActorHandle::invoke_stage",agg_perf="CudaIPCActorHandle::send_msg",)).await
-        .context("CUDA actor channel closed")?;
+        .context("invoke_stage: CUDA actor channel closed")?;
 
-        Ok(recv.await.context("CUDA actor response channel closed")??)
+        Ok(recv.await.context("invoke_stage: CUDA actor response channel closed")??)
     }
 
     pub async fn install_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput>) -> anyhow::Result<CudaWorkerMsgOut> {

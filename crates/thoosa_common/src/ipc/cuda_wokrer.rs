@@ -21,7 +21,7 @@ use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use log::{LevelFilter, debug, error, info, trace};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Mutex, RwLock};
 use rand::{Rng, rng};
@@ -119,7 +119,10 @@ where
         loop {
             let request = match cuda_process::read_frame(&mut reader, "worker requests", cuda_process::MAX_FRAME_LEN).await {
                 Ok(payload) => PostcardToFromBytes::from_bytes::<CudaWorkerMsgIn>(&payload),
-                Err(error) => Err(error.into()),
+                Err(error) => {
+                    warn!("serve_worker_requests: error={error:?}");
+                    Err(error.into())
+                },
             };
             let failed = request.is_err();
             if frame_tx.send(request).await.is_err() || failed { return; }
@@ -154,12 +157,18 @@ where
                 request_tasks.spawn(async move {
                     let result = match (identity, run) {
                         (Ok(()), Some(run)) => run.await,
-                        (Err(error), _) => Err(error),
+                        (Err(error), _) => {
+                            warn!("serve_worker_requests: error={error:?}");
+                            Err(error)
+                        },
                         _ => unreachable!("validated request must be dispatched"),
                     };
                     // This is the only send for an ordinary request. A panic
                     // instead fails this task and the supervisor closes transport.
-                    let status = match result { Ok(status) => status, Err(error) => error.into() };
+                    let status = match result { Ok(status) => status, Err(error) => {
+                        warn!("serve_worker_requests: error={error:?}");
+                        error.into()
+                    } };
                     replies.send(CudaWorkerMsgOut { worker_id, request_id, status }).await.context("worker response writer is closed")
                 });
             }
@@ -201,6 +210,7 @@ pub type InitFn<W = dyn Workspace> = Box<dyn for <'a> Fn(Option<String>, Box<dyn
 
 // A worker endpoint owns its execution/export lease. An export retains the
 // owned guard across wire requests; unrelated endpoints remain runnable.
+#[derive(Debug)]
 struct InstalledEndpoint {
     stage: Arc<dyn SyncStageIpcWrapper>,
     lease: Arc<tokio::sync::RwLock<()>>,
@@ -208,6 +218,7 @@ struct InstalledEndpoint {
     state_failure: Mutex<Option<ThoError>>,
 }
 
+#[derive(Debug)]
 struct FrozenExport {
     id: u64,
     _lease: tokio::sync::OwnedRwLockWriteGuard<()>,
@@ -241,6 +252,8 @@ impl InstalledEndpoint {
         match std::panic::AssertUnwindSafe(async { stage.do_run_with_state(input, tensors, device, stream, ctx).await }).catch_unwind().await {
             Ok(result) => result,
             Err(panic) => {
+                warn!("run_with_state: panic={panic:?}");
+
                 let error = worker_stage_panic(panic);
                 *self.state_failure.lock() = Some(error.clone());
                 Err(error)
@@ -650,6 +663,7 @@ impl CudaWorker {
                     let endpoint_wrapper = match init_fn(stage_id, init_data, Arc::clone(&context.ws), &context.all_cuda_tensors, &context.tho_device).await {
                         Ok(endpoint_wrapper) => endpoint_wrapper,
                         Err(error) => {
+                            warn!("process_worker_request, InstallStage: error={error:?}");
                             context.installed_stages.remove(&endpoint_key);
                             return Err(error);
                         }
@@ -710,6 +724,16 @@ impl CudaWorker {
 
                     for (key, tensor) in context.all_cuda_tensors.tensors.lock().iter() {
                         info!("run_worker: key={key:?} tensor={tensor:?}");
+                    }
+
+                    for entry in context.installed_stages.iter() {
+                        info!("run_worker: key={:?} stage={:?}", entry.key(), entry.value());
+                        if let Some(endpoint) = entry.value() {
+                            if let Some(stage_with_state) = endpoint.stage.as_with_state() {
+                                info!("run_worker: key={:?} state_info={:?}", entry.key(), stage_with_state.get_state_info(&context.tho_device).await?);
+                            }
+                        }
+
                     }
 
                     let out = Box::new(DebugOutput::new(DEBUG_DATA.lock().as_ref()));

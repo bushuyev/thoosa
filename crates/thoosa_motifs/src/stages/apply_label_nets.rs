@@ -786,6 +786,17 @@ where
     }
 }
 
+impl<C> WithId for ApplyLabelNet<C>
+where
+    C: RunCtx + 'static,
+{
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
 
 // Loading a trained label net repeatedly must reuse both its module state and installed endpoint.
 static APPLY_LABEL_NET_INSTANCES: InstanceCache = InstanceCache::new();
@@ -821,7 +832,7 @@ where
                 &ws,
             ).await?;
 
-            // GlobalCtx::global().register_cache((stage., Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
         }).await
