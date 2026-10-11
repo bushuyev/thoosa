@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
-use mockall::automock;
+use mockall::{automock, Any};
 use num_traits::PrimInt;
 use parking_lot::Mutex;
 #[cfg(test)]
@@ -650,6 +650,13 @@ impl ThoError {
         match self.what() {
             Self::Cuda { action: CudaAction::HandleOOM, .. } | Self::AdjusterFailed => true,
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_retryable_oom(),
+            Self::Anyhow(anyhow) => {
+                let is_oom = cuda_cause_from_msg(&anyhow.to_string()).is_retryable_oom();
+                if is_oom{
+                    warn!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
+                }
+                is_oom
+            }
             _ => false,
         }
     }
@@ -708,19 +715,27 @@ impl ThoError {
 
 impl From<anyhow::Error> for ThoError {
     fn from(error: anyhow::Error) -> Self {
+        info!("From<anyhow::Error> for ThoError: error={error:?} type_name={}", error.type_name());
         // LibTorch exposes no CUDA status in TchError. Confine its legacy text adapter to
         // the raw Torch payload; never classify application context or arbitrary Display text.
-        #[cfg(feature = "tch-error")]
+        // #[cfg(feature = "tch-error")]
         if Self::typed_error(&error).is_none() {
+            info!("From<anyhow::Error> for ThoError: typed_error(&error).is_none()");
             if let Some(tch::TchError::Torch(msg)) = error.downcast_ref::<tch::TchError>() {
+                info!("From<anyhow::Error> for ThoError: Some(tch::TchError::Torch(msg))");
+
                 if msg.to_ascii_lowercase().contains("cuda") {
                     let classification = cuda_cause_from_msg(msg.clone());
                     let Self::Cuda { action, .. } = classification else { unreachable!() };
                     let marker = Self::Cuda { action, msg: "LibTorch operation failed".into() };
+
+                    info!("From<anyhow::Error> for ThoError: classification={classification:?} marker={marker:?}");
+
                     return Self::Anyhow(Arc::new(error.context(marker)));
                 }
             }
         }
+        info!("From<anyhow::Error> for ThoError: anyhow");
         Self::Anyhow(Arc::new(error))
     }
 }

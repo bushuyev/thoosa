@@ -10,13 +10,13 @@ use async_trait::async_trait;
 use anyhow::Context as _;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, error};
+use log::{debug, error, warn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::mem;
@@ -325,6 +325,7 @@ where
                         }
                     }
                     OpResult::Failed(error) => {
+                        warn!("handle_rs: error={error:?}");
                         Err(error.into())
                     }
                 }
@@ -784,27 +785,26 @@ where
 static EMPTY_STR: LazyLock<String> = LazyLock::new(|| String::from(""));
 
 
-impl <St, Init> WithId for DynSyncStageWithStateEnum<St, Init>
+impl <St, Init> DynSyncStageWithStateEnum<St, Init>
 where
     St:SyncStage+StageWithState + WithId,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static,
-    <St as WithId>::ID:AsRef<String>
+    <St as WithId>::ID:Display
 
 {
-    type ID = String;
 
     //to use same id for proxies and local stages with state when registering in GlobalCtx::global().register_cache
-    fn id(&self) -> &String {
+    pub fn stage_id(&self) -> String {
         match self {
             DynSyncStageWithStateEnum::Local(stage) => {
-                stage.id().as_ref()
+                stage.id().to_string()
             }
             DynSyncStageWithStateEnum::Proxy { stage, .. } => {
                 stage.stage_id.as_ref().unwrap_or_else(|| {
                     &EMPTY_STR
-                })
+                }).clone()
             }
         }
     }

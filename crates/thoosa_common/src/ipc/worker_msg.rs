@@ -173,6 +173,8 @@ impl WorkerError {
 
 impl From<WorkerError> for ThoError {
     fn from(error: WorkerError) -> Self {
+        warn!("<thoosa_shared::ThoError as core::convert::From>::from: error={error:?}");
+
         let WorkerError { kind, message } = error;
         match kind {
             WorkerErrorKind::Cuda(action) => Self::Cuda { action, msg: message },
