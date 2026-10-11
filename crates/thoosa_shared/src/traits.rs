@@ -252,7 +252,7 @@ impl Display for DataId {
 }
 
 #[delegatable_trait]
-#[automock(type ID=DummyCachableId;)]
+#[automock(type ID=DummyWithId;)]
 pub trait WithId {
     type ID: CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug + ?Sized;
 
@@ -261,11 +261,11 @@ pub trait WithId {
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
 #[name = "n/a"]
-pub struct DummyCachableId(pub &'static str);
+pub struct DummyWithId(pub &'static str);
 
-impl From<&'static str> for DummyCachableId {
+impl From<&'static str> for DummyWithId {
     fn from(value: &'static str) -> Self {
-        DummyCachableId(value)
+        DummyWithId(value)
     }
 }
 

@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use futures_util::future::BoxFuture;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use std::any::Any;
 use std::backtrace::Backtrace;
 use std::borrow::Borrow;
@@ -272,7 +272,7 @@ fn finish_cuda_panic<T>(result: std::thread::Result<T>, sync: &Result<(), ThoErr
                 Err(error.clone().context(format!("stage panicked before stream synchronization: {message}")))
             }
             Err(error) => {
-                debug!("stream synchronization also failed while unwinding a stage: {error:?}");
+                warn!("stream synchronization also failed while unwinding a stage: {error:?}");
                 std::panic::resume_unwind(panic)
             }
         },
@@ -294,6 +294,8 @@ pub(crate) fn finish_cuda_run<T>(result: Result<T, ThoError>, sync: Result<(), T
 pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) -> ThoError {
     match sync {
         Err(sync) => {
+            warn!("finish_cuda_error: original={original:?} sync={sync:?}");
+
             if sync.is_cuda_recovery_failed() || (!original.is_cuda_recovery_failed() && sync.needs_cuda_ctx_reset() && !original.needs_cuda_ctx_reset()) {
                 sync.context(format!("stage also failed: {original}"))
             } else {
@@ -446,9 +448,9 @@ impl CudaLocalActorHandle {
                 activity,
                 respond_to,
             }
-        ).await.context("CUDA actor channel closed")?;
+        ).await.context("copy_tensor: CUDA actor channel closed")?;
 
-        Ok(recv.await.context("CUDA actor response channel closed")??)
+        Ok(recv.await.context("copy_tensor: CUDA actor response channel closed")??)
     }
 
     async fn restart_inner(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> anyhow::Result<()> {
@@ -459,9 +461,9 @@ impl CudaLocalActorHandle {
                 authority,
                 respond_to,
             }
-        ).await.context("CUDA actor channel closed")?;
+        ).await.context("restart_inner: CUDA actor channel closed")?;
 
-        Ok(recv.await.context("CUDA actor response channel closed")??)
+        Ok(recv.await.context("restart_inner: CUDA actor response channel closed")??)
     }
 
     async fn acquire_exec_stream(&self) -> anyhow::Result<LocalHandleCtx> {
@@ -472,9 +474,9 @@ impl CudaLocalActorHandle {
                 activity,
                 respond_to,
             }
-        ).await.context("CUDA actor channel closed")?;
+        ).await.context("acquire_exec_stream: CUDA actor channel closed")?;
 
-        Ok(recv.await.context("CUDA actor response channel closed")??)
+        Ok(recv.await.context("acquire_exec_stream: CUDA actor response channel closed")??)
     }
 
 }
