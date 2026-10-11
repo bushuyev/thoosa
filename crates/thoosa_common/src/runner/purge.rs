@@ -324,7 +324,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::traits::{CachableIdTr, DummyCachableId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, DummyWithId as DummyCachableId, WithId};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 

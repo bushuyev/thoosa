@@ -429,6 +429,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::proxy::DynSyncStageWithStateEnum;
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
     use crate::ipc::serialization::json::JsonIpcCodec;
@@ -542,6 +543,27 @@ mod tests {
                 assert_eq!(ipc.worker_id()?.generation.0, retired.generation.0 + 1);
                 Ok::<_, ThoError>(())
             }).await?
+        }, async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+        })
+    }
+
+    #[test]
+    fn test_cancelled_async_invocation_preserves_endpoint_lease_ipc() -> Result<(), ThoError> {
+        run_ipc_test(module_path!(), async {
+            let stage = TestStageB::<(), TestRunCtx>::new(Some("cancelled".into()), 1, TestStageInitB::new(2, 3, 1)).await?;
+            let DynSyncStageWithStateEnum::Proxy { stage: proxy, .. } = stage.as_ref() else { panic!("expected proxy") };
+            let actor = GlobalCtx::global().cuda_actor(1);
+            let value = actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1usize.into()).await?;
+            crate::ipc::proxy::async_dispatch_tests::assert_cancelled_invocation_holds_export_lease(Arc::clone(proxy), Box::new(TestInputB { value })).await?;
+            // The same worker and endpoint must still restore and execute after
+            // the cancelled call and its serialized offload finish.
+            let value = actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1usize.into()).await?;
+            let output = actor.run_stage(stage, TestInputB { value }, 1, &TestRunCtx).await?;
+            let cpu = actor.copy(output.value, 0usize.into()).await?;
+            assert!(Tensor::f_full([1, 3], 5., FLOAT_CPU)?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false)?);
+            Ok(())
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await

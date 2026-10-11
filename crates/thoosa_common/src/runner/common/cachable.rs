@@ -1167,7 +1167,7 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::traits::{DummyCachableId, RangeSelector, RunCtx, WithId};
+    use thoosa_shared::traits::{DummyWithId as DummyCachableId, RangeSelector, RunCtx, WithId};
     use tokio::sync::{Notify, Semaphore};
     use tokio::time::timeout;
     extern crate self as caching_runner;

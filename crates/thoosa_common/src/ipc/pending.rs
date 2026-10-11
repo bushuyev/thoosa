@@ -69,6 +69,15 @@ impl PendingRequests {
         self.state.lock().closed.get_or_insert(error);
     }
 
+    pub fn retain_until_reply(&self, id: u64, owner: KeepAlive) -> Result<(), ThoError> {
+        let mut state = self.state.lock();
+        let request = state.requests.get_mut(&id).ok_or(ThoError::ContextReset)?;
+        // Serialization must not drop invocation tensor references while the
+        // worker is still reading them. Preserve any existing copy allocation too.
+        request.keepalive = Some(Box::new((request.keepalive.take(), owner)));
+        Ok(())
+    }
+
     pub fn transport_failed(&self, error: ThoError) {
         self.close(ThoError::ContextReset.context(format!("worker transport failed: {error}")));
         self.failed.cancel();
@@ -163,6 +172,33 @@ mod tests {
         assert!(weak.upgrade().is_some(), "cancelled callers cannot free worker storage");
         pending.exited(ThoError::ContextReset);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_caller_retains_serialized_request_until_reply_or_exit() {
+        for transport_failure in [false, true] {
+            let pending = PendingRequests::new(worker());
+            let (tx, _rx) = mpsc::channel(1);
+            let storage = Arc::new(vec![0u8; 8]);
+            let request_owner = Arc::new(vec![1u8; 8]);
+            let storage_weak = Arc::downgrade(&storage);
+            let request_weak = Arc::downgrade(&request_owner);
+            let (reply, response) = oneshot::channel();
+            pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker(), 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
+            // The socket writer adds the serialized request's owners without
+            // replacing the allocation already retained for a copy operation.
+            pending.retain_until_reply(1, Box::new(request_owner)).unwrap();
+            drop(response);
+            assert!(storage_weak.upgrade().is_some() && request_weak.upgrade().is_some());
+            if transport_failure {
+                pending.transport_failed(ThoError::new("socket closed"));
+                assert!(storage_weak.upgrade().is_some() && request_weak.upgrade().is_some());
+                pending.exited(ThoError::ContextReset);
+            } else {
+                pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: OpResult::Ok(None) }).unwrap();
+            }
+            assert!(storage_weak.upgrade().is_none() && request_weak.upgrade().is_none());
+        }
     }
 
     #[tokio::test]
