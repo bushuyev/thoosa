@@ -136,6 +136,11 @@ impl dyn CudaActorHandle + '_ {
             ConsumeResult::Ok(prepared) => prepared,
             ConsumeResult::Failed { input, error } => return Ok(ConsumeResult::Failed { input, error }),
         };
+        // Preparation returns owned input, so the remote consume can await its
+        // response and still return that exact input on a recoverable failure.
+        if let Some(remote) = stage.as_async() {
+            return Ok(remote.consume(Arc::clone(&stage), input, ctx).await);
+        }
         let mut handle_ctx = match self.init_handle_ctx().await {//acquires exec stream
             Ok(handle_ctx) => handle_ctx,
             Err(error) => return Ok(ConsumeResult::Failed { input, error }),
@@ -175,6 +180,12 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
 
+        // Select before local pre_run: proxy restoration owns its own endpoint
+        // lease, and no thread-local CUDA guard may survive the IPC await.
+        if let Some(remote) = stage.as_async() {
+            let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;
+            return remote.run(Arc::clone(&stage), borrowed.borrow(), ctx).await;
+        }
         let mut state = if let Some(with_state) = stage.as_with_state() {
             // Select stateful execution before preparation so only stateful stages run pre_run.
             with_state.pre_run(to_device_idx).await?
@@ -222,6 +233,10 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
+        if let Some(remote) = stage.as_async() {
+            let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;
+            return remote.run(Arc::clone(&stage), borrowed.borrow(), ctx).await;
+        }
         let mut state = if let Some(with_state) = stage.as_with_state() {
             // Keep selector-based execution consistent with the primary stateful runner path.
             with_state.pre_run(to_device_idx).await?

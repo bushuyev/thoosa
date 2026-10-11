@@ -1,11 +1,12 @@
 use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
 use log::debug;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tch::{Kind, Tensor, nn, nn::OptimizerConfig};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, AsyncStageDispatch, ConsumeResult, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 
 use super::common::{ABData, ClsOut, ModelTestId};
@@ -115,6 +116,11 @@ impl Stage for Classifier {
 }
 
 impl SyncStage for Classifier {
+    // The adapter's CPU result copy belongs to the async IPC path as well.
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> {
+        self.sync_classifier.as_async().map(|_| self as &dyn AsyncStageDispatch<Self>)
+    }
+
     fn do_run<'a>(
         self: Arc<Self>,
         input: &Self::In<'a>,
@@ -123,25 +129,35 @@ impl SyncStage for Classifier {
     where
         Self: Sized,
     {
-        if GlobalCtx::global().is_ipc() && input.ref_key().is_none() {
-            if input.tho_device_idx() == ctx.tho_device_idx() {
-                return Err(ThoError::new(format!("Classifier IPC sync path expected a worker tensor ref, got local tensor already on device {}: {input:?}", ctx.tho_device_idx())));
+        Arc::clone(&self.sync_classifier).do_run(input, ctx)
+    }
+}
+
+impl AsyncStageDispatch<Classifier> for Classifier {
+    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a ThoTensor<ABData, ModelTestId>, ctx: &'a RunCtxImpl) -> BoxFuture<'a, Result<ThoTensor<ClsOut, ModelTestId>, ThoError>> {
+        async move {
+            let prepared;
+            let input = if input.ref_key().is_none() {
+                if input.tho_device_idx() == ctx.tho_device_idx() {
+                    return Err(ThoError::new(format!("Classifier IPC path expected a worker tensor ref, got local tensor already on device {}: {input:?}", ctx.tho_device_idx())));
+                }
+                prepared = input.copy_to_device(ctx.tho_device_idx()).await?;
+                &prepared
+            } else { input };
+            let output = AsyncStageDispatch::run(stage.sync_classifier.as_ref(), Arc::clone(&stage.sync_classifier), input, ctx).await?;
+            if output.ref_key().is_some() { output.copy_to_device(0).await } else { Ok(output) }
+        }.boxed()
+    }
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: ThoTensor<ABData, ModelTestId>, ctx: RunCtxImpl) -> BoxFuture<'a, ConsumeResult<ThoTensor<ABData, ModelTestId>, ThoTensor<ClsOut, ModelTestId>>> {
+        async move {
+            // The classifier's worker entry is borrowed; retain the owned input
+            // until its invocation and CPU result copy have both succeeded.
+            match AsyncStageDispatch::run(stage.as_ref(), Arc::clone(&stage), &input, &ctx).await {
+                Ok(output) => ConsumeResult::Ok(output),
+                Err(error) => ConsumeResult::Failed { input, error },
             }
-
-            let input = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(input.copy_to_device(ctx.tho_device_idx())))?;
-            let output = Arc::clone(&self.sync_classifier).do_run(&input, ctx)?;
-            if output.ref_key().is_some() {
-                return tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(output.copy_to_device(0)));
-            }
-            return Ok(output);
-        }
-
-        let output = Arc::clone(&self.sync_classifier).do_run(input, ctx)?;
-        if GlobalCtx::global().is_ipc() && output.ref_key().is_some() {
-            return tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(output.copy_to_device(0)));
-        }
-
-        Ok(output)
+        }.boxed()
     }
 }
 

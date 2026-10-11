@@ -874,6 +874,11 @@ async fn writer_loop<W>(
             }
         };
 
+        // Async proxy callers can disappear while the worker runs. Register
+        // ownership before publishing the frame so even an immediate reply
+        // cannot race retention of its tensor references and initializer data.
+        if pending.retain_until_reply(request_id, Box::new(msg)).is_err() { break; }
+
         if let Err(e) = write_frame(&mut writer, &frame, "CudaWorkerMsg").await {
             error!("worker IPC writer failed: {e}");
             pending.transport_failed(ThoError::new(format!("worker IPC writer stopped: {e}")));

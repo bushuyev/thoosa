@@ -764,6 +764,13 @@ where
 
 pub trait SyncStage: Stage + Debug {
 
+    // Remote execution waits for I/O and must bypass the local synchronous
+    // stream boundary. Ordinary tensor stages keep the default local dispatch.
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>>
+    where Self: Sized,
+    {
+        None
+    }
 
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
     where
@@ -783,6 +790,16 @@ pub trait SyncStage: Stage + Debug {
     ) -> ConsumeResult<Self::In<'f>, Self::Out> {
         unimplemented!()
     }
+}
+
+// This capability keeps the input/output contract of a SyncStage while allowing
+// actor helpers to await remote execution without blocking a runtime thread.
+pub trait AsyncStageDispatch<S: SyncStage>: Sync {
+    fn run<'a, 'i: 'a>(&self, stage: Arc<S>, input: &'a S::In<'i>, ctx: &'a S::Ctx) -> BoxFuture<'a, Result<S::Out, ThoError>>
+    where S: 'a;
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<S>, input: S::In<'i>, ctx: S::Ctx) -> BoxFuture<'a, ConsumeResult<S::In<'i>, S::Out>>
+    where S: 'a, S::In<'i>: Send + 'a;
 }
 
 pub trait StageWithState: SyncStage + Sync {

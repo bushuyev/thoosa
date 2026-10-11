@@ -27,7 +27,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
 use tch::Tensor;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStageDispatch, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLockReadGuard};
 use thoosa_shared::ipc_types::{H2DTensorKey, WorkerOutput};
 
@@ -171,53 +171,59 @@ where
 
 
 
-impl <St>SyncStage for ProxyStage<St>
+impl<St> SyncStage for ProxyStage<St>
 where
-    St:SyncStage,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
+    St: SyncStage + Send + Sync + 'static,
+    for<'a> St::In<'a>: WorkerStageInput + Serialize,
+    St::Out: WorkerStageOutput + DeserializeOwned + 'static,
 {
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> { Some(self) }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage2::do_run"))]
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                let rs = self.invoke(self.clone_refs(input)?, ctx.tho_device_idx(), false).await?;
-                Self::handle_rs(rs)
-
-            })
-        })
+    // A synchronous call cannot safely wait for the worker. Actor helpers must
+    // select the async capability before installing a local stream context.
+    fn do_run<'a>(self: Arc<Self>, _: &Self::In<'a>, _: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        Err(ThoError::new("IPC stages require asynchronous actor dispatch"))
     }
 
+    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
+        ConsumeResult::Failed { input, error: ThoError::new("IPC stages require asynchronous actor dispatch") }
+    }
+}
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ProxyStage2::consume"))]
-    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out>
-    where
-        Self: Sized,
+impl<St> AsyncStageDispatch<ProxyStage<St>> for ProxyStage<St>
+where
+    St: SyncStage + Send + Sync + 'static,
+    for<'a> St::In<'a>: WorkerStageInput + Serialize,
+    St::Out: WorkerStageOutput + DeserializeOwned + 'static,
+{
+    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a St::In<'i>, ctx: &'a St::Ctx) -> BoxFuture<'a, Result<St::Out, ThoError>> {
+        // Clone wire references before awaiting; the request retains their
+        // ownership until its response, independently of this borrowed caller.
+        let input = stage.clone_refs(input);
+        let device = ctx.tho_device_idx();
+        async move { Self::handle_rs(stage.invoke(input?, device, false).await?) }.boxed()
+    }
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>
+    where St::In<'i>: Send + 'a,
     {
-
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-
-
-                let rs = self.invoke(self.clone_refs(&input)?, ctx.tho_device_idx(), true).await?;
-                Self::handle_rs(rs)
-            })
-        });
-        match result {
-            Ok(output) => ConsumeResult::Ok(output),
-            Err(error) => ConsumeResult::Failed { input, error },
-        }
+        let refs = stage.clone_refs(&input);
+        async move {
+            let result = async move {
+                let refs = refs?;
+                Self::handle_rs(stage.invoke(refs, ctx.tho_device_idx(), true).await?)
+            }.await;
+            match result {
+                Ok(output) => ConsumeResult::Ok(output),
+                Err(error) => ConsumeResult::Failed { input, error },
+            }
+        }.boxed()
     }
 }
 
 impl <St>StageWithState for ProxyStage<St>
 where
-    St:SyncStage + StageWithState,
+    St:SyncStage + StageWithState + Send + Sync + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
@@ -333,22 +339,24 @@ where
         }
     }
 
-    async fn invoke(&self, input: Box<dyn WorkerInput>, device: usize, consume: bool) -> Result<CudaWorkerMsgOut, ThoError> {
+    async fn invoke(self: Arc<Self>, input: Box<dyn WorkerInput>, device: usize, consume: bool) -> Result<CudaWorkerMsgOut, ThoError>
+    where St: Send + Sync + 'static,
+    {
         let actor = GlobalCtx::global().cuda_actor(device);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
         let activity = actor.activity_for(self.worker_id)?;
-        // Keep admission from restoration through the completed invocation, even
-        // for direct actor users without a runner scope. This future is driven by
-        // the synchronous callback's block_on and cannot be cancelled mid-request.
-        activity.run(async {
+        // The caller may now cancel at any await. An owned task retains the
+        // proxy, activity, and endpoint lease through restoration and reply, so
+        // cancellation cannot admit an export while accepted work is still live.
+        tokio::spawn(activity.run(async move {
             // Invocations share the endpoint lease. The worker never needs the
             // parent lock to reply; offload takes it exclusively through CPU commit.
             let _execution = self.execution.read().await;
             let mut state = self.state.lock().await;
             self.load_gpu_inner(device, &mut state).await?;
             drop(state);
-            Ok(actor.invoke_stage(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), input, consume).await?)
-        }).await
+            Ok::<_, ThoError>(actor.invoke_stage(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), input, consume).await?)
+        })).await.context("IPC invocation task failed")?
     }
 
     async fn purge_gpu(self: Arc<Self>, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, _name: &str) -> Result<(), ThoError>
@@ -511,13 +519,41 @@ where
     // Preserve the local stage's adjustment marker across local/proxy dispatch.
 }
 
+impl<St, Init> AsyncStageDispatch<DynSyncStageEnum<St, Init>> for DynSyncStageEnum<St, Init>
+where
+    St: SyncStage + Send + Sync + 'static,
+    for<'a> St::In<'a>: WorkerStageInput + Serialize,
+    St::Out: WorkerStageOutput + DeserializeOwned + 'static,
+    Init: Debug + Send + Sync + 'static,
+{
+    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a St::In<'i>, ctx: &'a St::Ctx) -> BoxFuture<'a, Result<St::Out, ThoError>> {
+        match stage.as_ref() {
+            Self::Proxy { stage, .. } => AsyncStageDispatch::run(stage.as_ref(), Arc::clone(stage), input, ctx),
+            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
+        }
+    }
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>
+    where St::In<'i>: Send + 'a,
+    {
+        match stage.as_ref() {
+            Self::Proxy { stage, .. } => AsyncStageDispatch::consume(stage.as_ref(), Arc::clone(stage), input, ctx),
+            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
+        }
+    }
+}
+
 impl <St, Init> SyncStage for DynSyncStageEnum<St, Init>
 where
-    St:SyncStage,
+    St:SyncStage + Send + Sync + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> {
+        match self { Self::Local(_) => None, Self::Proxy { .. } => Some(self) }
+    }
+
 
 
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
@@ -627,6 +663,30 @@ where
     // Preserve the wrapped stage's adjustment capability across local/proxy dispatch.
 }
 
+impl<St, Init> AsyncStageDispatch<DynSyncStageWithStateEnum<St, Init>> for DynSyncStageWithStateEnum<St, Init>
+where
+    St: SyncStage + StageWithState + Send + Sync + 'static,
+    for<'a> St::In<'a>: WorkerStageInput + Serialize,
+    St::Out: WorkerStageOutput + DeserializeOwned + 'static,
+    Init: Debug + Send + Sync + 'static,
+{
+    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a St::In<'i>, ctx: &'a St::Ctx) -> BoxFuture<'a, Result<St::Out, ThoError>> {
+        match stage.as_ref() {
+            Self::Proxy { stage, .. } => AsyncStageDispatch::run(stage.as_ref(), Arc::clone(stage), input, ctx),
+            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
+        }
+    }
+
+    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>
+    where St::In<'i>: Send + 'a,
+    {
+        match stage.as_ref() {
+            Self::Proxy { stage, .. } => AsyncStageDispatch::consume(stage.as_ref(), Arc::clone(stage), input, ctx),
+            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
+        }
+    }
+}
+
 impl <St, Init> SyncStage for DynSyncStageWithStateEnum<St, Init>
 where
     St: SyncStage + StageWithState + Send + Sync + 'static,
@@ -634,6 +694,10 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
+    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> {
+        match self { Self::Local(_) => None, Self::Proxy { .. } => Some(self) }
+    }
+
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
         Self: Sized,
@@ -641,6 +705,13 @@ where
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
             Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),
+        }
+    }
+
+    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
+        match self.as_ref() {
+            Self::Local(stage) => Arc::clone(stage).consume(input, ctx),
+            Self::Proxy { stage, .. } => Arc::clone(stage).consume(input, ctx),
         }
     }
 
@@ -807,5 +878,36 @@ where
                 }).clone()
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod async_dispatch_tests {
+    use super::*;
+    use std::time::Duration;
+
+    pub async fn assert_cancelled_invocation_holds_export_lease<St>(proxy: Arc<ProxyStage<St>>, input: Box<dyn WorkerInput>) -> Result<(), ThoError>
+    where
+        St: SyncStage + Send + Sync + 'static,
+        for<'a> St::In<'a>: WorkerStageInput + Serialize,
+        St::Out: WorkerStageOutput + DeserializeOwned + 'static,
+    {
+        // Hold restoration to suspend an invocation after it acquires execution
+        // admission. Cancellation must not release that lease to an offloader.
+        let state = proxy.state.lock().await;
+        let invocation = tokio::spawn(Arc::clone(&proxy).invoke(input, proxy.tho_device_idx, false));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while proxy.execution.try_write().is_ok() { tokio::task::yield_now().await; }
+        }).await?;
+        invocation.abort();
+        assert!(invocation.await.unwrap_err().is_cancelled());
+        assert!(proxy.execution.try_write().is_err(), "cancelled caller must not release accepted invocation admission");
+        let offload = Arc::clone(&proxy).purge_gpu(None, proxy.tho_device_idx, "cancelled invocation");
+        tokio::pin!(offload);
+        assert!(futures::poll!(&mut offload).is_pending());
+        drop(state);
+        tokio::time::timeout(Duration::from_secs(10), offload).await??;
+        assert!(proxy.state.lock().await.is_some(), "offload must commit its CPU backup after the invocation completes");
+        Ok(())
     }
 }
