@@ -137,8 +137,18 @@ where
 {
     config:ModConfig<DI, DO>,
     opt_state:OptSnapshot<DI, DO>,
-    ipc_export: Option<TrainingState>
+    ipc_export: Option<TrainingState>,
+    transaction_failed: bool
 }
+
+// Do not expose a retryable source: after failed rollback the session cannot replay safely.
+#[derive(Debug)]
+struct TrainingRollbackFailed { attempt: ThoError, rollback: ThoError }
+
+impl std::fmt::Display for TrainingRollbackFailed {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { f.write_str("training rollback failed; session invalidated") }
+}
+impl std::error::Error for TrainingRollbackFailed {}
 
 #[derive(Debug)]
 enum OptSnapshot<DI, DO>
@@ -225,6 +235,7 @@ where
             config,
             opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
             ipc_export: None,
+            transaction_failed: false,
         })
     }
 
@@ -358,6 +369,60 @@ where
             unsafe { self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?; }
             self.opt_state = OptSnapshot::Opt { opt, vs, module };
         }
+        Ok(())
+    }
+
+    /// A logical batch owns its rollback state until the optimizer update has completed.
+    /// Registered variables include running statistics; optimizer snapshots include counters
+    /// and momentum. Unregistered model state and RNG streams are outside this contract.
+    pub(crate) fn training_transaction<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T, ThoError>) -> Result<T, ThoError> {
+        self.ensure_training_usable()?;
+        self.ipc_export = None;
+        let mut snapshot = self.capture_state()?;
+        // Deep CPU copies also work when training on CPU, and add no persistent GPU pressure.
+        snapshot.tensors = snapshot.tensors.copy_to_cpu()?;
+        let result = panic_to_err!({
+            self.opt().zero_grad();
+            let output = run(self)?;
+            self.opt().step();
+            self.opt().zero_grad();
+            // Catch asynchronous optimizer failures while rollback data still exists.
+            if let Device::Cuda(index) = self.opt_state.device().into() { tch::Cuda::synchronize(index as i64); }
+            Ok::<_, ThoError>(output)
+        });
+        if let Err(error) = result {
+            self.ipc_export = None;
+            let restored = panic_to_err!(self.restore_training_transaction(snapshot));
+            if let Err(rollback) = restored {
+                self.transaction_failed = true;
+                if error.needs_cuda_ctx_reset() { return Err(error); }
+                if rollback.needs_cuda_ctx_reset() { return Err(rollback); }
+                log::error!("Training rollback invalidated the session: attempt={error:?} rollback={rollback:?}");
+                // This is terminal even when the rollback itself exhausted device memory.
+                return Err(ThoError::from(anyhow::Error::new(TrainingRollbackFailed { attempt: error, rollback })));
+            }
+            return Err(error);
+        }
+        result
+    }
+
+    pub(crate) fn ensure_training_usable(&self) -> Result<(), ThoError> {
+        if self.transaction_failed { return Err(ThoError::new("training session invalidated by failed rollback")); }
+        Ok(())
+    }
+
+    fn restore_training_transaction(&mut self, snapshot: TrainingState) -> Result<(), ThoError> {
+        let OptSnapshot::Opt { opt, vs, .. } = &mut self.opt_state else { return Err(ThoError::new("training transaction has no live state")); };
+        // Restore in place so the module and optimizer retain their parameter identities.
+        opt.zero_grad();
+        tch::no_grad(|| -> Result<(), ThoError> {
+            for (name, mut tensor) in vs.variables() { tensor.f_copy_(&snapshot.tensors.get(&format!("var/{name}"))?)?; }
+            Ok(())
+        })?;
+        let device = ThoDevice::from(vs.device()).tho_device_idx();
+        let optimizer = snapshot.optimizer.map_tensors(device, |key, _| Ok(snapshot.tensors.get(key)?.f_to_device(vs.device())?))?;
+        unsafe { self.config.opt_config.restore_snapshot(&optimizer, opt.as_raw_c_optimizer())?; }
+        if let Device::Cuda(index) = vs.device() { tch::Cuda::synchronize(index as i64); }
         Ok(())
     }
 

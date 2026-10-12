@@ -13,6 +13,7 @@ use std::time::Instant;
 use tch::Tensor;
 use thoosa_common::cuda_utils::maybe_cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
+use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::IpcCodec;
 use thoosa_common::ipc::worker_msg::{WorkerInput};
@@ -34,6 +35,13 @@ use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id
 use tokio::sync::MutexGuard;
 use thoosa_shared::ipc_types::WorkerOutput;
 
+/// Training uses mean loss with equally weighted samples and one optimizer update.
+/// Deterministic sample-independent models match an unsplit batch up to rounding.
+/// Batch-dependent layers use microbatch statistics; stochastic layers resample on
+/// retry (RNG streams are not rolled back). Mutable model state must be registered
+/// in the VarStore. Cross-sample objectives and external mutable state are unsupported.
+/// Chunking bounds activation memory; the source batch remains resident. Each attempt
+/// uses a deep CPU rollback snapshot and commits before another batch may be submitted.
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of
@@ -42,6 +50,8 @@ pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     x_f: Arc<F>,
     loss_fn: LossFp,
     best_checkpoint_path: PathBuf,
+    // A retry after reply/stream completion failure must not apply a committed batch twice.
+    last_training_batch: std::sync::Mutex<Option<(u64, f32)>>,
     pd: PhantomData<C>,
 }
 
@@ -108,8 +118,24 @@ where
             x_f,
             loss_fn,
             best_checkpoint_path,
+            last_training_batch: std::sync::Mutex::new(None),
             pd: PhantomData,
         }, node_params))
+    }
+}
+
+impl<F, DI, DO, C> DynSyncStageWithStateEnum<TrainStep<F, DI, DO, C>>
+where
+    DI: Dims + 'static,
+    DO: Dims + 'static,
+    C: RunCtx + 'static,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    /// Acknowledgement means the state owner has published the checkpoint in either mode.
+    pub async fn checkpoint(self: &Arc<Self>, ctx: &C) -> Result<(), ThoError> {
+        let device = ctx.tho_device_idx();
+        GlobalCtx::global().cuda_actor(device).run_stage(self.clone(), TrainStepInput::checkpoint()?, device, ctx).await?;
+        Ok(())
     }
 }
 
@@ -151,6 +177,7 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut guard = self.train_module.lock().await;
+            guard.ensure_training_usable()?;
             guard.move_to_device(to_device_idx).await?;
             Ok(Some(MutexGuard::map(guard, |v|v)))
         }.boxed()
@@ -170,79 +197,49 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, train_module: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("TrainStep::do_run: input={input:?}");
-        // Save inside the state owner so IPC training never exports a VarStore.
-        if input.save_var_store {
-            debug!("TrainStep::do_run: saved to={:?}", self.best_checkpoint_path);
-            train_module.save_var_store(&self.best_checkpoint_path)?;
+        train_module.ensure_training_usable()?;
+        if input.command == TrainStepCommand::Checkpoint {
+            // Publish only a completed checkpoint; failed writes cannot replace the previous best.
+            let pending = self.best_checkpoint_path.with_extension("pending.safetensors");
+            let result = train_module.save_var_store(&pending).and_then(|()| Ok(std::fs::rename(&pending, &self.best_checkpoint_path)?));
+            if result.is_err() { let _ = std::fs::remove_file(&pending); }
+            result?;
+            return Ok(TrainStepOutput::new(0.0));
         }
-
-        let x_t_0 = input.x();
-        let expected_y = input.expected_y();
-
-        debug!("TrainStep::do_run: device={:?} x_t_0.size={:?} expected_y.size={:?}", self.device, x_t_0.size(), expected_y.size());
-        debug!("TrainStep::do_run: 0. cuda_mem={:?}",maybe_cuda_mem(&self.device));
-
-        let x_t = (self.x_f)(x_t_0);
-
-        debug!("TrainStep::do_run: device={:?}  x_t.size={:?}", self.device, x_t.size());
-
-        let mut lengths = input.lengths.clone();
-        let mut calculate_loss = || {
-
-
-            let predicted_y = train_module.module().tho_forward(&x_t, lengths.as_mut(), input.train)?;
-
-            debug!("TrainStep::do_run: x_t={x_t:?} predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
-
-
-            let loss = (self.loss_fn)(&predicted_y.as_ref(), &expected_y.as_ref())?;
-
-            trace!("TrainStep::do_run: x_t=\n{x_t} predicted_y=\n{predicted_y} expected_y=\n{expected_y} loss=\n{loss}");
-
-            Ok::<_, ThoError>((predicted_y, loss))
-
+        let train = input.train();
+        let batch_len = *input.x_ref()?.size().first().ok_or_else(|| ThoError::new("training input has no batch dimension"))?;
+        let chunk_len = input.microbatch_size.unwrap_or(batch_len);
+        if batch_len <= 0 || chunk_len <= 0 { return Err(ThoError::new("training requires a nonempty batch and positive microbatch size")); }
+        let calculate = |module: &mut ThoTrainModule<DI, DO>| -> Result<TrainStepOutput, ThoError> {
+            let mut weighted_loss = 0.0;
+            for start in (0..batch_len).step_by(chunk_len as usize) {
+                let end = (start + chunk_len).min(batch_len);
+                let chunk = input.select_batch((start..end).into())?;
+                let x = (self.x_f)(chunk.x()?);
+                let mut lengths = chunk.lengths.clone();
+                let predicted = module.module().tho_forward(&x, lengths.as_mut(), train)?;
+                let loss = (self.loss_fn)(&predicted.as_ref(), &chunk.expected_y_ref()?.as_ref())?;
+                let weight = (end - start) as f64 / batch_len as f64;
+                weighted_loss += loss.f_double_value(&[])? * weight;
+                if train {
+                    // Loss is a mean over equally weighted samples. Backward accumulates;
+                    // only training_transaction may update the optimizer, after every chunk.
+                    loss.f_mul_scalar(weight)?.f_backward()?;
+                }
+            }
+            Ok(TrainStepOutput::new(weighted_loss as f32))
         };
-        let (predicted_y, loss) = if input.train {
-            panic_to_err!(calculate_loss())?
+        if train {
+            let mut committed = self.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))?;
+            if let Some((id, loss)) = *committed {
+                if id == input.request_id { return Ok(TrainStepOutput::new(loss)); }
+            }
+            let output = train_module.training_transaction(calculate)?;//<-zero_grad is here
+            *committed = Some((input.request_id, output.loss));
+            Ok(output)
         } else {
-            panic_to_err!(tch::no_grad(calculate_loss))?
-        };
-        debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));
-
-
-        x_t.drop_inner();
-        let loss_value = panic_to_err!(Ok::<_, ThoError>(loss.double_value(&[])))? as f32;
-
-        if input.train {
-
-            let opt = train_module.opt();
-            debug!("TrainStep::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
-
-            debug!("TrainStep::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));
-            trace!("TrainStep::do_run: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",optimizer_mem_size(&opt));
-
-            predicted_y.drop_inner();
-            drop(expected_y);
-            debug!("TrainStep::do_run: 2.1 cuda_mem={:?}",maybe_cuda_mem(&self.device));
-
-            let t1 = Instant::now();
-
-            panic_to_err!({
-                opt.backward_step(&loss.set_requires_grad(true));
-                opt.zero_grad();
-                Ok::<_, ThoError>(())
-            })?;
-
-
-            debug!("TrainStep::do_run: 2.2 cuda_mem={:?}  optimizer_size={}", maybe_cuda_mem(&self.device),optimizer_mem_size(&opt));
-            debug!("TrainStep::do_run: device={:?}  backward_step done in {}", self.device, t1.elapsed().as_millis());
-        } else {
-            predicted_y.drop_inner();
-            drop(expected_y);
+            panic_to_err!(tch::no_grad(|| calculate(train_module)))
         }
-
-        Ok(TrainStepOutput::new(loss_value))
     }
 }
 
@@ -258,62 +255,79 @@ where
 
 pub type TrainStepXFn<D> = Box<dyn Fn(ThoBatch<D>) -> ThoBatch<D> + Send + Sync + 'static>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum TrainStepCommand { Train, Validate, Checkpoint }
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = ""))]
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
     id: SynKey,
-    pub x: ThoBatch<DI>,
+    x: Option<ThoBatch<DI>>,
     pub lengths: Option<BatchLengths>,
-    pub expected_y: ThoBatch<DO>,
-    train: bool,
-    save_var_store: bool,
+    expected_y: Option<ThoBatch<DO>>,
+    command: TrainStepCommand,
+    request_id: u64,
+    microbatch_size: Option<i64>,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
-    pub fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool, save_var_store: bool) -> Self {
+    pub fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool) -> Self {
         Self {
             id: SynKey::new([mono_key!("train_step", "stage")]),
-            x,
+            x: Some(x),
             lengths,
-            expected_y,
-            train,
-            save_var_store,
+            expected_y: Some(expected_y),
+            command: if train { TrainStepCommand::Train } else { TrainStepCommand::Validate },
+            request_id: rand::random(),
+            microbatch_size: None,
         }
     }
 
-    pub fn x(&self) -> ThoBatch<DI> {
-        self.x.shallow_clone::<Batch<DI>>()//called form sync TrainStep::do_run
+    fn checkpoint() -> Result<Self, ThoError> {
+        // Control commands carry no tensors and never run a forward or backward pass.
+        Ok(Self {
+            id: SynKey::new([mono_key!("train_checkpoint", "stage")]),
+            x: None,
+            expected_y: None,
+            lengths: None,
+            command: TrainStepCommand::Checkpoint,
+            request_id: rand::random(),
+            microbatch_size: None,
+        })
     }
 
-    pub fn expected_y(&self) -> ThoBatch<DO> {
-        self.expected_y.shallow_clone::<Batch<DO>>()
+    fn x(&self) -> Result<ThoBatch<DI>, ThoError> {
+        // The alias stays within the synchronous forward/backward transaction.
+        Ok(self.x_ref()?.shallow_clone::<Batch<DI>>())
     }
 
-    pub fn x_ref(&self) -> &ThoBatch<DI> {
-        &self.x
+    pub fn x_ref(&self) -> Result<&ThoBatch<DI>, ThoError> {
+        self.x.as_ref().ok_or_else(|| ThoError::new("training command has no input batch"))
     }
 
     pub fn lengths_ref(&self) -> Option<&BatchLengths> {
         self.lengths.as_ref()
     }
 
-    pub fn expected_y_ref(&self) -> &ThoBatch<DO> {
-        &self.expected_y
+    pub fn expected_y_ref(&self) -> Result<&ThoBatch<DO>, ThoError> {
+        self.expected_y.as_ref().ok_or_else(|| ThoError::new("training command has no target batch"))
     }
 
     pub fn train(&self) -> bool {
-        self.train
+        self.command == TrainStepCommand::Train
     }
 
     pub fn clone_refs_for_worker(&self) -> Result<Self, ThoError> {
+        if self.command == TrainStepCommand::Checkpoint { return Self::checkpoint(); }
         // Training requests keep only worker tensor references; the worker owns the materialized tensors.
         Ok(Self {
             id: self.id.clone(),
-            x: self.x.clone_ref()?,
+            x: Some(self.x_ref()?.clone_ref()?),
             lengths: self.lengths.clone(),
-            expected_y: self.expected_y.clone_ref()?,
-            train: self.train,
-            save_var_store: self.save_var_store,
+            expected_y: Some(self.expected_y_ref()?.clone_ref()?),
+            command: self.command,
+            request_id: self.request_id,
+            microbatch_size: self.microbatch_size,
         })
     }
 
@@ -326,12 +340,12 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
 
         Ok(Self {
             id: self.id.clone(),
-            x: select_batch_tensor(&self.x, &batch_range)?,
+            x: Some(select_batch_tensor(self.x_ref()?, &batch_range)?),
             lengths,
-            expected_y: select_batch_tensor(&self.expected_y, &batch_range)?,
-            train: self.train,
-            // Saving on every retry chunk would checkpoint parameters after earlier chunks updated them.
-            save_var_store: self.save_var_store && batch_range.start == 0,
+            expected_y: Some(select_batch_tensor(self.expected_y_ref()?, &batch_range)?),
+            command: self.command,
+            request_id: self.request_id,
+            microbatch_size: None,
         })
     }
 }
@@ -427,15 +441,15 @@ impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
 
 
     fn size(&self) -> Self::Metrics {
-        <ThoBatch<DI> as Data>::size(&self.x)
+        self.x.as_ref().map_or_else(Default::default, |x| <ThoBatch<DI> as Data>::size(x))
     }
 
     fn tho_device_idx(&self) -> usize {
-        self.x.tho_device_idx()
+        self.x.as_ref().map_or(0, |x| x.tho_device_idx())
     }
 
     fn mem_size(&self) -> u64 {
-        self.x.mem_size() + self.expected_y.mem_size()
+        self.x.as_ref().map_or(0, |x| x.mem_size()) + self.expected_y.as_ref().map_or(0, |y| y.mem_size())
     }
 }
 
@@ -445,13 +459,15 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
     where
         Self: Sized,
     {
+        if self.command == TrainStepCommand::Checkpoint { return Self::checkpoint(); }
         Ok(TrainStepInput {
             id: self.id.clone(),
-            x: track_await(self.x.copy_to_device(dst_device)).await?,
+            x: Some(track_await(self.x_ref()?.copy_to_device(dst_device)).await?),
             lengths: self.lengths.clone(),
-            expected_y: track_await(self.expected_y.copy_to_device(dst_device)).await?,
-            train: self.train,
-            save_var_store: self.save_var_store,
+            expected_y: Some(track_await(self.expected_y_ref()?.copy_to_device(dst_device)).await?),
+            command: self.command,
+            request_id: self.request_id,
+            microbatch_size: self.microbatch_size,
         })
     }
 }
@@ -485,7 +501,7 @@ impl<DI: Dims, DO: Dims> TrainStepInputWrapper<DI, DO> {
     }
 
     pub fn batch_len(&self) -> Result<i64, ThoError> {
-        self.input.x.size().first().copied().ok_or_else(|| ThoError::new("TrainStep input has no batch dimension"))
+        self.input.x_ref()?.size().first().copied().ok_or_else(|| ThoError::new("TrainStep input has no batch dimension"))
     }
 }
 
@@ -519,7 +535,16 @@ impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWra
             let Some(selector) = selector else {
                 return BorrowRef::borrow_ref(self, to_tho_device_idx).await;
             };
-            let selected = self.input.select_batch(selector)?;
+            let selected = if self.input.train() {
+                // The selector changes execution granularity, never the logical training batch.
+                let len = self.batch_len()?;
+                checked_batch_range(len, &selector.0)?;
+                let mut full = self.input.select_batch((0..len).into())?;
+                full.microbatch_size = Some(selector.0.end - selector.0.start);
+                full
+            } else {
+                self.input.select_batch(selector)?
+            };
             if selected.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Owned(selected))
             } else {
@@ -567,14 +592,16 @@ where
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
+        if self.command == TrainStepCommand::Checkpoint { return Self::checkpoint(); }
         // Materialize both batch references together immediately before the worker-side run.
         Ok(Self {
             id: self.id.clone(),
-            x: WorkerStageInput::ref_to_tensor(&self.x, all_cuda_tensors, remove)?,
+            x: Some(WorkerStageInput::ref_to_tensor(self.x_ref()?, all_cuda_tensors, remove)?),
             lengths: self.lengths.clone(),
-            expected_y: WorkerStageInput::ref_to_tensor(&self.expected_y, all_cuda_tensors, remove)?,
-            train: self.train,
-            save_var_store: self.save_var_store,
+            expected_y: Some(WorkerStageInput::ref_to_tensor(self.expected_y_ref()?, all_cuda_tensors, remove)?),
+            command: self.command,
+            request_id: self.request_id,
+            microbatch_size: self.microbatch_size,
         })
     }
 

@@ -64,11 +64,12 @@ struct TrainStepSplitsContext {
     done_to: i64,
     weighted_loss_sum: f64,
     samples: i64,
+    logical_training_batch: bool,
 }
 
 impl TrainStepSplitsContext {
-    fn new(input_len: i64) -> Self {
-        Self { input_len, split_len: input_len, done_to: 0, weighted_loss_sum: 0.0, samples: 0 }
+    fn new(input_len: i64, logical_training_batch: bool) -> Self {
+        Self { input_len, split_len: input_len, done_to: 0, weighted_loss_sum: 0.0, samples: 0, logical_training_batch }
     }
 }
 
@@ -97,7 +98,8 @@ where
     R: Stage<Out = TrainStepOutput> + 'a,
 {
     async fn add_partial_output(&mut self, output: R::Out) {
-        let chunk_len = self.split_len.min(self.input_len - self.done_to);
+        // Training returns the complete logical batch; validation returns selected chunks.
+        let chunk_len = if self.logical_training_batch { self.input_len } else { self.split_len.min(self.input_len - self.done_to) };
         self.weighted_loss_sum += f64::from(output.loss) * chunk_len as f64;
         self.samples += chunk_len;
         self.done_to += chunk_len;
@@ -274,6 +276,7 @@ where
             // checkpoint without exporting its VarStore.
             std::fs::create_dir_all("/tmp/thoosa")?;
             let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
+            let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
             let (train_step, params) = track_await(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
             static STEP_COUNT:AtomicU32 = AtomicU32::new(0);//TODO
@@ -309,7 +312,6 @@ where
 
             let mut best_valid_loss = f32::MAX;
 
-            let mut save_var_store = false;//the var store is saved in TrainStep stage to keep it on worker side in IPC mode
             let mut best_saved = false;
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             for idx in 0..epochs {
@@ -326,8 +328,7 @@ where
                     .await {
                     // A failed batch invalidates the trial instead of ending this epoch early.
                     let (x_t_0, lengths, expected_y) = batch_result?;
-                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true, save_var_store)));
-                    save_var_store = false;
+                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true)));
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
@@ -336,7 +337,7 @@ where
                         Arc::clone(&input),
                         ctx.branch(false),
                         Contexts::<DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, _, _, _>::new(
-                            TrainStepSplitsContext::new(input.batch_len()?),
+                            TrainStepSplitsContext::new(input.batch_len()?, true),
                             NoopRunnableContext {},
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
@@ -345,11 +346,7 @@ where
                         ),
                     )
                         .instrument(tracing::debug_span!("run_inner/oom_handler.run", file = file!(),line = line!()))
-                        .await;
-
-                    if let Err(e) = &out_result {
-                        error!("TrainNet::run_inner, train: descr={descr} e={e:?}");
-                    }
+                        .await?;
 
                     debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?} out={out_result:?}", input.id(), tokio::task::try_id());
 
@@ -370,8 +367,8 @@ where
                         .await {
                         // Never score a configuration using only the validation batches before an error.
                         let (x_t_0, lengths, y_t) = batch_result?;
-                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false, false)));
-                        let input_context = TrainStepSplitsContext::new(input.batch_len()?);
+                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false)));
+                        let input_context = TrainStepSplitsContext::new(input.batch_len()?, false);
                         let output = oom_handler.run(
                             &train_step,
                             input,
@@ -396,10 +393,12 @@ where
                         debug!("TrainNet::run_inner, valid: descr={descr}  avg_valid_loss={avg_valid_loss}");
 
                         if avg_valid_loss < best_valid_loss - min_delta {
+                            // Await publication before associating this score with saved weights,
+                            // including the final epoch when there is no subsequent training call.
+                            train_step.checkpoint(&ctx).await?;
                             best_valid_loss = avg_valid_loss;
                             bad_epochs = 0;
 
-                            save_var_store = true;
                             best_saved = true;
                         } else {
                             bad_epochs += 1;
@@ -421,10 +420,10 @@ where
             if best_saved {
                 debug!("TrainNet::run_inner: descr={descr} final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
             } else {
-                warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
+                return Err(ThoError::new("training completed without a valid checkpoint"));
             }
 
-            Ok((TmpFile::new(best_checkpoint_path), best_valid_loss, params))
+            Ok((best_checkpoint, best_valid_loss, params))
         })
 
     }
@@ -713,6 +712,26 @@ pub mod tests {
             .with_valid_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(valid_error))
             .finish());
         Box::new(move |_ctx, _rc| ready(Ok(Arc::clone(&batch))).boxed())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_final_epoch_checkpoint() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let configs = thoosa_shared::run_configs::OptRunConfigs::new(
+            thoosa_shared::run_configs::GridRunConfigs::new(
+                thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()),
+                vec![],
+            ),
+            vec![],
+        );
+        // The only validation is in the final epoch. The old deferred save never ran.
+        let train_net = Arc::new(TrainNet::new(batch_factory_with_stream_errors(None, None), Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_rc: &DummyRunConfig| 1, 1, "final checkpoint regression".to_string()));
+        let (checkpoint, loss, ()) = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "final checkpoint regression".to_string()).await?;
+        let tensors = Tensor::read_safetensors(checkpoint.path())?;
+        let bias = tensors.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("checkpoint has no bias"))?.1.f_double_value(&[0])?;
+        assert!((loss as f64 - bias * bias).abs() < 1e-6, "best loss must describe the completed checkpoint");
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
