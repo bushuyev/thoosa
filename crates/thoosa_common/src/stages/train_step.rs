@@ -38,10 +38,12 @@ use thoosa_shared::ipc_types::WorkerOutput;
 /// Training uses mean loss with equally weighted samples and one optimizer update.
 /// Deterministic sample-independent models match an unsplit batch up to rounding.
 /// Batch-dependent layers use microbatch statistics; stochastic layers resample on
-/// retry (RNG streams are not rolled back). Mutable model state must be registered
-/// in the VarStore. Cross-sample objectives and external mutable state are unsupported.
+/// retry (RNG streams are not rolled back). Forward/backward may mutate registered
+/// non-trainable buffers, but must leave parameters and optimizer state unchanged.
+/// Cross-sample objectives and external mutable state are unsupported.
 /// Chunking bounds activation memory; the source batch remains resident. Each attempt
-/// uses a deep CPU rollback snapshot and commits before another batch may be submitted.
+/// snapshots only buffers. Optimizer update/completion failures invalidate the session.
+/// Callers must await a batch acknowledgement before submitting another batch.
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of

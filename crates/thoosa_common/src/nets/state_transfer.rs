@@ -25,15 +25,6 @@ impl StateTensors {
         Ok(())
     }
 
-    pub(crate) fn copy_to_cpu(&self) -> Result<Self, ThoError> {
-        let mut result = Self::default();
-        for key in self.0.keys() {
-            let tensor = self.get(key)?;
-            result.insert(key.clone(), tensor.f_to_device_(Device::Cpu, tensor.kind(), false, true)?)?;
-        }
-        Ok(result)
-    }
-
     pub(crate) fn info(&self) -> StageStateInfo {
         // CudaWorker supplies the installed endpoint identity. Model state does
         // not need to know which crate or stage installed its owner.

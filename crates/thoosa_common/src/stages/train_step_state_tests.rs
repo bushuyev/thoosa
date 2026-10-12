@@ -220,20 +220,19 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             let actual = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss;
             let expected = full.clone().do_run_with_state(&valid, &mut full_state, &ctx)?.loss;
             assert!((actual - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: update differs after retry");
-            // Inject failure after mutating optimizer state and registered variables,
-            // proving rollback covers a partially applied update, not just gradients.
+            // A failed accumulation must discard gradients and restore registered
+            // buffers without copying parameters or optimizer state.
             let failed: Result<(), ThoError> = state.training_transaction(|module| {
                 let x = input.x()?;
                 let predicted = module.module().tho_forward(&x, None, true)?;
                 predicted.as_ref().f_mse_loss(&input.expected_y_ref()?.as_ref(), Reduction::Mean)?.f_backward()?;
-                module.opt().step();
                 let _ = module.state_tensor("var/test_buffer")?.f_fill_(42.0)?;
                 Err(ThoError::oom())
             });
             assert!(failed.unwrap_err().is_retryable_oom());
             assert_eq!(state.state_tensor("var/test_buffer")?.f_double_value(&[0])?, 0.25, "registered buffer was not rolled back");
             let rolled_back = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss;
-            assert!((rolled_back - expected).abs() < 1e-5, "partial optimizer update was not rolled back");
+            assert!((rolled_back - expected).abs() < 1e-5, "failed accumulation changed parameters");
         }
         let mut state = split.train_module.lock().await;
         let valid = split.clone().do_run_with_state(&uneven_input(false)?, &mut state, &ctx)?.loss;
