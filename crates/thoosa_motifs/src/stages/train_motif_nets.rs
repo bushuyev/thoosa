@@ -1785,7 +1785,6 @@ mod tests {
                 None,
                 cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("3"))?,
                 false,
-                false,
             ))
         }
 
@@ -1813,7 +1812,7 @@ mod tests {
 
                 // Reuse worker-owned tensor refs across training and validation to verify
                 // that adapting the wire input preserves both tensors and mutable state.
-                let training_input = TrainStepInput::new(input.x.clone_ref()?, input.lengths.clone(), input.expected_y.clone_ref()?, true, false);
+                let training_input = TrainStepInput::new(input.x_ref()?.clone_ref()?, input.lengths.clone(), input.expected_y_ref()?.clone_ref()?, true);
                 // let trained = train_step.clone().do_run(&training_input, &ctx)?;
                 let trained = cuda_actor.run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), &ctx).await?;
                 assert!(trained.loss.is_finite());
