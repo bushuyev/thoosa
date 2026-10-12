@@ -179,7 +179,7 @@ where
 {
     fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> { Some(self) }
 
-    // A synchronous call cannot safely wait for the worker. Actor helpers must
+    // In IPC mode a synchronous call cannot safely wait for the worker. Actor helpers must
     // select the async capability before installing a local stream context.
     fn do_run<'a>(self: Arc<Self>, _: &Self::In<'a>, _: &Self::Ctx) -> Result<Self::Out, ThoError> {
         Err(ThoError::new("IPC stages require asynchronous actor dispatch"))
@@ -562,7 +562,7 @@ where
     {
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),//TODO TestRunCtx
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),
         }
     }
 
@@ -577,51 +577,6 @@ where
         }
     }
 
-}
-
-
-#[async_trait]
-impl <St, Init> FuturesRunnerMapPurger for DynSyncStageEnum<St, Init>//TODO stages without State don't have GPU data, remove
-where
-    St:SyncStage+StageWithState + FuturesRunnerMapPurger,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static
-{
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        match self {
-            DynSyncStageEnum::Local(stage) => {
-                stage.has_gpu_data(device_idx).await
-            }
-            DynSyncStageEnum::Proxy { stage, .. } => {
-                stage.tho_device_idx == device_idx
-            }
-        }
-    }
-
-
-
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        match self {
-            DynSyncStageEnum::Local(local) => {
-                local.drop_gpu(device_idx, name).await
-            }
-            DynSyncStageEnum::Proxy { .. } => {
-                Ok(())
-            }
-        }
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        match self {
-            DynSyncStageEnum::Local(local) => {
-                local.purge_cpu(purge_until).await
-            }
-            DynSyncStageEnum::Proxy { .. } => {
-                0
-            }
-        }
-    }
 }
 
 
