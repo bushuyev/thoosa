@@ -1071,7 +1071,7 @@ where
             static TRAIN_LABEL_STEP_ID: AtomicU32 = AtomicU32::new(0);
             let stage_id = TRAIN_LABEL_STEP_ID.fetch_add(1, Ordering::AcqRel);
             let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
-            let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
+            let input_cloner = Arc::new(|input: &TrainStepInput<MotifProbability, LabelProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainLabelStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
                 init: (),

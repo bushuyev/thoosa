@@ -284,10 +284,15 @@ impl SynKey {
     }
 }
 
-/// Nice ergonomics: `CompKey::from([..])` with only one allocation (boxing the array).
 impl<const N: usize> From<[MonoKey; N]> for SynKey {
     fn from(vals: [MonoKey; N]) -> Self {
         Self { vals: Box::new(vals) }
+    }
+}
+
+impl From<Vec<MonoKey>> for SynKey {
+    fn from(vals: Vec<MonoKey>) -> Self {
+        Self { vals: vals.into_boxed_slice() }
     }
 }
 
