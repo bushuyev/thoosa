@@ -156,7 +156,7 @@ where
         let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false, false)?;
 
         let mut apply_nets = vec![];
-
+        let mut train_label_net_run_config_ids = vec![];
         debug!("ApplyLabelNets::new: all_label_nets={all_label_nets:?}");
 
         for (label, nets) in all_label_nets {
@@ -191,6 +191,7 @@ where
                     label_net.net_path.clone(),
                     false,
                 );
+                train_label_net_run_config_ids.push(train_label_net_run_config_id);
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
                     apply_label_net: track_await(ApplyLabelNet::new(label_net.id, apply_label_net_init, stage_ctx.branch(true), ws)).await?,
@@ -200,7 +201,7 @@ where
 
 
         Ok(Self {
-            id: mono_key!(0, "todo").into(),
+            id: train_label_net_run_config_ids.into_iter().map(|run_config_id|mono_key!(run_config_id, format!("run_config_id={run_config_id}"))).collect::<Vec<_>>().into(),
             apply_nets,
             pd: PhantomData,
         })
@@ -832,7 +833,8 @@ where
                 &ws,
             ).await?;
 
-            GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            ////ApplyLabelNet is needed for final net training - no need to unregister
+            GlobalCtx::global().register_cache((format!("ApplyLabelNet: {}", stage.stage_id()).leak()/*TODO*/, Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
         }).await
@@ -841,13 +843,13 @@ where
     async fn new_local(
         label: String,
         train_label_net_run_config_id: RunConfigId,
-        net: ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
+        label_net: ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
     ) -> Result<Self, ThoError> {
         Ok(Self {
-            id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
+            id: mono_key!(label.clone(), "ApplyLabelNet") + label_net.id(),
             label,
             train_label_net_run_config_id,
-            net: tokio::sync::Mutex::new(net),
+            net: tokio::sync::Mutex::new(label_net),
             pd: PhantomData,
         })
     }

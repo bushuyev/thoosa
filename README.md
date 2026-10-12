@@ -8,7 +8,7 @@ It is built directly on **LibTorch**. Supporting other ML runtimes or GPU backen
 
 A primary design objective is to make long-running experiments survive memory pressure whenever possible. On CUDA OOM, the system attempts to recover by progressively reducing resource usage—for example by decreasing data sizes, using lower-quality or less memory-intensive operations, or accepting slower execution.
 
-When LibTorch encounters a CUDA error that requires the CUDA context to be restarted, the application can run GPU work in a separate **IPC worker process**. That worker can be restarted independently, allowing training to continue without restarting the entire application.
+When LibTorch encounters a CUDA error that requires the CUDA context to be restarted, the application can run GPU work in a separate **IPC worker process** ("IPC Mode"). That worker can be restarted independently, allowing training to continue without restarting the entire application.
 
 The project also includes a simple **DashMap-based cache** that can keep data on the GPU for reuse and move cached GPU data back to CPU memory when additional VRAM needs to be freed.
 

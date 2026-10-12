@@ -521,7 +521,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LogitsResourcesBatch::build_batch_stream"))]
     fn build_batch_stream(loader: Arc<L>, resources: Arc<Vec<(Resource, Vec<f32>)>>, batch_size: u32, labels_len: usize, mut ctx: C) -> BoxStream<'static, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         let batches = shuffle_and_chunk_with_rng(resources.len(), batch_size, &mut rand::rng());
-        let futures = batches.into_iter().map(move |batch_keys| {
+        let futures = futures::stream::iter(batches.into_iter()).then(move |batch_keys| {
             let loader = Arc::clone(&loader);
             let resources = Arc::clone(&resources);
             let mut ctx_for_batch = ctx.branch(false);
@@ -580,7 +580,8 @@ where
             }
         });
 
-        prefetch_next_batch_stream(futures)
+        // prefetch_next_batch_stream(futures)
+        futures.boxed()
     }
 }
 
