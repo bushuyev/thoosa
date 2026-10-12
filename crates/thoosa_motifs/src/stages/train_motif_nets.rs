@@ -1490,6 +1490,7 @@ mod tests {
     use thoosa_shared::ipc_types::WorkerOutput;
     use thoosa_store::RunConfigRow;
     use tokio::fs;
+    use thoosa_common::copy_ctx::CudaActorHandle;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_motif_nets() -> Result<(), ThoError> {
@@ -1778,6 +1779,17 @@ mod tests {
             }.boxed()
         }
 
+        async fn train_input(cuda_actor: &Box<dyn CudaActorHandle>) -> Result<TrainStepInput<InDims, OutDims>, ThoError> {
+            Ok(TrainStepInput::<InDims, OutDims>::new(
+                cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([3, 100], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("2"))?,
+                None,
+                cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("3"))?,
+                false,
+                false,
+            ))
+        }
+
+
         // Exercise the shared TrainStep through a local wire input, with no stage wrapper.
         run_ipc_test(
             module_path!(),
@@ -1791,24 +1803,22 @@ mod tests {
                     state: Default::default(),
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                let input = TrainStepInput::<InDims, OutDims>::new(
-                    cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([3, 100], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("2"))?,
-                    None,
-                    cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("3"))?,
-                    false,
-                    false,
-                );
+                let input = train_input(cuda_actor).await?;
+                let input_0 = train_input(cuda_actor).await?;
                 let train_step = Arc::new(train_step);
                 let ctx = RunCtxImpl::new(1, "train_step_ipc");
-                let before = train_step.clone().do_run(&input, &ctx)?;
+                // let before = train_step.clone().do_run(&input, &ctx)?;
+                let before = cuda_actor.run_stage(Arc::clone(&train_step), input_0, ctx.tho_device_idx(), &ctx).await?;
                 assert!(before.loss.is_finite());
 
                 // Reuse worker-owned tensor refs across training and validation to verify
                 // that adapting the wire input preserves both tensors and mutable state.
                 let training_input = TrainStepInput::new(input.x.clone_ref()?, input.lengths.clone(), input.expected_y.clone_ref()?, true, false);
-                let trained = train_step.clone().do_run(&training_input, &ctx)?;
+                // let trained = train_step.clone().do_run(&training_input, &ctx)?;
+                let trained = cuda_actor.run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), &ctx).await?;
                 assert!(trained.loss.is_finite());
-                let after = train_step.do_run(&input, &ctx)?;
+                // let after = train_step.do_run(&input, &ctx)?;
+                let after = cuda_actor.run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx).await?;
                 assert!(after.loss.is_finite());
                 assert!((after.loss - before.loss).abs() > f32::EPSILON, "training must update the worker's model: before={} after={}", before.loss, after.loss);
                 Ok(())
