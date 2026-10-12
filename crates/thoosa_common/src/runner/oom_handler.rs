@@ -2036,6 +2036,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_terminal_training_oom_does_not_retry() {
+        let error = ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: ThoError::oom(), recovery: None })).context("optimizer commit failed");
+        let (task, task_calls) = mock_runnable([Err(error)]);
+        let (adjuster, adjust_calls) = mock_context_adjuster(1);
+        let handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![Adjusters::RunContext(run_ctx_adjuster(adjuster))], None);
+        let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(0).finish();
+        let result = handler.run(&Arc::new(task), Arc::new(BorrowOnlyInput::new(TestInput::new(1))), ctx, WithRunCtxContext::new(super::MockRunCtxContext::new())).await;
+        let error = result.unwrap_err();
+        assert!(error.is_oom(), "OOM cause must remain visible to the handler's caller");
+        assert!(!error.is_retryable_oom());
+        assert_eq!(task_calls.load(Ordering::SeqCst), 1, "a partial update must never be replayed");
+        assert_eq!(adjust_calls.load(Ordering::SeqCst), 0, "terminal errors must bypass recovery adjusters");
+    }
+
+    #[tokio::test]
     async fn test_no_input_adjuster_accepts_borrow_ref_only_input() {
         let (task, task_calls) = mock_runnable([Ok(TestOutput::new(12.))]);
         let oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);

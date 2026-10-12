@@ -1474,6 +1474,21 @@ mod tests {
     }
 
     #[test]
+    fn test_worker_error_round_trip_preserves_terminal_training_oom() {
+        for recovery in [None, Some(ThoError::oom().context("restore buffers"))] {
+            let error = ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: ThoError::oom().context("optimizer update"), recovery }));
+            // Exercise the actual worker reply codec, preserving diagnostics and retry policy.
+            let received = round_trip_worker_error(error.context("training failed"));
+            assert!(received.is_oom());
+            assert!(!received.is_retryable_oom());
+            assert!(!received.needs_cuda_ctx_reset());
+            assert!(format!("{received:#}").contains("out of memory"));
+            let ThoError::TrainingSessionFailed(failure) = received.what() else { panic!("training failure classification was lost") };
+            assert!(failure.original.is_oom());
+        }
+    }
+
+    #[test]
     fn test_worker_error_round_trip_preserves_terminal_recovery_failure() {
         use thoosa_shared::{CudaAction, CudaRecoveryFailure};
 
