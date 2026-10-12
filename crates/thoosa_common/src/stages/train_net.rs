@@ -280,7 +280,8 @@ where
             let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
             let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((step_id, Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
 
-            let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+            let set = HashSet::new();
+            let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::from([(&*step_id, &set)]);
             let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
             let mut bad_epochs = 0u32;

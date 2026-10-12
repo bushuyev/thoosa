@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use mockall::Any;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::CachableIdTr;
@@ -283,17 +284,19 @@ impl GlobalCtx {
 
     pub fn register_cache(&self, cache: (&'static str, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {//TODO rename DataPurger?
         debug!("GlobalCtx::register_cache: cache={}", cache.0);
-
+        let cache_type = cache.1.type_name();
         let gate = Arc::new(AsyncRwLock::new(()));
         let entry = Arc::new(CacheRegistryEntry {
             purger: cache.1,
             gate: Arc::clone(&gate),
         });
 
+
         assert!(
             perf_log!(sync_write_lock!(self.caches))
             .insert(cache.0, entry)
-            .is_none()
+            .is_none(),
+            "duplicate {}/{}", cache.0, cache_type
         );
 
         debug!("GlobalCtx::register_cache: cache={} lock acquired/released, done", cache.0);
@@ -418,7 +421,9 @@ impl GlobalCtx {
         descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
+
         debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
+
         let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
@@ -439,11 +444,12 @@ impl GlobalCtx {
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
         debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
 
-        // #[cfg(tho_debug)]
-        // track_await(self.debug_caches(tho_device_idx, descr)).await;
-
         #[cfg(tho_debug)]
-        self.cuda_actor(tho_device_idx).debug_worker().await?;
+        {
+            track_await(self.debug_caches(tho_device_idx, descr)).await;
+
+            self.cuda_actor(tho_device_idx).debug_worker().await?;
+        }
 
         Ok(())
     }

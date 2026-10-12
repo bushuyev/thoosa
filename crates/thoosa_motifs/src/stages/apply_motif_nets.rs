@@ -1047,7 +1047,7 @@ where
     // Keep the module and motif metadata under one state lock for device moves.
     motif_net: tokio::sync::Mutex<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>,
     params: MotifNetParams,
-    slice_step:u32,
+    slice_step:u32,//step to apply motif net width - should be same for all motif nets so doesn't affect motif net identity
     pd:PhantomData<C>,
     channel:u32,
     motif_id:MonoKey,
@@ -1156,6 +1156,7 @@ where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
     {
         let ws = Arc::clone(ws);
+        //for now there is only one net trained on  each motif so trained_net_id can be used instead of motif_id for net identity
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), trained_net_id, move || async move {
             let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
@@ -1172,7 +1173,8 @@ where
                 &ws,
             ).await?;
 
-            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            //ApplyMotifNet is needed for final net training - no need to unregister
+            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((format!("ApplyMotifNet: {}", stage.stage_id()).leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));//TODO make key in  register_cache
 
             Ok(stage)
         }).await
