@@ -34,7 +34,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster,
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
 use thoosa_shared::traits::MaxParallelCtx;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, SyncStage, WithId};
 
 use mockall_double::double;
 #[double]

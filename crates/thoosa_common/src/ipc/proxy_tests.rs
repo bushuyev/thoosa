@@ -28,7 +28,7 @@ use std::sync::{Arc, LazyLock};
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, DynSyncStage, DynSyncStageBox, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Data, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
 use thoosa_shared::ipc_types::WorkerOutput;

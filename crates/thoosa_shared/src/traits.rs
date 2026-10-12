@@ -793,7 +793,7 @@ pub trait SyncStage: Stage + Debug {
 }
 
 // This capability keeps the input/output contract of a SyncStage while allowing
-// actor helpers to await remote execution without blocking a runtime thread.
+// actor helpers to await remote (IPC Mode) execution without blocking a runtime thread.
 pub trait AsyncStageDispatch<S: SyncStage>: Sync {
     fn run<'a, 'i: 'a>(&self, stage: Arc<S>, input: &'a S::In<'i>, ctx: &'a S::Ctx) -> BoxFuture<'a, Result<S::Out, ThoError>>
     where S: 'a;
@@ -839,136 +839,6 @@ where
     S: SyncStage,
 {
     fn do_run_with_state<'f>(&mut self, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
-}
-
-//for switching between ipc proxy and local
-pub trait DynSyncStage<I, O, C>: Debug + Send + Sync + 'static
-where
-    I: Input /* + WithId*/ + 'static,
-    O: Output/* + WithId*/ + 'static,
-    C: RunCtx + 'static,
-{
-    fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError>;
-
-
-}
-
-pub trait DynOutId<I, O>: Debug + Send + Sync + 'static
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static
-{
-    fn out_id_dyn(&self, input_id: &I::ID) -> O::ID;
-}
-
-pub trait DynSyncStageOutId<I, O, C>:DynSyncStage<I, O, C> + DynOutId<I, O>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static
-{
-
-}
-
-impl <I, O, C, T> DynSyncStageOutId<I,O,C> for T
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-    T: DynSyncStage<I,O,C> + DynOutId<I, O>
-{
-
-}
-
-impl<T, I, O, C> DynSyncStage<I, O, C> for T
-where
-    T: SyncStage + Send + Sync + 'static,
-    for<'a> T: Stage<In<'a> = I, Out = O, Ctx = C>,
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
-    fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError> {
-        self.do_run(input, ctx)
-    }
-
-
-}
-
-impl<T, I, O> DynOutId<I, O> for T
-where
-    for<'a> T: Stage<In<'a> = I, Out = O>,
-    T: OutId + Send + Sync + 'static,
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-{
-
-    fn out_id_dyn(&self, input_id: &I::ID) -> O::ID {
-        self.out_id(input_id)
-    }
-}
-
-
-#[derive(Debug)]
-pub struct DynSyncStageBox<I, O, C>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
-    inner: Arc<dyn DynSyncStageOutId<I, O, C>>,
-}
-
-impl<I, O, C> DynSyncStageBox<I, O, C>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
-    pub fn new(inner: Arc<dyn DynSyncStageOutId<I, O, C>>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<I, O, C> Stage for DynSyncStageBox<I, O, C>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
-    type Ctx = C;
-    type In<'a> = I;
-    type Out = O;
-}
-
-impl<I, O, C> SyncStage for DynSyncStageBox<I, O, C>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        Arc::clone(&self.inner).do_run_dyn(input, ctx)
-    }
-}
-
-impl<I, O, C> OutId for DynSyncStageBox<I, O, C>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        self.inner.out_id_dyn(input_id)
-    }
-}
-
-impl<I, O, C> Adjustable for DynSyncStageBox<I, O, C>
-where
-    I: Input + WithId + 'static,
-    O: Output + WithId + 'static,
-    C: RunCtx + 'static,
-{
 }
 
 #[derive(Debug)]

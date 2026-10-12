@@ -111,7 +111,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError>;
 }
 /// the methods here ensure that copy and exec streams are handled properly in consume/run_stage/run_*select cases in Local mode.
-/// In IPC modes the streams are handles in the CudaWorker so IPCHanldeCTx is empty.
+/// In IPC modes the streams are handled in the CudaWorker so IPCHanldeCTx is empty.
 // TODO Extract A template function with streams handling (acquires exec stream/create guard/synchronizes) and use from consume/run_stage/run_*select
 impl dyn CudaActorHandle + '_ {
 
