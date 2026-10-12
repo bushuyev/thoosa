@@ -200,8 +200,8 @@ where
         // Clone wire references before awaiting; the request retains their
         // ownership until its response, independently of this borrowed caller.
         let input = stage.clone_refs(input);
-        let device = ctx.tho_device_idx();
-        async move { Self::handle_rs(stage.invoke(input?, device, false).await?) }.boxed()
+
+        async move { Self::handle_rs(stage.invoke(input?, ctx.tho_device_idx(), false).await?) }.boxed()
     }
 
     fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>

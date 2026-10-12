@@ -44,7 +44,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStageBox, MonoMetrics, Named, OutId, RunCtx, Select, DebugId, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MonoMetrics, Named, OutId, RunCtx, Select, DebugId, Stage, SyncStage, WithId};
 use thoosa_shared::ThoError;
 use thoosa_shared::{CopyToDevice, mono_key, debug_id};
 use tokio::sync::Mutex;
