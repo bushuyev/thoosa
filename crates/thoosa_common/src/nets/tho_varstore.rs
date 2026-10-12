@@ -143,24 +143,6 @@ where
     transaction_failed: bool
 }
 
-// Keep the underlying diagnostics, but do not expose a retryable source after the
-// session is invalidated. IPC must receive a terminal message, even for optimizer OOM.
-#[derive(Debug)]
-enum TrainingSessionFailed {
-    Rollback { attempt: ThoError, rollback: ThoError },
-    Commit { cause: ThoError },
-}
-
-impl std::fmt::Display for TrainingSessionFailed {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Rollback { .. } => "training buffer rollback failed; session invalidated",
-            Self::Commit { .. } => "training optimizer commit failed; session invalidated",
-        })
-    }
-}
-impl std::error::Error for TrainingSessionFailed {}
-
 #[derive(Debug)]
 enum OptSnapshot<DI, DO>
 where
@@ -439,8 +421,7 @@ where
                 if let Err(rollback) = rollback {
                     self.transaction_failed = true;
                     if rollback.needs_cuda_ctx_reset() || rollback.is_cuda_recovery_failed() { return Err(rollback); }
-                    log::error!("Training buffer rollback invalidated the session: attempt={error:?} rollback={rollback:?}");
-                    return Err(anyhow::Error::new(TrainingSessionFailed::Rollback { attempt: error, rollback }).into());
+                    return Err(ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: error, recovery: Some(rollback) })).context("training buffer rollback failed"));
                 }
                 return Err(error);
             }
@@ -457,8 +438,12 @@ where
             self.transaction_failed = true;
             self.ipc_export = None;
             if cause.needs_cuda_ctx_reset() || cause.is_cuda_recovery_failed() { return Err(cause); }
-            log::error!("Training optimizer commit invalidated the session: cause={cause:?}");
-            return Err(anyhow::Error::new(TrainingSessionFailed::Commit { cause }).into());
+            // tch's optimizer API panics on allocation errors. Promote a recognized
+            // OOM payload to a typed cause before marking this update non-retryable.
+            let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {
+                ThoError::from(anyhow::Error::new(cause).context(ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "optimizer allocation failed".into() }))
+            } else { cause };
+            return Err(ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: cause, recovery: None })).context("training optimizer commit failed"));
         }
         Ok(output)
     }
@@ -472,9 +457,11 @@ where
         let OptSnapshot::Opt { vs, .. } = &self.opt_state else { return Err(ThoError::new("training transaction has no live state")); };
         let vars = vs.variables_.lock().or_else(|_| Err(ThoError::new("VarStore lock poisoned")))?;
         let mut buffers = Vec::new();
-        for tensor in vars.named_variables.values() {
+        'buffers: for tensor in vars.named_variables.values() {
             // Registration, not requires_grad, distinguishes buffers from frozen parameters.
-            if vars.trainable_variables.iter().any(|var| var.tensor.is_set_to(tensor)) { continue; }
+            for var in &vars.trainable_variables {
+                if var.tensor.f_is_set_to(tensor)? { continue 'buffers; }
+            }
             // Small buffer copies stay on the execution device and live only inside
             // this synchronous call. No parameters or optimizer tensors are copied.
             let saved = tensor.f_detach()?.f_to_device_(tensor.device(), tensor.kind(), false, true)?;

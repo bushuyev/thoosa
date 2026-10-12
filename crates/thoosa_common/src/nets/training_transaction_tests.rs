@@ -43,9 +43,13 @@ fn accumulate(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(), ThoEr
 
 fn assert_terminal_over_ipc(error: ThoError) -> Result<(), ThoError> {
     assert!(!error.is_retryable_oom(), "invalidated training must not be retried locally");
+    let caused_by_oom = error.is_oom();
+    if caused_by_oom { assert!(format!("{error:#}").contains("out of memory"), "terminal failures must retain their OOM diagnostics"); }
     let wire = serde_json::to_vec(&WorkerError::from(error))?;
     let decoded: WorkerError = serde_json::from_slice(&wire)?;
-    assert!(!ThoError::from(decoded).is_retryable_oom(), "invalidated training must not be retried over IPC");
+    let decoded = ThoError::from(decoded);
+    assert!(!decoded.is_retryable_oom(), "invalidated training must not be retried over IPC");
+    assert_eq!(decoded.is_oom(), caused_by_oom, "IPC must retain the OOM cause separately from retry policy");
     Ok(())
 }
 
@@ -98,6 +102,7 @@ fn test_training_commit_and_completion_failures_are_terminal() -> Result<(), Tho
                 if fail_completion && completions.get() == 2 { Err(ThoError::oom()) } else { Ok(()) }
             }).unwrap_err();
             assert_eq!(completions.get(), 2, "a failed commit must still synchronize");
+            assert!(error.is_oom(), "commit failure must retain its typed OOM cause");
             assert_terminal_over_ipc(error)?;
             assert_ne!(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0])?, before, "partial optimizer updates must not be presented as rolled back");
             assert!(module.ensure_training_usable().is_err());
@@ -119,6 +124,7 @@ fn test_training_cleanup_failure_invalidates_session() -> Result<(), ThoError> {
         completions.set(completions.get() + 1);
         if completions.get() == 2 { Err(ThoError::oom()) } else { Ok(()) }
     }).unwrap_err();
+    assert!(error.is_oom(), "cleanup failure must retain its typed OOM cause");
     assert_terminal_over_ipc(error)?;
     assert!(module.ensure_training_usable().is_err());
     Ok(())
@@ -131,6 +137,17 @@ fn test_training_fatal_commit_error_preserves_cuda_recovery() -> Result<(), ThoE
     assert!(error.needs_cuda_ctx_reset());
     let wire: WorkerError = error.into();
     assert!(ThoError::from(wire).needs_cuda_ctx_reset());
+    assert!(module.ensure_training_usable().is_err());
+    Ok(())
+}
+
+#[test]
+fn test_training_optimizer_panic_preserves_terminal_oom() -> Result<(), ThoError> {
+    let mut module = module(0)?;
+    // tch::Optimizer::step exposes C++ failures through unwrap/panic rather than Result.
+    let error = module.training_transaction_with(accumulate, |_| panic!("CUDA out of memory during optimizer update"), || Ok(())).unwrap_err();
+    assert!(error.is_oom());
+    assert_terminal_over_ipc(error)?;
     assert!(module.ensure_training_usable().is_err());
     Ok(())
 }

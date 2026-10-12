@@ -527,6 +527,7 @@ pub enum SyncStageRunnerError {
 pub enum ThoError {
     Cuda { action: CudaAction, msg: String },
     CudaRecoveryFailed(Arc<CudaRecoveryFailure>),
+    TrainingSessionFailed(Arc<TrainingSessionFailure>),
     AdjusterFailed,
     // Shared futures require Clone; sharing keeps the original source and backtrace intact.
     Anyhow(Arc<anyhow::Error>),
@@ -539,6 +540,14 @@ pub enum ThoError {
 /// restart request or an OOM just because its original cause was one.
 #[derive(Debug, Clone)]
 pub struct CudaRecoveryFailure {
+    pub original: ThoError,
+    pub recovery: Option<ThoError>,
+}
+
+/// A failed optimizer commit or buffer rollback invalidates the training session.
+/// Keep its causes typed and visible without making a partial update replayable.
+#[derive(Debug, Clone)]
+pub struct TrainingSessionFailure {
     pub original: ThoError,
     pub recovery: Option<ThoError>,
 }
@@ -584,6 +593,11 @@ impl Display for ThoError {
                 }
                 Ok(())
             }
+            Self::TrainingSessionFailed(failure) => {
+                write!(f, "training session invalidated; original error: {:#}", failure.original)?;
+                if let Some(error) = &failure.recovery { write!(f, "; cleanup error: {error:#}")?; }
+                Ok(())
+            }
             Self::AdjusterFailed => f.write_str("adjuster failed"),
             Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
             Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
@@ -599,6 +613,7 @@ impl Error for ThoError {
             Self::Anyhow(error) => Some(error.as_ref().as_ref()),
             Self::SyncStageRunner(error) => Some(error),
             Self::CudaRecoveryFailed(failure) => Some(&failure.original),
+            Self::TrainingSessionFailed(failure) => Some(&failure.original),
             _ => None,
         }
     }
@@ -641,6 +656,7 @@ impl ThoError {
     pub fn is_oom(&self) -> bool {
         match self.what() {
             Self::Cuda { action: CudaAction::HandleOOM, .. } => true,
+            Self::TrainingSessionFailed(failure) => failure.original.is_oom() || failure.recovery.as_ref().is_some_and(Self::is_oom),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_oom(),
             _ => false,
         }
@@ -648,6 +664,8 @@ impl ThoError {
 
     pub fn is_retryable_oom(&self) -> bool {
         match self.what() {
+            // An OOM cause is still reportable, but invalidated state cannot be replayed.
+            Self::TrainingSessionFailed(_) => false,
             Self::Cuda { action: CudaAction::HandleOOM, .. } | Self::AdjusterFailed => true,
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_retryable_oom(),
             Self::Anyhow(anyhow) => {
@@ -664,6 +682,7 @@ impl ThoError {
     pub fn needs_cuda_ctx_reset(&self) -> bool {
         match self.what() {
             Self::Cuda { action: CudaAction::NeedsRestart, .. } => true,
+            Self::TrainingSessionFailed(failure) => failure.original.needs_cuda_ctx_reset() || failure.recovery.as_ref().is_some_and(Self::needs_cuda_ctx_reset),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_ctx_reset(),
             _ => false,
         }
@@ -672,6 +691,7 @@ impl ThoError {
     pub fn is_cuda_recovery_failed(&self) -> bool {
         match self.what() {
             Self::CudaRecoveryFailed(_) => true,
+            Self::TrainingSessionFailed(failure) => failure.original.is_cuda_recovery_failed() || failure.recovery.as_ref().is_some_and(Self::is_cuda_recovery_failed),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_cuda_recovery_failed(),
             _ => false,
         }
@@ -2348,7 +2368,7 @@ mod shared_tests {
     use crate::pulse_v;
     use crate::val::NamedVal;
     use crate::{FuturesOrdering,
-                RangeOrValue, ResourceType, SyncStageRunnerError, ThoError,
+                RangeOrValue, ResourceType, SyncStageRunnerError, ThoError, TrainingSessionFailure,
                 add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
                 make_combos, snake_to_camel, test_utils,
     };
@@ -2559,6 +2579,23 @@ mod shared_tests {
 
         let error: ThoError = Err::<(), _>(ThoError::ContextReset).context("cancel stage").unwrap_err().into();
         assert!(matches!(error.what(), ThoError::ContextReset));
+    }
+
+    #[test]
+    fn test_training_session_failure_retains_oom_without_retry() {
+        for (original, recovery) in [
+            (ThoError::oom(), None),
+            (ThoError::new("forward failed"), Some(ThoError::oom())),
+        ] {
+            let error = ThoError::TrainingSessionFailed(Arc::new(TrainingSessionFailure { original, recovery }));
+            let job: ThoError = SyncStageRunnerError::JobError { job_id: 42, inner: Box::new(error.clone()) }.into();
+            let wrapped = job.context("training request").clone().context("worker reply");
+            assert!(wrapped.is_oom(), "report the cause even though replay is forbidden");
+            assert!(!wrapped.is_retryable_oom());
+            assert!(!wrapped.needs_cuda_ctx_reset());
+            assert!(format!("{wrapped:#}").contains("out of memory"));
+            assert!(anyhow::Error::new(error).chain().any(|cause| cause.downcast_ref::<ThoError>().is_some_and(ThoError::is_oom)));
+        }
     }
 
     #[test]
