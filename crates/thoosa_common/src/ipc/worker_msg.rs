@@ -134,6 +134,8 @@ enum WorkerErrorKind {
     Other,
     // Keep terminal recovery distinct from the restartable errors it contains.
     CudaRecoveryFailed { original: Box<WorkerError>, recovery: Option<Box<WorkerError>> },
+    // Preserve both the OOM cause and the prohibition on replaying a partial update.
+    TrainingSessionFailed { original: Box<WorkerError>, recovery: Option<Box<WorkerError>> },
 }
 
 impl WorkerErrorKind {
@@ -141,6 +143,10 @@ impl WorkerErrorKind {
         match error.what() {
             ThoError::Cuda { action, .. } => Self::Cuda(*action),
             ThoError::CudaRecoveryFailed(failure) => Self::CudaRecoveryFailed {
+                original: Box::new(failure.original.clone().into()),
+                recovery: failure.recovery.clone().map(|error| Box::new(error.into())),
+            },
+            ThoError::TrainingSessionFailed(failure) => Self::TrainingSessionFailed {
                 original: Box::new(failure.original.clone().into()),
                 recovery: failure.recovery.clone().map(|error| Box::new(error.into())),
             },
@@ -167,7 +173,10 @@ impl From<ThoError> for WorkerError {
 
 impl WorkerError {
     pub(crate) fn requires_worker_exit(&self) -> bool {
-        matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. })
+        match &self.kind {
+            WorkerErrorKind::TrainingSessionFailed { original, recovery } => original.requires_worker_exit() || recovery.as_ref().is_some_and(|error| error.requires_worker_exit()),
+            _ => matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. }),
+        }
     }
 }
 
@@ -184,6 +193,10 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
             WorkerErrorKind::Other => Self::new(message),
+            WorkerErrorKind::TrainingSessionFailed { original, recovery } => Self::TrainingSessionFailed(std::sync::Arc::new(thoosa_shared::TrainingSessionFailure {
+                original: (*original).into(),
+                recovery: recovery.map(|error| (*error).into()),
+            })).context(message),
             WorkerErrorKind::CudaRecoveryFailed { original, recovery } => Self::CudaRecoveryFailed(std::sync::Arc::new(thoosa_shared::CudaRecoveryFailure {
                 original: (*original).into(),
                 recovery: recovery.map(|error| (*error).into()),

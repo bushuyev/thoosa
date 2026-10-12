@@ -1,5 +1,6 @@
 use anyhow::Context as _;
 use crate::dims::{AnyDims, Batch, Dims};
+use crate::copy_ctx::{complete_cuda_stream, finish_cuda_run};
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
 use crate::nets::state_transfer::{StateTensors, VarStoreState};
@@ -22,6 +23,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage, SyncStage};
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, panic_to_err};
+use thoosa_shims::stream::ThoCudaStream;
 use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamParamStateSnapshot, AdamWOptimizerSnapshot, SgdGroupSnapshot, SgdOptimizerSnapshot, SgdParamStateSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot};
 use tokio::task::JoinSet;
 
@@ -140,15 +142,6 @@ where
     ipc_export: Option<TrainingState>,
     transaction_failed: bool
 }
-
-// Do not expose a retryable source: after failed rollback the session cannot replay safely.
-#[derive(Debug)]
-struct TrainingRollbackFailed { attempt: ThoError, rollback: ThoError }
-
-impl std::fmt::Display for TrainingRollbackFailed {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { f.write_str("training rollback failed; session invalidated") }
-}
-impl std::error::Error for TrainingRollbackFailed {}
 
 #[derive(Debug)]
 enum OptSnapshot<DI, DO>
@@ -372,58 +365,109 @@ where
         Ok(())
     }
 
-    /// A logical batch owns its rollback state until the optimizer update has completed.
-    /// Registered variables include running statistics; optimizer snapshots include counters
-    /// and momentum. Unregistered model state and RNG streams are outside this contract.
+    /// Forward/backward retries restore only registered buffers and clear gradients.
+    /// Parameters and optimizer state must not change during accumulation. Once the
+    /// optimizer starts updating them, any failure invalidates the session instead of
+    /// replaying a possibly partial update. RNG streams are not rolled back.
     pub(crate) fn training_transaction<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T, ThoError>) -> Result<T, ThoError> {
         self.ensure_training_usable()?;
+        // The actor's guard selects the execution stream in both local and IPC modes.
+        // Do not synchronize the whole device and stall unrelated stages.
+        let stream = match Device::from(self.opt_state.device()) {
+            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),
+            _ => None,
+        };
+        self.training_transaction_with(run, |module| {
+            module.opt().step();
+            Ok(())
+        }, || stream.as_ref().map_or(Ok(()), |stream| complete_cuda_stream(stream.synchronize(), || stream.synchronize()).result))
+    }
+
+    // Keep phase ordering in one place; injected operations also allow failures at
+    // the update/completion boundary to be tested without inducing CUDA corruption.
+    fn training_transaction_with<T>(
+        &mut self,
+        run: impl FnOnce(&mut Self) -> Result<T, ThoError>,
+        commit: impl FnOnce(&mut Self) -> Result<(), ThoError>,
+        mut synchronize: impl FnMut() -> Result<(), ThoError>,
+    ) -> Result<T, ThoError> {
+        self.ensure_training_usable()?;
         self.ipc_export = None;
-        let mut snapshot = self.capture_state()?;
-        // Deep CPU copies also work when training on CPU, and add no persistent GPU pressure.
-        snapshot.tensors = snapshot.tensors.copy_to_cpu()?;
-        let result = panic_to_err!({
+        let buffers = match panic_to_err!(self.capture_training_buffers()) {
+            Ok(buffers) => buffers,
+            Err(error) => return finish_cuda_run(Err(error), synchronize()),
+        };
+        // Synchronize even on failure before restoring buffers. A successful
+        // forward/backward call alone does not establish GPU completion.
+        let accumulated = finish_cuda_run(panic_to_err!({
             self.opt().zero_grad();
-            let output = run(self)?;
-            self.opt().step();
-            self.opt().zero_grad();
-            // Catch asynchronous optimizer failures while rollback data still exists.
-            if let Device::Cuda(index) = self.opt_state.device().into() { tch::Cuda::synchronize(index as i64); }
-            Ok::<_, ThoError>(output)
-        });
-        if let Err(error) = result {
-            self.ipc_export = None;
-            let restored = panic_to_err!(self.restore_training_transaction(snapshot));
-            if let Err(rollback) = restored {
-                self.transaction_failed = true;
-                if error.needs_cuda_ctx_reset() { return Err(error); }
-                if rollback.needs_cuda_ctx_reset() { return Err(rollback); }
-                log::error!("Training rollback invalidated the session: attempt={error:?} rollback={rollback:?}");
-                // This is terminal even when the rollback itself exhausted device memory.
-                return Err(ThoError::from(anyhow::Error::new(TrainingRollbackFailed { attempt: error, rollback })));
+            run(self)
+        }), synchronize());
+        let output = match accumulated {
+            Ok(output) => output,
+            Err(error) => {
+                self.ipc_export = None;
+                if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
+                    self.transaction_failed = true;
+                    return Err(error);
+                }
+                let rollback = finish_cuda_run(panic_to_err!({
+                    self.opt().zero_grad();
+                    tch::no_grad(|| -> Result<(), ThoError> {
+                        for (mut live, saved) in buffers { live.f_copy_(&saved)?; }
+                        Ok(())
+                    })
+                }), synchronize());
+                if let Err(rollback) = rollback {
+                    self.transaction_failed = true;
+                    if rollback.needs_cuda_ctx_reset() || rollback.is_cuda_recovery_failed() { return Err(rollback); }
+                    return Err(ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: error, recovery: Some(rollback) })).context("training buffer rollback failed"));
+                }
+                return Err(error);
             }
-            return Err(error);
+        };
+        drop(buffers); // Buffer rollback is no longer possible or needed once commit starts.
+        // No rollback snapshot of parameters or momentum is needed on the hot path.
+        // From this point an error (including completion/gradient cleanup) is terminal.
+        let committed = finish_cuda_run(panic_to_err!({
+            commit(self)?;
+            self.opt().zero_grad();
+            Ok::<_, ThoError>(())
+        }), synchronize());
+        if let Err(cause) = committed {
+            self.transaction_failed = true;
+            self.ipc_export = None;
+            if cause.needs_cuda_ctx_reset() || cause.is_cuda_recovery_failed() { return Err(cause); }
+            // tch's optimizer API panics on allocation errors. Promote a recognized
+            // OOM payload to a typed cause before marking this update non-retryable.
+            let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {
+                ThoError::from(anyhow::Error::new(cause).context(ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "optimizer allocation failed".into() }))
+            } else { cause };
+            return Err(ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: cause, recovery: None })).context("training optimizer commit failed"));
         }
-        result
+        Ok(output)
     }
 
     pub(crate) fn ensure_training_usable(&self) -> Result<(), ThoError> {
-        if self.transaction_failed { return Err(ThoError::new("training session invalidated by failed rollback")); }
+        if self.transaction_failed { return Err(ThoError::new("training session invalidated by failed cleanup or optimizer commit")); }
         Ok(())
     }
 
-    fn restore_training_transaction(&mut self, snapshot: TrainingState) -> Result<(), ThoError> {
-        let OptSnapshot::Opt { opt, vs, .. } = &mut self.opt_state else { return Err(ThoError::new("training transaction has no live state")); };
-        // Restore in place so the module and optimizer retain their parameter identities.
-        opt.zero_grad();
-        tch::no_grad(|| -> Result<(), ThoError> {
-            for (name, mut tensor) in vs.variables() { tensor.f_copy_(&snapshot.tensors.get(&format!("var/{name}"))?)?; }
-            Ok(())
-        })?;
-        let device = ThoDevice::from(vs.device()).tho_device_idx();
-        let optimizer = snapshot.optimizer.map_tensors(device, |key, _| Ok(snapshot.tensors.get(key)?.f_to_device(vs.device())?))?;
-        unsafe { self.config.opt_config.restore_snapshot(&optimizer, opt.as_raw_c_optimizer())?; }
-        if let Device::Cuda(index) = vs.device() { tch::Cuda::synchronize(index as i64); }
-        Ok(())
+    fn capture_training_buffers(&self) -> Result<Vec<(Tensor, Tensor)>, ThoError> {
+        let OptSnapshot::Opt { vs, .. } = &self.opt_state else { return Err(ThoError::new("training transaction has no live state")); };
+        let vars = vs.variables_.lock().or_else(|_| Err(ThoError::new("VarStore lock poisoned")))?;
+        let mut buffers = Vec::new();
+        'buffers: for tensor in vars.named_variables.values() {
+            // Registration, not requires_grad, distinguishes buffers from frozen parameters.
+            for var in &vars.trainable_variables {
+                if var.tensor.f_is_set_to(tensor)? { continue 'buffers; }
+            }
+            // Small buffer copies stay on the execution device and live only inside
+            // this synchronous call. No parameters or optimizer tensors are copied.
+            let saved = tensor.f_detach()?.f_to_device_(tensor.device(), tensor.kind(), false, true)?;
+            buffers.push((tensor.f_alias()?, saved));
+        }
+        Ok(buffers)
     }
 
     pub fn set_lr(&mut self, lr: f64) {
@@ -1217,3 +1261,7 @@ mod tests {
 
 
 }
+
+#[cfg(test)]
+#[path = "training_transaction_tests.rs"]
+mod training_transaction_tests;
