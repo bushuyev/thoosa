@@ -19,7 +19,6 @@ use crate::utils::lin_for_size;
 use async_trait::async_trait;
 pub(crate) use clc::sync_clc_endpoint_init;
 use clc::{ClcDynSyncStage, ClcStage, ClcStageOutput, SyncClcStage, SyncClcStageInit};
-use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 pub(crate) use loader::sync_test_tensor_loader_endpoint_init;
@@ -164,10 +163,7 @@ impl AsyncStage for LoadAndClcStage {
 
 #[async_trait]
 impl Cached for LoadAndClcStage {//for test only, normally should be implemented with Derive(Cached)
-    async fn cache() -> &'static DashMap<
-        <<Self as Stage>::Out as WithId>::ID,
-        thoosa_common::runner::common::cachable::CachedFuture<Self::Out>,
-    >
+    async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>
     where
         Self: Sized,
     {
@@ -723,8 +719,8 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
     }
 
     for i in 0..10 {
-        let cached_loaded = <TestTensorLoader as Cached>::cache()
-            .await
+        let loaded_cache = <TestTensorLoader as Cached>::cache().await?;
+        let cached_loaded = loaded_cache
             // .get(&SimpleId::from(format!("loaded_resource_{i}")));
             .get(
                 &SynKey::new([mono_key!(i, "resource key")])
@@ -738,8 +734,8 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
 
         assert!(!reff.value().clone().await?.is_all_on_cpu().await);
 
-        let cached_multed = <ClcStage as Cached>::cache()
-            .await
+        let multed_cache = <ClcStage as Cached>::cache().await?;
+        let cached_multed = multed_cache
             .get(
                 // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
                 &SynKey::new([mono_key!("MulTask", "MulTask"), mono_key!(i, "resource key")])
@@ -769,8 +765,8 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
     _global_ctx.dump_all_to_cpu(&required_ids, 1, "test").await?;
 
     for i in 0..10 {
-        let cached_loaded = <TestTensorLoader as Cached>::cache()
-            .await
+        let loaded_cache = <TestTensorLoader as Cached>::cache().await?;
+        let cached_loaded = loaded_cache
             .get(
                 // &SimpleId::from(format!("loaded_resource_{i}"))
                 &SynKey::new([mono_key!(i, "resource key")])
@@ -788,8 +784,8 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
             assert!(reff.value().clone().await?.is_all_on_cpu().await);
         }
 
-        let cached_multed = <ClcStage as Cached>::cache()
-            .await
+        let multed_cache = <ClcStage as Cached>::cache().await?;
+        let cached_multed = multed_cache
             .get(
                 // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
                 &SynKey::new([mono_key!("MulTask", "MulTask"), mono_key!(i, "resource key")])

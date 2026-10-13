@@ -170,7 +170,6 @@ where
 #[cfg(test)]
 pub(crate) mod mock_tensor_loader {
     use async_trait::async_trait;
-    use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::collections::HashMap;
@@ -208,7 +207,7 @@ pub(crate) mod mock_tensor_loader {
         #[async_trait]
         impl Cached for TensorLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey >>>>>;
+            async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>;
             async fn run_cached(
                     self: Arc<Self>,
                     input: <MockTensorLoader as Stage>::In<'static>,
