@@ -21,44 +21,6 @@ use thoosa_shared::tracked_await::track_await;
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
 #[derive(Debug)]
-pub struct StaticMapPurger<M: 'static> {
-    map: &'static M,
-}
-
-impl<M> StaticMapPurger<M> {
-    pub const fn new(map: &'static M) -> Self {
-        Self { map }
-    }
-}
-
-#[async_trait]
-impl<M> FuturesRunnerMapPurger for StaticMapPurger<M>
-where
-    M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
-{
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        track_await(self.map.has_gpu_data(device_idx)).await
-    }
-
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        track_await(self.map.purge_gpu(ids_to_keep, device_idx, name)).await
-    }
-
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        track_await(self.map.drop_gpu(device_idx, name)).await
-    }
-
-    // #[cfg(any(debug_assertions, tho_debug))]
-    async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
-        track_await(self.map.debug_gpu(device_idx)).await
-    }
-
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
-        track_await(self.map.purge_cpu(purge_until)).await
-    }
-}
-
-#[derive(Debug)]
 pub struct WeakMapPurger<M> {
     map: std::sync::Weak<M>,
 }

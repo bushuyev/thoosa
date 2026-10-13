@@ -1654,7 +1654,6 @@ pub mod mock_motif_loader {
     use crate::dims::MotifSlices;
     use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
     use async_trait::async_trait;
-    use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::collections::HashMap;
@@ -1692,7 +1691,7 @@ pub mod mock_motif_loader {
         #[async_trait]
         impl Cached for MotifLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>>>;
+            async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>;
             async fn run_cached(
                 self: Arc<Self>,
                 input: <MockMotifLoader as Stage>::In<'static>,

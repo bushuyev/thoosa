@@ -1258,7 +1258,7 @@ where
                 debug!("run_plot: motif_id={motif_id}");
 
                 let result = track_await(plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).await;
-                track_await(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).await.clear();
+                track_await(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).await?.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 32 == 0 {

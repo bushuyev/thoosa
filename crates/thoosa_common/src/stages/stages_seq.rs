@@ -1,6 +1,5 @@
 use crate::runner::common::cachable::CachedPurgeOutput;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
 use log::debug;
 use parking_lot::RwLock;
@@ -134,7 +133,7 @@ where
 
     Self::Out: WithId
 {
-    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Self::Out>>
+    async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>
     where
         Self: Sized,
         Self::Out: WithId + Sync + Send,
@@ -264,7 +263,7 @@ where
 
     Self::Out: WithId
 {
-    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, thoosa_common::runner::common::cachable::CachedFuture<Self::Out>>
+    async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>
     where
         Self: Sized,
         Self::Out: Sync + Send

@@ -608,7 +608,6 @@ mod tests {
     use cached_derive::Cached;
     use clap::{Args, Parser, Subcommand};
     use crossbeam::deque::Worker;
-    use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use log::{debug, error};
     use mockall_double::double;
@@ -616,7 +615,7 @@ mod tests {
     use std::process::Stdio;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
-    use std::sync::{Arc, LazyLock, OnceLock};
+    use std::sync::{Arc, LazyLock};
     use std::time::Duration;
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
@@ -646,44 +645,10 @@ mod tests {
             .init();
     });
 
-    #[derive(Debug, Named)]
+    #[derive(Debug, Named, cached_derive::Cached)]
     pub struct DummyLoader {
         pub run_count: AtomicUsize,
         len: usize,
-    }
-
-    static DUMMY_LOADER_CACHE_PTR: OnceLock<Arc<DashMap<
-        <<DummyLoader as Stage>::Out as WithId>::ID,
-        thoosa_common::runner::common::cachable::CachedFuture<<DummyLoader as Stage>::Out>,
-    >>> = OnceLock::new();
-    static DUMMY_LOADER_REGISTER: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
-
-    #[async_trait::async_trait]
-    impl Cached for DummyLoader {
-        async fn cache() -> &'static DashMap<
-            <<Self as Stage>::Out as WithId>::ID,
-            thoosa_common::runner::common::cachable::CachedFuture<Self::Out>,
-        >
-        where
-            Self: Sized,
-            Self::Out: Sync + Send,
-        {
-            let map = DUMMY_LOADER_CACHE_PTR.get_or_init(|| Arc::new(Default::default()));
-
-            let cache_name: &'static str = "LoadedTensorId";
-
-            DUMMY_LOADER_REGISTER
-                .get_or_init(|| async move {
-                    GlobalCtx::global()
-                        .register_cache((
-                            cache_name,
-                            Arc::new(crate::runner::purge::StaticMapPurger::new(map.as_ref())) as Arc<dyn FuturesRunnerMapPurger>,
-                        ));
-                })
-                .await;
-
-            map.as_ref()
-        }
     }
 
     impl DummyLoader {
@@ -988,13 +953,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_cached_evicts_failed_computations_for_retry() {
+    async fn test_run_cached_evicts_failed_computations_for_retry() -> Result<(), ThoError> {
         use futures_util::FutureExt;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let loader = Arc::new(DummyLoader::new(3));
         let input = DLoaderInput { id: DLoaderInputId("recovery_retry") };
         let key = loader.out_id(input.id());
-        let cache = DummyLoader::cache().await;
+        let cache = DummyLoader::cache().await?;
         // Ordinary failures need a fresh computation too; a device restart is
         // neither necessary nor appropriate to evict a failed shared future.
         for failure in [ThoError::ContextReset, ThoError::oom(), ThoError::new("ordinary stage error")] {
@@ -1006,6 +971,7 @@ mod tests {
         let output = Arc::clone(&loader).run_cached(input, RunCtxImpl::new(0, "retry")).await.unwrap();
         assert_eq!(output.id(), &key);
         assert_eq!(loader.run_count.load(Relaxed), 1);
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -1110,23 +1076,23 @@ mod tests {
 
         assert!(!loaded_tensor_0_0.is_all_on_cpu().await);
 
-        DummyLoader::cache().await.purge_gpu(Some(&HashSet::new()), 1, "test").await?;
+        DummyLoader::cache().await?.purge_gpu(Some(&HashSet::new()), 1, "test").await?;
 
         assert!(loaded_tensor_0_0.is_all_on_cpu().await);
 
-        assert_eq!(1, DummyLoader::cache().await.len());
-        let purged = DummyLoader::cache().await.purge_cpu(0).await;
+        assert_eq!(1, DummyLoader::cache().await?.len());
+        let purged = DummyLoader::cache().await?.purge_cpu(0).await;
 
         assert_eq!(0, purged);
-        assert_eq!(1, DummyLoader::cache().await.len());
+        assert_eq!(1, DummyLoader::cache().await?.len());
 
         // Retention follows the cache area, not incidental output handles.
         drop(ctx_device_0);
 
-        let purged = DummyLoader::cache().await.purge_cpu(0).await;
+        let purged = DummyLoader::cache().await?.purge_cpu(0).await;
 
         assert_eq!(1, purged);
-        assert_eq!(0, DummyLoader::cache().await.len());
+        assert_eq!(0, DummyLoader::cache().await?.len());
         assert!(loaded_tensor_0_0.is_all_on_cpu().await);
 
         Ok(())
@@ -1162,7 +1128,7 @@ mod tests {
         for cleanup in rx.recv().await.unwrap() { cleanup().await?; }
         assert!(first.is_all_on_cpu().await);
         assert!(second.is_on_device(0));
-        assert_eq!(DummyLoader::cache().await.len(), 1);
+        assert_eq!(DummyLoader::cache().await?.len(), 1);
         assert!(rx.try_recv().is_err());
         Ok(())
     }
