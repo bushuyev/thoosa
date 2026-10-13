@@ -169,8 +169,8 @@ impl StageCommand for HbacCommands {
                     labels_epochs : 150,
                     final_epochs : 150,
                     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
-                    train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
-                    train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
+                    train_labels_opt_config : Arc::new(OptConfig::new(100, 10)),
+                    train_final_opt_config : Arc::new(OptConfig::new(100, 10)),
                     max_batch_size : 20,
                 });
 

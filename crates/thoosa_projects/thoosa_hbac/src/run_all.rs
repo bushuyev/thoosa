@@ -452,9 +452,9 @@ pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> A
             })),
         },
         net: FinalNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
-            // mid_features: RangeOrValue::Range { range: Range { start: 2, end: 100 }, step: None },
-            mid_features: RangeOrValue::Value(20),
+            num_layers: RangeOrValue::Range { range: Range { start: 2, end: 64 }, step: None },
+            mid_features: RangeOrValue::Range { range: Range { start: 2, end: 256 }, step: None },
+            // mid_features: RangeOrValue::Value(20),
         },
     };
 
@@ -789,7 +789,8 @@ fn run_all_find_motifs_config_1<P: FieldName + 'static>() -> FindMotifsRunConfig
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
             band_hz: RangeOrValue::Value(2.),
-            kernel_size: RangeOrValue::Value(10),
+            // kernel_size: RangeOrValue::Value(10),
+            kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
             stride: RangeOrValue::Value(1),
             padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
         })]),
@@ -797,7 +798,7 @@ fn run_all_find_motifs_config_1<P: FieldName + 'static>() -> FindMotifsRunConfig
             similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
                 aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.1) }),
-                slices: RangeOrValue::Value(100),
+                slices: RangeOrValue::Value(200),
             }),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
