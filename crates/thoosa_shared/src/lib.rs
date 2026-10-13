@@ -544,7 +544,7 @@ pub struct CudaRecoveryFailure {
     pub recovery: Option<ThoError>,
 }
 
-/// A failed optimizer commit or buffer rollback invalidates the training session.
+/// A failed training attempt invalidates the session until checkpoint restoration.
 /// Keep its causes typed and visible without making a partial update replayable.
 #[derive(Debug, Clone)]
 pub struct TrainingSessionFailure {

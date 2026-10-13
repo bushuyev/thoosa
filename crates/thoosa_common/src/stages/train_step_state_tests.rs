@@ -58,7 +58,10 @@ async fn local_step<C: RunCtx>(optimizer: u8, device: ThoDevice, checkpoint: Pat
         // Restoration must preserve live group options, not just the initial config.
         module.set_lr(0.017);
         Ok((module, ()))
-    }, Arc::new(Box::new(|batch| batch) as TrainStepXFn<AnyDims>), |predicted, expected| Ok(predicted.f_mse_loss(expected, Reduction::Mean)?), (), checkpoint).await?;
+    }, Arc::new(Box::new(|batch| batch) as TrainStepXFn<AnyDims>), |predicted, expected| {
+        if expected.f_double_value(&[0, 0])? == -999.0 { return Err(ThoError::oom().into()); }
+        Ok(predicted.f_mse_loss(expected, Reduction::Mean)?)
+    }, (), checkpoint).await?;
     Ok(step)
 }
 
@@ -102,6 +105,18 @@ async fn round_trips() -> Result<(), ThoError> {
         // Compare with uninterrupted training, including a purge before any
         // optimizer state exists and repeated purges after momentum is populated.
         for cycle in 0..5 {
+            // Save before/after lazy optimizer initialization, then discard both
+            // successful updates and a failed invocation from the next epoch.
+            let saved = restored.save_epoch_checkpoint(1).await?;
+            for _ in 0..2 { actor.run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
+            let mut failed = input(true)?;
+            failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
+            let error = restored.run_once(failed, RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();
+            assert!(error.is_oom());
+            restored.restore_epoch_checkpoint(Arc::clone(&saved), 1).await?;
+            // The checkpoint survives a restore and unrelated CPU purge.
+            restored.purge_gpu(None, 1, "checkpoint retained through purge").await?;
+            restored.restore_epoch_checkpoint(saved, 1).await?;
             let train = cycle > 0;
             let expected = actor.run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
             let actual = actor.run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss;
@@ -205,9 +220,19 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
             let selected = wrapper.select_ref(0, Some((0..2).into())).await?;
             let mut state = split.train_module.lock().await;
+            let saved_info = state.state_info()?;
+            let mut saved_tensors = Vec::new();
+            for tensor in &saved_info.tensors {
+                let key = tensor.tensor_key.to_tensor_key();
+                let tensor = state.state_tensor(&key)?;
+                saved_tensors.push((key, tensor.f_to_device_(Device::Cpu, tensor.kind(), false, true)?));
+            }
             FAIL_LAST_CHUNK.store(true, Ordering::SeqCst);
             let error = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx).unwrap_err();
-            assert!(error.is_retryable_oom());
+            assert!(error.is_oom());
+            assert!(!error.is_retryable_oom());
+            state.reset_state(saved_info)?;
+            for (key, tensor) in saved_tensors { state.set_state_tensor(&key, tensor, 0)?; }
             let actual = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?.loss;
             let mut full_state = full.train_module.lock().await;
             let expected = full.clone().do_run_with_state(&input, &mut full_state, &ctx)?.loss;
@@ -220,19 +245,7 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             let actual = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss;
             let expected = full.clone().do_run_with_state(&valid, &mut full_state, &ctx)?.loss;
             assert!((actual - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: update differs after retry");
-            // A failed accumulation must discard gradients and restore registered
-            // buffers without copying parameters or optimizer state.
-            let failed: Result<(), ThoError> = state.training_transaction(|module| {
-                let x = input.x()?;
-                let predicted = module.module().tho_forward(&x, None, true)?;
-                predicted.as_ref().f_mse_loss(&input.expected_y_ref()?.as_ref(), Reduction::Mean)?.f_backward()?;
-                let _ = module.state_tensor("var/test_buffer")?.f_fill_(42.0)?;
-                Err(ThoError::oom())
-            });
-            assert!(failed.unwrap_err().is_retryable_oom());
-            assert_eq!(state.state_tensor("var/test_buffer")?.f_double_value(&[0])?, 0.25, "registered buffer was not rolled back");
-            let rolled_back = split.clone().do_run_with_state(&valid, &mut state, &ctx)?.loss;
-            assert!((rolled_back - expected).abs() < 1e-5, "failed accumulation changed parameters");
+
         }
         let mut state = split.train_module.lock().await;
         let valid = split.clone().do_run_with_state(&uneven_input(false)?, &mut state, &ctx)?.loss;

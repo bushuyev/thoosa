@@ -88,6 +88,7 @@ pub enum Operation {
     // Begin uses its request ID as the transaction identity; finish has its own request ID.
     BeginStageExport { endpoint_name: String, stage_id: Option<String> },
     FinishStageExport { endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool },
+    ResetStageState { endpoint_name: String, stage_id: Option<String>, info: StageStateInfo },
     DropStage { endpoint_name: String, stage_id: Option<String> },
     Debug,
     Shutdown {dummy: String},//without dummy empty message deserialized as Shutdown?

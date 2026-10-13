@@ -28,6 +28,10 @@ use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamPar
 use tokio::task::JoinSet;
 
 
+#[path = "training_metadata.rs"]
+mod training_metadata;
+use training_metadata::{TrainingMetadata, OptimizerMetadata};
+
 pub struct ModConfig<DI, DO>
 where
     DI: Dims, DO: Dims
@@ -312,8 +316,8 @@ where
         };
         let mut tensors = StateTensors::default();
         let variables = VarStoreState::capture(vs, &mut tensors)?;
-        // Keep options, absent-state markers, and step counters in the worker,
-        // but move every optimizer tensor through the same IPC copy protocol.
+        // Separate scalar metadata from tensor storage so checkpoint restoration
+        // recovers options, absent-state markers, and counters from the same epoch.
         let optimizer = snapshot.map_tensors(0, |key, tensor| {
             tensors.insert(key.to_owned(), tensor.f_detach()?)?;
             Ok(Tensor::new())
@@ -323,7 +327,21 @@ where
 
     pub fn state_info(&mut self) -> Result<StageStateInfo, ThoError> {
         self.ipc_export = Some(self.capture_state()?);
-        Ok(self.ipc_export.as_ref().expect("captured state").tensors.info())
+        let state = self.ipc_export.as_ref().expect("captured state");
+        let mut info = state.tensors.info();
+        info.scalars = Some(Box::new(TrainingMetadata { variables: state.variables.clone(), optimizer: OptimizerMetadata::capture(&state.optimizer) }));
+        Ok(info)
+    }
+
+    pub(crate) fn reset_state(&mut self, mut info: StageStateInfo) -> Result<(), ThoError> {
+        let tensors = StateTensors::from_info(&info);
+        let metadata = info.scalars.take().ok_or_else(|| ThoError::new("training checkpoint lacks metadata"))?;
+        let metadata = (metadata as Box<dyn std::any::Any>).downcast::<TrainingMetadata>().map_err(|_| ThoError::new("invalid training checkpoint metadata"))?;
+        // Replace the entire failed state; never export or reuse partial optimizer updates.
+        self.ipc_export = None;
+        self.transaction_failed = true;
+        self.opt_state = OptSnapshot::Offloaded(TrainingState { variables: metadata.variables, tensors, optimizer: metadata.optimizer.into_snapshot() });
+        Ok(())
     }
 
     pub fn state_tensor(&mut self, key: &str) -> Result<Tensor, ThoError> {
@@ -361,14 +379,13 @@ where
             let snapshot = state.optimizer.map_tensors(device, |key, _| state.tensors.get(key))?;
             unsafe { self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?; }
             self.opt_state = OptSnapshot::Opt { opt, vs, module };
+            self.transaction_failed = false;
         }
         Ok(())
     }
 
-    /// Forward/backward retries restore only registered buffers and clear gradients.
-    /// Parameters and optimizer state must not change during accumulation. Once the
-    /// optimizer starts updating them, any failure invalidates the session instead of
-    /// replaying a possibly partial update. RNG streams are not rolled back.
+    /// A failed batch invalidates this epoch. Recovery restores a complete CPU
+    /// checkpoint; no model or optimizer storage is duplicated on the hot path.
     pub(crate) fn training_transaction<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T, ThoError>) -> Result<T, ThoError> {
         self.ensure_training_usable()?;
         // The execution stream is set either in `impl dyn CudaActorHandle::run_stage/consume_stage` in Local Mode or in thoosa_common::ipc::wraps::run_worker_stage(_with_state) in IPC mode.
@@ -393,43 +410,17 @@ where
     ) -> Result<T, ThoError> {
         self.ensure_training_usable()?;
         self.ipc_export = None;
-        let buffers = match panic_to_err!(self.capture_training_buffers()) {
-            Ok(buffers) => buffers,
-            Err(error) => return finish_cuda_run(Err(error), synchronize()),
-        };
-        // Synchronize even on failure before restoring buffers. A successful
-        // forward/backward call alone does not establish GPU completion.
         let accumulated = finish_cuda_run(panic_to_err!({
             self.opt().zero_grad();
             run(self)
         }), synchronize());
-
         let output = match accumulated {
             Ok(output) => output,
             Err(error) => {
-                self.ipc_export = None;
-                if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
-                    self.transaction_failed = true;
-                    return Err(error);
-                }
-                let rollback = finish_cuda_run(panic_to_err!({
-                    self.opt().zero_grad();
-                    tch::no_grad(|| -> Result<(), ThoError> {
-                        for (mut live, saved) in buffers {
-                            live.f_copy_(&saved)?;
-                        }
-                        Ok(())
-                    })
-                }), synchronize());
-                if let Err(rollback) = rollback {
-                    self.transaction_failed = true;
-                    if rollback.needs_cuda_ctx_reset() || rollback.is_cuda_recovery_failed() { return Err(rollback); }
-                    return Err(ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: error, recovery: Some(rollback) })).context("training buffer rollback failed"));
-                }
-                return Err(error);
+                self.transaction_failed = true;
+                return Err(Self::failed_epoch(error));
             }
         };
-        drop(buffers); // Buffer rollback is no longer possible or needed once commit starts.
         // No rollback snapshot of parameters or momentum is needed on the hot path.
         // From this point an error (including completion/gradient cleanup) is terminal.
         let committed = finish_cuda_run(panic_to_err!({
@@ -441,36 +432,24 @@ where
             self.transaction_failed = true;
             self.ipc_export = None;
             if cause.needs_cuda_ctx_reset() || cause.is_cuda_recovery_failed() { return Err(cause); }
-            // tch's optimizer API panics on allocation errors. Promote a recognized
-            // OOM payload to a typed cause before marking this update non-retryable.
-            let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {
-                ThoError::from(anyhow::Error::new(cause).context(ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "optimizer allocation failed".into() }))
-            } else { cause };
-            return Err(ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: cause, recovery: None })).context("training optimizer commit failed"));
+            return Err(Self::failed_epoch(cause));
         }
         Ok(output)
     }
 
     pub(crate) fn ensure_training_usable(&self) -> Result<(), ThoError> {
-        if self.transaction_failed { return Err(ThoError::new("training session invalidated by failed cleanup or optimizer commit")); }
+        if self.transaction_failed { return Err(ThoError::new("training session invalidated; restore an epoch checkpoint before reuse")); }
         Ok(())
     }
 
-    fn capture_training_buffers(&self) -> Result<Vec<(Tensor, Tensor)>, ThoError> {
-        let OptSnapshot::Opt { vs, .. } = &self.opt_state else { return Err(ThoError::new("training transaction has no live state")); };
-        let vars = vs.variables_.lock().or_else(|_| Err(ThoError::new("VarStore lock poisoned")))?;
-        let mut buffers = Vec::new();
-        'buffers: for tensor in vars.named_variables.values() {
-            // Registration, not requires_grad, distinguishes buffers from frozen parameters.
-            for var in &vars.trainable_variables {
-                if var.tensor.f_is_set_to(tensor)? { continue 'buffers; }
-            }
-            // Small buffer copies stay on the execution device and live only inside
-            // this synchronous call. No parameters or optimizer tensors are copied.
-            let saved = tensor.f_detach()?.f_to_device_(tensor.device(), tensor.kind(), false, true)?;
-            buffers.push((tensor.f_alias()?, saved));
-        }
-        Ok(buffers)
+    fn failed_epoch(cause: ThoError) -> ThoError {
+        if cause.needs_cuda_ctx_reset() || cause.is_cuda_recovery_failed() { return cause; }
+        // Preserve allocation failures exposed as panics by tch without allowing
+        // the generic executor to replay a batch against mutated training state.
+        let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {
+            ThoError::from(anyhow::Error::new(cause).context(ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "training allocation failed".into() }))
+        } else { cause };
+        ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: cause, recovery: None }))
     }
 
     pub fn set_lr(&mut self, lr: f64) {

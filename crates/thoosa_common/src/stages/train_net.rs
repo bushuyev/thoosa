@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
+use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
@@ -31,7 +29,6 @@ use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::parzen::optimizer::CompletedTrial;
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, InputContext, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
@@ -55,67 +52,6 @@ use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
 use tokio::task::coop::cooperative;
 use tracing::Instrument;
-
-/// Tracks batch chunks and combines their mean losses without biasing the final short chunk.
-#[derive(Debug)]
-struct TrainStepSplitsContext {
-    input_len: i64,
-    split_len: i64,
-    done_to: i64,
-    weighted_loss_sum: f64,
-    samples: i64,
-    logical_training_batch: bool,
-}
-
-impl TrainStepSplitsContext {
-    fn new(input_len: i64, logical_training_batch: bool) -> Self {
-        Self { input_len, split_len: input_len, done_to: 0, weighted_loss_sum: 0.0, samples: 0, logical_training_batch }
-    }
-}
-
-impl SplitsAdjusterContext for TrainStepSplitsContext {
-    type Metrics = i64;
-
-    fn input_len(&self) -> &Self::Metrics {
-        &self.input_len
-    }
-
-    fn split_len(&self) -> &Self::Metrics {
-        &self.split_len
-    }
-
-    fn done_to(&self) -> &Self::Metrics {
-        &self.done_to
-    }
-
-    fn split_len_mut(&mut self) -> &mut Self::Metrics {
-        &mut self.split_len
-    }
-}
-
-impl<'a, R> InputContext<'a, R> for TrainStepSplitsContext
-where
-    R: Stage<Out = TrainStepOutput> + 'a,
-{
-    async fn add_partial_output(&mut self, output: R::Out) {
-        // Training returns the complete logical batch; validation returns selected chunks.
-        let chunk_len = if self.logical_training_batch { self.input_len } else { self.split_len.min(self.input_len - self.done_to) };
-        self.weighted_loss_sum += f64::from(output.loss) * chunk_len as f64;
-        self.samples += chunk_len;
-        self.done_to += chunk_len;
-    }
-
-    fn all_done(&self) -> bool {
-        self.done_to >= self.input_len
-    }
-
-    async fn build_final_output(self) -> Result<R::Out, ThoError> {
-        if self.samples == 0 {
-            return Err(ThoError::new("TrainStep input adjuster produced no samples"));
-        }
-        Ok(TrainStepOutput { loss: (self.weighted_loss_sum / self.samples as f64) as f32 })
-    }
-}
 
 #[derive(Debug, CpuData)]
 #[dummy_data(no_clone)]
@@ -283,10 +219,6 @@ where
             let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
             let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((step_id, Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
 
-            let set = HashSet::new();
-            let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::from([(&*step_id, &set)]);
-            let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
-
             let mut bad_epochs = 0u32;
             let patience = run_config.as_ref().patience;
             let min_delta = run_config.as_ref().min_delta;
@@ -298,124 +230,79 @@ where
 
             debug!("TrainNet::run_inner: descr={descr} device={device:?} epochs={epochs}");
 
-            let oom_handler: OOMHandler<'_, '_, _, NoStageAdjuster, _, TrainStepInputSelector> = OOMHandler::new(
-                vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
-                        MAX_PARALLEL,
-                        *MaxParallelStep::FAST,
-                    ))),
-                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("train_step"))),
-                    Adjusters::Input(input_adjuster(SplitsAdjuster::<TrainStepInputSelector, i64>::new(1))),
-                ],
-                None,
-            );
-
+            // This immutable CPU recovery point survives both GPU offload and
+            // restoration. Even an OOM in epoch zero has a complete initial state.
+            let mut recovery_checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
             let mut best_valid_loss = f32::MAX;
-
             let mut best_saved = false;
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
+            let mut max_other_parallel = MAX_PARALLEL as usize;
+            let mut completed_epochs = 0;
+            let mut aborted_epochs = 0;
             for idx in 0..epochs {
-
-                debug!("TrainNet::run_inner, train: descr={descr} 0. cuda_mem={:?} epoch={idx} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
-
-                let mut batches = batch.train_batch_stream(ctx.branch(false));
-                debug!("TrainNet::run_inner, train: descr={descr} 1. cuda_mem={:?} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
-
-                let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
-
-                while let Some(batch_result) = cooperative(batches.next())
-                    .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
-                    .await {
-                    // A failed batch invalidates the trial instead of ending this epoch early.
-                    let (x_t_0, lengths, expected_y) = batch_result?;
-                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true)));
-
-                    debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
-
-                    let out_result = oom_handler.run(
-                        &train_step,
-                        Arc::clone(&input),
-                        ctx.branch(false),
-                        Contexts::<DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, _, _, _>::new(
-                            TrainStepSplitsContext::new(input.batch_len()?, true),
-                            NoopRunnableContext {},
-                            MaxParallelAndDumpToCpuAdjustableContex::new(
-                                MaxParallelAdjustContextImpl::new(),
-                                DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
-                            ),
-                        ),
-                    )
-                        .instrument(tracing::debug_span!("run_inner/oom_handler.run", file = file!(),line = line!()))
-                        .await?;
-
-                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?} out={out_result:?}", input.id(), tokio::task::try_id());
-
-                    collect_eta_record_completion(batch_eta_guard.id());
-
-                }
-
-                if idx % validation_step == 0 || idx == epochs - 1 {
-                    debug!("TrainNet::run_inner, valid: descr={descr} 0. cuda_mem={:?} tokio::task_id={:?}", maybe_cuda_mem(&device), tokio::task::try_id());
-
-                    let mut batches = batch.valid_batch_stream(ctx.branch(false));
-                    debug!("TrainNet::run_inner, valid: descr={descr} 1. cuda_mem={:?}",maybe_cuda_mem(&device));
-                    let mut valid_loss_sum = 0f32;
-                    let mut valid_loss_count = 0u32;
-
-                    while let Some(batch_result) = batches.next()
-                        .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
-                        .await {
-                        // Never score a configuration using only the validation batches before an error.
-                        let (x_t_0, lengths, y_t) = batch_result?;
-                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false)));
-                        let input_context = TrainStepSplitsContext::new(input.batch_len()?, false);
-                        let output = oom_handler.run(
-                            &train_step,
-                            input,
-                            ctx.branch(false),
-                            Contexts::<DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, _, _, _>::new(
-                                input_context,
-                                NoopRunnableContext {},
-                                MaxParallelAndDumpToCpuAdjustableContex::new(
-                                    MaxParallelAdjustContextImpl::new(),
-                                    DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
-                                ),
-                            ),
-                        )
-                            .instrument(tracing::debug_span!("run_inner/validation_step/oom_handler.run", file = file!(),line = line!()))
-                            .await?;
-                        debug!("TrainNet::run_inner, valid: descr={descr} valid_loss={}", output.loss);
-                        valid_loss_sum += output.loss;
-                        valid_loss_count += 1;
+                // An epoch commits only after training, scheduled validation, and
+                // checkpoint publication all succeed. No batch is retried in place.
+                let epoch_result = async {
+                    let mut batches = batch.train_batch_stream(ctx.branch(false));
+                    let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
+                    while let Some(batch_result) = cooperative(batches.next()).await {
+                        let (x, lengths, expected) = batch_result?;
+                        train_step.run_once(TrainStepInput::new(x, lengths, expected, true), ctx.branch(false), max_other_parallel).await?;
+                        collect_eta_record_completion(batch_eta_guard.id());
                     }
-                    if valid_loss_count > 0 {
-                        let avg_valid_loss = valid_loss_sum / valid_loss_count as f32;
-                        debug!("TrainNet::run_inner, valid: descr={descr}  avg_valid_loss={avg_valid_loss}");
-
-                        if avg_valid_loss < best_valid_loss - min_delta {
-                            // Await publication before associating this score with saved weights,
-                            // including the final epoch when there is no subsequent training call.
-                            train_step.checkpoint(&ctx).await?;
-                            best_valid_loss = avg_valid_loss;
-                            bad_epochs = 0;
-
-                            best_saved = true;
-                        } else {
-                            bad_epochs += 1;
-                            if bad_epochs >= patience {
-                                info!("TrainNet::run_inner, valid: descr={descr}  early stopping triggered valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
-                                break;
+                    let mut valid_loss = None;
+                    if idx % validation_step == 0 || idx == epochs - 1 {
+                        let mut batches = batch.valid_batch_stream(ctx.branch(false));
+                        let mut sum = 0.0;
+                        let mut count = 0;
+                        while let Some(batch_result) = batches.next().await {
+                            let (x, lengths, expected) = batch_result?;
+                            let output = train_step.run_once(TrainStepInput::new(x, lengths, expected, false), ctx.branch(false), max_other_parallel).await?;
+                            sum += output.loss;
+                            count += 1;
+                        }
+                        if count > 0 { valid_loss = Some(sum / count as f32); }
+                    }
+                    let checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
+                    if valid_loss.is_some_and(|loss| loss < best_valid_loss - min_delta) {
+                        // Best-model publication remains explicit, including the last epoch.
+                        train_step.checkpoint(&ctx).await?;
+                    }
+                    Ok::<_, ThoError>((checkpoint, valid_loss))
+                }.await;
+                let attempted_parallel = max_other_parallel;
+                // Apply the user's per-epoch reduction on success and failure alike.
+                max_other_parallel /= 2;
+                collect_eta_record_completion(epochs_eta_guard.id());
+                match epoch_result {
+                    Ok((checkpoint, valid_loss)) => {
+                        recovery_checkpoint = checkpoint;
+                        completed_epochs += 1;
+                        if let Some(loss) = valid_loss {
+                            if loss < best_valid_loss - min_delta {
+                                best_valid_loss = loss;
+                                bad_epochs = 0;
+                                best_saved = true;
+                            } else {
+                                bad_epochs += 1;
+                                if bad_epochs >= patience { break; }
                             }
                         }
-                        debug!("TrainNet::run_inner, valid: descr={descr}  valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
-                    } else {
-                        debug!("TrainNet::run_inner, valid: descr={descr}  valid_loss skipped, no validation batches");
                     }
-
+                    Err(error) if (error.is_oom() || error.is_retryable_oom()) && !error.needs_cuda_ctx_reset() && !error.is_cuda_recovery_failed() => {
+                        aborted_epochs += 1;
+                        // Restoration replaces the entire module/optimizer and its
+                        // acknowledgement state. Failed epochs never affect patience.
+                        train_step.restore_epoch_checkpoint(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
+                        warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
+                        if attempted_parallel == 0 {
+                            return Err(error.context("training epoch ran out of memory with exclusive runner access"));
+                        }
+                    }
+                    Err(error) => return Err(error),
                 }
-
-                collect_eta_record_completion(epochs_eta_guard.id());
             }
+            info!("TrainNet: completed_epochs={completed_epochs} aborted_epochs={aborted_epochs} descr={descr}");
 
             if best_saved {
                 debug!("TrainNet::run_inner: descr={descr} final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
@@ -571,7 +458,8 @@ pub mod tests {
 
     fn dummy_loss_fn(pred: &Tensor, target: &Tensor) -> anyhow::Result<Tensor> {
         LOSS_FN_CALLS.fetch_add(1, Ordering::SeqCst);
-        Ok(pred.f_sub(target)?.pow_tensor_scalar(2.).mean(tch::Kind::Float))
+        if target.f_double_value(&[0, 0, 0])? == -999.0 { return Err(ThoError::oom().into()); }
+        Ok(pred.f_sub(target)?.f_pow_tensor_scalar(2.)?.f_mean(tch::Kind::Float)?)
     }
 
     fn dummy_batch() -> (ThoBatch<DummyX>, ThoBatch<DummyY>) {
@@ -712,6 +600,64 @@ pub mod tests {
             .with_valid_stream_calls(Arc::new(AtomicUsize::new(0)), move |_ctx| make_batches(valid_error))
             .finish());
         Box::new(move |_ctx, _rc| ready(Ok(Arc::clone(&batch))).boxed())
+    }
+
+    fn oom_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>, ThoBatch<DummyY>), ThoError>> {
+        // Failure originates inside TrainStep after forward, not in the loader.
+        let input = (|| {
+            let x = Tensor::f_zeros([1, 1, 1], (tch::Kind::Float, tch::Device::Cpu))?;
+            let y = Tensor::f_full([1, 1, 1], -999.0, (tch::Kind::Float, tch::Device::Cpu))?;
+            Ok((x.into(), None, y.into()))
+        })();
+        stream::iter([input]).boxed()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_discards_oom_epochs_and_continues() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        for fail_validation in [false, true] {
+            for failed_epoch in [0, 1] {
+                let train_calls = Arc::new(AtomicUsize::new(0));
+                let valid_calls = Arc::new(AtomicUsize::new(0));
+                let epoch = Arc::new(AtomicUsize::new(0));
+                let train_epoch = Arc::clone(&epoch);
+                let valid_epoch = Arc::clone(&epoch);
+                let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
+                    .with_train_stream_calls(Arc::clone(&train_calls), move |_| {
+                        let current = train_epoch.fetch_add(1, Ordering::SeqCst);
+                        if !fail_validation && current == failed_epoch { make_stream().chain(oom_stream()).boxed() } else { make_stream() }
+                    })
+                    .with_valid_stream_calls(Arc::clone(&valid_calls), move |_| {
+                        if fail_validation && valid_epoch.load(Ordering::SeqCst) - 1 == failed_epoch { oom_stream() } else { make_stream() }
+                    }).finish());
+                let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
+                let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
+                let train_net = Arc::new(TrainNet::new(factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 3, 1, "epoch rollback".into()));
+                let (_checkpoint, loss, ()) = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "epoch rollback".into()).await?;
+                assert!(loss.is_finite());
+                assert_eq!(train_calls.load(Ordering::SeqCst), 3, "an OOM skips the failed epoch without replaying its batches");
+                assert_eq!(valid_calls.load(Ordering::SeqCst), if fail_validation { 3 } else { 2 }, "aborted training must not enter validation");
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_net_stops_after_oom_at_exclusive_access() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
+            .with_train_stream_calls(Arc::clone(&calls), |_| oom_stream()).finish());
+        let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
+        let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
+        let train_net = Arc::new(TrainNet::new(factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 10, 1, "persistent OOM".into()));
+        let error = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "persistent OOM".into()).await.unwrap_err();
+        assert!(error.is_oom());
+        assert!(error.to_string().contains("exclusive runner access"));
+        assert_eq!(calls.load(Ordering::SeqCst), 7, "epochs run with limits 32, 16, 8, 4, 2, 1, 0");
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

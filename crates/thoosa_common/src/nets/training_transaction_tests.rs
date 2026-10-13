@@ -9,19 +9,22 @@ fn module(optimizer: u8) -> Result<ThoTrainModule<AnyDims, AnyDims>, ThoError> {
         _ => nn::Sgd { momentum: 0.9, ..Default::default() }.into(),
     };
     Ok(ThoTrainModule::new_on_device(ModConfig::new(optimizer, |vs| {
+        let initialize = vs.variables().is_empty();
         let mut builder = SeqBuilder::new(1, None)?;
         let module = builder.linear_s(1, "output")?.end_seq()?.build_tch_module(&vs.root())?;
         // Frozen parameters still belong to the optimizer registration and must
         // not become per-batch rollback copies merely because requires_grad is false.
-        let frozen = vs.root().f_var("frozen", &[1024], nn::Init::Const(0.5))?;
-        let _ = frozen.f_set_requires_grad(false)?;
-        let _ = vs.root().add("running_stat", Tensor::f_from_slice(&[0.25f32])?, false);
-        tch::no_grad(|| -> Result<(), ThoError> {
-            for var in &vs.variables_.lock().or_else(|_| Err(ThoError::new("test VarStore lock poisoned")))?.trainable_variables {
-                let _ = var.tensor.f_alias()?.f_fill_(0.5)?;
-            }
-            Ok(())
-        })?;
+        if initialize {
+            let frozen = vs.root().f_var("frozen", &[1024], nn::Init::Const(0.5))?;
+            let _ = frozen.f_set_requires_grad(false)?;
+            let _ = vs.root().add("running_stat", Tensor::f_from_slice(&[0.25f32])?, false);
+            tch::no_grad(|| -> Result<(), ThoError> {
+                for var in &vs.variables_.lock().or_else(|_| Err(ThoError::new("test VarStore lock poisoned")))?.trainable_variables {
+                    let _ = var.tensor.f_alias()?.f_fill_(0.5)?;
+                }
+                Ok(())
+            })?;
+        }
         Ok(module)
     }, 0.01), Cpu.into())?)
 }
@@ -53,36 +56,78 @@ fn assert_terminal_over_ipc(error: ThoError) -> Result<(), ThoError> {
     Ok(())
 }
 
+// Exercise the serialized metadata used by IPC, with independent CPU allocations.
+fn checkpoint(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(Vec<u8>, Vec<(String, Tensor)>), ThoError> {
+    let info = module.state_info()?;
+    let mut tensors = Vec::new();
+    for tensor in &info.tensors {
+        let key = tensor.tensor_key.to_tensor_key();
+        let tensor = module.state_tensor(&key)?;
+        tensors.push((key, tensor.f_to_device_(Cpu, tensor.kind(), false, true)?));
+    }
+    Ok((serde_json::to_vec(&info)?, tensors))
+}
+
+fn restore(module: &mut ThoTrainModule<AnyDims, AnyDims>, checkpoint: &(Vec<u8>, Vec<(String, Tensor)>)) -> Result<(), ThoError> {
+    module.reset_state(serde_json::from_slice(&checkpoint.0)?)?;
+    for (key, tensor) in &checkpoint.1 { module.set_state_tensor(key, tensor.f_to_device_(Cpu, tensor.kind(), false, true)?, 0)?; }
+    module.ensure_training_usable()
+}
+
 #[test]
-fn test_training_snapshot_contains_only_buffers() -> Result<(), ThoError> {
-    let module = module(0)?;
-    let buffers = module.capture_training_buffers()?;
-    assert_eq!(buffers.len(), 1, "parameters, including frozen ones, must not be captured");
-    assert!(buffers[0].0.is_set_to(&variable(&module, "running_stat")?));
-    assert!(!buffers[0].0.is_set_to(&buffers[0].1), "rollback requires an independent buffer copy");
-    let _ = variable(&module, "running_stat")?.f_fill_(42.0)?;
-    assert_eq!(buffers[0].1.f_double_value(&[0])?, 0.25);
+fn test_epoch_checkpoint_restores_complete_optimizer_and_buffers() -> Result<(), ThoError> {
+    for optimizer in 0..3 {
+        for initialized in [false, true] {
+            let mut restored = module(optimizer)?;
+            let mut reference = module(optimizer)?;
+            if initialized {
+                restored.training_transaction(accumulate)?;
+                reference.training_transaction(accumulate)?;
+            }
+            let saved = checkpoint(&mut restored)?;
+            for fail_commit in [false, true] {
+                let error = restored.training_transaction_with(|module| {
+                    accumulate(module)?;
+                    if fail_commit { Ok(()) } else { Err(ThoError::oom()) }
+                }, |module| {
+                    module.opt().step();
+                    Err(ThoError::oom())
+                }, || Ok(())).unwrap_err();
+                assert!(error.is_oom());
+                assert_terminal_over_ipc(error)?;
+                assert!(restored.ensure_training_usable().is_err());
+                restore(&mut restored, &saved)?;
+                let reference_state = checkpoint(&mut reference)?;
+                let actual = checkpoint(&mut restored)?;
+                assert_eq!(actual.0, reference_state.0, "optimizer metadata must return to the saved epoch, including absent state");
+                for ((actual_key, actual), (expected_key, expected)) in actual.1.iter().zip(&reference_state.1) {
+                    assert_eq!(actual_key, expected_key);
+                    assert!(actual.f_allclose(expected, 1e-7, 1e-7, false)?, "checkpoint differs for {actual_key}");
+                }
+            }
+            // The next update matches uninterrupted training, including momentum.
+            restored.training_transaction(accumulate)?;
+            reference.training_transaction(accumulate)?;
+            assert_eq!(variable(&restored, "seq_0.output.weight")?.f_double_value(&[0, 0])?, variable(&reference, "seq_0.output.weight")?.f_double_value(&[0, 0])?);
+            restore(&mut restored, &saved)?;
+            assert_eq!(checkpoint(&mut restored)?.0, saved.0, "restoring must not consume the checkpoint");
+        }
+    }
     Ok(())
 }
 
 #[test]
-fn test_training_accumulation_completion_oom_is_retryable() -> Result<(), ThoError> {
-    for optimizer in 0..3 {
-        let mut module = module(optimizer)?;
-        let before = variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0])?;
-        let completions = Cell::new(0);
-        let error = module.training_transaction_with(accumulate, |_| panic!("commit must not run after failed accumulation completion"), || {
-            completions.set(completions.get() + 1);
-            if completions.get() == 1 { Err(ThoError::oom()) } else { Ok(()) }
-        }).unwrap_err();
-        assert!(error.is_retryable_oom());
-        assert_eq!(completions.get(), 2, "restore must also complete before retry");
-        assert_eq!(variable(&module, "running_stat")?.f_double_value(&[0])?, 0.25);
-        assert_eq!(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0])?, before);
-        module.ensure_training_usable()?;
-        module.training_transaction(accumulate)?;
-        assert_ne!(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0])?, before);
-    }
+fn test_training_accumulation_completion_oom_invalidates_epoch() -> Result<(), ThoError> {
+    let mut module = module(0)?;
+    let completions = Cell::new(0);
+    let error = module.training_transaction_with(accumulate, |_| panic!("commit must not run"), || {
+        completions.set(completions.get() + 1);
+        Err(ThoError::oom())
+    }).unwrap_err();
+    assert!(error.is_oom());
+    assert!(!error.is_retryable_oom());
+    assert_eq!(completions.get(), 1, "failed epochs do not attempt buffer rollback");
+    assert!(module.ensure_training_usable().is_err());
     Ok(())
 }
 
@@ -110,23 +155,6 @@ fn test_training_commit_and_completion_failures_are_terminal() -> Result<(), Tho
             assert_terminal_over_ipc(retried.unwrap_err())?;
         }
     }
-    Ok(())
-}
-
-#[test]
-fn test_training_cleanup_failure_invalidates_session() -> Result<(), ThoError> {
-    let mut module = module(0)?;
-    let completions = Cell::new(0);
-    let error = module.training_transaction_with(|module| {
-        accumulate(module)?;
-        Err::<(), _>(ThoError::oom())
-    }, |_| panic!("failed accumulation must not commit"), || {
-        completions.set(completions.get() + 1);
-        if completions.get() == 2 { Err(ThoError::oom()) } else { Ok(()) }
-    }).unwrap_err();
-    assert!(error.is_oom(), "cleanup failure must retain its typed OOM cause");
-    assert_terminal_over_ipc(error)?;
-    assert!(module.ensure_training_usable().is_err());
     Ok(())
 }
 

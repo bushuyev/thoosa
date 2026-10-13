@@ -707,6 +707,17 @@ impl CudaWorker {
                 Operation::FinishStageExport { endpoint_name, stage_id, export_id, commit } => {
                     finish_stage_export(&context.installed_stages, endpoint_name, stage_id, export_id, commit, context.tho_device).await
                 }
+                Operation::ResetStageState { endpoint_name, stage_id, info } => {
+                    let key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
+                    let endpoint = installed_endpoint(&context.installed_stages, &key)?;
+                    let _lease = endpoint.lease.write().await;
+                    // Reset bypasses the failed-state guard: it destroys that state.
+                    *endpoint.state_failure.lock() = Some(ThoError::new("checkpoint restoration incomplete"));
+                    let state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new("checkpoint requires stateful stage"))?;
+                    state.reset_state(info).await?;
+                    *endpoint.state_failure.lock() = None;
+                    Ok(OpResult::Ok(None))
+                }
                 Operation::DropStage { endpoint_name, stage_id } => {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
                     let endpoint = context.installed_stages.get(&endpoint_key).and_then(|entry| entry.value().as_ref().map(Arc::clone));
