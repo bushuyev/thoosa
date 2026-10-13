@@ -61,7 +61,7 @@ impl SyncCtx for (){}
 #[async_trait]
 pub trait HandleCtx:Send {
 
-    fn sync_ctx(&self) ->Result<Box<dyn SyncCtx>, ThoError> {
+    fn sync_ctx(&self) ->Result<Box<dyn SyncCtx>, ThoError> {//TODO rename to get_guard and SyncCtx -> Guard?
         Ok(Box::new(()))
     }
 
@@ -311,7 +311,12 @@ pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) 
         Err(sync) => {
             warn!("finish_cuda_error: original={original:?} sync={sync:?}");
 
-            if sync.is_cuda_recovery_failed() || (!original.is_cuda_recovery_failed() && sync.needs_cuda_ctx_reset() && !original.needs_cuda_ctx_reset()) {
+            if sync.is_cuda_recovery_failed()
+                ||
+                (
+                    sync.needs_cuda_ctx_reset() && !original.is_cuda_recovery_failed() && !original.needs_cuda_ctx_reset()
+                )
+            {
                 sync.context(format!("stage also failed: {original}"))
             } else {
                 original.context(format!("stream synchronization also failed: {sync}"))

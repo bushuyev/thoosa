@@ -464,14 +464,14 @@ where
     fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
 
         let run_config_source = Arc::clone(&self.run_config_source);
-        let device_idx = ctx.tho_device_idx();
+        let tho_device_idx = ctx.tho_device_idx();
         let reusable_completed_trials = self.reusable_completed_trials.clone();
 
         debug!("TrainNet::run: self.descr={:?}", self.descr);
 
         async move {
             let self_for_train = Arc::clone(&self);
-            let device_idx_for_train = device_idx;
+            let device_idx_for_train = tho_device_idx;
 
             let descr = self.descr.clone();
             let validation_step = self.validation_step;

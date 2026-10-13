@@ -371,10 +371,10 @@ where
     /// replaying a possibly partial update. RNG streams are not rolled back.
     pub(crate) fn training_transaction<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T, ThoError>) -> Result<T, ThoError> {
         self.ensure_training_usable()?;
-        // The actor's guard selects the execution stream in both local and IPC modes.
-        // Do not synchronize the whole device and stall unrelated stages.
+        // The execution stream is set either in `impl dyn CudaActorHandle::run_stage/consume_stage` in Local Mode or in thoosa_common::ipc::wraps::run_worker_stage(_with_state) in IPC mode.
+        // this does not fit the usual approach of setting/synching stream outside SyncStages
         let stream = match Device::from(self.opt_state.device()) {
-            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),
+            Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),//steam from StreamGuard returned from thoosa_common::copy_ctx::HandleCtx::sync_ctx
             _ => None,
         };
         self.training_transaction_with(run, |module| {
@@ -403,6 +403,7 @@ where
             self.opt().zero_grad();
             run(self)
         }), synchronize());
+
         let output = match accumulated {
             Ok(output) => output,
             Err(error) => {
@@ -414,7 +415,9 @@ where
                 let rollback = finish_cuda_run(panic_to_err!({
                     self.opt().zero_grad();
                     tch::no_grad(|| -> Result<(), ThoError> {
-                        for (mut live, saved) in buffers { live.f_copy_(&saved)?; }
+                        for (mut live, saved) in buffers {
+                            live.f_copy_(&saved)?;
+                        }
                         Ok(())
                     })
                 }), synchronize());
