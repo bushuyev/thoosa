@@ -12,6 +12,10 @@ use crate::tho_device::ThoDevice;
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
+use std::any::{Any, TypeId};
+use mockall::Any as _;
+use crate::runner::common::cachable::{CachedPurgeOutput, StageCache};
+use thoosa_shared::traits::{Named, Stage, WithId};
 use std::fmt::Debug;
 use std::future::ready;
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -19,11 +23,10 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use mockall::Any;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock};
+use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_write_lock};
 use thoosa_shims::context::ThoCudaContext;
 use tokio::sync::RwLock as AsyncRwLock;
 use tracing::Instrument;
@@ -39,7 +42,7 @@ pub struct GlobalCtx {
 
     num_devices: usize,//TODO replace with Vec<ThoDevice>
 
-    caches: parking_lot::RwLock<HashMap<&'static str, Arc<CacheRegistryEntry>>>,
+    caches: Arc<CacheRegistry>,
     is_all_on_cpu: Vec<AtomicBool>,
     cache_time: AtomicU64, //for tracking CPU-only lifetime
     purger: Purger,
@@ -73,6 +76,64 @@ struct CacheRegistryEntry {
 }
 
 type CacheSnapshot = Vec<(&'static str, Arc<CacheRegistryEntry>)>;
+
+/// Application-owned stage maps and instance purgers. Names retain their legacy
+/// meaning for OOM keep-lists; they never determine a typed stage cache's identity.
+#[derive(Debug, Default)]
+pub struct CacheRegistry {
+    named: parking_lot::RwLock<HashMap<&'static str, Arc<CacheRegistryEntry>>>,
+    typed: parking_lot::RwLock<HashMap<TypeId, TypedCacheEntry>>,
+}
+
+#[derive(Debug)]
+struct TypedCacheEntry {
+    name: &'static str,
+    map: Arc<dyn Any + Send + Sync>,
+    purge: Arc<CacheRegistryEntry>,
+}
+
+impl CacheRegistry {
+    pub fn cache_for<S>(&self) -> Result<Arc<StageCache<S>>, ThoError>
+    where
+        S: Stage + Named + 'static,
+        S::Out: CachedPurgeOutput + WithId,
+        <S::Out as WithId>::ID: Sized,
+    {
+        let key = TypeId::of::<S>();
+        let existing = self.typed.read().get(&key).map(|entry| Arc::clone(&entry.map));
+        let erased = if let Some(map) = existing {
+            map
+        } else {
+            // Publish the map and its purger together. No registry lock is held
+            // over an await or while executing tensor/purge operations.
+            let mut caches = self.typed.write();
+            let entry = caches.entry(key).or_insert_with(|| {
+                let map = Arc::new(StageCache::<S>::new());
+                TypedCacheEntry {
+                    name: S::name(),
+                    map: map.clone(),
+                    purge: Arc::new(CacheRegistryEntry {
+                        purger: map,
+                        gate: Arc::new(AsyncRwLock::new(())),
+                    }),
+                }
+            });
+            Arc::clone(&entry.map)
+        };
+        // Even an internal registry invariant violation must never become an
+        // unchecked pointer reinterpretation with the caller's output type.
+        match erased.downcast::<StageCache<S>>() {
+            Ok(map) => Ok(map),
+            Err(_) => Err(ThoError::new(format!("cache type mismatch for {}", std::any::type_name::<S>()))),
+        }
+    }
+
+    fn snapshot(&self) -> CacheSnapshot {
+        let mut snapshot: CacheSnapshot = self.named.read().iter().map(|(name, entry)| (*name, Arc::clone(entry))).collect();
+        snapshot.extend(self.typed.read().values().map(|entry| (entry.name, Arc::clone(&entry.purge))));
+        snapshot
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RegisteredCacheHandle {
@@ -125,7 +186,7 @@ impl GlobalCtx {
             num_devices,
             devices,
 
-            caches: parking_lot::RwLock::new(HashMap::new()),
+            caches: Arc::new(CacheRegistry::default()),
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
@@ -191,7 +252,7 @@ impl GlobalCtx {
             num_devices,
             devices,
 
-            caches: parking_lot::RwLock::new(HashMap::new()),
+            caches: Arc::new(CacheRegistry::default()),
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
@@ -282,6 +343,10 @@ impl GlobalCtx {
     }
 
 
+    pub fn cache_registry(&self) -> Arc<CacheRegistry> {
+        Arc::clone(&self.caches)
+    }
+
     pub fn register_cache(&self, cache: (&'static str, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {//TODO rename DataPurger?
         debug!("GlobalCtx::register_cache: cache={}", cache.0);
         let cache_type = cache.1.type_name();
@@ -293,7 +358,7 @@ impl GlobalCtx {
 
 
         assert!(
-            perf_log!(sync_write_lock!(self.caches))
+            perf_log!(sync_write_lock!(self.caches.named))
             .insert(cache.0, entry)
             .is_none(),
             "duplicate {}/{}", cache.0, cache_type
@@ -305,13 +370,7 @@ impl GlobalCtx {
     }
 
     fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot {
-        perf_log!(
-            sync_read_lock!(self.caches, "{descr}")
-                .iter()
-                .map(|(type_name, entry)| (*type_name, Arc::clone(entry)))
-                .collect(),
-            "{descr}"
-        )
+        perf_log!(self.caches.snapshot(), "{descr}")
     }
 
     async fn lock_cache_shared(entry: &Arc<CacheRegistryEntry>, ctx: &'static str) -> tokio::sync::OwnedRwLockReadGuard<()> {
@@ -322,7 +381,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
-            perf_log!(sync_write_lock!(self.caches, "key={key:?}"))
+            perf_log!(sync_write_lock!(self.caches.named, "key={key:?}"))
             .remove(key)
             .is_some()
         );
@@ -700,6 +759,10 @@ pub mod mock_global_ctx {
             self
         }
         pub fn with_register_cache(mut self) -> Self {
+            // Each mock runtime owns its caches too; real-runtime mocks must
+            // share the actual registry so GPU purging sees the same maps.
+            let registry = self.real.map(|real| real.cache_registry()).unwrap_or_else(|| std::sync::Arc::new(super::CacheRegistry::default()));
+            self.mock.expect_cache_registry().returning(move || std::sync::Arc::clone(&registry));
             if let Some(real) = self.real {
                 self.mock.expect_register_cache().returning({
                     move |cache| real.register_cache(cache)
@@ -1001,7 +1064,7 @@ mod tests {
     use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::tmp_cache::TmpCached;
     use crate::tho_tensor::ThoTensor;
-    use futures_util::{StreamExt, TryStreamExt};
+    use futures_util::{FutureExt, StreamExt, TryStreamExt};
     use log::debug;
     use parking_lot::{Condvar, Mutex, RwLock};
     use rand::{RngExt, rng};
@@ -1024,6 +1087,98 @@ mod tests {
     use crate::ipc::tests::run_ipc_test;
     use crate::tho_device::ThoDevice;
     use crate::ws::mock_ws_simp;
+
+    // Exercise the real derive with varying output types and a generic argument
+    // that does not change the output. Neither may share a cache accidentally.
+    #[derive(Debug, cached_derive::Cached, thoosa_named_derive::Named)]
+    struct GenericCacheStage<D: crate::dims::Dims + 'static, const TAG: u8>(std::marker::PhantomData<D>);
+
+    impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::Stage for GenericCacheStage<D, TAG> {
+        type Ctx = RunCtxImpl;
+        type In<'a> = Arc<DevicesWrap<ThoTensor<D, u32>>>;
+        type Out = Arc<DevicesWrap<ThoTensor<D, u32>>>;
+    }
+
+    impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::AsyncStage for GenericCacheStage<D, TAG> {}
+
+    #[tokio::test]
+    async fn test_derived_caches_isolate_complete_stage_types() -> Result<(), ThoError> {
+        use crate::runner::common::cachable::Cached;
+        let mock = super::mock_global_ctx::build().with_register_cache().finish();
+        let registry = mock.cache_registry();
+        let global = super::MockGlobalCtx::global_context();
+        global.expect().return_const(Box::leak(Box::new(mock)) as &'static super::MockGlobalCtx);
+        let first = GenericCacheStage::<AnyDims, 0>::cache().await?;
+        let other_output = GenericCacheStage::<crate::dims::ChannelsData, 0>::cache().await?;
+        let other_tag = GenericCacheStage::<AnyDims, 1>::cache().await?;
+        assert!(Arc::ptr_eq(&first, &GenericCacheStage::<AnyDims, 0>::cache().await?));
+        assert!(!Arc::ptr_eq(&first, &other_tag));
+        assert_eq!(registry.snapshot().len(), 3);
+        first.insert(7, futures_util::future::pending().boxed().shared().into());
+        assert!(!other_output.contains_key(&7));
+        assert!(!other_tag.contains_key(&7));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_registry_concurrent_initialization_and_lifetime() -> Result<(), ThoError> {
+        let registry = super::CacheRegistry::default();
+        let barrier = std::sync::Barrier::new(16);
+        let maps = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16).map(|_| scope.spawn(|| {
+                barrier.wait();
+                registry.cache_for::<GenericCacheStage<AnyDims, 0>>()
+            })).collect();
+            handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Result<Vec<_>, _>>()
+        })?;
+        assert!(maps.iter().all(|map| Arc::ptr_eq(map, &maps[0])));
+        assert_eq!(registry.snapshot().len(), 1);
+        let other_runtime = super::CacheRegistry::default();
+        assert!(!Arc::ptr_eq(&maps[0], &other_runtime.cache_for::<GenericCacheStage<AnyDims, 0>>()?));
+        let weak = Arc::downgrade(&maps[0]);
+        drop(maps);
+        assert!(weak.upgrade().is_some(), "the runtime owns the cache even without callers");
+        drop(registry);
+        assert!(weak.upgrade().is_none(), "dropping the registry must release both map and purger ownership");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_registry_purgers_use_the_registered_maps() -> Result<(), ThoError> {
+        use crate::runner::common::cachable::CachedFuture;
+        let runtime = GlobalCtx::new(1)?;
+        let registry = runtime.cache_registry();
+        let first = registry.cache_for::<GenericCacheStage<AnyDims, 0>>()?;
+        let second = registry.cache_for::<GenericCacheStage<crate::dims::ChannelsData, 0>>()?;
+        // Pending computations need no tensors or GPU to verify the actual
+        // reset purgers invalidate both generic instantiations independently.
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        first.insert(7, CachedFuture::for_device(futures_util::future::pending().boxed().shared(), Some(Arc::clone(&gate))));
+        second.insert(7, CachedFuture::for_device(futures_util::future::pending().boxed().shared(), Some(gate)));
+        // The runtime snapshot must include every typed cache even though their
+        // human-readable names are identical, alongside named instance caches.
+        runtime.register_cache((<GenericCacheStage<AnyDims, 0> as thoosa_shared::traits::Named>::name(), Arc::new(crate::runner::common::cachable::StageCache::<GenericCacheStage<AnyDims, 0>>::new())));
+        let snapshot = runtime.caches_snapshot("typed cache test");
+        assert_eq!(snapshot.len(), 3);
+        for (name, entry) in snapshot {
+            entry.purger.drop_gpu(1, name).await?;
+        }
+        assert!(first.is_empty());
+        assert!(second.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_registry_rejects_incompatible_erased_type() -> Result<(), ThoError> {
+        let registry = super::CacheRegistry::default();
+        registry.cache_for::<GenericCacheStage<AnyDims, 0>>()?;
+        // Simulate an internal invariant violation: the public API cannot insert
+        // an arbitrary erased map, and the checked downcast must still reject it.
+        registry.typed.write().get_mut(&std::any::TypeId::of::<GenericCacheStage<AnyDims, 0>>()).unwrap().map = Arc::new(());
+        let error = registry.cache_for::<GenericCacheStage<AnyDims, 0>>().unwrap_err();
+        assert!(error.to_string().contains("cache type mismatch"));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_mock_execution_contexts_are_per_device() {

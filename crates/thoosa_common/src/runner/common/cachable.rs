@@ -304,6 +304,10 @@ impl<O: Clone> Future for CachedFuture<O> {
     }
 }
 
+// Callers own a handle, so cache lifetimes follow the runtime and active users
+// instead of a leaked allocation hidden behind a static reference.
+pub type StageCache<S> = DashMap<<<S as Stage>::Out as WithId>::ID, CachedFuture<<S as Stage>::Out>>;
+
 #[async_trait]
 pub trait Cached: AsyncStage + Named
 where
@@ -314,10 +318,7 @@ where
         unimplemented!()
     }
 
-    async fn cache() -> &'static DashMap<
-        <<Self as Stage>::Out as WithId>::ID,
-        CachedFuture<Self::Out>,
-    >
+    async fn cache() -> Result<Arc<StageCache<Self>>, ThoError>
     where
         Self: Sized,
         Self::Out:  Sync + Send;
@@ -340,7 +341,7 @@ where
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let cache = track_await(Self::cache()).await;
+        let cache = track_await(Self::cache()).await?;
         GlobalCtx::global().do_age();
 
         let (shared, cleanup) = match cache.entry(key.clone()) {
