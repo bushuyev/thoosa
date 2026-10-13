@@ -1301,7 +1301,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_copied_error_wakes_follower() -> Result<(), ThoError> {
+    async fn test_ensure_copied_error_wakes_follower() -> Result<(), ThoError> {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (data, state) = ControlledCopyData::new(0, CopyBehavior::FailFirst);
         let tested = Arc::new(DevicesWrap::wrap(data));
@@ -1333,7 +1333,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_copied_cancellation_wakes_follower() -> Result<(), ThoError> {
+    async fn test_ensure_copied_cancellation_wakes_follower() -> Result<(), ThoError> {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (data, state) = ControlledCopyData::new(0, CopyBehavior::BlockFirst);
         let tested = Arc::new(DevicesWrap::wrap(data));
@@ -1461,7 +1461,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dump_to_cpu_error_preserves_source_data() {
+    async fn test_dump_to_cpu_error_preserves_source_data() {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (data, state) = ControlledCopyData::new(1, CopyBehavior::FailAlways);
         let tested = DevicesWrap::wrap(data);
