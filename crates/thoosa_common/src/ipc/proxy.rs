@@ -727,13 +727,19 @@ where
 // worker transaction. The actor owns activity until that cleanup has replied.
 #[derive(Debug)]
 pub(crate) struct PreparedStageExport {
-    pub decision: tokio::sync::oneshot::Sender<()>,
+    pub decision: tokio::sync::oneshot::Sender<bool>,
     pub completed: tokio::sync::oneshot::Receiver<Result<(), ThoError>>,
 }
 
 impl PreparedStageExport {
+    // A checkpoint releases the export freeze without evicting live GPU state.
+    pub(crate) async fn keep_live(self) -> Result<(), ThoError> {
+        let _ = self.decision.send(false);
+        self.completed.await.context("stage export completion channel closed")?
+    }
+
     pub(crate) async fn commit(self) -> Result<(), ThoError> {
-        let _ = self.decision.send(());
+        let _ = self.decision.send(true);
         self.completed.await.context("stage export completion channel closed")?
     }
 }
@@ -866,3 +872,7 @@ pub(crate) mod async_dispatch_tests {
         Ok(())
     }
 }
+
+#[path = "state_checkpoint.rs"]
+mod state_checkpoint;
+pub(crate) use state_checkpoint::{CpuStateCheckpoint, checkpoint_operation, copy_state_tensor};

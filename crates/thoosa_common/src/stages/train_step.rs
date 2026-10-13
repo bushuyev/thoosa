@@ -13,7 +13,7 @@ use std::time::Instant;
 use tch::Tensor;
 use thoosa_common::cuda_utils::maybe_cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
+use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, CpuStateCheckpoint, checkpoint_operation, copy_state_tensor};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::IpcCodec;
 use thoosa_common::ipc::worker_msg::{WorkerInput};
@@ -37,13 +37,11 @@ use thoosa_shared::ipc_types::WorkerOutput;
 
 /// Training uses mean loss with equally weighted samples and one optimizer update.
 /// Deterministic sample-independent models match an unsplit batch up to rounding.
-/// Batch-dependent layers use microbatch statistics; stochastic layers resample on
-/// retry (RNG streams are not rolled back). Forward/backward may mutate registered
-/// non-trainable buffers, but must leave parameters and optimizer state unchanged.
+/// Batch-dependent layers use microbatch statistics. Failed epochs are discarded
+/// and restored from a complete CPU checkpoint; RNG streams are not rolled back.
 /// Cross-sample objectives and external mutable state are unsupported.
-/// Chunking bounds activation memory; the source batch remains resident. Each attempt
-/// snapshots only buffers. Optimizer update/completion failures invalidate the session.
-/// Callers must await a batch acknowledgement before submitting another batch.
+/// No rollback tensors are allocated per batch. Callers await acknowledgement
+/// before submitting another batch or capturing a checkpoint.
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of
@@ -133,6 +131,58 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
+    pub(crate) async fn run_once(self: &Arc<Self>, input: TrainStepInput<DI, DO>, ctx: C, max_other_parallel: usize) -> Result<TrainStepOutput, ThoError> {
+        let stage = Arc::clone(self);
+        let device = ctx.tho_device_idx();
+        // Admission/throttling belongs to the runner; this invocation is never replayed.
+        GlobalCtx::global().get_runner(device).submit(max_other_parallel, async move {
+            GlobalCtx::global().cuda_actor(device).run_stage(stage, input, device, &ctx).await
+        }, None).await
+    }
+
+    pub(crate) async fn save_epoch_checkpoint(self: &Arc<Self>, device: usize) -> Result<Arc<CpuStateCheckpoint>, ThoError> {
+        let checkpoint = match self.as_ref() {
+            Self::Proxy { stage, .. } => Arc::clone(stage).save_cpu_checkpoint().await?,
+            Self::Local(stage) => {
+                let stage = Arc::clone(stage);
+                checkpoint_operation(device, async move {
+                    let mut module = stage.train_module.lock().await;
+                    module.ensure_training_usable()?;
+                    module.move_to_device(device).await?;
+                    let info = module.state_info()?;
+                    let mut tensors = std::collections::HashMap::new();
+                    for tensor in &info.tensors {
+                        let key = tensor.tensor_key.to_tensor_key();
+                        let copied = copy_state_tensor(module.state_tensor(&key)?, 0).await?;
+                        tensors.insert(key, ThoTensor::new((), copied)?);
+                    }
+                    CpuStateCheckpoint::new(info, tensors)
+                }).await?
+            }
+        };
+        Ok(Arc::new(checkpoint))
+    }
+
+    pub(crate) async fn restore_epoch_checkpoint(self: &Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>, device: usize) -> Result<(), ThoError> {
+        match self.as_ref() {
+            Self::Proxy { stage, .. } => Arc::clone(stage).restore_cpu_checkpoint(checkpoint).await,
+            Self::Local(stage) => {
+                let stage = Arc::clone(stage);
+                checkpoint_operation(device, async move {
+                    let mut module = stage.train_module.lock().await;
+                    module.reset_state(checkpoint.info()?)?;
+                    *stage.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
+                    for (key, tensor) in &checkpoint.tensors {
+                        let source = tensor.as_ref().f_alias()?;
+                        let restored = copy_state_tensor(source, device).await?;
+                        module.set_state_tensor(key, restored, device)?;
+                    }
+                    module.ensure_training_usable()
+                }).await
+            }
+        }
+    }
+
     /// Acknowledgement means the state owner has published the checkpoint in either mode.
     pub async fn checkpoint(self: &Arc<Self>, ctx: &C) -> Result<(), ThoError> {
         let device = ctx.tho_device_idx();
@@ -189,6 +239,15 @@ where
         async move { self.train_module.lock().await.state_info() }.boxed()
     }
 
+    fn reset_state(&self, info: thoosa_shared::traits::StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move {
+            let mut module = self.train_module.lock().await;
+            module.reset_state(info)?;
+            *self.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
+            Ok(())
+        }.boxed()
+    }
+
     fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async move { self.train_module.lock().await.state_tensor(&tensor_id) }.boxed()
     }
@@ -236,7 +295,7 @@ where
             if let Some((id, loss)) = *committed {
                 if id == input.request_id { return Ok(TrainStepOutput::new(loss)); }
             }
-            let output = train_module.training_transaction(calculate)?;//<-zero_grad is here
+            let output = train_module.training_transaction(calculate)?;//<-opt.step and zero_grad are here
             *committed = Some((input.request_id, output.loss));
             Ok(output)
         } else {

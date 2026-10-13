@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
 use tch::{Device, Kind, Tensor, nn::VarStore};
 use thoosa_shared::ThoError;
 use thoosa_shared::ipc_types::{TensorKey, WorkerTensorInfoPayload};
@@ -20,6 +21,12 @@ struct StateTensor {
 }
 
 impl StateTensors {
+    pub(crate) fn from_info(info: &StageStateInfo) -> Self {
+        Self(info.tensors.iter().map(|tensor| (tensor.tensor_key.to_tensor_key(), StateTensor {
+            tensor: None, kind: tensor.kind.into(), shape: tensor.shape.clone(),
+        })).collect())
+    }
+
     pub(crate) fn insert(&mut self, key: String, tensor: Tensor) -> Result<(), ThoError> {
         self.0.insert(key, StateTensor { kind: tensor.kind(), shape: tensor.size(), tensor: Some(ThoTensor::new((), tensor)?) });
         Ok(())
@@ -63,13 +70,13 @@ impl StateTensors {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct VarStoreState {
-    kind: Kind,
+    kind: thoosa_shared::ipc_types::IpcTensorKind,
     variables: Vec<VariableState>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct VariableState {
     name: String,
     trainable: Option<(usize, usize)>,
@@ -88,12 +95,12 @@ impl VarStoreState {
         // Optimizer snapshots address parameters by group and registration
         // order, not by the arbitrary iteration order of named_variables.
         variables.sort_by(|a, b| a.trainable.map(|(order, _)| order).unwrap_or(usize::MAX).cmp(&b.trainable.map(|(order, _)| order).unwrap_or(usize::MAX)).then(a.name.cmp(&b.name)));
-        Ok(Self { kind: vs.kind(), variables })
+        Ok(Self { kind: vs.kind().into(), variables })
     }
 
     pub(crate) fn restore(&self, tensors: &StateTensors, device: usize) -> Result<VarStore, ThoError> {
         let mut vs = VarStore::new(ThoDevice::from(device).into());
-        vs.set_kind(self.kind);
+        vs.set_kind(self.kind.into());
         for var in &self.variables {
             let tensor = tensors.get(&format!("var/{}", var.name))?;
             let (trainable, group) = var.trainable.map_or((false, 0), |(_, group)| (true, group));
