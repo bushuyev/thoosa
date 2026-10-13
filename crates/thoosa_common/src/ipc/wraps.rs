@@ -262,6 +262,10 @@ where
         StageWithState::get_state_info(self.base.as_ref(), tho_device.tho_device_idx())
     }
 
+    fn reset_state(&self, info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        StageWithState::reset_state(self.base.as_ref(), info)
+    }
+
     fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String) -> BoxFuture<'a, Result<Tensor, ThoError>> {
         StageWithState::get_state_tensor(self.base.as_ref(), tho_device.tho_device_idx(), tensor_id)
     }
@@ -315,6 +319,9 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
     fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
 
+    fn reset_state(&self, _info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        Box::pin(async { Err(ThoError::new("stage does not support checkpoint restoration")) })
+    }
     fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
     fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>>;
 
@@ -325,6 +332,9 @@ pub trait ErasedWithState: Sync + Debug {
 
     fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, handle_ctx: &'a mut dyn HandleCtx, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
     fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
+    fn reset_state(&self, _info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        Box::pin(async { Err(ThoError::new("stage does not support checkpoint restoration")) })
+    }
     fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
     fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>>;
 }
@@ -372,6 +382,10 @@ where
         async move {
             SyncStageIpcWrapperWithState::get_state_info(self, tho_device).await
         }.boxed()
+    }
+
+    fn reset_state(&self, info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        SyncStageIpcWrapperWithState::reset_state(self, info)
     }
 
     fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String) -> BoxFuture<'a, Result<Tensor, ThoError>> {

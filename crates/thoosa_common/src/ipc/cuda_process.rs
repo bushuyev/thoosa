@@ -565,7 +565,7 @@ impl CudaIPCActor {
                 // A dropped response or dump closes decided, selecting abort.
                 let _ = respond_to.send(Ok(dump));
                 let commit = tokio::select! {
-                    decision = decided => decision.is_ok(),
+                    decision = decided => decision.unwrap_or(false),
                     _ = pending.failed.cancelled() => {
                         let _ = completed.send(Err(pending.failure()));
                         return;
@@ -1048,6 +1048,16 @@ impl CudaIPCActorHandle {
         self.sender.send(CudaIPCActorMessage::SendMsg {
             activity: self.activity_for(worker_id)?,
             input: CudaWorkerMsgIn::new(worker_id, 0, Operation::PurgeStage { endpoint_name, stage_id }),
+            respond_to,
+        }).await.context("CUDA actor channel closed")?;
+        unit_reply(recv.await.context("CUDA actor response channel closed")??)
+    }
+
+    pub(crate) async fn reset_stage_state(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, info: StageStateInfo) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(CudaIPCActorMessage::SendMsg {
+            activity: self.activity_for(worker_id)?,
+            input: CudaWorkerMsgIn::new(worker_id, 0, Operation::ResetStageState { endpoint_name, stage_id, info }),
             respond_to,
         }).await.context("CUDA actor channel closed")?;
         unit_reply(recv.await.context("CUDA actor response channel closed")??)

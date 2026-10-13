@@ -814,6 +814,11 @@ pub trait StageWithState: SyncStage + Sync {
         }.boxed()
     }
 
+    // Install checkpoint metadata and discard live state before accepting its tensors.
+    fn reset_state(&self, _info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        Box::pin(async { Err(ThoError::new("stage does not support checkpoint restoration")) })
+    }
+
     fn get_state_tensor(&self, tho_device: usize, tensor_id:String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
             todo!()
