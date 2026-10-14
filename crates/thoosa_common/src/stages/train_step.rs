@@ -265,7 +265,7 @@ where
             let result = train_module.save_var_store(&pending).and_then(|()| Ok(std::fs::rename(&pending, &self.best_checkpoint_path)?));
             if result.is_err() { let _ = std::fs::remove_file(&pending); }
             result?;
-            return Ok(TrainStepOutput::new(0.0));//TODO add enum in TrainStepOutput for each input command
+            return Ok(TrainStepOutput::new(0.0));//TODO add enum in TrainStepOutput for each input command to avoid sending dummy 0.0
         }
         let train = input.train();
         let batch_len = *input.x_ref()?.size().first().ok_or_else(|| ThoError::new("training input has no batch dimension"))?;

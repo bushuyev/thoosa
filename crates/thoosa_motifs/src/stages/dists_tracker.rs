@@ -1599,7 +1599,7 @@ where
             channels_groups.push((channel, groups_inserted));
         }
 
-        debug!("groups inserted: {:?} find_motifs_run_config_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_config_id);
+        info!("groups inserted: {:?} find_motifs_run_config_id={}", channels_groups.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), self.find_motifs_run_config_id);
         Ok(())
     }
 }

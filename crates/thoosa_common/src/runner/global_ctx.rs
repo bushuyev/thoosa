@@ -111,7 +111,7 @@ impl CacheRegistry {
                 let map = Arc::new(StageCache::<S>::new());
                 TypedCacheEntry {
                     name: S::name(),
-                    map: map.clone(),
+                    map: Arc::clone(&map) as Arc<dyn Any + Send + Sync>,
                     purge: Arc::new(CacheRegistryEntry {
                         purger: map,
                         gate: Arc::new(AsyncRwLock::new(())),
@@ -120,11 +120,11 @@ impl CacheRegistry {
             });
             Arc::clone(&entry.map)
         };
-        // Even an internal registry invariant violation must never become an
+        // An internal registry invariant violation must never become an
         // unchecked pointer reinterpretation with the caller's output type.
         match erased.downcast::<StageCache<S>>() {
             Ok(map) => Ok(map),
-            Err(_) => Err(ThoError::new(format!("cache type mismatch for {}", std::any::type_name::<S>()))),
+            Err(e) => Err(ThoError::new(format!("cache type mismatch for {}: {e:?}", std::any::type_name::<S>()))),
         }
     }
 

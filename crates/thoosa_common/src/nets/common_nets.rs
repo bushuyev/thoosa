@@ -495,10 +495,6 @@ impl CommonTrainingRunConfig {
         }
     }
 
-    pub fn build_optimizer(&self, vs: &VarStore)->anyhow::Result<Optimizer>{
-        self.tho_optimizer().build_for(vs, self.lr)
-    }
-
     pub fn tho_optimizer(&self) -> crate::nets::tho_varstore::ThoOptimizers {
         let optimizer = self.optimizer.clone().unwrap_or_else(Self::default_optimizer);
 
