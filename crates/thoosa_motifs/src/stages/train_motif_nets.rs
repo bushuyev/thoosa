@@ -233,6 +233,7 @@ where
                 state: Default::default()
             }, node_params))
         } else {
+            //TODO extract and use train_motif_step_endpoint_init
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
                     let motif_ref = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;

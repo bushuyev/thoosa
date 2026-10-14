@@ -684,7 +684,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
             None => RangeOrValue::Value(100),
             Some(value) => {
                 let window = value.val().to_i64(0) as u32;
-                // info!("Window: window={window}");
+                debug!("Window: window={window}");
                 let end = window.saturating_mul(max_k);
                 let start = window / min_k;
                 RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
@@ -695,7 +695,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 2000 }, step: Some((50, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
@@ -714,7 +714,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
                 similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
                 slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.3),
+                        q: RangeOrValue::Value(0.2),
                         // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                     }),
                 }),
@@ -735,18 +735,18 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 }),
                 min: RangeOrValue::Value(0.8),
             },
-            MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1. / 64.),
-                    lag_min: RangeOrValue::Value(1. / 32.),
-                    lag_max: RangeOrValue::Value(0.5),
-                    struct0: RangeOrValue::Value(0.2),
-                    peak_good: RangeOrValue::Value(0.25),
-                    peak_bad: RangeOrValue::Value(0.65),
-                    eps: RangeOrValue::Value(1e-8),
-                }),
-                min: RangeOrValue::Value(0.80),
-            },
+            // MotifCriterionConstraintRangeOrValue {
+            //     metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
+            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
+            //         lag_min: RangeOrValue::Value(1. / 32.),
+            //         lag_max: RangeOrValue::Value(0.5),
+            //         struct0: RangeOrValue::Value(0.2),
+            //         peak_good: RangeOrValue::Value(0.25),
+            //         peak_bad: RangeOrValue::Value(0.65),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     }),
+            //     min: RangeOrValue::Value(0.80),
+            // },
         ],
     }
 }

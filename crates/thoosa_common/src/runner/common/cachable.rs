@@ -305,7 +305,6 @@ impl<O: Clone> Future for CachedFuture<O> {
 }
 
 // Callers own a handle, so cache lifetimes follow the runtime and active users
-// instead of a leaked allocation hidden behind a static reference.
 pub type StageCache<S> = DashMap<<<S as Stage>::Out as WithId>::ID, CachedFuture<<S as Stage>::Out>>;
 
 #[async_trait]
