@@ -90,13 +90,7 @@ impl ThoOptimizers {
             ThoOptimizers::Sgd { config } => config.build(vs, lr)?,
         })
     }
-
-    pub fn build_for(&self, vs: &VarStore, lr: f64) -> anyhow::Result<Optimizer> {
-        // Keep legacy callers on the same optimizer construction path used by
-        // stateful training modules.
-        self.build(vs, lr)
-    }
-
+    
     unsafe fn snapshot(&self, optimizer: *const torch_sys::C_optimizer, tho_device_idx: usize) -> anyhow::Result<OptimizerSnapshot> {
         // The configuration is the authoritative optimizer type because tch erases it behind Optimizer.
         Ok(match self {
