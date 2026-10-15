@@ -72,13 +72,13 @@ async fn round_trips() -> Result<(), ThoError> {
     let ctx = RunCtxImpl::new(1, "inference state round trips");
     let motif_init = ApplyMotifNetInit::new(8101, 1, PathBuf::from("motif"), 0, 19, false, None);
     let label_init = ApplyLabelNetInit::new(8102, "label".into(), 23, PathBuf::from("label"), false);
-    let motif: Arc<DynSyncStageWithStateEnum<ApplyMotifNet<RunCtxImpl>, MotifNetMeta>> = Arc::new(if global.is_ipc() {
+    let motif: Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<RunCtxImpl>, MotifNetMeta>> = Arc::new(if global.is_ipc() {
         DynSyncStageWithStateEnum::Proxy {
             stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some("8101".into()), 1, Box::new(motif_init)).await?),
             init: MotifNetMeta::new(19, 0, motif_params()), state: Default::default(),
         }
     } else {
-        let stage = Arc::new(ApplyMotifNet::new_local(1, motif_params(), motif_module()?, 0, 19, None).await?);
+        let stage = Arc::new(SyncApplyMotifNet::new_local(motif_init.inference_id(), 1, motif_params(), motif_module()?, 0, 19, None).await?);
         restore_guards(stage.as_ref()).await?;
         DynSyncStageWithStateEnum::Local(stage)
     });

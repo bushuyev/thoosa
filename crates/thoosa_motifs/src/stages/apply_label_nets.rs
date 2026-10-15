@@ -45,7 +45,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedSt
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
-use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
+use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, SyncApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
 use crate::stages::instance_cache::InstanceCache;
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::stft::SyncStftSelector;
