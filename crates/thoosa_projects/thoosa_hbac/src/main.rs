@@ -35,7 +35,7 @@ use thoosa_motifs::cli::{CommonCommands, ImportResourcesArgs, MotifCommands, Run
 use thoosa_motifs::find::FindMotifsArgs;
 use thoosa_motifs::motifs_store::MotifsStore;
 use thoosa_motifs::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
-use thoosa_motifs::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNet, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
+use thoosa_motifs::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, SyncApplyMotifNet, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
 use thoosa_motifs::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use thoosa_motifs::stages::cross_loader::ResourcesConfigInput;
 use thoosa_motifs::stages::find_motifs_run_config::FindMotifsRunConfigRangeOrValue;
