@@ -87,6 +87,7 @@ where
 {
     id: SynKey,
     apply_nets: Vec<ApplyNets<C, AMN>>,
+    stack_applied_label_nets: Arc<DynSyncStageEnum<StackAppliedLabelNets<C>>>,
     pd: PhantomData<C>,
 }
 
@@ -203,6 +204,8 @@ where
         Ok(Self {
             id: train_label_net_run_config_ids.into_iter().map(|run_config_id|mono_key!(run_config_id, format!("run_config_id={run_config_id}"))).collect::<Vec<_>>().into(),
             apply_nets,
+            // Reuse the endpoint for every resource; ordering and output identity belong to each request.
+            stack_applied_label_nets: StackAppliedLabelNets::<C>::new(tho_device_idx.into()).await?,
             pd: PhantomData,
         })
     }
@@ -335,8 +338,8 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| ThoError::new("ApplyLabelNets::run: missing label output id"))?;
-        let stack_applied_label_nets = Arc::new(StackAppliedLabelNets::<C>::new(self.id.clone(), label_output_order, 1.into()).await?);
-        let stack_input = StackAppliedLabelNetsInputWrapper::new(input_id.clone(), Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
+        let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
+        let stack_input = StackAppliedLabelNetsInputWrapper::new(self.out_id(&input_id), order, Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
@@ -347,7 +350,7 @@ where
             None,
         );
         let label_outputs = track_await(oom_handler.consume(
-            &stack_applied_label_nets,
+            &self.stack_applied_label_nets,
             stack_input,
             ctx.branch(true),
             WithRunCtxContext::new(
@@ -377,17 +380,20 @@ where
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StackAppliedLabelNetsInput {
+    // Full aggregate identity and resource-specific ordering must travel together on retries and over IPC.
     id: SynKey,
+    #[serde(with = "hashmap_as_vec")]
+    label_output_order: HashMap<SynKey, usize>,
     device_idx: usize,
     label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>,
 }
 
 impl StackAppliedLabelNetsInput {
-    fn new(id: SynKey, mut label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>, device_idx: usize) -> Self {
+    fn new(id: SynKey, label_output_order: HashMap<SynKey, usize>, mut label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>, device_idx: usize) -> Self {
         for t in &mut label_outputs {
             t.no_drop();
         }
-        Self { id, device_idx, label_outputs }
+        Self { id, label_output_order, device_idx, label_outputs }
     }
 }
 
@@ -395,12 +401,12 @@ impl WorkerStageInput for StackAppliedLabelNetsInput {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
         // Preserve stack ordering while cloning only worker tensor references.
         let outputs = self.label_outputs.iter().map(ThoTensor::clone_ref).collect::<Result<Vec<_>, _>>()?;
-        Ok(Box::new(Self::new(self.id.clone(), outputs, self.device_idx)))
+        Ok(Box::new(Self::new(self.id.clone(), self.label_output_order.clone(), outputs, self.device_idx)))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let outputs = self.label_outputs.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
-        Ok(Self::new(self.id.clone(), outputs, self.device_idx))
+        Ok(Self::new(self.id.clone(), self.label_output_order.clone(), outputs, self.device_idx))
     }
 
 }
@@ -439,12 +445,13 @@ impl Adjustable for StackAppliedLabelNetsInput {}
 #[derive(Debug)]
 struct StackAppliedLabelNetsInputWrapper {
     id: SynKey,
+    label_output_order: HashMap<SynKey, usize>,
     tmp_cache: TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>,
 }
 
 impl StackAppliedLabelNetsInputWrapper {
-    fn new(id: SynKey, tmp_cache: TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>) -> Self {
-        Self { id, tmp_cache }
+    fn new(id: SynKey, label_output_order: HashMap<SynKey, usize>, tmp_cache: TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>) -> Self {
+        Self { id, label_output_order, tmp_cache }
     }
 }
 
@@ -462,11 +469,11 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
         P: RunCtx,
     {
         async move {
-            let StackAppliedLabelNetsInputWrapper { id, tmp_cache } = self;
+            let StackAppliedLabelNetsInputWrapper { id, label_output_order, tmp_cache } = self;
 
             match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
-                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, to_device_idx), run_ctx),
-                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, to_device_idx), error: err.error },
+                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_output_order, label_outputs, to_device_idx), run_ctx),
+                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, label_output_order, err.data, to_device_idx), error: err.error },
             }
         }
     }
@@ -478,26 +485,16 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
             for label_output in o.label_outputs {
                 cache.insert(label_output);
             }
-            StackAppliedLabelNetsInputWrapper::new(o.id, cache)
+            StackAppliedLabelNetsInputWrapper::new(o.id, o.label_output_order, cache)
         }
     }
 }
 
 pub const STACK_APPLIED_LABEL_NETS_ENDPOINT: &str = "STACK_APPLIED_LABEL_NETS_ENDPOINT";
 
+// Installing a stateless stack endpoint needs no resource or label-set metadata.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct StackAppliedLabelNetsInit {
-    id: SynKey,
-
-    #[serde(with = "hashmap_as_vec")]
-    label_output_order: HashMap<SynKey, usize>,
-}
-
-impl StackAppliedLabelNetsInit {
-    pub fn new(id: SynKey, label_output_order: HashMap<SynKey, usize>) -> Self {
-        Self { id, label_output_order }
-    }
-}
+pub struct StackAppliedLabelNetsInit;
 
 #[typetag::serde(name = "StackAppliedLabelNetsInit")]
 impl WorkerInput for StackAppliedLabelNetsInit {}
@@ -507,40 +504,35 @@ pub struct StackAppliedLabelNets<C>
 where
     C: RunCtx + 'static,
 {
-    id: SynKey,
-    label_output_order: HashMap<SynKey, usize>,
     pd: PhantomData<C>,
 }
+
+static STACK_APPLIED_LABEL_NETS_INSTANCES: InstanceCache = InstanceCache::new();
 
 impl<C> StackAppliedLabelNets<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(id: SynKey, label_output_order: Vec<SynKey>, device: ThoDevice) -> Result<DynSyncStageEnum<StackAppliedLabelNets<C>>, ThoError> {
-        let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
-
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID:AtomicU32 = AtomicU32::new(0);//TODO
-            let stage_id = STAGE_ID.fetch_add(1, Relaxed);
-            let init = StackAppliedLabelNetsInit::new(id, order);
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(init)).await?),
-                init: (),
-            })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local(StackAppliedLabelNetsInit::new(id, order)).await?)))
-        }
+    async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<Self>>, ThoError> {
+        // The shared cache serializes installation and isolates worker generations and devices.
+        STACK_APPLIED_LABEL_NETS_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), (), move || async move {
+            if GlobalCtx::global().is_ipc() {
+                // Different context-type cache entries must not overwrite one another in the same worker.
+                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+                let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+                Ok(Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(StackAppliedLabelNetsInit)).await?),
+                    init: (),
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?))))
+            }
+        }).await
     }
 
-    pub async fn new_local(init:StackAppliedLabelNetsInit) -> Result<Self, ThoError>{
-        Ok(Self {
-            id:init.id,
-            label_output_order:init.label_output_order,
-            pd: PhantomData,
-        })
-
+    pub async fn new_local() -> Result<Self, ThoError> {
+        Ok(Self { pd: PhantomData })
     }
-
 }
 
 pub fn stack_applied_label_nets_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
@@ -548,8 +540,7 @@ pub fn stack_applied_label_nets_init<'a>(stage_id:Option<String>, init: Box<dyn 
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>() else {
             return Err(ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"));
         };
-        let init = *init;
-        Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local(init).await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -565,7 +556,7 @@ where
     C: RunCtx + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.id + input_id
+        input_id.clone()
     }
 }
 
@@ -586,7 +577,7 @@ where
     fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
         let input_id = input.id().clone();
         let mut label_outputs = std::mem::take(&mut input.label_outputs);
-        label_outputs.sort_by_key(|label_output| self.label_output_order.get(label_output.id()).copied().unwrap_or(usize::MAX));
+        label_outputs.sort_by_key(|label_output| input.label_output_order.get(label_output.id()).copied().unwrap_or(usize::MAX));
 
         let out_id = self.out_id(&input_id);
         let tensor = if label_outputs.is_empty() {
@@ -1012,7 +1003,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::traits::{AsyncStage, RunCtx, StageWithState};
+    use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, StageWithState, WithId};
     use thoosa_shared::{ThoError, mono_key};
     use thoosa_store::{RunConfigRow, TrainedNet};
 
@@ -1370,22 +1361,35 @@ mod tests {
         ).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 
-        let input = ThoTensor::<ChannelsData, SynKey>::new(
-            SynKey::new([mono_key!("input", "input")]),
-            Tensor::f_ones(&[channels as i64, (motif_width as i64) * 3], (Kind::Float, device))?,
-        )?;
-        trace!("run_apply_label_case: input=\n{}", input.t_ref());
-
+        // Reuse the real pipeline across concurrent and later resources to catch stale stack metadata.
         let mut run_ctx = mock_run_ctx::default(0);
-        let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input)), run_ctx.branch(false)).await?;
-
-
-        {
-            let out = SelectRef::select_ref(&out, run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            trace!("run_apply_label_case: out=\n{}", out.t_ref());
-            let out = out.as_ref().as_ref().f_squeeze_dim(-1)?;
-            Ok::<_, ThoError>((out.size(), to_vec_f32(&out.totype(Float))))
+        let stack = Arc::clone(&apply_label_nets.stack_applied_label_nets);
+        let make_input = |resource: u32| -> Result<_, ThoError> {
+            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new(
+                SynKey::new([mono_key!(resource, "resource")]),
+                Tensor::f_ones([channels as i64, motif_width as i64 * 3], (Kind::Float, device))?,
+            )?)))
+        };
+        let first = make_input(1u32)?;
+        let second = make_input(2u32)?;
+        let third = make_input(3u32)?;
+        let expected_ids = [first.id(), second.id(), third.id()].map(|id| apply_label_nets.out_id(id));
+        let (out, other) = tokio::try_join!(
+            apply_label_nets.clone().run(first, run_ctx.branch(false)),
+            apply_label_nets.clone().run(second, run_ctx.branch(false)),
+        )?;
+        let later = apply_label_nets.clone().run(third, run_ctx.branch(false)).await?;
+        assert!(Arc::ptr_eq(&stack, &apply_label_nets.stack_applied_label_nets), "resource runs must retain the same stacking stage");
+        for (output, expected_id) in [&out, &other, &later].into_iter().zip(expected_ids) {
+            assert_eq!(output.id(), &expected_id, "each resource must keep its aggregate output identity");
         }
+        let out = SelectRef::select_ref(&out, 0, None::<SyncStftSelector>).await?;
+        for other in [&other, &later] {
+            let other = SelectRef::select_ref(other, 0, None::<SyncStftSelector>).await?;
+            assert!(out.as_ref().t_ref().f_allclose(&other.as_ref().t_ref(), 1e-6, 1e-6, false)?, "per-resource output ids must not change label order");
+        }
+        let out = out.as_ref().t_ref().f_squeeze_dim(-1)?;
+        Ok((out.size(), to_vec_f32(&out)))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1477,3 +1481,7 @@ mod tests {
 #[cfg(test)]
 #[path = "apply_net_state_tests.rs"]
 mod state_tests;
+
+#[cfg(test)]
+#[path = "stack_applied_label_nets_tests.rs"]
+mod stack_tests;
