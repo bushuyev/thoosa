@@ -1,3 +1,4 @@
+use std::cmp::min;
 use async_trait::async_trait;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
@@ -270,12 +271,15 @@ where
                     }
                     Ok::<_, ThoError>((checkpoint, valid_loss))
                 }.await;
-                let attempted_parallel = max_other_parallel;
-                // Apply the user's per-epoch reduction on success and failure alike.
-                max_other_parallel /= 2;
+
+
+
                 collect_eta_record_completion(epochs_eta_guard.id());
                 match epoch_result {
                     Ok((checkpoint, valid_loss)) => {
+                        if max_other_parallel < MAX_PARALLEL as usize  {
+                            max_other_parallel = min(max_other_parallel * 2, MAX_PARALLEL as usize);
+                        }
                         recovery_checkpoint = checkpoint;
                         completed_epochs += 1;
                         if let Some(loss) = valid_loss {
@@ -295,7 +299,9 @@ where
                         // acknowledgement state. Failed epochs never affect patience.
                         train_step.restore_epoch_checkpoint(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
                         warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
-                        if attempted_parallel == 0 {
+                        // Apply the user's per-epoch reduction on success and failure alike.
+                        max_other_parallel /= 2;
+                        if max_other_parallel == 0 {
                             return Err(error.context("training epoch ran out of memory with exclusive runner access"));
                         }
                     }
