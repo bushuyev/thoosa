@@ -533,13 +533,13 @@ impl DistsMask {
                 };
                 let device = ThoDevice::from(t.device());
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying local tensor device={device:?}");
-                Ok(track_await(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
+                Ok(track_await!(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
             }
             ThoTensorInner::Ref { key, size, kind, selector } => {
                 let device = ThoDevice::from(key.worker_id.device_idx);
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?}");
                 let actor = GlobalCtx::global().cuda_actor(device);
-                let copied = track_await(actor.copy(ThoTensor::new_ref((), key.key, size, kind, selector, key.worker_id), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
+                let copied = track_await!(actor.copy(ThoTensor::new_ref((), key.key, size, kind, selector, key.worker_id), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?} copied={copied:?}");
 
                 Ok(copied)
@@ -973,7 +973,7 @@ fn gather_dists_for_indices(
 impl CrossClcResultMerge for DistsMask {
 
     fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>> {
-        async move { track_await(DistsMask::to_cpu(self)).await }.boxed()
+        async move { track_await!(DistsMask::to_cpu(self)).await }.boxed()
     }
 
     //gpt generated
@@ -1595,7 +1595,7 @@ where
                 (tracker.take_dumper()?, tracker.max_slices_counts())
             };
             // Trackers now consume the motif store directly because both APIs share the same crate boundary.
-            let groups_inserted = track_await(dumper.load_slices_into_groups(self.store.as_ref(), max_slices_counts)).await?;
+            let groups_inserted = track_await!(dumper.load_slices_into_groups(self.store.as_ref(), max_slices_counts)).await?;
             channels_groups.push((channel, groups_inserted));
         }
 

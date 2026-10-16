@@ -528,9 +528,9 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
         if self.command == TrainStepCommand::Checkpoint { return Self::checkpoint(); }
         Ok(TrainStepInput {
             id: self.id.clone(),
-            x: Some(track_await(self.x_ref()?.copy_to_device(dst_device)).await?),
+            x: Some(track_await!(self.x_ref()?.copy_to_device(dst_device)).await?),
             lengths: self.lengths.clone(),
-            expected_y: Some(track_await(self.expected_y_ref()?.copy_to_device(dst_device)).await?),
+            expected_y: Some(track_await!(self.expected_y_ref()?.copy_to_device(dst_device)).await?),
             command: self.command,
             request_id: self.request_id,
             microbatch_size: self.microbatch_size,
@@ -549,7 +549,7 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
             if self.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
-                Ok(ThoDataRef::Owned(track_await(self.copy_to_device(to_tho_device_idx)).await?))
+                Ok(ThoDataRef::Owned(track_await!(self.copy_to_device(to_tho_device_idx)).await?))
             }
         }
     }
@@ -614,7 +614,7 @@ impl<DI: Dims, DO: Dims> SelectRef<TrainStepInputSelector> for TrainStepInputWra
             if selected.tho_device_idx() == to_tho_device_idx {
                 Ok(ThoDataRef::Owned(selected))
             } else {
-                Ok(ThoDataRef::Owned(track_await(selected.copy_to_device(to_tho_device_idx)).await?))
+                Ok(ThoDataRef::Owned(track_await!(selected.copy_to_device(to_tho_device_idx)).await?))
             }
         }
     }

@@ -313,13 +313,13 @@ impl MotifStatsCalcInputWrapper {
             MotifStatsCalcInputDataWrapper::Managed(motif) => {
                 let motif = SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>).await?;
                 let input = MotifStatsCalcInput::from_managed(id, motif.as_ref(), metrics, quantiles);
-                track_await(do_run(&input, &run_ctx)).await
+                track_await!(do_run(&input, &run_ctx)).await
             }
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
                 let motif_refs = try_join_all(motifs.iter().map(|motif| SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>))).await?;
                 let motifs = motif_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
                 let input = MotifStatsCalcInput::from_motifs(id, motifs, metrics, quantiles);
-                track_await(do_run(&input, &run_ctx)).await
+                track_await!(do_run(&input, &run_ctx)).await
             }
         }
     }
@@ -336,13 +336,13 @@ impl BorrowRef for MotifStatsCalcInputWrapper {
         async move {
             let data = match &self.data {
                 MotifStatsCalcInputDataWrapper::Managed(motif) => {
-                    let motif = track_await(motif.load_from_any_device_(to_device_idx)).await?;
+                    let motif = track_await!(motif.load_from_any_device_(to_device_idx)).await?;
                     MotifStatsCalcInputData::Managed(ThoDataRef::ReadLocked(motif))
                 }
                 MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
                     let mut loaded = Vec::with_capacity(motifs.len());
                     for motif in motifs {
-                        loaded.push(ThoDataRef::ReadLocked(track_await(motif.load_from_any_device_(to_device_idx)).await?));
+                        loaded.push(ThoDataRef::ReadLocked(track_await!(motif.load_from_any_device_(to_device_idx)).await?));
                     }
                     MotifStatsCalcInputData::Motifs(loaded)
                 }
@@ -419,7 +419,7 @@ impl CopyToDevice for MotifStatsLoadedChannelsInput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         let mut channels_motifs_slices = Vec::with_capacity(self.channels_motifs_slices.len());
         for channels in &self.channels_motifs_slices {
-            channels_motifs_slices.push(track_await(channels.copy_to_device(dst_device)).await?);
+            channels_motifs_slices.push(track_await!(channels.copy_to_device(dst_device)).await?);
         }
         Ok(Self {
             id: self.id.clone(),
@@ -470,7 +470,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
                 quantiles,
             } = self;
 
-            let channels_motifs_slices = match track_await(channels_motifs_slices.take_all_recovering(to_device_idx)).await {
+            let channels_motifs_slices = match track_await!(channels_motifs_slices.take_all_recovering(to_device_idx)).await {
                 Ok(channels_motifs_slices) => channels_motifs_slices,
                 Err(err) => {
                     return ConsumeResult::Failed {
@@ -489,7 +489,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsTmpCachedChannelsInput::burp"))]
     fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
         async move {
-            let cache = track_await(TmpCached::new("tmp_motif_stats_channels_burp")).await;
+            let cache = track_await!(TmpCached::new("tmp_motif_stats_channels_burp")).await;
             for channels_motifs_slices in o.channels_motifs_slices {
                 cache.insert(channels_motifs_slices);
             }
@@ -1228,7 +1228,7 @@ where
         let stats = match source {
             MotifStatsSource::Motif(motif_loader_input) => {
                 debug!("MotifStats::run: motif_loader_input={motif_loader_input:?}");
-                let motif = track_await(Arc::clone(&self.motif_loader)
+                let motif = track_await!(Arc::clone(&self.motif_loader)
                     .run_cached(
                         Arc::new(motif_loader_input),
                         ctx.branch(false),
@@ -1245,7 +1245,7 @@ where
                     ],
                     None,
                 );
-                track_await(oom_handler.run(
+                track_await!(oom_handler.run(
                     &clc_stats_run,
                     clc_input,
                     ctx.branch(false),
@@ -1267,13 +1267,13 @@ where
                 let mut motifs = Vec::with_capacity(motif_loader_inputs.len());
 
                 for (idx, motif_loader_input) in motif_loader_inputs.into_iter().enumerate() {
-                    let motif = track_await(Arc::clone(&self.motif_loader)
+                    let motif = track_await!(Arc::clone(&self.motif_loader)
                         .run_cached(
                             Arc::new(motif_loader_input),
                             ctx.branch(false),
                         )).await?;
 
-                    let meta = track_await(motif.extra()).await?;
+                    let meta = track_await!(motif.extra()).await?;
                     debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, motif.size());
 
                     match expected_channel {
@@ -1304,7 +1304,7 @@ where
                     ],
                     None,
                 );
-                track_await(oom_handler.run(
+                track_await!(oom_handler.run(
                     &clc_stats_run,
                     clc_input,
                     ctx.branch(false),
@@ -1326,16 +1326,16 @@ where
 
                 let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
                     find_motifs_run_config_id,
-                    &track_await(self.store.list_run_config_values(find_motifs_run_config_id)).await?,
+                    &track_await!(self.store.list_run_config_values(find_motifs_run_config_id)).await?,
                 )?;
                 let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
                 let resources = match resources {
                     Some(resources) => resources,
-                    None => track_await(self.store.list_random_resources(None)).await?,
+                    None => track_await!(self.store.list_random_resources(None)).await?,
                 };
                 let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
 
-                let (_window, channels_slices) = track_await(load_random_slices(
+                let (_window, channels_slices) = track_await!(load_random_slices(
                     find_motifs_run_config_id,
                     resources_map,
                     slices,
@@ -1359,7 +1359,7 @@ where
                     ],
                     None,
                 );
-                track_await(oom_handler.consume(
+                track_await!(oom_handler.consume(
                     &clc_stats_consume,
                     clc_input,
                     ctx.branch(false),

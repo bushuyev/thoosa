@@ -181,8 +181,8 @@ impl BorrowRef for ABClcSyncStageInputWrapper {
         Self: 'a,
     {
         async move {
-            let from_a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
-            let from_b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
+            let from_a = track_await!(self.a_out.load_from_any_device_(to_device_idx)).await?;
+            let from_b = track_await!(self.b_out.load_from_any_device_(to_device_idx)).await?;
             Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
         }
     }

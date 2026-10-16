@@ -89,7 +89,7 @@ impl BorrowRef for TestInputB {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(TestInputB {
-                    value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
+                    value: track_await!(self.value.copy_to_device(to_tho_device_idx)).await?,
                 }))
             }
         }

@@ -46,15 +46,15 @@ where
     FH: FromHashmap + RunConfig + Debug,
     S: Store + ?Sized,
 {
-    let real_run_config_id = if track_await(store.run_config_descr(run_config_id)).await?.r#type == run_config_type {
+    let real_run_config_id = if track_await!(store.run_config_descr(run_config_id)).await?.r#type == run_config_type {
         run_config_id
     } else {
-        let run_config_ids = track_await(store.get_input_run_config_ids(run_config_id, Some(run_config_type))).await?;
+        let run_config_ids = track_await!(store.get_input_run_config_ids(run_config_id, Some(run_config_type))).await?;
         *run_config_ids.first().ok_or_else(|| anyhow::anyhow!("load_run_config: no {run_config_type} input for find_motifs_run_config_id={run_config_id}"))?
     };
 
 
-    let map = track_await(store.list_run_config_values(real_run_config_id)).await?;
+    let map = track_await!(store.list_run_config_values(real_run_config_id)).await?;
     let mut run_config = FH::from_properties_map(None, &map)?;
 
     debug!("load_run_config: run_config={run_config:?}");

@@ -614,11 +614,11 @@ where
                 };
 
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
-                track_await(cuda_actor.copy(src.into(), dst_device)).await?
+                track_await!(cuda_actor.copy(src.into(), dst_device)).await?
             }
             ThoTensorInner::Ref { key, size, kind, selector, .. } => {
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key:?} dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
-                track_await(cuda_actor.copy(
+                track_await!(cuda_actor.copy(
                     ThoTensor::clone_ref_fields((), key, size, kind, selector)?, //TODO remove extra ThoTensor::new_ref
                     dst_device,
                 ))

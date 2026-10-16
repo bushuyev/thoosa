@@ -111,14 +111,14 @@ where
 
 {
     //Build a final-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(track_await(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step)).await?);
+    let apply_label_nets = Arc::new(track_await!(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step)).await?);
 
     let label_loader = Arc::new(PairStage::new(
         Arc::clone(&loader),
         Arc::clone(&apply_label_nets),
     ));
 
-    track_await(TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config)).await
+    track_await!(TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config)).await
 }
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
@@ -174,7 +174,7 @@ impl SavableResult for TrainFinalNetOutput {
     type R = Vec<u32>;
 
     async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
-        let _ = track_await(self.result.save(store, ws, ())).await;
+        let _ = track_await!(self.result.save(store, ws, ())).await;
 
         Ok(vec![0])//TODO
     }
@@ -211,7 +211,7 @@ where
             //Load train/valid logits resources and validate label vector sizes.
             let resources_config = input.resources_config().clone();
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
-                track_await(resources_config.to_resources(&store)).await?;
+                track_await!(resources_config.to_resources(&store)).await?;
 
             let labels_len = train_resources.first().ok_or_else(|| ThoError::new("TrainFinalNet::run: no train resources"))?.1.len();
             if labels_len == 0 {
@@ -242,7 +242,7 @@ where
                 "final".to_string(),
             ));
 
-            let result = track_await(train_net.run(
+            let result = track_await!(train_net.run(
                 Arc::new(TrainNetInput::new()),
                 ctx.branch(false))).await?;
 
@@ -536,7 +536,7 @@ where
                     async move {
                         debug!("LogitsResourcesBatch::build_batch_stream: resource={resource:?} labels={labels:?}");
 
-                        let out = track_await(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
+                        let out = track_await!(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
 
                         if log_enabled!(DebugLevel) {
                             let val = BorrowRef::borrow_ref(&out, 1).await?;
@@ -551,7 +551,7 @@ where
                     }
                 });
 
-                let (outputs, labels) = track_await(collect_futures_with_progress(
+                let (outputs, labels) = track_await!(collect_futures_with_progress(
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
@@ -571,7 +571,7 @@ where
                 let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-                let output = track_await(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
+                let output = track_await!(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
 
                 debug!("LogitsResourcesBatch::build_batch_stream: SyncLogitsBatch::outputs={output:?}");
 
@@ -1052,7 +1052,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> anyhow::Result<u32> {
-        let run_config_id = track_await(store.save_run_config(
+        let run_config_id = track_await!(store.save_run_config(
             Some(&self.train_label_nets_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
@@ -1062,7 +1062,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         let path = ws.read()
             .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
 
-        track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
+        track_await!(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
         Ok(run_config_id)
     }

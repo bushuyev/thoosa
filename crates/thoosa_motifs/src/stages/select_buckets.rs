@@ -174,7 +174,7 @@ where
             Arc::clone(ws),
             Arc::clone(&motif_loader),
         ));
-        let (resources, output_mode) = track_await(Self::load_resources_for_selection(
+        let (resources, output_mode) = track_await!(Self::load_resources_for_selection(
             &select_motifs_input,
             store,
             init_ctx.branch(false),
@@ -186,15 +186,15 @@ where
         let mut bucket_mean_energies = HashMap::new();
         let mut reference_mean_energies = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            let motif_ids = track_await(store.list_motifs(*find_motifs_run_config_id)).await?;
-            let energies = track_await(Self::preload_bucket_mean_energies(
+            let motif_ids = track_await!(store.list_motifs(*find_motifs_run_config_id)).await?;
+            let energies = track_await!(Self::preload_bucket_mean_energies(
                 &motif_stats,
                 *find_motifs_run_config_id,
                 motif_ids,
                 init_ctx.branch(true),
             )).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
-            let reference_energy = track_await(Self::reference_energy_for_find_run(
+            let find_motifs_run_config: FindMotifsRunConfig = track_await!(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
+            let reference_energy = track_await!(Self::reference_energy_for_find_run(
                 &motif_stats,
                 resources.as_ref(),
                 *find_motifs_run_config_id,
@@ -234,7 +234,7 @@ where
             let mut ctx = ctx.branch(true);
 
             async move {
-                let stats = track_await(Arc::clone(&motif_stats)
+                let stats = track_await!(Arc::clone(&motif_stats)
                     .run(
                         Arc::new(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
@@ -253,7 +253,7 @@ where
             }
         });
 
-        let energies = track_await(collect_futures_with_progress(
+        let energies = track_await!(collect_futures_with_progress(
             futures,
             motif_ids_len,
             FuturesOrdering::Unordered,
@@ -273,7 +273,7 @@ where
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
 
-        Ok((Arc::new(track_await(resources_config.to_resources(store)).await?.into_iter().collect::<Vec<_>>()), output_mode))
+        Ok((Arc::new(track_await!(resources_config.to_resources(store)).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
     fn reference_random_slices(resources: &[Resource], find_motifs_run_config: &FindMotifsRunConfig, motif_count: usize) -> Result<u32, ThoError> {
@@ -304,7 +304,7 @@ where
     ) -> Result<f64, ThoError> {
         let max_slices = Self::reference_random_slices(resources, find_motifs_run_config, motif_count)?;
         let energy_metric = energy_metric();
-        let stats = track_await(Arc::clone(motif_stats)
+        let stats = track_await!(Arc::clone(motif_stats)
             .run_cached(
                 Arc::new(MotifStatsInput::from_random_resources(
                     max_slices,
@@ -517,7 +517,7 @@ where
                     None,
                 );
 
-                track_await(oom_handler
+                track_await!(oom_handler
                     .run(
                         &sync_stage,
                         Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
@@ -532,7 +532,7 @@ where
             }
         });
 
-        let run_results = track_await(collect_futures_with_progress(
+        let run_results = track_await!(collect_futures_with_progress(
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,

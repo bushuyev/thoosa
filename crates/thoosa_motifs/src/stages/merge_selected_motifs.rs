@@ -186,19 +186,19 @@ where
         let mut candidates_by_channel = vec![Vec::new(); channels as usize];
         let mut run_config_cache = HashMap::<RunConfigId, FindMotifsRunConfig>::new();
 
-        for (select_run_config_id, selected_motifs) in track_await(self.store.list_selected_motifs(run_config_ids, channels, None)).await? {
+        for (select_run_config_id, selected_motifs) in track_await!(self.store.list_selected_motifs(run_config_ids, channels, None)).await? {
             debug!("MergeSelectedMotifs::load_candidates_by_channel: select_run_config_id={select_run_config_id:?} selected_motifs={selected_motifs:?}");
 
             for (channel_idx, channel_motifs) in selected_motifs.into_iter().enumerate() {
                 for (motif_id, _score) in channel_motifs {
-                    let (motif_channel, find_motifs_run_config_id) = track_await(self.store.get_motif_meta(motif_id)).await?;
+                    let (motif_channel, find_motifs_run_config_id) = track_await!(self.store.get_motif_meta(motif_id)).await?;
 
                     if motif_channel != channel_idx {
                         return Err(ThoError::new(format!("MergeSelectedMotifs::run: motif_id={motif_id} listed under channel={channel_idx}, but store returned channel={motif_channel}")));
                     }
 
                     if !run_config_cache.contains_key(&find_motifs_run_config_id) {
-                        let run_config = track_await(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
+                        let run_config = track_await!(load_run_config(&self.store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
                         run_config_cache.insert(find_motifs_run_config_id, run_config);
                     }
 
@@ -216,7 +216,7 @@ where
     }
 
     async fn run_metric(&self, motif_stats_input: MotifStatsInput, metric: Metrics, mut ctx: C) -> Result<f32, ThoError> {
-        let stats = track_await(Arc::clone(&self.motif_stats)
+        let stats = track_await!(Arc::clone(&self.motif_stats)
             .run_cached(
                 Arc::new(motif_stats_input),
                 ctx.branch(false),
@@ -226,7 +226,7 @@ where
     }
 
     async fn metric_for_candidate(&self, candidate: &SelectedMotifCandidate, ctx: C) -> Result<f32, ThoError> {
-        track_await(self.run_metric(
+        track_await!(self.run_metric(
             MotifStatsInput::from_motif_input(candidate.key.motif_loader_input(), vec![candidate.comparison.metric.clone()]),
             candidate.comparison.metric.clone(),
             ctx,
@@ -234,7 +234,7 @@ where
     }
 
     async fn metric_for_pair(&self, left: &SelectedMotifCandidate, right: &SelectedMotifCandidate, ctx: C) -> Result<f32, ThoError> {
-        track_await(self.run_metric(
+        track_await!(self.run_metric(
             MotifStatsInput::from_merged_motif_inputs(
                 vec![left.key.motif_loader_input(), right.key.motif_loader_input()],
                 vec![left.comparison.metric.clone()],
@@ -247,7 +247,7 @@ where
     async fn collect_group_slices(&self, channel: usize, motif_keys: &HashSet<SelectedMotifKey>) -> Result<HashSet<IdSlice>, ThoError> {
         let mut merged_slices = HashSet::new();
         for motif_key in motif_keys {
-            let (motif_channel, _find_run_config_id, slices, _resources_map) = track_await(self
+            let (motif_channel, _find_run_config_id, slices, _resources_map) = track_await!(self
                 .store
                 .list_motif_slices(motif_key.motif_id, Some(vec![motif_key.select_run_config_id]), None, None)).await?;
 
@@ -290,11 +290,11 @@ where
             run_config_ids.sort();
             run_config_ids.dedup();
 
-            let merge_run_config_id = track_await(self
+            let merge_run_config_id = track_await!(self
                 .store
                 .save_run_config(Some(run_config_ids.as_slice()), "MergeMotifs", "MergeMotifs", HashMap::new())).await?;
 
-            let candidates_by_channel = track_await(self.load_candidates_by_channel(run_config_ids.as_slice())).await?;
+            let candidates_by_channel = track_await!(self.load_candidates_by_channel(run_config_ids.as_slice())).await?;
             let mut merged_groups_by_channel = Vec::with_capacity(candidates_by_channel.len());
             let mut motif_ids = vec![];
             for (channel, candidates) in candidates_by_channel.into_iter().enumerate() {
@@ -318,18 +318,18 @@ where
                         let left_metric = if let Some(metric) = self_metric_cache.get(&left.key) {
                             *metric
                         } else {
-                            let metric = track_await(self.metric_for_candidate(left, ctx.branch(false))).await?;
+                            let metric = track_await!(self.metric_for_candidate(left, ctx.branch(false))).await?;
                             self_metric_cache.insert(left.key.clone(), metric);
                             metric
                         };
                         let right_metric = if let Some(metric) = self_metric_cache.get(&right.key) {
                             *metric
                         } else {
-                            let metric = track_await(self.metric_for_candidate(right, ctx.branch(false))).await?;
+                            let metric = track_await!(self.metric_for_candidate(right, ctx.branch(false))).await?;
                             self_metric_cache.insert(right.key.clone(), metric);
                             metric
                         };
-                        let merged_metric = track_await(self.metric_for_pair(left, right, ctx.branch(false))).await?;
+                        let merged_metric = track_await!(self.metric_for_pair(left, right, ctx.branch(false))).await?;
 
                         debug!("MergeSelectedMotifs::run: channel={channel} left_metric={left_metric:.6} right_metric={right_metric:.6} merged_metric={merged_metric:.6}");
                         if merged_metric <= left_metric * 1.2 && merged_metric <= right_metric * 1.2 {//TODO param
@@ -350,7 +350,7 @@ where
 
                 let mut slice_groups = HashMap::with_capacity(motif_groups.len());
                 for (group_id, motif_keys) in motif_groups {
-                    let merged_slices = track_await(self.collect_group_slices(channel, &motif_keys)).await?;
+                    let merged_slices = track_await!(self.collect_group_slices(channel, &motif_keys)).await?;
                     if !merged_slices.is_empty() {
                         slice_groups.insert(group_id, merged_slices);
                     }
@@ -358,7 +358,7 @@ where
 
                 if !slice_groups.is_empty() {
                     motif_ids.extend(
-                        track_await(self.store
+                        track_await!(self.store
                             .save_groups_as_motifs(merge_run_config_id, channel as i64, slice_groups)).await?
                             .into_iter()
                             .map(|motif_id| (motif_id, 1.0)),
@@ -367,7 +367,7 @@ where
             }
 
             motif_ids.sort_by_key(|(motif_id, _)| *motif_id);
-            let select_motifs_run_config_id = track_await(self.store.save_selected_motifs(merge_run_config_id, motif_ids)).await?;
+            let select_motifs_run_config_id = track_await!(self.store.save_selected_motifs(merge_run_config_id, motif_ids)).await?;
 
             Ok(Arc::new(MergeSelectedMotifsOutput::new(select_motifs_run_config_id, merged_groups_by_channel)))
         }

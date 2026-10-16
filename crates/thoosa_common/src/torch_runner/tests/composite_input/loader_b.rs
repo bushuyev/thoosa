@@ -156,7 +156,7 @@ impl thoosa_shared::CopyToDevice for BStageOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(Self {
             id: self.id.clone(),
-            value: track_await(self.value.copy_to_device(dst_device)).await?,
+            value: track_await!(self.value.copy_to_device(dst_device)).await?,
         })
     }
 }

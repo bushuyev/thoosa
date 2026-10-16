@@ -99,7 +99,7 @@ where
     RUN_ID.set(match args.run_id{
         None => {
             // TODO throw error if command doesn't support new run_id - inference, export etc
-            track_await(store.save_run(format!("{args:?}"))).await?
+            track_await!(store.save_run(format!("{args:?}"))).await?
         }
         Some(run_id) => run_id
     }).expect("can't set run_id");
@@ -147,7 +147,7 @@ where
 
     let mut purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));//TODO config
-        track_await(ticker.tick()).await;
+        track_await!(ticker.tick()).await;
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             select! {
@@ -225,7 +225,7 @@ where
 
     info!("perf: \n{}", format_perf_map(&PERF));
 
-    track_await(GlobalCtx::global().shutdown()).await;
+    track_await!(GlobalCtx::global().shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);
     // A purge may be waiting for work in the poisoned local process. It must
@@ -233,9 +233,9 @@ where
     tokio::select! {
         _ = GlobalCtx::wait_for_process_failure() => {
             purge_cpu_worker.abort();
-            let _ = track_await(purge_cpu_worker).await;
+            let _ = track_await!(purge_cpu_worker).await;
         }
-        _ = track_await(&mut purge_cpu_worker) => {}
+        _ = track_await!(&mut purge_cpu_worker) => {}
     }
 
 

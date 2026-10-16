@@ -271,7 +271,7 @@ impl GlobalCtx {
             // This device's coordinator invokes the hook after its activity drains.
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
-            track_await(GlobalCtx::global()
+            track_await!(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
                 // .dump_all_to_cpu(&HashMap::new(), tho_device_idx, "drop"))
                 .await?;
@@ -428,8 +428,8 @@ impl GlobalCtx {
         let maps = self.caches_snapshot("GlobalCtx::is_all_on_cpu_force_check: timed out waiting for caches read lock");
 
         for (type_name, entry) in maps.iter() {
-            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
-            if track_await(entry.purger.has_gpu_data(device_idx)).await {
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
+            if track_await!(entry.purger.has_gpu_data(device_idx)).await {
                 debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
                 return false;
             }
@@ -449,9 +449,9 @@ impl GlobalCtx {
 
         let mut total_gpu_mem = 0;
         for (type_name, entry) in maps.iter() {
-            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
             info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
-            match track_await(entry.purger.debug_gpu(device_idx)).await {
+            match track_await!(entry.purger.debug_gpu(device_idx)).await {
                 Ok(v) => total_gpu_mem += v,
                 Err(e) => log::error!("GlobalCtx::debug_gpu: failed with {e:?}"),
             }
@@ -468,7 +468,7 @@ impl GlobalCtx {
     // #[cfg(tho_debug)]
     pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
         let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
-        track_await(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
+        track_await!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
@@ -487,15 +487,15 @@ impl GlobalCtx {
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {
-            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
-            if !track_await(entry.purger.has_gpu_data(tho_device_idx)).await {
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
+            if !track_await!(entry.purger.has_gpu_data(tho_device_idx)).await {
                 debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} has no data on device_idx={tho_device_idx}, skipping");
                 collect_eta_record_completion(dump_eta_guard.id());
                 continue;
             }
 
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
-            track_await(entry.purger.purge_gpu(required_ids.get(type_name).map(|v| *v), tho_device_idx, type_name)).await?;
+            track_await!(entry.purger.purge_gpu(required_ids.get(type_name).map(|v| *v), tho_device_idx, type_name)).await?;
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
@@ -505,7 +505,7 @@ impl GlobalCtx {
 
         #[cfg(tho_debug)]
         {
-            track_await(self.debug_caches(tho_device_idx, descr)).await;
+            track_await!(self.debug_caches(tho_device_idx, descr)).await;
 
             self.cuda_actor(tho_device_idx).debug_worker().await?;
         }
@@ -526,9 +526,9 @@ impl GlobalCtx {
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {
-            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
             debug!("GlobalCtx::drop_data_on_device: type_name={type_name}");
-            track_await(entry.purger.drop_gpu(tho_device_idx, type_name)).await?;
+            track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await?;
             debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
@@ -551,16 +551,16 @@ impl GlobalCtx {
             let maps = self.caches_snapshot("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
 
             #[cfg(tho_debug)]
-            track_await(self.debug_caches_snapshot(1, "before purge_cpu", &maps)).await;
+            track_await!(self.debug_caches_snapshot(1, "before purge_cpu", &maps)).await;
 
             for (type_name, entry) in maps.iter() {
-                let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
-                let purged = track_await(entry.purger.purge_cpu(purge_until)).await;
+                let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
+                let purged = track_await!(entry.purger.purge_cpu(purge_until)).await;
                 debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
             }
 
             #[cfg(tho_debug)]
-            track_await(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
+            track_await!(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
         }
 
         debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
@@ -1030,7 +1030,7 @@ impl MockGlobalCtx {
     pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, _device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
         static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
         // This mock-only accessor cannot return initialization errors without changing the generated mock API.
-        track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(match CopyCtx::make_instance_for_cuda_device(0, 0.2, 16) {
+        track_await!(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(match CopyCtx::make_instance_for_cuda_device(0, 0.2, 16) {
             Ok(copy_ctx) => copy_ctx,
             Err(error) => panic!("failed to initialize mock CopyCtx: {error:?}"),
         })).read()).await
