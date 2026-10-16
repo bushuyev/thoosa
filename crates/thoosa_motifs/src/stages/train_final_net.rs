@@ -32,7 +32,7 @@ use tch::{Kind, Reduction, Tensor};
 use thoosa_common::dims::{Batch, ThoBatch};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
+use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
@@ -580,7 +580,7 @@ where
             }
         });
 
-        // prefetch_next_batch_stream(futures)
+        // TrainNet polls one batch ahead and owns its temporary cache and drain.
         futures.boxed()
     }
 }
