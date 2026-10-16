@@ -300,10 +300,11 @@ where
                         train_step.restore_epoch_checkpoint(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
                         warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
                         // Apply the user's per-epoch reduction on success and failure alike.
-                        max_other_parallel /= 2;
                         if max_other_parallel == 0 {
                             return Err(error.context("training epoch ran out of memory with exclusive runner access"));
                         }
+                        max_other_parallel /= 2;
+
                     }
                     Err(error) => return Err(error),
                 }
@@ -656,8 +657,10 @@ pub mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
             .with_train_stream_calls(Arc::clone(&calls), |_| oom_stream()).finish());
+
         let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
+
         let train_net = Arc::new(TrainNet::new(factory, Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_: &DummyRunConfig| 10, 1, "persistent OOM".into()));
         let error = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "persistent OOM".into()).await.unwrap_err();
         assert!(error.is_oom());

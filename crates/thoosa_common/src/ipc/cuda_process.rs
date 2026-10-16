@@ -1404,7 +1404,7 @@ mod tests {
     use anyhow::Context as _;
     use futures_util::FutureExt;
     use futures_util::future::BoxFuture;
-    use log::{debug, info};
+    use log::{debug, info, warn};
     use mockall::PredicateBoxExt;
     use parking_lot::RwLock;
     use rand::random_range;
@@ -1479,7 +1479,7 @@ mod tests {
 
         let received = round_trip_worker_error(ThoError::from(std::io::Error::other("CUDA out of memory")).context("read model"));
         assert!(matches!(received, ThoError::Anyhow(_)));
-        assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_ctx_reset());
+        assert!(received.is_oom() && received.is_retryable_oom() && !received.needs_cuda_ctx_reset());
         assert!(received.to_string().contains("read model") && received.to_string().contains("CUDA out of memory"));
     }
 
