@@ -316,10 +316,11 @@ impl<T> Drop for CopyCompletion<T> {
     }
 }
 
-fn spawn_copy_chunk<R, F>(transfer: Arc<CopyTransfer>, resources: R, copy: F) -> tokio::task::JoinHandle<Result<(), ThoError>>
+fn spawn_copy_chunk<T, R, F>(transfer: Arc<T>, resources: R, copy: F) -> tokio::task::JoinHandle<Result<(), ThoError>>
 where
+    T: Send + Sync + 'static,
     R: Send + 'static,
-    F: FnOnce(&Arc<CopyTransfer>, R) -> Result<(), ThoError> + Send + 'static,
+    F: FnOnce(&Arc<T>, R) -> Result<(), ThoError> + Send + 'static,
 {
     let activity = CudaActivityScope::current();
     spawn_blocking(move || {
@@ -328,6 +329,130 @@ where
         // rather than capturing only the raw address fields it happens to use.
         copy(&transfer, resources)
     })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct D2hBatchSlice {
+    tensor: usize,
+    offset: usize,
+    len: usize,
+    pinned_offset: usize,
+}
+
+// Pack small state tensors together without allocating a concatenated GPU
+// tensor. Large tensors still split at the reusable pinned buffer's capacity.
+fn d2h_batches(lengths: impl IntoIterator<Item = usize>, capacity: usize) -> Result<Vec<Vec<D2hBatchSlice>>, ThoError> {
+    let mut batches = Vec::new();
+    let mut batch = Vec::new();
+    let mut used = 0;
+    for (tensor, length) in lengths.into_iter().enumerate() {
+        if length != 0 && capacity == 0 { return Err(ThoError::new("batched D2H requires a non-zero copy buffer")); }
+        let mut offset = 0;
+        while offset < length {
+            let len = (capacity - used).min(length - offset);
+            batch.push(D2hBatchSlice { tensor, offset, len, pinned_offset: used });
+            offset += len;
+            used += len;
+            if used == capacity {
+                batches.push(std::mem::take(&mut batch));
+                used = 0;
+            }
+        }
+    }
+    if !batch.is_empty() { batches.push(batch); }
+    Ok(batches)
+}
+
+// A strided source needs a logical copy, not a raw byte copy. Materialize it on
+// CPU synchronously so no newly queued GPU packing work escapes its stream.
+fn prepare_d2h_batch_source(source: Tensor, device: Device) -> Result<(Tensor, bool), ThoError> {
+    if source.device() != device && source.device() != Cpu { return Err(ThoError::new("D2H source belongs to another device")); }
+    let source = if source.is_contiguous() { source } else { source.f_to(Cpu)?.f_contiguous()? };
+    let on_cpu = source.device() == Cpu;
+    Ok((source, on_cpu))
+}
+
+async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfers: Arc<Vec<(Arc<CopyTransfer>, bool)>>, buf_size: usize, pool: &Arc<CopyBufferPool>) -> Result<(), ThoError> {
+    CudaActivityScope::for_operation(gate)?.run(async {
+        pool.check()?;
+        let batches = d2h_batches(transfers.iter().map(|(transfer, _)| transfer.source.byte_len), buf_size)?;
+        let count = batches.len();
+        collect_futures_with_progress(batches.into_iter().map(|batch| {
+            let transfers = Arc::clone(&transfers);
+            let pool = Arc::clone(pool);
+            async move {
+                let buffer = pool.acquire().await?;
+                let copy_pool = Arc::clone(&pool);
+                let result = spawn_copy_chunk(transfers, buffer, move |transfers, buffer| {
+                    let stream = Arc::clone(&buffer.1);
+                    let mut completion = CopyCompletion { resources: Some((Arc::clone(transfers), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
+                    let buffer = &completion.resources.as_ref().expect("batch copy resources").1;
+                    let pinned = buffer.0.as_mut_ptr();
+                    let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                    let submitted = (|| -> Result<(), ThoError> {
+                        for slice in &batch {
+                            if slice.pinned_offset + slice.len > buffer.0.len() { return Err(ThoError::new("batch exceeds pinned buffer")); }
+                            let (transfer, on_cpu) = &transfers[slice.tensor];
+                            let source = transfer.source.address + slice.offset;
+                            // Each slice has disjoint pinned/destination ranges;
+                            // completion retains every allocation through DMA.
+                            if *on_cpu {
+                                unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned.add(slice.pinned_offset), slice.len); }
+                            } else {
+                                completion.submitted = true;
+                                let status = unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.add(slice.pinned_offset).cast(), source as _, slice.len, stream.as_mut_ptr()) };
+                                check_cuda_status(status, "batched CUDA D2H submission")?;
+                            }
+                        }
+                        Ok(())
+                    })();
+                    // Drain all submitted slices once, also after a partial
+                    // submission failure. Failed batches never publish a snapshot.
+                    let sync = if completion.submitted {
+                        completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()))
+                    } else { Ok(()) };
+                    crate::copy_ctx::finish_cuda_run(submitted, sync)?;
+                    for slice in &batch {
+                        let destination = transfers[slice.tensor].0.destination.address + slice.offset;
+                        unsafe { std::ptr::copy_nonoverlapping(pinned.add(slice.pinned_offset), destination as *mut u8, slice.len); }
+                    }
+                    Ok(())
+                }).await;
+                crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
+            }
+        }), count, FuturesOrdering::Unordered, COPY_D2H).await.map(|_| ())
+    }).await
+}
+
+pub(crate) async fn copy_d2h_batch(gate: &Arc<thoosa_shared::CudaActivityGate>, sources: Vec<Tensor>, buf_size: usize, pool: &Arc<CopyBufferPool>) -> Result<Vec<Tensor>, ThoError> {
+    CudaActivityScope::for_operation(gate)?.run(async move {
+        let transfers = sources.into_iter().map(|source| {
+            let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
+            let destination = Tensor::f_empty(source.size(), (source.kind(), Cpu))?;
+            Ok((CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?, on_cpu))
+        }).collect::<Result<Vec<_>, ThoError>>()?;
+        let transfers = Arc::new(transfers);
+        copy_d2h_transfers(gate, Arc::clone(&transfers), buf_size, pool).await?;
+        let transfers = Arc::try_unwrap(transfers).map_err(|_| ThoError::new("completed D2H batch is still leased"))?;
+        transfers.into_iter().map(|(transfer, _)| transfer.into_tensor()).collect()
+    }).await
+}
+
+/// # Safety
+/// Destinations must be disjoint writable CPU ranges covering their sources.
+/// destination_owner must retain exclusive access until reply or worker exit,
+/// including cancellation. Every queued slice also retains this mapping owner.
+pub(crate) async unsafe fn copy_d2h_batch_to_ptrs(gate: &Arc<thoosa_shared::CudaActivityGate>, sources: Vec<(Tensor, usize)>, buf_size: usize, pool: &Arc<CopyBufferPool>, destination_owner: Arc<impl Send + Sync + 'static>) -> Result<(), ThoError> {
+    CudaActivityScope::for_operation(gate)?.run(async move {
+        let transfers = sources.into_iter().map(|(source, destination)| {
+            let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
+            let source = CopyStorage::tensor(source)?;
+            // SAFETY: the caller supplies the range/ownership contract above.
+            let destination = unsafe { CopyStorage::external(destination, source.byte_len, Arc::clone(&destination_owner))? };
+            Ok((CopyTransfer::new(source, destination)?, on_cpu))
+        }).collect::<Result<Vec<_>, ThoError>>()?;
+        copy_d2h_transfers(gate, Arc::new(transfers), buf_size, pool).await
+    }).await
 }
 
 #[derive(Clone, Copy)]
@@ -1061,6 +1186,62 @@ mod transfer_lifetime_tests {
     use super::*;
     use futures_util::FutureExt;
     use std::sync::Weak;
+
+    #[test]
+    fn test_d2h_batches_coalesce_small_tensors_and_split_large_ones() -> Result<(), ThoError> {
+        let batches = d2h_batches([0, 3, 2, 14, 1, 0], 8)?;
+        assert_eq!(batches.len(), 3, "twenty bytes should use three staging checkouts");
+        let mut copied = [0; 6];
+        for batch in batches {
+            let mut used = 0;
+            for slice in batch {
+                assert_eq!(slice.pinned_offset, used, "staging ranges must not overlap or waste space");
+                assert_eq!(slice.offset, copied[slice.tensor], "each tensor must have complete, ordered coverage");
+                copied[slice.tensor] += slice.len;
+                used += slice.len;
+            }
+            assert!(used <= 8);
+        }
+        assert_eq!(copied, [0, 3, 2, 14, 1, 0]);
+        assert!(d2h_batches([0, 0], 0)?.is_empty());
+        assert!(d2h_batches([1], 0).is_err());
+        assert_eq!(d2h_batches([4; 64], 1024)?.len(), 1, "small parameters should share one synchronization");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_d2h_batch_reuses_staging_without_mutating_saved_tensors() -> Result<(), ThoError> {
+        let context = ThoCudaContext::new(0)?;
+        context.bind_to_thread()?;
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        // Odd capacity splits inside elements and across tensor boundaries;
+        // one buffer forces every batch and snapshot to reuse the same storage.
+        let capacity = 17;
+        let pool = Arc::new(CopyBufferPool::new([(PinnedHostBuffer::new(capacity, 0)?, Arc::new(ThoCudaStream::from_pool(0, true)?))]));
+        let mut expected = Vec::new();
+        for kind in [Kind::Uint8, Kind::Int64, Kind::Float, Kind::Double, Kind::Bool] {
+            expected.push(Tensor::f_ones([], (kind, Cpu))?);
+            expected.push(Tensor::f_zeros([0, 3], (kind, Cpu))?);
+            expected.push(Tensor::f_arange(9, (Kind::Int64, Cpu))?.f_to_kind(kind)?.f_reshape([3, 3])?);
+        }
+        expected.push(Tensor::f_arange(12, (Kind::Int64, Cpu))?.f_reshape([3, 4])?.f_transpose(0, 1)?);
+        let mut sources = expected.iter().map(|tensor| Ok(tensor.f_to(Device::Cuda(0))?)).collect::<Result<Vec<_>, ThoError>>()?;
+        // State can contain CPU tensors as well; their copies must also be independent.
+        sources.push(Tensor::f_from_slice(&[42i64, 7])?);
+        expected.push(Tensor::f_from_slice(&[42i64, 7])?);
+        let saved = copy_d2h_batch(&gate, sources.iter().map(Tensor::f_alias).collect::<Result<_, _>>()?, capacity, &pool).await?;
+        for source in &mut sources { let _ = source.f_zero_()?; }
+        let newer = copy_d2h_batch(&gate, sources, capacity, &pool).await?;
+        for ((saved, newer), expected) in saved.iter().zip(&newer).zip(&expected) {
+            assert_eq!(saved.kind(), expected.kind());
+            assert_eq!(saved.size(), expected.size());
+            assert!(saved.f_equal(expected)?);
+            assert_eq!(newer.f_count_nonzero(None)?.f_int64_value(&[])?, 0);
+        }
+        assert_eq!(pool.remaining_capacity(), 1);
+        assert!(copy_d2h_batch(&gate, Vec::new(), capacity, &pool).await?.is_empty());
+        Ok(())
+    }
 
     fn tensor_transfer() -> Result<Arc<CopyTransfer>, ThoError> {
         CopyTransfer::new(

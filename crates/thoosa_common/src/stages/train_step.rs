@@ -150,12 +150,17 @@ where
                     module.ensure_training_usable()?;
                     module.move_to_device(device).await?;
                     let info = module.state_info()?;
-                    let mut tensors = std::collections::HashMap::new();
-                    for tensor in &info.tensors {
-                        let key = tensor.tensor_key.to_tensor_key();
-                        let copied = copy_state_tensor(module.state_tensor(&key)?, 0).await?;
-                        tensors.insert(key, ThoTensor::new((), copied)?);
-                    }
+                    // Keep the module frozen through one batched transfer. Only
+                    // pinned staging storage is reused; committed CPU tensors
+                    // remain independent of live state and future checkpoints.
+                    let keys = info.tensors.iter().map(|tensor| tensor.tensor_key.to_tensor_key()).collect::<Vec<_>>();
+                    let sources = keys.iter().map(|key| module.state_tensor(key)).collect::<Result<Vec<_>, _>>()?;
+                    let copied = if device == 0 {
+                        sources.into_iter().map(|source| Ok(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true)?)).collect::<Result<Vec<_>, ThoError>>()?
+                    } else {
+                        GlobalCtx::global().cuda_actor(device).copy_batch_to_cpu(sources).await?
+                    };
+                    let tensors = keys.into_iter().zip(copied).map(|(key, tensor)| Ok((key, ThoTensor::new((), tensor)?))).collect::<Result<_, ThoError>>()?;
                     CpuStateCheckpoint::new(info, tensors)
                 }).await?
             }

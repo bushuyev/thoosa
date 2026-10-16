@@ -639,6 +639,46 @@ impl CudaWorker {
                     unsafe { context.copy_ctx.read().await.copy_to_cpu_ptr(source, destination_address, Arc::clone(&context.shared_arena)).await?; }
                     Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)))
                 }
+                Operation::ExportStageTensors { endpoint_name, stage_id, export_id, destinations } => {
+                    let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), stage_id.as_ref());
+                    let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
+                    // Hold this once for the whole batch. Finish cannot unfreeze
+                    // or purge the sources while any slice is still copying.
+                    let export = endpoint.export.lock().await;
+                    if export.as_ref().map(|export| export.id) != Some(export_id) {
+                        return Err(ThoError::new("state batch does not belong to the active export"));
+                    }
+                    let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new("state batch requires a stateful endpoint"))?;
+                    let mut ranges = Vec::new();
+                    let mut keys = std::collections::HashSet::new();
+                    // Validate the complete batch before obtaining sources or
+                    // submitting DMA, including non-overlap of parent buffers.
+                    for destination in &destinations {
+                        let info = &destination.info;
+                        let key = info.tensor_key.to_tensor_key();
+                        if info.tensor_key != TensorKey::stage_state(&endpoint_name, stage_id.as_deref().unwrap_or(""), &key) || !keys.insert(key) {
+                            return Err(ThoError::new("state batch has an unrelated or duplicate tensor key"));
+                        }
+                        validate_arena_tensor_metadata(info.kind, &info.shape, info.tensor_byte_len, destination.arena_offset, &context.shared_arena, "state D2H destination")?;
+                        if info.tensor_byte_len != 0 { ranges.push((destination.arena_offset, destination.arena_offset + info.tensor_byte_len)); }
+                    }
+                    ranges.sort_unstable();
+                    if ranges.windows(2).any(|ranges| ranges[0].1 > ranges[1].0) { return Err(ThoError::new("state D2H destinations overlap")); }
+                    let mut sources = Vec::with_capacity(destinations.len());
+                    for destination in destinations {
+                        let info = destination.info;
+                        let source = with_state.get_state_tensor(&context.tho_device, info.tensor_key.to_tensor_key()).await?;
+                        if source.kind() != info.kind.into() || source.size() != info.shape {
+                            return Err(ThoError::new("state D2H source does not match destination metadata"));
+                        }
+                        let address = context.shared_arena.address(destination.arena_offset, info.tensor_byte_len, "state D2H destination")?;
+                        sources.push((source, address));
+                    }
+                    // SAFETY: ranges/metadata were validated above; the parent
+                    // request retains all allocations until reply or worker exit.
+                    unsafe { context.copy_ctx.read().await.copy_batch_to_cpu_ptrs(sources, Arc::clone(&context.shared_arena)).await?; }
+                    Ok(OpResult::Ok(None))
+                }
                 Operation::DropThoTensor { tensor_key } => {
                     debug!("run_worker: Operation::DropThoTensor: request_id={request_id} tensor_key={tensor_key}");
                     Ok(Self::drop_tensor(&context, &tensor_key))

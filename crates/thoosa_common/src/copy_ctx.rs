@@ -41,6 +41,8 @@ static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
 enum CudaLocalActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope, respond_to: Sender<Result<Tensor, ThoError>>},
+    // Tensor is Send but not Sync; keep the queued message (and SendError) Sync.
+    CopyBatchToCpu { sources: parking_lot::Mutex<Vec<Tensor>>, activity: CudaActivityScope, respond_to: Sender<Result<Vec<Tensor>, ThoError>> },
 
     GetExecStream {
         activity: CudaActivityScope,
@@ -76,6 +78,12 @@ pub trait HandleCtx:Send {
 #[async_trait]
 pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + Debug + Send + Sync {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
+
+    // Local snapshots use one admitted transfer; IPC snapshots use the frozen
+    // export protocol because their tensor allocations live in the worker.
+    async fn copy_batch_to_cpu(&self, _sources: Vec<Tensor>) -> Result<Vec<Tensor>, ThoError> {
+        Err(ThoError::new("this CUDA backend requires a state export for batched copies"))
+    }
 
     #[cfg(test)]
     async fn restart(&self) -> Result<(), ThoError>;
@@ -361,6 +369,21 @@ impl CudaLocalActor {
      fn handle_message(&mut self, msg: CudaLocalActorMessage) {
 
         match msg {
+            CudaLocalActorMessage::CopyBatchToCpu { sources, activity, respond_to } => {
+                if let Err(error) = activity.check_operation(&self.gate) {
+                    let _ = respond_to.send(Err(error));
+                    return;
+                }
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let gate = Arc::clone(&self.gate);
+                let generation = activity.generation(&gate).expect("batch copy device lease");
+                // Accepted copies keep their owners and activity even if the
+                // checkpoint caller disappears before receiving the batch.
+                tokio::spawn(activity.run(async move {
+                    let result = copy_ctx.read().await.copy_batch_to_cpu(sources.into_inner()).await;
+                    let _ = respond_to.send(report_cuda_copy_result(result, &gate, generation));
+                }));
+            }
             CudaLocalActorMessage::Copy{ src, dst_device, activity, respond_to } => {
                 if let Err(error) = activity.check_operation(&self.gate) {
                     let _ = respond_to.send(
@@ -615,6 +638,13 @@ impl HandleCtx for LocalHandleCtx {
 
 #[async_trait]
 impl CudaActorHandle for CudaLocalActorHandle {
+    async fn copy_batch_to_cpu(&self, sources: Vec<Tensor>) -> Result<Vec<Tensor>, ThoError> {
+        let activity = CudaActivityScope::for_operation(&self.gate)?;
+        let (respond_to, receive) = oneshot::channel();
+        self.sender.send(CudaLocalActorMessage::CopyBatchToCpu { sources: parking_lot::Mutex::new(sources), activity, respond_to }).await.context("batch copy: CUDA actor channel closed")?;
+        receive.await.context("batch copy: CUDA actor response channel closed")?
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaLocalActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
         trace!("CudaLocalActorHandle::copy: src={src:?} dst_device={dst_device:?} backtrace={}", Backtrace::capture().to_string());
@@ -787,6 +817,17 @@ impl CopyCtx {
         } else {
             copy_h2d(&self.gate, source, self.buf_size, &self.bufs_pool_h2d, dst_tho_device).await
         }
+    }
+
+    pub(crate) async fn copy_batch_to_cpu(&self, sources: Vec<Tensor>) -> Result<Vec<Tensor>, ThoError> {
+        crate::cuda_utils::copy_d2h_batch(&self.gate, sources, self.buf_size, &self.bufs_pool_d2h).await
+    }
+
+    /// # Safety
+    /// The caller owns disjoint writable destination ranges and retains them
+    /// until reply or worker exit; the owner keeps their mapping alive as well.
+    pub(crate) async unsafe fn copy_batch_to_cpu_ptrs(&self, sources: Vec<(Tensor, usize)>, owner: Arc<impl Send + Sync + 'static>) -> Result<(), ThoError> {
+        unsafe { crate::cuda_utils::copy_d2h_batch_to_ptrs(&self.gate, sources, self.buf_size, &self.bufs_pool_d2h, owner).await }
     }
 
     /// # Safety
