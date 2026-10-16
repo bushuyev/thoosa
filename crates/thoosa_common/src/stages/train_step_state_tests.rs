@@ -97,7 +97,7 @@ fn input(train: bool) -> Result<TrainStepInput<AnyDims, AnyDims>, ThoError> {
 async fn round_trips() -> Result<(), ThoError> {
     let global = GlobalCtx::global();
     let actor = global.cuda_actor(1);
-    let ctx = RunCtxImpl::new(1, "train state round trip");
+    let mut ctx = RunCtxImpl::new(1, "train state round trip");
     for optimizer in 0..3 {
         let id = format!("restored-{optimizer}");
         let restored = step(optimizer, id.clone(), PathBuf::from(format!("/tmp/unused-restored-{optimizer}"))).await?;
@@ -108,7 +108,7 @@ async fn round_trips() -> Result<(), ThoError> {
             // Save before/after lazy optimizer initialization, then discard both
             // successful updates and a failed invocation from the next epoch.
             let saved = restored.save_epoch_checkpoint(1).await?;
-            for _ in 0..2 { actor.run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
+            for _ in 0..2 { actor.run_stage(restored.clone(), input(true)?, 1, ctx.branch(false)).await?; }
             let mut failed = input(true)?;
             failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
             let error = restored.run_once(failed, RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();
@@ -118,8 +118,8 @@ async fn round_trips() -> Result<(), ThoError> {
             restored.purge_gpu(None, 1, "checkpoint retained through purge").await?;
             restored.restore_epoch_checkpoint(saved, 1).await?;
             let train = cycle > 0;
-            let expected = actor.run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
-            let actual = actor.run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss;
+            let expected = actor.run_stage(reference.clone(), input(train)?, 1, ctx.branch(false)).await?.loss;
+            let actual = actor.run_stage(restored.clone(), input(train)?, 1, ctx.branch(false)).await?.loss;
             assert!((actual - expected).abs() < 1e-6, "optimizer={optimizer}, cycle={cycle}: {actual} != {expected}");
             restored.purge_gpu(None, 2, "wrong device").await?;
             assert!(restored.has_gpu_data(1).await);
@@ -136,8 +136,8 @@ async fn round_trips() -> Result<(), ThoError> {
             }
         }
         // Check the final update too: training returns the loss before its update.
-        let expected = actor.run_stage(reference, input(false)?, 1, &ctx).await?.loss;
-        let actual = actor.run_stage(restored, input(false)?, 1, &ctx).await?.loss;
+        let expected = actor.run_stage(reference, input(false)?, 1, ctx.branch(false)).await?.loss;
+        let actual = actor.run_stage(restored, input(false)?, 1, ctx.branch(false)).await?.loss;
         assert!((actual - expected).abs() < 1e-6, "optimizer={optimizer}: final loss {actual} != {expected}");
     }
     // Use the real selector/actor/worker path: one selected training invocation must
@@ -147,16 +147,16 @@ async fn round_trips() -> Result<(), ThoError> {
         let split = step(optimizer, format!("split-{optimizer}"), checkpoint.path().to_owned()).await?;
         let full = step(optimizer, format!("full-{optimizer}"), PathBuf::from("/tmp/unused-full")).await?;
         for _ in 0..3 {
-            let expected = actor.run_stage(full.clone(), uneven_input(true)?, 1, &ctx).await?.loss;
+            let expected = actor.run_stage(full.clone(), uneven_input(true)?, 1, ctx.branch(false)).await?.loss;
             let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
-            let actual = actor.run_stage_with_select(split.clone(), wrapper, Some(TrainStepInputSelector::from(0..2)), 1, &ctx).await?.loss;
+            let actual = actor.run_stage_with_select(split.clone(), wrapper, Some(TrainStepInputSelector::from(0..2)), 1, ctx.branch(false)).await?.loss;
             assert!((actual - expected).abs() < 1e-5, "split loss mismatch: {actual} vs {expected}");
         }
-        let expected = actor.run_stage(full, uneven_input(false)?, 1, &ctx).await?.loss;
-        let actual = actor.run_stage(split.clone(), uneven_input(false)?, 1, &ctx).await?.loss;
+        let expected = actor.run_stage(full, uneven_input(false)?, 1, ctx.branch(false)).await?.loss;
+        let actual = actor.run_stage(split.clone(), uneven_input(false)?, 1, ctx.branch(false)).await?.loss;
         assert!((actual - expected).abs() < 1e-5, "split updates differ: {actual} vs {expected}");
         // A final validation has no later training call to trigger checkpointing.
-        split.checkpoint(&ctx).await?;
+        split.checkpoint(ctx.branch(false)).await?;
         let saved_loss = checkpoint_loss(checkpoint.path())?;
         assert!((saved_loss - actual).abs() < 1e-5, "checkpoint does not match final validation: {saved_loss} vs {actual}");
     }

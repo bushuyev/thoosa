@@ -766,7 +766,7 @@ where
         run_ctx.max_other_parallel().into(),
         async move {
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            cuda_actor.run_stage(task, input, tho_device_idx, &run_ctx).await
+            cuda_actor.run_stage(task, input, tho_device_idx, run_ctx).await
         },
         retry_token
     )).await
@@ -840,7 +840,7 @@ where
         run_ctx.max_other_parallel().into(),
         async move {
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            cuda_actor.run_stage_with_select(task, input, selector, tho_device_idx, &run_ctx).await
+            cuda_actor.run_stage_with_select(task, input, selector, tho_device_idx, run_ctx).await
         },
         retry
     )).await

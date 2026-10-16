@@ -122,7 +122,11 @@ where
     ) -> Result<Self::Out, ThoError> {
         debug!("RawTensorLoader::run: input={input:?} ctx={ctx:?}");
 
-        let cpu_tensor = (self.loader_fn)(&input, &Cpu)?;
+        // Tensor::load performs blocking file I/O; keep the scheduler available
+        // for copies, replies, and other resources while a cold file is loaded.
+        let loader = Arc::clone(&self.loader_fn);
+        let resource = Arc::clone(&input);
+        let cpu_tensor = tokio::task::spawn_blocking(move || loader(&resource, &Cpu)).await??;
         debug!("RawTensorLoader::run: cpu_tensor={cpu_tensor:?}");
 
         let tensor = if ctx.tho_device_idx() != 0 {
@@ -269,6 +273,33 @@ pub(crate) mod mock_tensor_loader {
 
 #[cfg(test)]
 mod tests {
+
+    use super::*;
+    use std::time::Duration;
+    use thoosa_common::runner::run_ctx::RunCtxImpl;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_cold_loading_keeps_runtime_responsive_and_preserves_errors() {
+        let _global = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let caller_thread = std::thread::current().id();
+        let (started, mut start) = tokio::sync::mpsc::unbounded_channel();
+        let (release, finish) = std::sync::mpsc::channel();
+        let finish = std::sync::Mutex::new(finish);
+        let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(move |_, device| {
+            assert_eq!(*device, Cpu);
+            assert_ne!(std::thread::current().id(), caller_thread);
+            started.send(()).unwrap();
+            // Simulate a slow file read through the injected production loader.
+            finish.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+            Err(ThoError::oom())
+        }, ThoDevice::from(Cpu)));
+        let mut load = Box::pin(loader.run(Arc::new(Resource::new(1, 0, "cold", 3)), RunCtxImpl::new(0, "cold load")));
+        assert!(futures::poll!(load.as_mut()).is_pending());
+        start.recv().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        release.send(()).unwrap();
+        assert!(load.await.unwrap_err().is_oom());
+    }
 
 
     //TODO

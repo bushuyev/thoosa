@@ -136,7 +136,7 @@ where
         let device = ctx.tho_device_idx();
         // Admission/throttling belongs to the runner; this invocation is never replayed.
         GlobalCtx::global().get_runner(device).submit(max_other_parallel, async move {
-            GlobalCtx::global().cuda_actor(device).run_stage(stage, input, device, &ctx).await
+            GlobalCtx::global().cuda_actor(device).run_stage(stage, input, device, ctx).await
         }, None).await
     }
 
@@ -184,7 +184,7 @@ where
     }
 
     /// Acknowledgement means the state owner has published the checkpoint in either mode.
-    pub async fn checkpoint(self: &Arc<Self>, ctx: &C) -> Result<(), ThoError> {
+    pub async fn checkpoint(self: &Arc<Self>, ctx: C) -> Result<(), ThoError> {
         let device = ctx.tho_device_idx();
         GlobalCtx::global().cuda_actor(device).run_stage(self.clone(), TrainStepInput::checkpoint()?, device, ctx).await?;
         Ok(())

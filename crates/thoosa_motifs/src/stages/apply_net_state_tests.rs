@@ -69,7 +69,7 @@ async fn restore_guards<S: StageWithState + FuturesRunnerMapPurger>(stage: &S) -
 async fn round_trips() -> Result<(), ThoError> {
     let global = GlobalCtx::global();
     let actor = global.cuda_actor(1);
-    let ctx = RunCtxImpl::new(1, "inference state round trips");
+    let mut ctx = RunCtxImpl::new(1, "inference state round trips");
     let motif_init = ApplyMotifNetInit::new(8101, 1, PathBuf::from("motif"), 0, 19, false, None);
     let label_init = ApplyLabelNetInit::new(8102, "label".into(), 23, PathBuf::from("label"), false);
     let motif: Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<RunCtxImpl>, MotifNetMeta>> = Arc::new(if global.is_ipc() {
@@ -98,18 +98,18 @@ async fn round_trips() -> Result<(), ThoError> {
     let mut expected_label = None;
     for cycle in 0..3 {
         let motif_input = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("motif input", "test").into(), Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu))?.f_reshape([1, 16])?.f_div_scalar(16.)?)?));
-        let motif_output = actor.run_stage(motif.clone(), ApplyMotifNetInputWrapper::new(motif_input), 1, &ctx).await?.copy_to_device(0).await?;
+        let motif_output = actor.run_stage(motif.clone(), ApplyMotifNetInputWrapper::new(motif_input), 1, ctx.branch(false)).await?.copy_to_device(0).await?;
         let label_input = Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(mono_key!("label input", "test").into(), Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu))?.f_reshape([2, 8])?.f_div_scalar(16.)?)?, vec![8, 6])));
         if global.is_ipc() && cycle == 1 {
             for _ in 0..2 {
-                let result = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input.clone()), 1, &ctx).await;
+                let result = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input.clone()), 1, ctx.branch(false)).await;
                 assert!(result.unwrap_err().is_oom(), "injected reconstruction OOM must remain typed");
                 assert!(label.has_gpu_data(1).await, "partial restore must remain purgeable");
             }
             label.purge_gpu(None, 1, "discard partial restore after OOM").await?;
             assert!(!label.has_gpu_data(1).await);
         }
-        let label_output = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input), 1, &ctx).await?.copy_to_device(0).await?;
+        let label_output = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input), 1, ctx.branch(false)).await?.copy_to_device(0).await?;
         if let (Some(expected_motif), Some(expected_label)) = (&expected_motif, &expected_label) {
             assert!(motif_output.t_ref().f_allclose(expected_motif, 1e-6, 1e-6, false)?, "motif output changed after restore {cycle}");
             assert!(label_output.t_ref().f_allclose(expected_label, 1e-6, 1e-6, false)?, "label output changed after restore {cycle}");

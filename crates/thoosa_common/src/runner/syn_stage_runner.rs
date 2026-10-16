@@ -143,6 +143,18 @@ tokio::task_local! {
     static CURRENT_JOB: CurrentJob;
 }
 
+// Offloaded preparation must retain the logical parent, so nested submissions
+// can suspend it instead of waiting for capacity that the parent itself owns.
+pub(crate) fn inherit_current_job<F: Future>(future: F) -> impl Future<Output = F::Output> {
+    let parent = CURRENT_JOB.try_with(Clone::clone).ok();
+    async move {
+        match parent {
+            Some(parent) => CURRENT_JOB.scope(parent, future).await,
+            None => future.await,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CurrentJob {
     job_id: JobId,
@@ -1663,6 +1675,23 @@ mod tests {
         let (reply, received) = oneshot::channel();
         exec.cmd_tx.send(ManagerCmd::Suspend { job_id: 0, reply }).unwrap();
         received.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_gpu_execution_preserves_nested_submission_parent() -> Result<(), ThoError> {
+        let limits = Arc::new(FuturesLimits::new_with_parallelism(1, 1));
+        let exec = runner_with_limits(1, &limits);
+        let child_exec = Arc::clone(&exec);
+        // An exclusive parent must suspend while preparation submits a child,
+        // even though preparation is now polled on the GPU execution pool.
+        let result = tokio::time::timeout(Duration::from_secs(10), exec.submit(0, async move {
+            crate::gpu_executor::run(async move {
+                child_exec.submit(0, async { Ok(42) }, None).await
+            }).await?
+        }, None)).await.expect("offloading must preserve nested admission")?;
+        assert_eq!(result, 42);
+        Arc::try_unwrap(exec).unwrap().shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]

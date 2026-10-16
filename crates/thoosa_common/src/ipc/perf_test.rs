@@ -154,11 +154,11 @@ async fn do_test_simp() -> Result<(), ThoError> {
     let cuda_actor = GlobalCtx::global().cuda_actor(1);
     let stage = Arc::new(SimpStage::<RunCtxImpl>::new().await?);
 
-    let ctx = RunCtxImpl::new(1, "test");
+    let mut ctx = RunCtxImpl::new(1, "test");
 
     for _ in 0..100 {
         let input = SimpInput { value: 42 };
-        let output = cuda_actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
+        let output = cuda_actor.run_stage(Arc::clone(&stage), input, 1, ctx.branch(false)).await?;
         assert_eq!(output, SimpOutput { value: 420 });
     }
 

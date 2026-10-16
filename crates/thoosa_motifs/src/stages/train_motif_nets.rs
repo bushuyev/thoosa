@@ -1806,19 +1806,19 @@ mod tests {
                 let input = train_input(cuda_actor).await?;
                 let input_0 = train_input(cuda_actor).await?;
                 let train_step = Arc::new(train_step);
-                let ctx = RunCtxImpl::new(1, "train_step_ipc");
+                let mut ctx = RunCtxImpl::new(1, "train_step_ipc");
                 // let before = train_step.clone().do_run(&input, &ctx)?;
-                let before = cuda_actor.run_stage(Arc::clone(&train_step), input_0, ctx.tho_device_idx(), &ctx).await?;
+                let before = cuda_actor.run_stage(Arc::clone(&train_step), input_0, ctx.tho_device_idx(), ctx.branch(false)).await?;
                 assert!(before.loss.is_finite());
 
                 // Reuse worker-owned tensor refs across training and validation to verify
                 // that adapting the wire input preserves both tensors and mutable state.
                 let training_input = TrainStepInput::new(input.x_ref()?.clone_ref()?, input.lengths.clone(), input.expected_y_ref()?.clone_ref()?, true);
                 // let trained = train_step.clone().do_run(&training_input, &ctx)?;
-                let trained = cuda_actor.run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), &ctx).await?;
+                let trained = cuda_actor.run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), ctx.branch(false)).await?;
                 assert!(trained.loss.is_finite());
                 // let after = train_step.do_run(&input, &ctx)?;
-                let after = cuda_actor.run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx).await?;
+                let after = cuda_actor.run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), ctx.branch(false)).await?;
                 assert!(after.loss.is_finite());
                 assert!((after.loss - before.loss).abs() > f32::EPSILON, "training must update the worker's model: before={} after={}", before.loss, after.loss);
                 Ok(())

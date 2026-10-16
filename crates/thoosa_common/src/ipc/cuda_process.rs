@@ -9,6 +9,7 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use anyhow::Context as _;
 use async_trait::async_trait;
+use futures_util::future::BoxFuture;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -1207,8 +1208,8 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 
 
-    async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
-        Ok(Box::new(IPCHanldeCTx{}))
+    fn init_handle_ctx(&self) -> BoxFuture<'static, Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError>> {
+        Box::pin(async { Ok(Box::new(IPCHanldeCTx{}) as Box<dyn crate::copy_ctx::HandleCtx>) })
     }
 
 

@@ -21,7 +21,7 @@ torch-sys.workspace = true
 crossbeam-utils.workspace = true
 crossbeam.workspace = true
 crossbeam-channel.workspace = true
-futures.workspace = true
+futures = { workspace = true, features = ["thread-pool"] }
 futures-util = "0.3.30"
 dashmap.workspace = true
 async-trait.workspace = true

@@ -391,8 +391,8 @@ mod tests {
                             let output = GlobalCtx::global().get_runner(1).submit(12, async move {
                                 let ctx = RunCtxImpl::new(1, "async dispatch");
                                 match index % 3 {
-                                    0 => actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &ctx).await,
-                                    1 => actor.run_stage_with_select(stage, Arc::new(DevicesWrap::wrap(input)), None, 1, &ctx).await,
+                                    0 => actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, ctx).await,
+                                    1 => actor.run_stage_with_select(stage, Arc::new(DevicesWrap::wrap(input)), None, 1, ctx).await,
                                     _ => match actor.consume_stage(stage, ConsumeTestInput::new(input), 1, ctx).await? {
                                         ConsumeResult::Ok(output) => Ok(output),
                                         ConsumeResult::Failed { error, .. } => Err(error),

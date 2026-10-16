@@ -997,13 +997,13 @@ mod tests {
             let reference = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., config_id, 0))?);
             let tensor_count = reference.get_state_info(0).await?.tensors.len();
             let stage = SyncFreqFilter::<RunCtxImpl>::new(SyncFreqFilterIpcInit::new(configs, 2, 100., config_id, 1)).await?;
-            let ctx = RunCtxImpl::new(1, "freq_filter_state");
+            let mut ctx = RunCtxImpl::new(1, "freq_filter_state");
             // Exercise both initial invocation and repeated restore cycles.
             for cycle in 0..3 {
                 let input = state_test_input(cycle as f64 + 1.)?;
                 let expected = state_test_reference(&reference, &input)?;
                 let input = Arc::new(DevicesWrap::wrap(input));
-                let output = actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
+                let output = actor.run_stage(Arc::clone(&stage), input, 1, ctx.branch(false)).await?;
                 let output = output.copy_to_device(0).await?;
                 assert!(output.as_ref().f_allclose(&expected, 1e-4, 1e-5, false)?, "filter output changed in case {case}, cycle {cycle}");
                 // A purge for another device must preserve this stage's state.

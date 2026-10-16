@@ -267,7 +267,7 @@ where
                     let checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
                     if valid_loss.is_some_and(|loss| loss < best_valid_loss - min_delta) {
                         // Best-model publication remains explicit, including the last epoch.
-                        train_step.checkpoint(&ctx).await?;
+                        train_step.checkpoint(ctx.branch(false)).await?;
                     }
                     Ok::<_, ThoError>((checkpoint, valid_loss))
                 }.await;

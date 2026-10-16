@@ -126,10 +126,10 @@ where
     let b_out = BStageOutput::new("02".into(), Tensor::from_slice(&[3., 4., 5.]))?;
     let input = Arc::new(ab_clc::ABClcSyncStageInputWrapper::new(a_out, b_out));
 
-    let r = cuda_actor.run_stage(Arc::clone(&ab_clc_sync), Arc::clone(&input), 1, &run_ctx).await?; // ((0+3) + (1+4) + (2+5))/3
+    let r = cuda_actor.run_stage(Arc::clone(&ab_clc_sync), Arc::clone(&input), 1, run_ctx.branch(false)).await?; // ((0+3) + (1+4) + (2+5))/3
     assert_eq!(5.0, r.value);
 
-    let r = cuda_actor.run_stage_with_select(ab_clc_sync, input, Some(ABClcSyncStageInputWrapperSelector::new(2, 2)), 1, &run_ctx).await?; // ((0+3) + (1+4)) / 2
+    let r = cuda_actor.run_stage_with_select(ab_clc_sync, input, Some(ABClcSyncStageInputWrapperSelector::new(2, 2)), 1, run_ctx.branch(false)).await?; // ((0+3) + (1+4)) / 2
     assert_eq!(4.0, r.value);
     Ok(())
 }

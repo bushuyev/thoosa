@@ -232,6 +232,8 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TestStage::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        // Exercise actual local/IPC dispatch, including the worker-side pool.
+        assert!(std::thread::current().name().unwrap_or_default().starts_with("thoosa-gpu-"));
         if input.fail_with_oom {
             return Err(ThoError::oom())
         }
@@ -354,7 +356,7 @@ mod tests {
         };
         let ctx = TestRunCtx;
 
-        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+        let result = cuda_actor.run_stage(test_stage, input, 1, ctx).await?;
 
         debug!("do_test_simp: result={result:?}");
 
@@ -390,7 +392,7 @@ mod tests {
                 };
                 let ctx = TestRunCtx;
 
-                let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await;
+                let result = cuda_actor.run_stage(test_stage, input, 1, ctx).await;
                 debug!("result={result:?}");
                 let Err(e) = result else {
                     panic!("not an error");

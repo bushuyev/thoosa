@@ -14,6 +14,7 @@ pub mod tho_device;
 
 pub mod bool_iter;
 pub mod copy_ctx;
+mod gpu_executor;
 pub mod cuda_utils;
 pub mod dims;
 pub mod parzen;

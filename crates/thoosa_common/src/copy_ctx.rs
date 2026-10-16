@@ -106,7 +106,9 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     }
 
 
-    async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
+    // An owned request can move with a GPU job without acquiring a stream
+    // before asynchronous state/input preparation has finished.
+    fn init_handle_ctx(&self) -> BoxFuture<'static, Result<Box<dyn HandleCtx>, ThoError>>;
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError>;
 }
@@ -124,7 +126,8 @@ impl dyn CudaActorHandle + '_ {
     ) -> Result<ConsumeResult<S::In<'z>, S::Out>, ThoError>
     where
         S: SyncStage + Send + Sync + 'static,
-        S::Out: Send,
+        S::Out: Send + 'static,
+        S::Ctx: 'static,
         W: ConsumeData<O = S::In<'z>> + Debug,
         S::In<'z>: Send + 'static,
     {
@@ -145,22 +148,24 @@ impl dyn CudaActorHandle + '_ {
             Ok(handle_ctx) => handle_ctx,
             Err(error) => return Ok(ConsumeResult::Failed { input, error }),
         };
-        let sync_ctx = match handle_ctx.sync_ctx() {//creates guard
-            Ok(sync_ctx) => sync_ctx,
-            Err(error) => return Ok(ConsumeResult::Failed { input, error }),
-        };
+        crate::gpu_executor::run(async move {
+            let sync_ctx = match handle_ctx.sync_ctx() {//creates guard
+                Ok(sync_ctx) => sync_ctx,
+                Err(error) => return Ok(ConsumeResult::Failed { input, error }),
+            };
 
-        // Synchronize while the stream remains installed and the result (or
-        // recoverable input) is still owned by this admitted operation.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stage.consume(input, ctx)));
-        let sync = handle_ctx.on_after_run();//synchronizes exec stream
-        drop(sync_ctx);
-        // Retain owned failures, but synchronize a panicking consume before
-        // unwinding its execution lease just like borrowed execution.
-        match finish_cuda_panic(result, &sync)? {
-            ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
-            ConsumeResult::Failed { input, error } => Ok(ConsumeResult::Failed { input, error: finish_cuda_error(error, sync) }),
-        }
+            // Synchronize while the stream remains installed and the result (or
+            // recoverable input) is still owned by this admitted operation.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stage.consume(input, ctx)));
+            let sync = handle_ctx.on_after_run();//synchronizes exec stream
+            drop(sync_ctx);
+            // Retain owned failures, but synchronize a panicking consume before
+            // unwinding its execution lease just like borrowed execution.
+            match finish_cuda_panic(result, &sync)? {
+                ConsumeResult::Ok(output) => finish_cuda_run(Ok(output), sync).map(ConsumeResult::Ok),
+                ConsumeResult::Failed { input, error } => Ok(ConsumeResult::Failed { input, error: finish_cuda_error(error, sync) }),
+            }
+        }).await?
     }
 
 
@@ -170,13 +175,15 @@ impl dyn CudaActorHandle + '_ {
         stage: Arc<S>,
         input: W,
         to_device_idx: usize,
-        ctx:&S::Ctx
+        ctx:S::Ctx
     ) -> Result<S::Out, ThoError>
     where
-        S: SyncStage,
-        W: Debug + Sync,
+        S: SyncStage + Send + Sync + 'static,
+        S::Ctx: 'static,
+        S::Out: Send + 'static,
+        W: Debug + Send + Sync,
         for<'a> W: BorrowRef + 'a,
-        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>>,
+        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>> + Send,
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
 
@@ -184,36 +191,40 @@ impl dyn CudaActorHandle + '_ {
         // lease, and no thread-local CUDA guard may survive the IPC await.
         if let Some(remote) = stage.as_async() {
             let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;
-            return remote.run(Arc::clone(&stage), borrowed.borrow(), ctx).await;
+            return remote.run(Arc::clone(&stage), borrowed.borrow(), &ctx).await;
         }
-        let mut state = if let Some(with_state) = stage.as_with_state() {
-            // Select stateful execution before preparation so only stateful stages run pre_run.
-            with_state.pre_run(to_device_idx).await?
-        } else {
-            None
-        };
+        // Transfer ownership before dispatch: cancellation must not release
+        // inputs, state, or the execution lease while CUDA is still using them.
+        let handle_ctx = self.init_handle_ctx();
+        crate::gpu_executor::run(async move {
+            let mut state = if let Some(with_state) = stage.as_with_state() {
+                // Select stateful execution before preparation so only stateful stages run pre_run.
+                with_state.pre_run(to_device_idx).await?
+            } else {
+                None
+            };
 
-        debug!("CudaActorHandle::run_stage: stage={stage:?} with_state={}", state.is_some());
+            debug!("CudaActorHandle::run_stage: stage={stage:?} with_state={}", state.is_some());
 
-        let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;//syncs copy stream
+            let borrowed = BorrowRef::borrow_ref(&input, to_device_idx).await?;//syncs copy stream
 
-        let mut handle_ctx = self.init_handle_ctx().await?;//acquires exec stream
+            let mut handle_ctx = handle_ctx.await?;//acquires exec stream after preparation
+            let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
 
-        let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
-
-        // Borrow the erased guard so it remains locked even if submission fails
-        // or panics; run_cuda_stage synchronizes before releasing that borrow.
-        let out = run_cuda_stage(|| match state.as_mut() {
-            None => {
-                Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
-            }
-            Some(state) => {
-                state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx)
-            }
-        }, || handle_ctx.on_after_run());
-        drop(sync_ctx);
-        drop(state);
-        out
+            // Borrow the erased guard so it remains locked even if submission fails
+            // or panics; run_cuda_stage synchronizes before releasing that borrow.
+            let out = run_cuda_stage(|| match state.as_mut() {
+                None => {
+                    Arc::clone(&stage).do_run(borrowed.borrow(), &ctx)
+                }
+                Some(state) => {
+                    state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), &ctx)
+                }
+            }, || handle_ctx.on_after_run());
+            drop(sync_ctx);
+            drop(state);
+            out
+        }).await?
     }
 
     pub async fn run_stage_with_select<S, W, SL>(
@@ -222,47 +233,53 @@ impl dyn CudaActorHandle + '_ {
         input: W,
         selector: Option<SL>,
         to_device_idx: usize,
-        ctx:&S::Ctx
+        ctx:S::Ctx
     ) -> Result<S::Out, ThoError>
     where
-        S: SyncStage,
+        S: SyncStage + Send + Sync + 'static,
+        S::Ctx: 'static,
+        S::Out: Send + 'static,
         SL: ThoSelector + Clone + Debug + Send + 'static,
-        W: Debug + Sync,
+        W: Debug + Send + Sync,
         for<'a> W: SelectRef<SL> + 'a,
-        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>> + Debug,
+        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>> + Send + Debug,
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
         if let Some(remote) = stage.as_async() {
             let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;
-            return remote.run(Arc::clone(&stage), borrowed.borrow(), ctx).await;
+            return remote.run(Arc::clone(&stage), borrowed.borrow(), &ctx).await;
         }
-        let mut state = if let Some(with_state) = stage.as_with_state() {
-            // Keep selector-based execution consistent with the primary stateful runner path.
-            with_state.pre_run(to_device_idx).await?
-        } else {
-            None
-        };
-        let has_selector = selector.is_some();
-        let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;//syncs copy stream
+        // Transfer ownership before dispatch: cancellation must not release
+        // inputs, state, or the execution lease while CUDA is still using them.
+        let handle_ctx = self.init_handle_ctx();
+        crate::gpu_executor::run(async move {
+            let mut state = if let Some(with_state) = stage.as_with_state() {
+                // Keep selector-based execution consistent with the primary stateful runner path.
+                with_state.pre_run(to_device_idx).await?
+            } else {
+                None
+            };
+            let has_selector = selector.is_some();
+            let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;//syncs copy stream
 
-        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
+            debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
 
-        let mut handle_ctx = self.init_handle_ctx().await?;//acquires exec stream
+            let mut handle_ctx = handle_ctx.await?;//acquires exec stream after preparation
+            let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
 
-        let sync_ctx = handle_ctx.sync_ctx()?;//creates guard
+            // Selected execution has the same state/stream lifetime as the full input.
+            let out = run_cuda_stage(|| match state.as_mut() {
+                Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), &ctx),
+                None => Arc::clone(&stage).do_run(borrowed.borrow(), &ctx),
+            }, || handle_ctx.on_after_run());
+            debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} out={out:?}");
 
-        // Selected execution has the same state/stream lifetime as the full input.
-        let out = run_cuda_stage(|| match state.as_mut() {
-            Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx),
-            None => Arc::clone(&stage).do_run(borrowed.borrow(), ctx),
-        }, || handle_ctx.on_after_run());
-        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} out={out:?}");
-
-        drop(sync_ctx);
-        drop(state);
-        drop(borrowed);
-        out
+            drop(sync_ctx);
+            drop(state);
+            drop(borrowed);
+            out
+        }).await?
     }
 
 }
@@ -635,9 +652,9 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 
 
-    async fn init_handle_ctx(&self) -> Result<Box<dyn HandleCtx>, ThoError> {
-
-        Ok(Box::new(self.acquire_exec_stream().await?))
+    fn init_handle_ctx(&self) -> BoxFuture<'static, Result<Box<dyn HandleCtx>, ThoError>> {
+        let actor = self.clone();
+        Box::pin(async move { Ok(Box::new(actor.acquire_exec_stream().await?) as Box<dyn HandleCtx>) })
     }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
@@ -855,6 +872,8 @@ mod mock_stateful_stage {
             let mut stage = MockStatefulStage::new();
             stage.expect_state().return_const(self.state);
             stage.expect_execute().times(1).return_once(move |_, state, _| {
+                // The real actor path must submit tensor work to execution threads.
+                assert!(std::thread::current().name().unwrap_or_default().starts_with("thoosa-gpu-"));
                 // Mutating before failure models a submission that has already
                 // begun using state when it errors or unwinds.
                 *state += 1;
@@ -895,7 +914,7 @@ mod tests {
             ctx.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
             ctx.expect_on_after_run().times(1).return_once(move || self.sync_result);
             let mut actor = MockCudaActorHandle::new();
-            actor.expect_init_handle_ctx().times(1).return_once(move || Ok(Box::new(ctx)));
+            actor.expect_init_handle_ctx().times(1).return_once(move || Box::pin(async move { Ok(Box::new(ctx) as Box<dyn HandleCtx>) }));
             Box::new(actor)
         }
     }
@@ -916,24 +935,31 @@ mod tests {
                         result: if outcome == 1 { Err(ThoError::oom()) } else { Ok(TestOutput::new(7.)) },
                     }.build();
                     let mut handle = MockHandleCtx::new();
-                    handle.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
+                    let guard_thread = Arc::new(std::sync::OnceLock::new());
+                    let sync_thread = Arc::clone(&guard_thread);
+                    handle.expect_sync_ctx().times(1).return_once(move || {
+                        assert!(std::thread::current().name().unwrap_or_default().starts_with("thoosa-gpu-"));
+                        guard_thread.set(std::thread::current().id()).unwrap();
+                        Ok(Box::new(()))
+                    });
                     let during_sync = Arc::clone(&state);
                     handle.expect_on_after_run().times(1).return_once(move || {
                         // A competing exporter/trainer must remain unable to
                         // acquire the real mutex until synchronization returns.
+                        assert_eq!(sync_thread.get(), Some(&std::thread::current().id()), "guard and completion must share a thread");
                         assert!(during_sync.try_lock().is_err(), "state unlocked before stream synchronization");
                         if sync_fails { Err(fatal_consume_error()) } else { Ok(()) }
                     });
                     let mut actor = MockCudaActorHandle::new();
-                    actor.expect_init_handle_ctx().times(1).return_once(move || Ok(Box::new(handle)));
+                    actor.expect_init_handle_ctx().times(1).return_once(move || Box::pin(async move { Ok(Box::new(handle) as Box<dyn HandleCtx>) }));
                     let actor: Box<dyn CudaActorHandle> = Box::new(actor);
                     let input = Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1)));
                     let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(0).finish();
                     let result = std::panic::AssertUnwindSafe(async {
                         if selected {
-                            actor.run_stage_with_select(stage, input, None::<RangeSelector>, 0, &ctx).await
+                            actor.run_stage_with_select(stage, input, None::<RangeSelector>, 0, ctx).await
                         } else {
-                            actor.run_stage(stage, input, 0, &ctx).await
+                            actor.run_stage(stage, input, 0, ctx).await
                         }
                     }).catch_unwind().await;
                     assert_eq!(*state.try_lock().expect("state must unlock after synchronization"), 1);
@@ -1001,7 +1027,7 @@ mod tests {
             let init = actor.expect_init_handle_ctx().times(1).in_sequence(&mut sequence);
             let mut stage = MockRunnable::new();
             if matches!(self.setup_failure, Some(SetupFailure::Handle)) {
-                init.return_once(|| Err(ThoError::oom()));
+                init.return_once(|| Box::pin(async { Err(ThoError::oom()) }));
                 stage.expect_consume().times(0);
                 return (Arc::new(stage), Box::new(actor));
             }
@@ -1016,7 +1042,13 @@ mod tests {
                 let dropped = Arc::clone(&alive);
                 let mut guard = MockStreamScope::new();
                 guard.expect_release().times(1).return_once(move || { dropped.store(false, std::sync::atomic::Ordering::SeqCst); });
-                install.return_once(move || Ok(Box::new(guard)));
+                let execution_thread = Arc::new(std::sync::OnceLock::new());
+                let guard_thread = Arc::clone(&execution_thread);
+                install.return_once(move || {
+                    assert!(std::thread::current().name().unwrap_or_default().starts_with("thoosa-gpu-"));
+                    guard_thread.set(std::thread::current().id()).unwrap();
+                    Ok(Box::new(guard))
+                });
                 stage.expect_consume().times(1).in_sequence(&mut sequence).return_once(move |input, _| {
                     if self.panics { std::panic::panic_any("consume panic"); }
                     match self.execution {
@@ -1025,11 +1057,12 @@ mod tests {
                     }
                 });
                 ctx.expect_on_after_run().times(1).in_sequence(&mut sequence).return_once(move || {
+                    assert_eq!(execution_thread.get(), Some(&std::thread::current().id()));
                     assert!(alive.load(std::sync::atomic::Ordering::SeqCst), "stream guard must remain installed during synchronization");
                     self.synchronization
                 });
             }
-            init.return_once(move || Ok(Box::new(ctx)));
+            init.return_once(move || Box::pin(async move { Ok(Box::new(ctx) as Box<dyn HandleCtx>) }));
             (Arc::new(stage), Box::new(actor))
         }
     }
@@ -1186,9 +1219,9 @@ mod tests {
                 let input = Arc::new(DevicesWrap::wrap_cpu(TestInput::new(1)));
                 let ctx = crate::runner::common::mock_run_ctx::build().with_device_idx(0).finish();
                 let result = if selected {
-                    actor.run_stage_with_select(Arc::new(stage), input, None::<RangeSelector>, 0, &ctx).await
+                    actor.run_stage_with_select(Arc::new(stage), input, None::<RangeSelector>, 0, ctx).await
                 } else {
-                    actor.run_stage(Arc::new(stage), input, 0, &ctx).await
+                    actor.run_stage(Arc::new(stage), input, 0, ctx).await
                 };
                 assert!(result.unwrap_err().needs_cuda_ctx_reset(), "both entry points must surface the fatal error");
             }

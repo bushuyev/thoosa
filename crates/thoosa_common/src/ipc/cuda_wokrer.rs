@@ -678,27 +678,31 @@ impl CudaWorker {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
 
                     let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
-                    let with_state = endpoint.stage.as_with_state();
-                    // Stateful stages already serialize on their state mutex.
-                    // Extend that exclusion through panic invalidation as well.
-                    let _state_lease = if with_state.is_some() { Some(endpoint.lease.write().await) } else { None };
-                    let _shared_lease = if with_state.is_none() { Some(endpoint.lease.read().await) } else { None };
-                    endpoint.check_state()?;
-                    let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
-                    let mut stream = context.exec_stream_pool.acquire().await?;
-                    let result = match with_state {
-                        Some(with_state) => {
-                            debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} as_with_state");
-                            // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
-                            endpoint.run_with_state(with_state, &input, &context.all_cuda_tensors, &context.tho_device, &mut stream, &run_ctx).await
-                        }
-                        None => {
-                            debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
-                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
-                        }
-                    }?;
-                    debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
-                    Ok(OpResult::Ok(Some(result)))
+                    // The owned job retains the endpoint lease, tensors, state,
+                    // and stream through completion even if its request is cancelled.
+                    crate::gpu_executor::run(async move {
+                        let with_state = endpoint.stage.as_with_state();
+                        // Stateful stages already serialize on their state mutex.
+                        // Extend that exclusion through panic invalidation as well.
+                        let _state_lease = if with_state.is_some() { Some(endpoint.lease.write().await) } else { None };
+                        let _shared_lease = if with_state.is_none() { Some(endpoint.lease.read().await) } else { None };
+                        endpoint.check_state()?;
+                        let run_ctx = WokerRunCtx::new(context.tho_device.tho_device_idx());
+                        let mut stream = context.exec_stream_pool.acquire().await?;
+                        let result = match with_state {
+                            Some(with_state) => {
+                                debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} as_with_state");
+                                // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
+                                endpoint.run_with_state(with_state, &input, &context.all_cuda_tensors, &context.tho_device, &mut stream, &run_ctx).await
+                            }
+                            None => {
+                                debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
+                                panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
+                            }
+                        }?;
+                        debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
+                        Ok(OpResult::Ok(Some(result)))
+                    }).await?
                 }
                 operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. } | Operation::BeginStageExport { .. }) => {
                     stage_state_operation(&context.installed_stages, operation, context.tho_device, request_id).await

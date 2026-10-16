@@ -1,0 +1,32 @@
+The task was:
+
+6. Move blocking work off Tokio execution threads — both modes.
+
+   Local dispatch executes synchronous tensor work and stream synchronization directly inside an async task. IPC does the same inside worker request tasks. Cold resource loading also calls synchronous Tensor::load through RawTensorLoader::run.
+
+   Under load, these operations occupy threads needed for scheduling, transfers, and IPC replies. Offload file loading first. A larger improvement would use bounded GPU execution threads that own the stream guard, synchronous invocation, and completion together, while IPC response waits remain asynchronous.
+
+   References: local execution (crates/thoosa_common/src/copy_ctx.rs:198), worker execution (crates/thoosa_common/src/ipc/wraps.rs:356), resource loading (crates/thoosa_motifs/src/stages/tensor_loader.rs:125).
+
+
+Was implemented with use futures::executor::ThreadPool (crates/thoosa_common/src/gpu_executor.rs) which is not managed by tokio. The reasons were (gpt):
+
+
+>Yes. tokio::task::spawn_blocking can achieve the requested offloading, including keeping stream-guard creation, synchronous invocation, synchronization, and guard destruction together in one closure.
+>
+>I used futures::executor::ThreadPool for two reasons:
+>
+>- Pool isolation: it provides 32 dedicated execution threads, separate from Tokio’s shared blocking pool, which already handles tensor transfers and file loading.
+>- Existing borrowing: async preparation produces state guards and input views that borrow their owners. The executor accepts an owned async future containing those owners and borrows, releases its thread while preparation awaits, then executes the synchronous section. Moving the prepared borrows directly into a spawn_blocking closure would conflict with its 'static requirement.
+>
+>Those are implementation tradeoffs; the extra executor is not required by the offloading goal itself.
+>
+>A Tokio-based implementation would keep preparation asynchronous, arrange owned state/input handles for the blocking closure, and acquire a GPU semaphore permit asynchronously before spawning. The closure would retain that permit and all execution resources through synchronization. IPC response waits would remain asynchronous.
+>
+>Simply wrapping the current future in spawn_blocking(|| Handle::block_on(...)) would be less suitable: it would occupy blocking threads during preparation, potentially waiting for transfers that need that same pool.
+>
+>So your suggestion is valid. The dedicated pool buys isolation and avoids changing the preparation ownership interfaces, at the cost of another executor and runtime-context plumbing. I should have made that tradeoff explicit.
+
+
+
+This didn't bring any performance improvements, and also adding extra pool not managed by tokio doesn't look correct. Then the max number of concurrent sync tasks is capped by thoosa_common::copy_ctx::CopyCtx::exec_stream_pool limit.

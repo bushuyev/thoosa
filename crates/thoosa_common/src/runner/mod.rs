@@ -12,4 +12,5 @@ mod purger;
 pub mod run_ctx;
 pub mod cache_areas;
 mod syn_stage_runner;
+pub(crate) use syn_stage_runner::inherit_current_job;
 mod cuda_recovery;

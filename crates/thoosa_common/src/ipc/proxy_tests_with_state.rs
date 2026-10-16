@@ -391,6 +391,8 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        // Exercise actual local/IPC dispatch, including the worker-side pool.
+        assert!(std::thread::current().name().unwrap_or_default().starts_with("thoosa-gpu-"));
         debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
         Ok(TestOutputB {
             value: input.value.as_ref().f_mul(&k.k_0.as_ref().f_add(&k.k_1.as_ref())?)?.into(),
@@ -518,7 +520,7 @@ mod tests {
                 assert_eq!(fresh_tensor.ref_key(), Some(old_key));
 
                 let fresh_input = || TestInputB { value: fresh_tensor.clone_ref().unwrap() };
-                let error = actor.run_stage(Arc::clone(&old_stage), fresh_input(), 1, &TestRunCtx).await.unwrap_err();
+                let error = actor.run_stage(Arc::clone(&old_stage), fresh_input(), 1, TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::ContextReset));
 
                 let error = actor.copy(old_tensor.clone_ref()?, 0.into()).await.unwrap_err();
@@ -526,7 +528,7 @@ mod tests {
 
                 // Embedded stale tensor references must also be rejected by
                 // the new worker when the endpoint itself belongs to it.
-                let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
+                let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::ContextReset));
                 actor.drop_endpoint(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
 
@@ -536,7 +538,7 @@ mod tests {
                 // Reconstructed state and live colliding tensor survive every
                 // old cleanup path, including the deferred Drop implementations.
                 for _ in 0..2 {
-                    let result = actor.run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, &TestRunCtx).await?;
+                    let result = actor.run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, TestRunCtx).await?;
                     let cpu = actor.copy(result.value, 0.into()).await?;
                     assert!(Tensor::f_full([1, 3], 3., FLOAT_CPU)?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false)?);
                 }
@@ -560,7 +562,7 @@ mod tests {
             // The same worker and endpoint must still restore and execute after
             // the cancelled call and its serialized offload finish.
             let value = actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1usize.into()).await?;
-            let output = actor.run_stage(stage, TestInputB { value }, 1, &TestRunCtx).await?;
+            let output = actor.run_stage(stage, TestInputB { value }, 1, TestRunCtx).await?;
             let cpu = actor.copy(output.value, 0usize.into()).await?;
             assert!(Tensor::f_full([1, 3], 5., FLOAT_CPU)?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false)?);
             Ok(())
@@ -592,7 +594,7 @@ mod tests {
                         let actor = GlobalCtx::global().cuda_actor(1);
                         for _ in 0..12 {
                             let value = actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1usize.into()).await?;
-                            let output = actor.run_stage(Arc::clone(&stage), TestInputB { value }, 1, &TestRunCtx).await?;
+                            let output = actor.run_stage(Arc::clone(&stage), TestInputB { value }, 1, TestRunCtx).await?;
                             let cpu = actor.copy(output.value, 0usize.into()).await?;
                             assert!(Tensor::f_full([1, 3], (id + 4) as f64, FLOAT_CPU)?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false)?, "offload must preserve both tensors of the endpoint state");
                         }
@@ -646,7 +648,7 @@ mod tests {
         let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
-        let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
+        let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, TestRunCtx).await?;
         debug!("do_test_distinct_stateful_endpoints: first_result={first_result:?}");
 
         let first_cpu = cuda_actor.copy(first_result.value.shallow_clone(), 0.into()).await?;//shallow_clone to avoid id being dropped before copy starts
@@ -655,7 +657,7 @@ mod tests {
         assert!(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0])?.f_view([1, 3])?.f_allclose(&first_cpu.t_ref(), 0.01, 0.01, false)?);
 
         let second_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([1, 3], FLOAT_CPU)?)?, 1.into()).await? };
-        let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
+        let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
 
         debug!("do_test_distinct_stateful_endpoints: second_cpu=\n{}", second_cpu.t_ref());
@@ -699,7 +701,7 @@ mod tests {
             value: cuda_tensor,
         };
         let ctx = TestRunCtx;
-        let result = cuda_actor.run_stage(Arc::clone(&test_stage), input, 1, &ctx).await?;
+        let result = cuda_actor.run_stage(Arc::clone(&test_stage), input, 1, TestRunCtx).await?;
 
         debug!("test_with_state_target: result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
@@ -721,7 +723,7 @@ mod tests {
             value: cuda_tensor,
         };
 
-        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+        let result = cuda_actor.run_stage(test_stage, input, 1, TestRunCtx).await?;
 
         debug!("result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
