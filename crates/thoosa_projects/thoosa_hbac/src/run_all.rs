@@ -1060,7 +1060,7 @@ mod tests {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> anyhow::Result<()> {
-
+        tch::manual_seed(42);
         let settings = RunAllSettings {
             resources_per_label: 30,
             pure_sets_len: [(10, true), (20, true)],
