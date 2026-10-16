@@ -1,6 +1,7 @@
 use async_trait::async_trait;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt};
 use futures_util::future::BoxFuture;
+use futures_util::stream::BoxStream;
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -23,6 +24,7 @@ use thoosa_common::nets::tho_varstore::ThoTrainModule;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
 use thoosa_common::utils::optimizer_mem_size;
@@ -33,6 +35,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
+use tokio::task::coop::cooperative;
 use thoosa_shared::ipc_types::WorkerOutput;
 
 /// Training uses mean loss with equally weighted samples and one optimizer update.
@@ -131,13 +134,52 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    pub(crate) async fn run_once(self: &Arc<Self>, input: TrainStepInput<DI, DO>, ctx: C, max_other_parallel: usize) -> Result<TrainStepOutput, ThoError> {
+    pub(crate) async fn run_once(self: &Arc<Self>, input: TmpCachedEntry<TrainStepInput<DI, DO>>, ctx: C, max_other_parallel: usize) -> Result<TrainStepOutput, ThoError> {
         let stage = Arc::clone(self);
         let device = ctx.tho_device_idx();
         // Admission/throttling belongs to the runner; this invocation is never replayed.
         GlobalCtx::global().get_runner(device).submit(max_other_parallel, async move {
             GlobalCtx::global().cuda_actor(device).run_stage(stage, input, device, &ctx).await
         }, None).await
+    }
+
+    pub(crate) async fn run_batches(
+        self: &Arc<Self>,
+        batches: BoxStream<'_, Result<(ThoBatch<DI>, Option<BatchLengths>, ThoBatch<DO>), ThoError>>,
+        mut ctx: C,
+        train: bool,
+        max_other_parallel: usize,
+        prefetch: bool,
+        mut on_completed: impl FnMut(f32) + Send,
+    ) -> Result<(), ThoError> {
+        let cache = Arc::new(TmpCached::new("prepared_training_batches").await);
+        // Cache synchronously when preparation finishes: a ready future must
+        // never hold raw tensors while the other half of the join is pending.
+        let mut batches = batches.map(|batch| batch.map(|(x, lengths, expected)| {
+            cache.insert_guarded(TrainStepInput::new(x, lengths, expected, train))
+        }));
+        let mut current = cooperative(batches.next()).await;
+        while let Some(input) = current {
+            let step = self.run_once(input?, ctx.branch(false), max_other_parallel);
+            // Exactly one preparation overlaps the current step. join! drains
+            // both on failure before TrainNet can restore its epoch checkpoint;
+            // cancellation drops both futures rather than detaching a producer.
+            let (output, next) = if prefetch {
+                tokio::join!(step, cooperative(batches.next()))
+            } else {
+                (step.await, None)
+            };
+            // A reset during preparation invalidates the worker generation even
+            // if training reported an ordinary OOM first. Do not roll it back.
+            if let Some(Err(error)) = &next {
+                if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
+                    return Err(error.clone());
+                }
+            }
+            on_completed(output?.loss);
+            current = if prefetch { next } else { cooperative(batches.next()).await };
+        }
+        Ok(())
     }
 
     pub(crate) async fn save_epoch_checkpoint(self: &Arc<Self>, device: usize) -> Result<Arc<CpuStateCheckpoint>, ThoError> {
@@ -338,13 +380,15 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
     pub fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool) -> Self {
+        let request_id: u64 = rand::random();
         Self {
-            id: SynKey::new([mono_key!("train_step", "stage")]),
+            // Active and prefetched batches coexist in one temporary cache.
+            id: SynKey::new([mono_key!(request_id.to_string(), "train_step")]),
             x: Some(x),
             lengths,
             expected_y: Some(expected_y),
             command: if train { TrainStepCommand::Train } else { TrainStepCommand::Validate },
-            request_id: rand::random(),
+            request_id,
             microbatch_size: None,
         }
     }
@@ -487,6 +531,9 @@ impl ThoSelector for TrainStepTensorSelector {
 impl<DI: Dims, DO: Dims> Input for TrainStepInput<DI, DO> {
 
 }
+
+// Batch preparation produces these cacheable inputs for the training consumer.
+impl<DI: Dims, DO: Dims> Output for TrainStepInput<DI, DO> {}
 
 impl<DI: Dims, DO: Dims> WithId for TrainStepInput<DI, DO> {
     type ID = SynKey;

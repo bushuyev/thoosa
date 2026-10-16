@@ -51,7 +51,6 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, OutId, R
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
-use tokio::task::coop::cooperative;
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
@@ -238,30 +237,27 @@ where
             let mut best_saved = false;
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             let mut max_other_parallel = MAX_PARALLEL as usize;
+            let mut prefetch = true;
             let mut completed_epochs = 0;
             let mut aborted_epochs = 0;
             for idx in 0..epochs {
                 // An epoch commits only after training, scheduled validation, and
                 // checkpoint publication all succeed. No batch is retried in place.
                 let epoch_result = async {
-                    let mut batches = batch.train_batch_stream(ctx.branch(false));
+                    let batches = batch.train_batch_stream(ctx.branch(false));
                     let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
-                    while let Some(batch_result) = cooperative(batches.next()).await {
-                        let (x, lengths, expected) = batch_result?;
-                        train_step.run_once(TrainStepInput::new(x, lengths, expected, true), ctx.branch(false), max_other_parallel).await?;
+                    train_step.run_batches(batches, ctx.branch(false), true, max_other_parallel, prefetch, |_| {
                         collect_eta_record_completion(batch_eta_guard.id());
-                    }
+                    }).await?;
                     let mut valid_loss = None;
                     if idx % validation_step == 0 || idx == epochs - 1 {
-                        let mut batches = batch.valid_batch_stream(ctx.branch(false));
+                        let batches = batch.valid_batch_stream(ctx.branch(false));
                         let mut sum = 0.0;
                         let mut count = 0;
-                        while let Some(batch_result) = batches.next().await {
-                            let (x, lengths, expected) = batch_result?;
-                            let output = train_step.run_once(TrainStepInput::new(x, lengths, expected, false), ctx.branch(false), max_other_parallel).await?;
-                            sum += output.loss;
+                        train_step.run_batches(batches, ctx.branch(false), false, max_other_parallel, prefetch, |loss| {
+                            sum += loss;
                             count += 1;
-                        }
+                        }).await?;
                         if count > 0 { valid_loss = Some(sum / count as f32); }
                     }
                     let checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
@@ -295,6 +291,9 @@ where
                     }
                     Err(error) if (error.is_oom() || error.is_retryable_oom()) && !error.needs_cuda_ctx_reset() && !error.is_cuda_recovery_failed() => {
                         aborted_epochs += 1;
+                        // Retrying a memory-constrained trial with the same extra
+                        // resident batch can OOM even with exclusive GPU access.
+                        prefetch = false;
                         // Restoration replaces the entire module/optimizer and its
                         // acknowledgement state. Failed epochs never affect patience.
                         train_step.restore_epoch_checkpoint(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;

@@ -14,7 +14,7 @@ use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectE
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::runner::common::cachable::{CachedPurgeOutput, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, CachedPurgeOutput, DevicesWrap, ThoDataRef};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::RegisteredCacheHandle;
@@ -39,6 +39,31 @@ pub struct TmpCacheTakeAllError<D> {
     pub error: ThoError,
 }
 
+// Keep an individual queued value registered until its consumer finishes, even
+// if the producer is cancelled. Dropping the entry also bounds the cache size.
+#[derive(Debug)]
+pub(crate) struct TmpCachedEntry<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> {
+    value: Arc<DevicesWrap<D>>,
+    cache: Arc<TmpCached<D>>,
+}
+
+impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> BorrowRef for TmpCachedEntry<D> {
+    type Out<'a> = ThoDataRef<'a, D> where Self: 'a;
+
+    fn borrow_ref<'a>(&'a self, device: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        BorrowRef::borrow_ref(&self.value, device)
+    }
+}
+
+impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> Drop for TmpCachedEntry<D> {
+    fn drop(&mut self) {
+        self.cache.map.remove(self.value.id());
+    }
+}
+
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
 {
     pub fn registered_name(&self) -> &'static str {
@@ -58,6 +83,14 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
         self.map.insert(value.id().clone(), Arc::new(DevicesWrap::wrap(value)));
 
+    }
+
+    // Entries need distinct IDs while alive; replacing a queued entry would
+    // leave its old tensors invisible to OOM offload.
+    pub(crate) fn insert_guarded(self: &Arc<Self>, value: D) -> TmpCachedEntry<D> {
+        let value = Arc::new(DevicesWrap::wrap(value));
+        assert!(self.map.insert(value.id().clone(), Arc::clone(&value)).is_none(), "duplicate guarded temporary cache entry");
+        TmpCachedEntry { value, cache: Arc::clone(self) }
     }
 
     #[cfg(test)]
@@ -256,7 +289,11 @@ where
     fn drop(&mut self) {
 
         if let Some(cache) = self.registered_cache.take() {
-            warn!("TmpCached::drop: {}", self.name);//i.e. take_all was not called
+            // Guarded entries remove themselves as consumers finish, so an
+            // empty cache is also a normal completion path without take_all.
+            if !self.map.is_empty() {
+                warn!("TmpCached::drop: {}", self.name);//i.e. take_all was not called
+            }
 
             GlobalCtx::global().remove_cache(cache.name());
         }
