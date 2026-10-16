@@ -15,6 +15,27 @@ use std::pin::Pin;
 use dashmap::DashMap;
 use pin_project::{pin_project, pinned_drop};
 
+// Select the expansion when this crate is compiled, so ordinary builds return
+// the original expression without boxing, registry updates, or waker wrapping.
+// In particular, do not add a block/async wrapper that shortens temporary
+// lifetimes or changes the future's type and capture behavior.
+#[cfg(not(tho_debug))]
+#[macro_export]
+macro_rules! track_await {
+    ($future:expr $(,)?) => { $future };
+}
+
+/// Enable await diagnostics only in builds compiled with `--cfg tho_debug`.
+#[cfg(tho_debug)]
+#[macro_export]
+macro_rules! track_await {
+    ($future:expr $(,)?) => { $crate::tracked_await::track_await($future) };
+}
+
+// Keep the existing module import path usable for both the macro and the
+// explicit tracking function used by its diagnostic expansion.
+pub use crate::track_await;
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub static TASKS: LazyLock<DashMap<u64, TaskInfo>> = LazyLock::new(DashMap::new);
 
@@ -209,7 +230,7 @@ pub fn track_await<F>(
 where
     F: Future,
 {
-    Tracked::new_at(Location::caller(), Box::pin(fut))//TODO disable if Debug is not enabled
+    Tracked::new_at(Location::caller(), Box::pin(fut))
 }
 
 pub fn snapshot_not_ready() -> Vec<TaskInfo> {
@@ -218,4 +239,70 @@ pub fn snapshot_not_ready() -> Vec<TaskInfo> {
         .filter(|e| matches!(e.state, TaskState::Pending | TaskState::Woken))
         .map(|e| e.value().clone())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[cfg(not(tho_debug))]
+    #[test]
+    fn test_track_await_returns_the_original_future_type() {
+        // A concrete type check rules out boxing and any tracking wrapper.
+        let future: std::future::Ready<u32> = track_await!(std::future::ready(42));
+        assert_eq!(futures::executor::block_on(future), 42);
+    }
+
+    #[test]
+    fn test_track_await_evaluates_once_and_preserves_borrowed_temporaries() {
+        let evaluations = Cell::new(0);
+        let polls = Cell::new(0);
+        let future = track_await!({
+            evaluations.set(evaluations.get() + 1);
+            std::future::poll_fn(|cx| {
+                polls.set(polls.get() + 1);
+                if polls.get() == 1 { cx.waker().wake_by_ref(); Poll::Pending }
+                else { Poll::Ready(42) }
+            })
+        },);
+        assert_eq!(evaluations.get(), 1);
+        assert_eq!(polls.get(), 0, "constructing the wrapper must not poll the future");
+        assert_eq!(futures::executor::block_on(future), 42);
+        assert_eq!(evaluations.get(), 1);
+        assert_eq!(polls.get(), 2);
+        async fn length(value: &str) -> usize { value.len() }
+        // Direct expansion must keep the temporary String alive through await.
+        assert_eq!(futures::executor::block_on(async { track_await!(length(&String::from("abc"))).await }), 3);
+    }
+
+    #[cfg(tho_debug)]
+    #[test]
+    fn test_track_await_tracks_location_wakes_completion_and_cancellation() {
+        let polls = Cell::new(0);
+        let line = line!() + 1;
+        let future = track_await!(std::future::poll_fn(|cx| {
+            polls.set(polls.get() + 1);
+            if polls.get() == 1 { cx.waker().wake_by_ref(); Poll::Pending }
+            else { Poll::Ready(42) }
+        }));
+        let id = future.id;
+        assert_eq!(TASKS.get(&id).unwrap().spawn_location.line(), line);
+        let mut future = Box::pin(future);
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        {
+            let task = TASKS.get(&id).unwrap();
+            assert_eq!(task.state, TaskState::Woken);
+            assert_eq!(task.poll_count, 1);
+            assert_eq!(task.wake_count, 1);
+        }
+        assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(42));
+        assert!(!TASKS.contains_key(&id));
+        let cancelled = track_await!(std::future::pending::<()>());
+        let id = cancelled.id;
+        assert!(TASKS.contains_key(&id));
+        drop(cancelled);
+        assert!(!TASKS.contains_key(&id), "cancellation must remove diagnostic entries");
+    }
 }

@@ -134,7 +134,7 @@ pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<dyn MotifsStore>,
 ) -> Vec<(Resource, Vec<f32>)> {
-    track_await(store
+    track_await!(store
         .list_resource_random_in_group(group)).await
         .expect("list_resource_random_in_group")
         .into_iter()

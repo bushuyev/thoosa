@@ -1589,7 +1589,7 @@ impl SavableResult for SelectMotifsSavableResult {
     ) -> anyhow::Result<u32> {
 
         for run_result in &self.run_results {
-            track_await(store.save_selected_motifs(
+            track_await!(store.save_selected_motifs(
                 run_result.run_config.id.expect("should be pre saved in run_grid"),
                 run_result.selected_motif_ids_scores.clone()
             )).await?;

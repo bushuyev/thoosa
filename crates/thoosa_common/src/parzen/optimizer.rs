@@ -650,7 +650,7 @@ where
                 .collect::<Vec<_>>();
 
             debug!("AsyncTPEOptimizerImpl::optimize:sample about to call obj_func  i={i} ");
-            let results = track_await(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
+            let results = track_await!(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
             debug!("AsyncTPEOptimizerImpl::optimize:sample got results from obj_func results={results:?} i={i} ");
 
             let loss = results.loss();
@@ -767,7 +767,7 @@ where
     }
 
     pub async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
-        track_await(self.inner.optimize()).await
+        track_await!(self.inner.optimize()).await
     }
 
     pub fn enqueue_configs<I>(&mut self, configs: I)
@@ -812,7 +812,7 @@ where
     }
 
     pub async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
-        track_await(self.inner.optimize()).await
+        track_await!(self.inner.optimize()).await
     }
 
     pub fn enqueue_configs<I>(&mut self, configs: I)

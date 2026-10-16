@@ -772,7 +772,7 @@ impl CopyCtx {
     }
 
     pub async fn acquire_exec_stream(&self) -> Result<ExecutionStream, ThoError> {
-        track_await(self.exec_stream_pool.acquire()).await
+        track_await!(self.exec_stream_pool.acquire()).await
     }
 
     pub fn restart(&mut self) -> Result<(), ThoError> {

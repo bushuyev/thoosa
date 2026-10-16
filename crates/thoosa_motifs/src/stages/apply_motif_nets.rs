@@ -306,13 +306,13 @@ where
     {
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
-        let motif_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(train_motif_net_run_config_ids.clone()), max_loss, trained_nets_limit)).await?;
+        let motif_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(train_motif_net_run_config_ids.clone()), max_loss, trained_nets_limit)).await?;
 
         if motif_nets.is_empty() {
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?} max_loss={max_loss:?}, trained_nets_limit={trained_nets_limit:?}")));
         };
 
-        track_await(Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize)).await
+        track_await!(Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize)).await
     }
 
     pub async fn from_trained_nets<R>(
@@ -339,9 +339,9 @@ where
             let trained_net_id = trained_net.id;
             let (channel, motif_id) = crate::motifs_ws::parse_motif_path(&trained_net.net_path)?;
 
-            let (_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
+            let (_channel, find_motifs_run_config_id) = track_await!(store.get_motif_meta(motif_id)).await?;
 
-            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
+            let find_motifs_run_config: FindMotifsRunConfig = track_await!(load_run_config(store, find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?;
 
            let maybe_freq_filter= match find_motifs_run_config.freq_filter.as_ref() {
                None => None,
@@ -430,7 +430,7 @@ where
                 Some(freq_filter) => {
                     debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id(), freq_filter_find_motifs_run_config_id_freq_filter);
 
-                    track_await(freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true))).await?
+                    track_await!(freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true))).await?
                 }
                 None => {
                     debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id());
@@ -451,7 +451,7 @@ where
                 Ok((motif_id, net_id, output))
             }
         });
-        let mut motif_nets_applied = track_await(collect_futures_with_progress(
+        let mut motif_nets_applied = track_await!(collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
             FuturesOrdering::Unordered,
@@ -472,7 +472,7 @@ where
             ],
             None,
         );
-        let motif_nets_applied = track_await(oom_handler
+        let motif_nets_applied = track_await!(oom_handler
         .run(
             &self.stack_applied_motif_nets,
             stack_input,
@@ -829,7 +829,7 @@ impl BorrowRef for ApplyMotifNetInputWrapper {
         Self: 'a,
     {
         async move {
-            let batch = track_await(BorrowRef::borrow_ref(&self.batch, to_device_idx)).await?;
+            let batch = track_await!(BorrowRef::borrow_ref(&self.batch, to_device_idx)).await?;
             Ok(ApplyMotifNetInput::from_data_ref(batch))
         }
     }
@@ -846,7 +846,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
             let Some(selector) = selector else {
                 return BorrowRef::borrow_ref(self, to_device_idx).await;
             };
-            let batch = track_await(SelectRef::select_ref(&self.batch, to_device_idx, Some(selector))).await?;
+            let batch = track_await!(SelectRef::select_ref(&self.batch, to_device_idx, Some(selector))).await?;
             Ok(ApplyMotifNetInput::from_data_ref(batch))
         }
     }

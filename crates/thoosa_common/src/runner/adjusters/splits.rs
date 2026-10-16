@@ -137,7 +137,7 @@ where
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
     async fn add_partial_output(&mut self, o: R::Out){
-        track_await(self.output_builder.add_partial_output(o)).await;
+        track_await!(self.output_builder.add_partial_output(o)).await;
 
         self.done_to += self.split_len.clone();
 
@@ -150,7 +150,7 @@ where
 
 
     async fn build_final_output(self) -> Result<R::Out, ThoError> {
-        track_await(self.output_builder.build()).await
+        track_await!(self.output_builder.build()).await
     }
 }
 

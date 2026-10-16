@@ -48,7 +48,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     async fn unregister_cache(&mut self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
         if let Some(cache) = self.registered_cache.take() {
             GlobalCtx::global().remove_cache(cache.name());
-            Some(track_await(cache.lock_exclusive()).await)
+            Some(track_await!(cache.lock_exclusive()).await)
         } else {
             None
         }
@@ -102,7 +102,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
     pub async fn take_all(self, device:usize) -> anyhow::Result<Vec<D>> {//TODO it can have only one device set when created
-        match track_await(self.take_all_recovering(device)).await {
+        match track_await!(self.take_all_recovering(device)).await {
             Ok(data) => Ok(data),
             Err(error) => Err(error.error.into()),
         }
@@ -112,7 +112,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all_recovering"))]
     pub async fn take_all_recovering(mut self, tho_device_idx:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all_recovering: name={} map.len={}", self.name, self.map.len());
-        let _cache_guard = track_await(self.unregister_cache()).await;
+        let _cache_guard = track_await!(self.unregister_cache()).await;
 
         let mut res = vec![];
         let map = Arc::into_inner(mem::take(&mut self.map)).expect("TmpCached::take_all: map still in use after unregister_cache");
@@ -123,7 +123,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
                 continue;
             };
 
-            match track_await(devices_wrap.load_from_any_device_(tho_device_idx)).await.map(|guard| drop(guard)) {
+            match track_await!(devices_wrap.load_from_any_device_(tho_device_idx)).await.map(|guard| drop(guard)) {
                 Ok(()) => match devices_wrap.take_data(tho_device_idx) {
 
                     Ok(value) => {
@@ -208,7 +208,7 @@ where
         for (key, val) in keys_vals {
             debug!("TmpCached::purge_gpu: key={key:?}");
 
-            if let Err(err) = track_await(val.dump_to_cpu(device_idx)).await {
+            if let Err(err) = track_await!(val.dump_to_cpu(device_idx)).await {
                 debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
             } else {
                 debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
@@ -228,7 +228,7 @@ where
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
 
-        track_await(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, data)| async move {
+        track_await!(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, data)| async move {
             if data.is_on_device(device_idx) {
                 data.drop_device(device_idx).await?;
                 if !data.has_any_data() {

@@ -109,7 +109,7 @@ where
         let motif_ws = Arc::clone(ws);
         let motif_store = Arc::clone(store);
 
-        track_await(Self::new_with_motif_nets_builder(
+        track_await!(Self::new_with_motif_nets_builder(
             ws,
             store,
             train_label_nets_run_config_ids,
@@ -119,7 +119,7 @@ where
                 let store = Arc::clone(&motif_store);
 
                 async move {
-                    track_await(ApplyMotifNets::from_trained_nets(
+                    track_await!(ApplyMotifNets::from_trained_nets(
                         &ws,
                         &store,
                         stage_ctx,
@@ -165,14 +165,14 @@ where
             debug!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
 
             for (train_label_net_run_config_id, label_net_params, _net) in nets {
-                let label_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
+                let label_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
                 assert_eq!(label_nets.len(), 1); //for now there is always single net for run_config_id
                 let label_net = &label_nets[0];
 
-                let motif_net_run_config_ids = track_await(store.list_input_nets(label_net.id)).await?;
+                let motif_net_run_config_ids = track_await!(store.list_input_nets(label_net.id)).await?;
 
                 debug!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
 
@@ -181,7 +181,7 @@ where
                     continue//TODO, change to assert?
                 }
 
-                let motif_nets = track_await(store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids), None, None)).await?;
+                let motif_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids), None, None)).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
@@ -194,8 +194,8 @@ where
                 );
                 train_label_net_run_config_ids.push(train_label_net_run_config_id);
                 apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new(track_await(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: track_await(ApplyLabelNet::new(label_net.id, apply_label_net_init, stage_ctx.branch(true), ws)).await?,
+                    apply_motif_nets: Arc::new(track_await!(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
+                    apply_label_net: track_await!(ApplyLabelNet::new(label_net.id, apply_label_net_init, stage_ctx.branch(true), ws)).await?,
                 });
             }
         }
@@ -250,7 +250,7 @@ where
 
         debug!("ApplyLabelNets::run: input={input:?} self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
 
-        let tmp_cache = track_await(TmpCached::new("tmp_stack_applied_label_nets")).await;
+        let tmp_cache = track_await!(TmpCached::new("tmp_stack_applied_label_nets")).await;
         let tmp_cache_name = tmp_cache.registered_name();
         let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
         let label_output_order = Arc::new(Mutex::new(vec![None; self.apply_nets.len()]));
@@ -298,7 +298,7 @@ where
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                         Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_label_net_init"))),
                     ], None);
-                    let result = track_await(oom_handler.run(
+                    let result = track_await!(oom_handler.run(
                         &apply_label_net,
                         input, ctx.branch(false),
                          WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),)
@@ -349,7 +349,7 @@ where
             ],
             None,
         );
-        let label_outputs = track_await(oom_handler.consume(
+        let label_outputs = track_await!(oom_handler.consume(
             &self.stack_applied_label_nets,
             stack_input,
             ctx.branch(true),
@@ -471,7 +471,7 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
         async move {
             let StackAppliedLabelNetsInputWrapper { id, label_output_order, tmp_cache } = self;
 
-            match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
+            match track_await!(tmp_cache.take_all_recovering(to_device_idx)).await {
                 Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_output_order, label_outputs, to_device_idx), run_ctx),
                 Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, label_output_order, err.data, to_device_idx), error: err.error },
             }
@@ -481,7 +481,7 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedLabelNetsInputWrapper::burp"))]
     fn burp(o: Self::O) -> impl Future<Output = Self> + Send {
         async move {
-            let cache = track_await(TmpCached::new("tmp_stack_applied_label_nets_burp")).await;
+            let cache = track_await!(TmpCached::new("tmp_stack_applied_label_nets_burp")).await;
             for label_output in o.label_outputs {
                 cache.insert(label_output);
             }
@@ -683,7 +683,7 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
         Self: 'a,
     {
         async move {
-            let input = track_await(BorrowRef::borrow_ref(&self.input, to_device_idx)).await?;
+            let input = track_await!(BorrowRef::borrow_ref(&self.input, to_device_idx)).await?;
             Ok(ApplyLabelNetInput { id: self.id.clone(), input })
         }
     }

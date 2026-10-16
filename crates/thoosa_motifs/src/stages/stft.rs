@@ -103,7 +103,7 @@ where
             ],
             None,
         );
-        let output = track_await(oom_handler
+        let output = track_await!(oom_handler
             .run(
                 &self.sync_stft,
                 input,

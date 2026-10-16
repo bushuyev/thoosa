@@ -340,7 +340,7 @@ where
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let cache = track_await(Self::cache()).await?;
+        let cache = track_await!(Self::cache()).await?;
         GlobalCtx::global().do_age();
 
         let (shared, cleanup) = match cache.entry(key.clone()) {
@@ -361,7 +361,7 @@ where
         // an entry between cache lookup and acquiring its explicit user lease.
         // Keep this context through completion; computation uses the same area.
         ctx.add_purge_gpu_closure(cleanup);
-        let result = track_await(shared.clone()).await;
+        let result = track_await!(shared.clone()).await;
         if result.is_err() {
             // A failed computation has no reusable output. Evict it without
             // requiring a device-generation change to permit a later attempt.
@@ -495,7 +495,7 @@ where
                     if self.is_resident_on_device(to_tho_device_idx) {
                         debug!("DevicesWrap::borrow_to: self.id={:?} is_resident_on_device", self.id);
 
-                        let guard = track_await(self.cached_data[to_tho_device_idx].read()).await;
+                        let guard = track_await!(self.cached_data[to_tho_device_idx].read()).await;
                         match guard.as_ref() {
                             None => {
                                 self.mark_not_resident_on_device(to_tho_device_idx);
@@ -515,7 +515,7 @@ where
                             continue;
                         }
 
-                        let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
+                        let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await!(op.read()).await;
 
                         if let Some(src) = source_read_guard.as_ref() {
                             let sub_t: O = src.subview(selector.clone())?;
@@ -523,7 +523,7 @@ where
                             debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx} self.copy_to_device={:?}", sub_t.size(), self.copy_to_device);
 
                             let data = match &self.copy_to_device {
-                                Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
+                                Some(copy_to_device) => track_await!(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
                                 None => sub_t,
                             };
 
@@ -780,7 +780,7 @@ where
 
     pub async fn drop_device(&self, device_idx: usize) -> Result<(), ThoError> {
         assert!(device_idx > 0, "can't drop cpu");
-        drop(track_await(self.cached_data[device_idx].write()).await.take());
+        drop(track_await!(self.cached_data[device_idx].write()).await.take());
         self.mark_not_resident_on_device(device_idx);
 
         Ok(())
@@ -850,7 +850,7 @@ where
             // Residency guards serialize materialized borrows with cache-area cleanup.
             if self.is_resident_on_device(to_tho_device_idx) {
                 let lock = &self.cached_data[to_tho_device_idx];
-                let read_guard = track_await(lock.read()).await;
+                let read_guard = track_await!(lock.read()).await;
                 if read_guard.is_some() {
                     return Ok(tokio::sync::RwLockReadGuard::map(
                         read_guard,
@@ -868,7 +868,7 @@ where
                     continue;
                 }
 
-                let source_read_guard = track_await(op.read()).await;
+                let source_read_guard = track_await!(op.read()).await;
 
                 if source_read_guard.is_some() && self.copy_to_device.is_none() {
                     return Ok(RwLockReadGuard::map(
@@ -878,7 +878,7 @@ where
                 }
 
                 if let Some(src) = source_read_guard.as_ref() {
-                    return track_await(self.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
+                    return track_await!(self.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
                 }
                 self.mark_not_resident_on_device(source_device_idx);
                 drop(source_read_guard);
@@ -973,7 +973,7 @@ where
         loop {
             if self.is_resident_on_device(dst_idx) {
                 let lock = &self.cached_data[dst_idx];
-                let dst_read = track_await(lock.read()).await;
+                let dst_read = track_await!(lock.read()).await;
                 // ---- Fast path
                 if dst_read.is_some() {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
@@ -995,7 +995,7 @@ where
             let leader_notify = match join_or_start_inflight(&self.inflights[dst_idx]) {
                 InflightRole::Follower(notified) => {
                     // follower: wait until the leader finishes, then try fast path again
-                    track_await(notified)
+                    track_await!(notified)
                     .await;
                     continue;
                 }
@@ -1011,7 +1011,7 @@ where
             // Double-check: maybe dst was filled after we dropped the read lock
             if self.is_resident_on_device(dst_idx) {
                 let lock = &self.cached_data[dst_idx];
-                let dst_read = track_await(lock.read()).await;
+                let dst_read = track_await!(lock.read()).await;
                 if dst_read.is_some() {
                     inflight_guard.clear();
                     continue;
@@ -1026,7 +1026,7 @@ where
             };
 
             debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
-            let produced = track_await(copy_to_device.copy(src, dst_idx)).await;
+            let produced = track_await!(copy_to_device.copy(src, dst_idx)).await;
 
             let produced = match produced {
                 Ok(v) => v,
@@ -1042,7 +1042,7 @@ where
                 debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.tho_device_idx());
 
                 let lock = &self.cached_data[dst_idx];
-                let mut w = track_await(lock.write()).await;
+                let mut w = track_await!(lock.write()).await;
                 if w.is_none() {
                     *w = Some(produced);
                     self.mark_resident_on_device(dst_idx);
@@ -1144,7 +1144,7 @@ where
         // A concurrent dump_to_cpu can move data from a device slot to CPU while this method is scanning slots; the second pass avoids a false NotFound after waiting on the old device slot.
         for _attempt in 0..2 {
             for op in self.cached_data.iter() {
-                let source_read_guard = track_await(op.read()).await;
+                let source_read_guard = track_await!(op.read()).await;
 
                 if let Some(data_with_extra) = source_read_guard.as_ref() {
                     return Ok(data_with_extra.extra().clone());
@@ -1483,7 +1483,7 @@ mod tests {
         let tested = DevicesWrap::wrap(data);
         assert!(tested.is_all_on_cpu().await);
         let lock = &tested.cached_data[1];
-        assert!(track_await(lock.read()).await.is_none());
+        assert!(track_await!(lock.read()).await.is_none());
 
         let ctx_for_data = mock_run_ctx::default(1);
 
@@ -1494,12 +1494,12 @@ mod tests {
 
 
         let lock = &tested.cached_data[1];
-        assert!(track_await(lock.read()).await.is_some());
+        assert!(track_await!(lock.read()).await.is_some());
         assert!(!tested.is_all_on_cpu().await);
 
         tested.dump_to_cpu(1).await?;
         let lock = &tested.cached_data[1];
-        assert!(track_await(lock.read()).await.is_none());
+        assert!(track_await!(lock.read()).await.is_none());
         assert!(tested.is_all_on_cpu().await);
         assert!(tested.is_on_cpu_before(0));
 

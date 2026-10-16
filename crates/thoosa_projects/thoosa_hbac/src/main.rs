@@ -123,7 +123,7 @@ impl StageCommand for HbacCommands {
                         ctx.tho_device_idx(),
                     ))?))
                 };
-                track_await(import_resources(
+                track_await!(import_resources(
                     &ws,
                     store,
                     &LABELS,
@@ -174,7 +174,7 @@ impl StageCommand for HbacCommands {
                 //     max_batch_size : 20,
                 // });
 
-                track_await(run_all(
+                track_await!(run_all(
                     &ws,
                     &store,
                     &loader,

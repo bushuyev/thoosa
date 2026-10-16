@@ -590,7 +590,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
     where
         OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static
     {
-        self.clc_result = track_await(f(self.clc_result)).await?;
+        self.clc_result = track_await!(f(self.clc_result)).await?;
         Ok(self)
     }
 }

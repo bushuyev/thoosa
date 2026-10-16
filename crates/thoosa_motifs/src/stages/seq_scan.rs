@@ -208,7 +208,7 @@ where
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let max_chunk_len = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let resources_config = input.resources_config().clone();
-        let resources = track_await(resources_config.to_resources(&self.store)).await?;
+        let resources = track_await!(resources_config.to_resources(&self.store)).await?;
 
         for configured_stage in &self.run_config_stages {
             let mut buckets: SeqScanBucketsByChannel = Vec::new();
@@ -217,7 +217,7 @@ where
             let mut batch_len = 0i64;
 
             for resource in &resources {
-                let loaded = track_await(Arc::clone(&configured_stage.configured_loader)
+                let loaded = track_await!(Arc::clone(&configured_stage.configured_loader)
                     .run_cached(
                         Arc::new(resource.clone()),
                         ctx.branch(false),
@@ -225,7 +225,7 @@ where
                 let resource_len = loaded.size().dim_1();
 
                 if resource_len > max_chunk_len {
-                    track_await(flush_batch_to_buckets(
+                    track_await!(flush_batch_to_buckets(
                         &batch_resources,
                         batch_tensors.clone(),
                         &configured_stage.run_config,
@@ -251,7 +251,7 @@ where
                     continue;
                 }
 
-                track_await(flush_batch_to_buckets(
+                track_await!(flush_batch_to_buckets(
                     &batch_resources,
                     batch_tensors.clone(),
                     &configured_stage.run_config,
@@ -263,7 +263,7 @@ where
                 batch_len = 0;
             }
 
-            track_await(flush_batch_to_buckets(
+            track_await!(flush_batch_to_buckets(
                 &batch_resources,
                 batch_tensors,
                 &configured_stage.run_config,

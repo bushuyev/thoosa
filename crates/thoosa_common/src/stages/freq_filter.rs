@@ -590,7 +590,7 @@ impl OutputBuilder for FreqFilterOutputBuilder {
         let partial = if partial.tho_device_idx() == 0 {
             partial
         } else {
-            match track_await(partial.copy_to_device(0)).await {
+            match track_await!(partial.copy_to_device(0)).await {
                 Ok(partial) => partial,
                 Err(error) => {
                     self.error = Some(error);
@@ -740,7 +740,7 @@ where
                 if let Some(slot) = filter.tensor_mut() {
                     let tensor = slot.ready()?;
                     if tensor.tho_device_idx() != to_device_idx {
-                        slot.tensor = Some(track_await(tensor.copy_to_device(to_device_idx)).await?);
+                        slot.tensor = Some(track_await!(tensor.copy_to_device(to_device_idx)).await?);
                     }
                 }
             }
@@ -811,7 +811,7 @@ where
         for filter in filters.iter_mut() {
             if let Some(slot) = filter.tensor_mut() {
                 if let Some(tensor) = &slot.tensor && device_idx != 0 && tensor.tho_device_idx() == device_idx {
-                    slot.tensor = Some(track_await(tensor.copy_to_device(0)).await?);
+                    slot.tensor = Some(track_await!(tensor.copy_to_device(0)).await?);
                 }
             }
         }
@@ -872,7 +872,7 @@ where
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         // let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self), ctx.tho_device_idx()).await?);
 
-        let filtered = track_await(OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(
+        let filtered = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::MID))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("freq_filter"))),
