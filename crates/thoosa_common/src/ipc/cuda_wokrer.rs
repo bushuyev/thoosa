@@ -736,7 +736,11 @@ impl CudaWorker {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
                             panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
                         }
-                    }?;
+                    };
+                    if let Err(e) = &result {
+                        warn!("run_worker: e={e:?}");
+                    }
+                    let result= result?;
                     debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
                     Ok(OpResult::Ok(Some(result)))
                 }
