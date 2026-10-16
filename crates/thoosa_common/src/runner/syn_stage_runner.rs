@@ -229,7 +229,7 @@ impl Job {
         let job_id = self.id;
         debug!("SyncStageRunner, Job::run: running job {self:?}");
 
-        let r = track_await(self.fut).await;
+        let r = track_await!(self.fut).await;
 
         debug!("SyncStageRunner, Job::run: done job {job_id:?}");
 
@@ -366,7 +366,7 @@ impl ParentSuspendGuard {
 
         // Sending is synchronous: arm compensation before the first cancellation point.
         self.suspended = true;
-        if track_await(ack_rx).await.is_err() {
+        if track_await!(ack_rx).await.is_err() {
             return Err(executor_closed_error("executor is closed"));
         }
 
@@ -399,7 +399,7 @@ impl ParentSuspendGuard {
         // The manager now owns the resume. Drop must not enqueue a second one while
         // we await capacity, since that could release another nested submission's slot.
         self.suspended = false;
-        if track_await(ack_rx).await.is_err() {
+        if track_await!(ack_rx).await.is_err() {
             return Err(executor_closed_error("executor is closed"));
         }
 
@@ -510,7 +510,7 @@ impl SyncStageRunner {
 
         let gate = recovery.as_ref().map(|recovery| Arc::clone(recovery.gate()));
         let worker = tokio::spawn(async move {
-            track_await(Self::run_manager(
+            track_await!(Self::run_manager(
                 rx,
                 sync_capacity_rx,
                 cmd_rx,
@@ -556,7 +556,7 @@ impl SyncStageRunner {
             // Its nested submissions must fail instead of waiting for reset.
             gate.check_admission()?;
         } else {
-            track_await(gate.wait_if_paused()).await?;
+            track_await!(gate.wait_if_paused()).await?;
         }
         Ok(())
     }
@@ -638,7 +638,7 @@ impl SyncStageRunner {
             let generation = recovery.as_ref().map(|recovery| {
                 CudaActivityScope::current().and_then(|scope| scope.generation(recovery.gate())).expect("admitted CUDA generation")
             });
-            let mut result = track_await(fut).await;//<--- wrapped
+            let mut result = track_await!(fut).await;//<--- wrapped
             let error = match &mut result {
                 Err(error) => Some(error),
                 Ok(value) => nested_error(value)
@@ -681,7 +681,7 @@ impl SyncStageRunner {
 
 
         loop {
-            await_dependency(&inherited, track_await(self.wait_until_accepting(parent.as_ref()))).await??;
+            await_dependency(&inherited, track_await!(self.wait_until_accepting(parent.as_ref()))).await??;
             retry.check_generation()?;
 
             debug!("SyncStageRunner::submit: job_id={job_id} accepted");
@@ -696,7 +696,7 @@ impl SyncStageRunner {
             //   4. handle_suspend() sets job.active = false and calls remove_active() at thoosa_common/src/runner/syn_stage_runner:1218.
             //
 
-            let send_permit = match await_dependency(&inherited, track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve()))).await? {
+            let send_permit = match await_dependency(&inherited, track_await!(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve()))).await? {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
                     error!("SyncStageRunner::submit: reserve job_id={job_id} failed: e={e:?}");
@@ -726,7 +726,7 @@ impl SyncStageRunner {
             // A nested submit must stop counting its blocked parent as active before the
             // child is enqueued, or the parent's own parallelism cap can block the child.
             let mut suspend_guard = ParentSuspendGuard::new(parent.clone());
-            if let Err(e) = await_dependency(&inherited, track_await(suspend_guard.maybe_suspend())).await.and_then(|result| result) {
+            if let Err(e) = await_dependency(&inherited, track_await!(suspend_guard.maybe_suspend())).await.and_then(|result| result) {
                 drop(send_permit);
                 retry.clear_exclusive();
                 return Err(e);
@@ -740,7 +740,7 @@ impl SyncStageRunner {
             };
             if let Err((rejected, error)) = enqueue {
                 job = rejected;
-                let _ = track_await(suspend_guard.resume()).await;
+                let _ = track_await!(suspend_guard.resume()).await;
                 retry.clear_exclusive();
                 if error.is_cuda_recovery_failed() || parent.is_some() || CudaActivityScope::current().is_some() {
                     return Err(error);
@@ -752,7 +752,7 @@ impl SyncStageRunner {
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
-            let result = match await_dependency(&inherited, track_await(result_rx)).await {
+            let result = match await_dependency(&inherited, track_await!(result_rx)).await {
                 Ok(Ok(result)) => result,
                 Ok(Err(_)) => Err(ThoError::new_with_cause("job was cancelled before producing a result", ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled))),
                 Err(error) => {
@@ -760,7 +760,7 @@ impl SyncStageRunner {
                     Err(error)
                 }
             };
-            track_await(suspend_guard.resume()).await?;
+            track_await!(suspend_guard.resume()).await?;
 
             return result;
         }
@@ -805,7 +805,7 @@ impl SyncStageRunner {
     pub async fn shutdown(self) {
         drop(self.tx);
         drop(self.cmd_tx);
-        let _ = track_await(self.worker).await;
+        let _ = track_await!(self.worker).await;
     }
 
     async fn run_manager(
@@ -1013,7 +1013,7 @@ impl SyncStageRunner {
             }
         }
 
-        while let Some(res) = track_await(running.join_next()).await {
+        while let Some(res) = track_await!(running.join_next()).await {
             if let Err(err) = res {
                 error!("job failed during shutdown: {err}");
             }
@@ -1239,14 +1239,14 @@ impl SyncStageRunner {
                                 async move {
                                     debug!("SyncStageRunner::try_spawn_ready_jobs: running job job_id={job_id}");
 
-                                    track_await(job.run())
+                                    track_await!(job.run())
                                         .await
                                 },
                             );
                         let feedback = match activity {
                             Some(activity) => {
                                 let dependencies = activity.clone();
-                                track_await(activity.run(async move {
+                                track_await!(activity.run(async move {
                                     tokio::pin!(future);
                                     tokio::select! {
                                         biased;
@@ -1265,7 +1265,7 @@ impl SyncStageRunner {
                                     }
                                 })).await
                             }
-                            None => track_await(future).await,
+                            None => track_await!(future).await,
                         };
 
                         match feedback {

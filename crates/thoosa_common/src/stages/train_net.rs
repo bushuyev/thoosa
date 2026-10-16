@@ -214,7 +214,7 @@ where
             std::fs::create_dir_all("/tmp/thoosa")?;
             let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
             let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
-            let (train_step, params) = track_await(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
+            let (train_step, params) = track_await!(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
             static STEP_COUNT:AtomicU32 = AtomicU32::new(0);//TODO
             let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
@@ -369,7 +369,7 @@ where
 
             let descr = self.descr.clone();
             let validation_step = self.validation_step;
-            let (var_store_path, node_params, run_config, loss) = track_await(opt_train::<_, _, _, NP, TmpFile>(
+            let (var_store_path, node_params, run_config, loss) = track_await!(opt_train::<_, _, _, NP, TmpFile>(
                 Arc::clone(&self.opt_config),
                 move |run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
                     debug!("TrainNet::run, about to call run_inner: descr={descr:?} run_config={:?}", run_config);

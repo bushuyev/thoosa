@@ -504,7 +504,7 @@ mod tests {
                 let self_k = parse_numeric_part(resource).unwrap_or(1.0);
                 let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu)?;
 
-                let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.to_types(mono_key!(0, "todo").into())?;
+                let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await!(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.to_types(mono_key!(0, "todo").into())?;
                 debug!("run_load_and_clc_ipc_cuda_worker: worker_ref={worker_ref:?}");
 
                 let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
@@ -618,10 +618,10 @@ mod tests {
 
                 let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu)?;
                 let expected_smoke = smoke.copy();
-                let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
+                let worker_ref = track_await!(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
                 assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
 
-                let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
+                let cpu_copy = track_await!(cuda_actor.copy(worker_ref, 0.into())).await?;
                 assert!(expected_smoke.allclose(&cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
 
                 Ok(())

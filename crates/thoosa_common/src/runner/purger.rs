@@ -34,7 +34,7 @@ impl Purger {
         let worker = tokio::spawn(async move {
             loop {
 
-                match track_await(track_await(rx_arc.write()).await.recv()).await {
+                match track_await!(track_await!(rx_arc.write()).await.recv()).await {
                     Some(PurgeCmd::Gpu { closures }) => {
                         debug!("Purger::new, loop, got cmd: closures.len={}", closures.len());
 

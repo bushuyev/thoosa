@@ -193,7 +193,7 @@ where
 
 
         for find_motifs_run_config_id in find_motifs_run_config_ids {
-            find_motifs_run_configs.push(Arc::new(track_await(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?));
+            find_motifs_run_configs.push(Arc::new(track_await!(load_run_config(store, *find_motifs_run_config_id, FindMotifsRunConfig::type_name())).await?));
         }
         let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
@@ -208,12 +208,12 @@ where
                     let stacked_motifs_input = Arc::new(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?);
 
                     // Missing required source data must fail extension instead of shrinking the run.
-                    let motif_data = track_await(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await?;
+                    let motif_data = track_await!(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await?;
                     Ok::<_, ThoError>((find_motifs_run_config, motif_data))
                 }
             });
 
-        let run_configs__stacked_motifs = track_await(collect_futures_with_progress(
+        let run_configs__stacked_motifs = track_await!(collect_futures_with_progress(
             futures,
             find_motifs_run_configs_len,
             FuturesOrdering::Ordered,
@@ -255,10 +255,10 @@ where
                 let slices_selector_metric = slices_selector_metric.clone();
                 let mut ctx_for_motif = ctx.branch(false);
                 async move {
-                    let result = track_await(async {
+                    let result = track_await!(async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
                         let clc_input = Arc::new(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()]));
-                        let motif_stats = track_await(load_and_clc_dist.run(clc_input, ctx_for_motif.branch(false))).await?;
+                        let motif_stats = track_await!(load_and_clc_dist.run(clc_input, ctx_for_motif.branch(false))).await?;
                         let motif_stat = motif_stats.channel_value(&slices_selector_metric, 0)?;
                         Ok::<_, ThoError>((motif_id, motif_stat))
                     }).await;
@@ -266,7 +266,7 @@ where
                 }
             });
 
-        let motif_stats = track_await(collect_futures_with_progress(
+        let motif_stats = track_await!(collect_futures_with_progress(
             futures,
             motif_ids_len,
             FuturesOrdering::Unordered,
@@ -337,7 +337,7 @@ where
         // This stays inside the run-config loop.
         // Stacked motifs are cached by find_motifs_run_config_id, while stats depend on metric/aggr (including floats in aggr).
         // Stats must be computed separately so motifs and statistics can be cached independently.
-        let run_configs__stacked_motifs = track_await(Self::load_stacked_motifs(
+        let run_configs__stacked_motifs = track_await!(Self::load_stacked_motifs(
             &self.store,
             &self.stacked_motifs_loader,
             ctx.branch(true),
@@ -364,14 +364,14 @@ where
 
                 async move {
                     // Propagate errors before publishing the accumulated slice set.
-                    track_await(async {
-                        let motifs_stats = track_await(Self::clc_stacked_motifs_statistics(
+                    track_await!(async {
+                        let motifs_stats = track_await!(Self::clc_stacked_motifs_statistics(
                             clc_dist,
                             Arc::clone(&motif_data),
                             slices_selector_metric.clone(),
                             ctx_to_move.branch(false),
                         )).await?;
-                        track_await(Self::extend_with_one_find_run(
+                        track_await!(Self::extend_with_one_find_run(
                             loader,
                             ws,
                             clc_resources_motifs_dist,
@@ -389,7 +389,7 @@ where
                 }
             });
 
-        let _ = track_await(collect_futures_with_progress(
+        let _ = track_await!(collect_futures_with_progress(
             futures,
             run_configs__stacked_motifs_len,
             FuturesOrdering::Unordered,
@@ -427,7 +427,7 @@ where
             debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
             let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws, ctx.tho_device_idx()).await?;
 
-            let t_0 = track_await(Arc::clone(&configured_loader)
+            let t_0 = track_await!(Arc::clone(&configured_loader)
                 .run_cached(Arc::new(resource_0.clone()), ctx.branch(false))).await?;
 
             t_1_batch_dim_0_size += t_0.size().dim_1();
@@ -467,7 +467,7 @@ where
                 channel_masks_dists_ids,
                 resources_iter,
                 ..
-            } = track_await(OOMHandler::<'_, '_, _, NoStageAdjuster, _, SelectMotifsInputSelector>::new(
+            } = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, SelectMotifsInputSelector>::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_resources_motifs_dist"))),
@@ -483,7 +483,7 @@ where
                         SelectMotifsSplitterContext::new(
                             t_1_batch_len as i64,
                             batch_1_slice_lengths,
-                            track_await(SelectMotifsClcOutputBuilder::new(
+                            track_await!(SelectMotifsClcOutputBuilder::new(
                                 StackedMotifsOutputId::new(find_motifs_run_config.id.expect("find_motifs_run_config"), vec![]),
                                 channels,
                                 find_motifs_run_config.step as usize,
@@ -514,10 +514,10 @@ where
                     let resources_slices = Arc::clone(&resources_slices);
                     let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
                     async move {
-                        let result = track_await(async {
+                        let result = track_await!(async {
                             if let Some(mask_dists_ids) = channel_mask_dists_ids {
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
-                                let mask_dists = track_await(mask_dists_ids.0.to_cpu()).await?;
+                                let mask_dists = track_await!(mask_dists_ids.0.to_cpu()).await?;
                                 let mask_size = mask_dists.mask_size_hint()?;
                                 assert_eq!(mask_size.len(), 3, "SelectMotifsStage::run: expected 3D mask, got {mask_size:?}");
                                 assert_eq!(mask_size[0], 1, "SelectMotifsStage::run: expected single-channel mask, got {mask_size:?}");
@@ -526,7 +526,7 @@ where
 
                                 let motif_count = mask_dists_ids.1.len();
                                 let resources_slices_cloned = Arc::clone(&resources_slices);
-                                let matches_by_motif = track_await(tokio::task::spawn_blocking(move || {
+                                let matches_by_motif = track_await!(tokio::task::spawn_blocking(move || {
                                     tracing::info_span!(
                                         "extend_motifs::group_mask_matches",
                                         kind = "spawn_blocking",
@@ -557,7 +557,7 @@ where
                                 })).await??;
 
 
-                                let mut motif_added_slices_guard = track_await(channels_motifs_added_slices[channel].write()).await;
+                                let mut motif_added_slices_guard = track_await!(channels_motifs_added_slices[channel].write()).await;
 
                                 for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
 
@@ -584,7 +584,7 @@ where
                     }
                 });
 
-            track_await(collect_futures_with_progress(
+            track_await!(collect_futures_with_progress(
                 futures,
                 channel_masks_dists_ids_len,
                 FuturesOrdering::Unordered,
@@ -627,7 +627,7 @@ where
         debug!("ExtendMotifsStage::run: input={input:?}");
 
         let resources_config = input.resources_input().resources_config().clone();
-        let resources = Arc::new(track_await(resources_config.to_resources(&self.store)).await?);
+        let resources = Arc::new(track_await!(resources_config.to_resources(&self.store)).await?);
         if resources.is_empty() {
             warn!("ExtendMotifsStage::run: no labels resources");
             return Err(ThoError::new(format!("no resources found in {input:?}")))
@@ -641,7 +641,7 @@ where
             let resources_for_fut = Arc::clone(&resources);
             let mut ctx_for_fut = ctx.branch(false);
             async move {
-                let channels_motifs_added_slices = track_await(self_for_fut.extend_motifs_for_run_config(
+                let channels_motifs_added_slices = track_await!(self_for_fut.extend_motifs_for_run_config(
                     &extend_motifs_run_config,
                     resources_for_fut,
                     num_channels,
@@ -653,13 +653,13 @@ where
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
                     for (motif_id, slices) in motif_slices {
                         debug!("ExtendMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
-                        track_await(self_for_fut.store.add_slices_to_motif(extend_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices)).await?
+                        track_await!(self_for_fut.store.add_slices_to_motif(extend_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices)).await?
                     }
                 }
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await?;
+        let _ = track_await!(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await?;
         Ok(Arc::new(ExtendMotifsSavableResult::new()))
     }
 }
@@ -724,10 +724,10 @@ impl BorrowRef for SelectMotifsInputSelectorWrap {
         async move {
             let mut batch = Vec::with_capacity(self.batch.len());
             for tensor in &self.batch {
-                batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                batch.push(ThoDataRef::ReadLocked(track_await!(tensor.load_from_any_device_(to_device_idx)).await?));
             }
-            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
-            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            let stacked_motifs = track_await!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await!(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
             Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids.clone(), self.resource_offsets.clone(), ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
         }
     }
@@ -759,22 +759,22 @@ impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
                 RangeOrSlice::Slice((_, range)) => {
                     let channels = batch_wrappers[0].size().dim_0();
                     let tensor_selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
-                    batch.push(track_await(SelectRef::select_ref(&batch_wrappers[0], to_device_idx, Some(tensor_selector))).await?);
+                    batch.push(track_await!(SelectRef::select_ref(&batch_wrappers[0], to_device_idx, Some(tensor_selector))).await?);
                     let range_offset = u32::try_from(range.start).with_context(|| format!("invalid batch slice start: {}", range.start))?;
                     let resource_offsets = vec![resource_offsets[0] + range_offset];
-                    let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
-                    let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+                    let stacked_motifs = track_await!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+                    let motifs_stats = track_await!(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
                     return Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, resource_ids.to_vec(), resource_offsets, ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)));
                 }
                 RangeOrSlice::Full | RangeOrSlice::Range(_) => {
                     for tensor in batch_wrappers {
-                        batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                        batch.push(ThoDataRef::ReadLocked(track_await!(tensor.load_from_any_device_(to_device_idx)).await?));
                     }
                 }
             }
 
-            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
-            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            let stacked_motifs = track_await!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await!(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
             Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, resource_ids.to_vec(), resource_offsets.to_vec(), ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
         }
     }
@@ -809,7 +809,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
         self.output.push (tokio::spawn(async {
-            track_await(o.to_cpu()).await
+            track_await!(o.to_cpu()).await
         }.instrument(tracing::info_span!(
             "extend_motifs::partial_output_to_cpu",
             kind = "spawn",
@@ -824,7 +824,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         let mut resource_ids_sizes: Vec<ResourceSlices> = vec![];
 
 
-        let output:Vec<ClcResourcesMotifsDistOutput> = track_await(futures::future::try_join_all(self.output)).await?
+        let output:Vec<ClcResourcesMotifsDistOutput> = track_await!(futures::future::try_join_all(self.output)).await?
             .into_iter()
             .collect::<Result<Vec<_>, ThoError>>()?;
 
@@ -903,7 +903,7 @@ struct SelectMotifsClcOutputBuilder {
 impl SelectMotifsClcOutputBuilder {
     pub async fn new(id: StackedMotifsOutputId, channels: u32, step: usize) -> Self {
         Self {
-            inner: track_await(SelectMotifsSavableResultBuilder::new(id, channels, step)).await,
+            inner: track_await!(SelectMotifsSavableResultBuilder::new(id, channels, step)).await,
         }
     }
 }
@@ -912,11 +912,11 @@ impl OutputBuilder for SelectMotifsClcOutputBuilder {
     type O = ClcResourcesMotifsDistOutput;
 
     async fn add_partial_output(&mut self, o: Self::O) {
-        track_await(self.inner.add_partial_output(o)).await;
+        track_await!(self.inner.add_partial_output(o)).await;
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
-        track_await(self.inner.build()).await
+        track_await!(self.inner.build()).await
     }
 }
 
@@ -1092,7 +1092,7 @@ where
 {
     async fn add_partial_output(&mut self, out: ST::Out) {
         debug!("SelectMotifsSplitterContext::add_partial_output: out={out:?}");
-        track_await(self.output_builder.add_partial_output(out)).await;
+        track_await!(self.output_builder.add_partial_output(out)).await;
         match self.batch_1_mode {
             Batch1SplitMode::Range => {
                 self.done_to += self.split_len;
@@ -1111,7 +1111,7 @@ where
     }
 
     async fn build_final_output(self) -> Result<ST::Out, ThoError> {
-        track_await(self.output_builder.build()).await
+        track_await!(self.output_builder.build()).await
     }
 }
 
@@ -1141,7 +1141,7 @@ where
     async fn adjust(&self, mut adjustable: Self::A, adjust_context: &mut SelectMotifsSplitterContext<'a, ST>) -> Result<Self::A, AdjusterError<Self::A>> {
         match adjust_context.batch_1_mode {
             Batch1SplitMode::Range => {
-                let result = track_await(self.batch_1_adjuster.adjust(0i64..0, adjust_context)).await;
+                let result = track_await!(self.batch_1_adjuster.adjust(0i64..0, adjust_context)).await;
                 debug!("SelectMotifsAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {
@@ -1152,7 +1152,7 @@ where
                 }
             }
             Batch1SplitMode::Slice => {
-                let result = track_await(self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).await;
+                let result = track_await!(self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).await;
                 debug!("SelectMotifsAdjuster::adjust: slice adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {

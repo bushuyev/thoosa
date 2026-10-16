@@ -82,7 +82,7 @@ impl<'a> BorrowRef for TestInputA<'a> {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
                 Ok(ThoDataRef::Owned(TestInputA {
-                    value: track_await(self.value.copy_to_device(to_tho_device_idx)).await?,
+                    value: track_await!(self.value.copy_to_device(to_tho_device_idx)).await?,
                     fail_with_oom: self.fail_with_oom,
                     // Own the copied field so the returned value does not borrow from this temporary operation.
                     name: Cow::Owned(self.name.to_string()),

@@ -146,10 +146,10 @@ where
 
     pub async fn run(&self, input: Arc<ResourcesConfigInput<RC>>, mut ctx:C) -> Result<Arc<()>, ThoError> {
         match self {
-            Self::CrossLoader { cross_loader, .. } => track_await(Arc::clone(cross_loader).run(input, ctx)).await,
+            Self::CrossLoader { cross_loader, .. } => track_await!(Arc::clone(cross_loader).run(input, ctx)).await,
             Self::Bucketing { bucketing_stage, .. } => {
                 let input = input.resources_config().clone();
-                track_await(Arc::clone(bucketing_stage).run(Arc::new(BucketingInput::new(input)), ctx)).await?;
+                track_await!(Arc::clone(bucketing_stage).run(Arc::new(BucketingInput::new(input)), ctx)).await?;
                 Ok(Arc::new(()))
             }
         }
@@ -438,7 +438,7 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats_output = track_await(motif_stats.run_cached(Arc::new(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()])), ctx.branch(true))).await?;
+                                    let motif_stats_output = track_await!(motif_stats.run_cached(Arc::new(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()])), ctx.branch(true))).await?;
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats_output:?} ctx.id={:?}", ctx_id);
 
@@ -494,12 +494,12 @@ where
                                     },
                                     fixed_config.max_chunk_size as usize,
                                     |batch| {
-                                        async { track_await(batch.to_cpu()).await }.boxed()
+                                        async { track_await!(batch.to_cpu()).await }.boxed()
                                     },
                                     |receiver| {
                                         let dists_tracker = Arc::clone(receiver);
                                         async move {
-                                            track_await(dists_tracker.build_groups()).await
+                                            track_await!(dists_tracker.build_groups()).await
                                         }
                                             .boxed()
                                     },
@@ -514,7 +514,7 @@ where
             });
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?} futures_done");
 
-        let cross_loaders = track_await(collect_futures_with_progress(
+        let cross_loaders = track_await!(collect_futures_with_progress(
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
@@ -582,7 +582,7 @@ where
                 async move { stage.run(input, ctx_for_stage).await }
             });
 
-        let _/*cross loader's out is ()*/ = track_await(collect_futures_with_progress(
+        let _/*cross loader's out is ()*/ = track_await!(collect_futures_with_progress(
             futures,
             run_config_stages_len,
             FuturesOrdering::Unordered,

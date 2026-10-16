@@ -857,7 +857,7 @@ where
         );
         opt.enqueue_configs(reusable_configs);
         debug!("opt_train: wait on optimize ");
-        let best_config = track_await(opt.optimize()).await;
+        let best_config = track_await!(opt.optimize()).await;
 
         debug!("opt_train: best_config={:?}", best_config);
 

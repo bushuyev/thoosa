@@ -228,7 +228,7 @@ where
         let target_precision = self.args.target_precision();
         let futures = entries.into_iter().map(move |entry| {
             async move {
-                Ok::<_, ThoError>(track_await(tokio::task::spawn_blocking(move || {
+                Ok::<_, ThoError>(track_await!(tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "convert_precision::convert_entry",
                         kind = "spawn_blocking",
@@ -240,7 +240,7 @@ where
             }
         });
 
-        let converted = track_await(collect_futures_with_progress(
+        let converted = track_await!(collect_futures_with_progress(
             futures,
             entries_len,
             FuturesOrdering::Unordered,

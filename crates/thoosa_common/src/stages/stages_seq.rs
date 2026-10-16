@@ -106,11 +106,11 @@ where
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
-        let output_a = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx.branch(false))).await?;
+        let output_a = track_await!(Arc::clone(&self.stage_a).run_cached(input, ctx.branch(false))).await?;
 
         debug!("ABStage::run: input.id={input_id:?} a done");
 
-        let output_b = track_await(Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch(false))).await?;
+        let output_b = track_await!(Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch(false))).await?;
 
         debug!("ABStage::run: input.id={input_id:?} b done");
 
@@ -150,10 +150,10 @@ where
         debug!("ABStage::run_cached: input.id={input_id:?}");
 
         let mut ctx_c: C = ctx;
-        let output_a: A::Out = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx_c.branch(false))).await?;
+        let output_a: A::Out = track_await!(Arc::clone(&self.stage_a).run_cached(input, ctx_c.branch(false))).await?;
         debug!("ABStage::run_cached: input.id={input_id:?} output_a={output_a:?} a done");
 
-        let output_b = track_await(Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).await?;
+        let output_b = track_await!(Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).await?;
 
         debug!("ABStage::run_cached: input.id={input_id:?} output_b={output_b:?} b done");
 
@@ -228,8 +228,8 @@ where
         ctx: <A as Stage>::Ctx,
     ) -> Result<Self::Out, ThoError> {
         match &*self {
-            SingleOrPair::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
-            SingleOrPair::Pair(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
+            SingleOrPair::Single(stage) => track_await!(Arc::clone(stage).run_cached(input, ctx)).await,
+            SingleOrPair::Pair(stage) => track_await!(Arc::clone(stage).run_cached(input, ctx)).await,
         }
     }
 }
@@ -287,8 +287,8 @@ where
         let ctx_a: <A as Stage>::Ctx = ctx;
 
         Ok(match &*self {
-            SingleOrPair::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
-            SingleOrPair::Pair(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
+            SingleOrPair::Single(stage) => track_await!(Arc::clone(stage).run_cached(input, ctx_a)).await?,
+            SingleOrPair::Pair(stage) => track_await!(Arc::clone(stage).run_cached(input, ctx_a)).await?,
         })
     }
 }

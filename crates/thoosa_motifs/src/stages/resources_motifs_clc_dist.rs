@@ -279,10 +279,10 @@ impl BorrowRef for ClcResourcesMotifsDistInputDeviceWrapper {
         async move {
             let mut batch = Vec::with_capacity(self.batch.len());
             for tensor in &self.batch {
-                batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                batch.push(ThoDataRef::ReadLocked(track_await!(tensor.load_from_any_device_(to_device_idx)).await?));
             }
-            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
-            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            let stacked_motifs = track_await!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await!(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
             Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids.clone(), vec![0; self.batch.len()], ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
         }
     }
@@ -302,10 +302,10 @@ impl SelectRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResource
             let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
             let mut batch = Vec::with_capacity(range.len());
             for tensor in &self.batch[range.clone()] {
-                batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                batch.push(ThoDataRef::ReadLocked(track_await!(tensor.load_from_any_device_(to_device_idx)).await?));
             }
-            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
-            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            let stacked_motifs = track_await!(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await!(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
             Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids[range.clone()].to_vec(), vec![0; range.len()], ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
         }
     }
@@ -449,11 +449,11 @@ impl ClcResourcesMotifsDistOutput {
     }
 
     pub async fn to_cpu(self) -> Result<ClcResourcesMotifsDistOutput, ThoError> {
-        let channel_masks_dists_ids = track_await(futures::future::try_join_all(
+        let channel_masks_dists_ids = track_await!(futures::future::try_join_all(
             self.channel_masks_dists_ids.into_iter().map(|op| async move {
                 match op {
                     None => Ok::<_, ThoError>(None),
-                    Some((dists_mask, data_ids)) => Ok(Some((track_await(dists_mask.to_cpu()).await?, data_ids))),
+                    Some((dists_mask, data_ids)) => Ok(Some((track_await!(dists_mask.to_cpu()).await?, data_ids))),
                 }
             }),
         )).await?;

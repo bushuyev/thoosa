@@ -213,7 +213,7 @@ where
     async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
         let (node_params, stft_config) = train_motif_step_params(&run_config, self.motif_width)?;
         if GlobalCtx::global().is_ipc() {
-            let motif = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+            let motif = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
             let motif = motif.as_ref().data();
             let motif = ThoTensor::new_ref(
                 motif.id().clone(),
@@ -236,16 +236,16 @@ where
             //TODO extract and use train_motif_step_endpoint_init
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
-                    let motif_ref = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                    let motif_ref = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
                     Some(Arc::new(copy_motif(motif_ref.as_ref().data())?))
                 }
                 MotifNetTypeArgs::Cosine2DNet(args) => {
                     let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone())?);
                     let motif_input = {
-                        let motif_ref = track_await(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                        let motif_ref = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
                         copy_motif(motif_ref.as_ref().data())
                     }?;
-                    let motif_specs = track_await(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
+                    let motif_specs = track_await!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
                     let motif_id = motif_specs.id().clone();
                     let cosine_motif = motif_specs.as_ref();
                     let mut copied = cosine_motif.f_zeros_like()?;
@@ -357,8 +357,8 @@ where
 {
     async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         match &*self {
-            RandomSlicesStage::Raw(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
-            RandomSlicesStage::WithStft(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
+            RandomSlicesStage::Raw(stage) => track_await!(Arc::clone(stage).run_cached(input, ctx)).await,
+            RandomSlicesStage::WithStft(stage) => track_await!(Arc::clone(stage).run_cached(input, ctx)).await,
         }
     }
 }
@@ -425,7 +425,7 @@ where
 {
     let device_idx = ctx.tho_device_idx();
     let out_id = input.id().clone();
-    let specs = track_await(Arc::clone(&stft)
+    let specs = track_await!(Arc::clone(&stft)
         .run(
             Arc::new(DevicesWrap::wrap(input)),
             ctx.branch(false),
@@ -495,7 +495,7 @@ async fn completed_train_motif_trials(store: &Arc<dyn MotifsStore>, select_motif
     let mut train_parent_ids = Vec::new();
     let mut seen_parent_candidates = HashSet::new();
     for select_motifs_run_config_id in select_motifs_run_config_ids {
-        for output_run_config_id in track_await(store.list_output_run_config_ids(*select_motifs_run_config_id)).await? {
+        for output_run_config_id in track_await!(store.list_output_run_config_ids(*select_motifs_run_config_id)).await? {
             if seen_parent_candidates.insert(output_run_config_id) {
                 train_parent_ids.push(output_run_config_id);
             }
@@ -506,7 +506,7 @@ async fn completed_train_motif_trials(store: &Arc<dyn MotifsStore>, select_motif
         return Ok(vec![]);
     }
 
-    let train_parent_ids = track_await(store
+    let train_parent_ids = track_await!(store
         .list_run_configs_by_ids(&train_parent_ids)).await?
         .into_iter()
         .filter(|entry| entry.run_config_type == TrainMotifNetRunConfig::type_name() && entry.descr == "TrainMotifsNetsResult")
@@ -516,7 +516,7 @@ async fn completed_train_motif_trials(store: &Arc<dyn MotifsStore>, select_motif
     let mut child_ids = Vec::new();
     let mut seen_child_candidates = HashSet::new();
     for train_parent_id in train_parent_ids {
-        for output_run_config_id in track_await(store.list_output_run_config_ids(train_parent_id)).await? {
+        for output_run_config_id in track_await!(store.list_output_run_config_ids(train_parent_id)).await? {
             if seen_child_candidates.insert(output_run_config_id) {
                 child_ids.push(output_run_config_id);
             }
@@ -527,7 +527,7 @@ async fn completed_train_motif_trials(store: &Arc<dyn MotifsStore>, select_motif
         return Ok(vec![]);
     }
 
-    let child_entries = track_await(store
+    let child_entries = track_await!(store
         .list_run_configs_by_ids(&child_ids)).await?
         .into_iter()
         .filter(|entry| entry.run_config_type == TrainMotifNetRunConfig::type_name() && entry.descr == "TrainMotifNetResult")
@@ -535,7 +535,7 @@ async fn completed_train_motif_trials(store: &Arc<dyn MotifsStore>, select_motif
 
     let mut trials = Vec::new();
     for child_entry in child_entries {
-        let values = track_await(store.list_run_config_values(child_entry.id)).await?;
+        let values = track_await!(store.list_run_config_values(child_entry.id)).await?;
         let Some(loss) = values.get("loss").and_then(val::val_to_f32) else {
             continue;
         };
@@ -565,7 +565,7 @@ where
             MotifsBy::SelectMotifsRunIds { ref select_motifs_run_config_ids } => {
 
                 let mut motifs_rates_selected_motifs_run_config_ids: Vec<((u32, f64), RunConfigId)> = Vec::new();
-                let run_configs_selected_motifs = track_await(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
+                let run_configs_selected_motifs = track_await!(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
                 for (select_motifs_run_config_id, selected_motifs) in &run_configs_selected_motifs {
 
                     debug!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs in channels={:?} selected_motifs={selected_motifs:?}", selected_motifs.iter().map(|motifs_in_channel|motifs_in_channel.len()).collect::<Vec<_>>());
@@ -579,14 +579,14 @@ where
             }
             MotifsBy::MotifId { motif_id, select_motifs_run_config_ids } => {
 
-                let (channel, find_motifs_run_config_id) = track_await(self.store.get_motif_meta(motif_id)).await?;
+                let (channel, find_motifs_run_config_id) = track_await!(self.store.get_motif_meta(motif_id)).await?;
                 let select_motifs_run_config_ids = match select_motifs_run_config_ids {
                     Some(select_motifs_run_config_ids) => select_motifs_run_config_ids,
-                    None => track_await(self.store.list_output_run_config_ids(find_motifs_run_config_id)).await?,
+                    None => track_await!(self.store.list_output_run_config_ids(find_motifs_run_config_id)).await?,
                 };
 
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
-                let run_configs_selected_motifs = track_await(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
+                let run_configs_selected_motifs = track_await!(self.store.list_selected_motifs(&select_motifs_run_config_ids, channels, input.motifs_limit)).await?;
                 for (select_motifs_run_config_id, selected_motifs) in &run_configs_selected_motifs {
                     let motif_is_selected = selected_motifs
                         .get(channel)
@@ -602,7 +602,7 @@ where
         let motifs_rates_selected_motifs_run_config_ids_len = motifs_rates_selected_motifs_run_config_ids.len();
         debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len} motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
 
-        let reusable_completed_trials = track_await(completed_train_motif_trials(&self.store, &select_motifs_run_config_ids)).await?;
+        let reusable_completed_trials = track_await!(completed_train_motif_trials(&self.store, &select_motifs_run_config_ids)).await?;
         debug!("TrainMotifNets::run: reusable_completed_trials.len={}", reusable_completed_trials.len());
 
         motifs_rates_selected_motifs_run_config_ids.sort_by(|a, b|{
@@ -627,14 +627,14 @@ where
 
             async move {
 
-                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = track_await(motif_loader.run_cached(
+                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = track_await!(motif_loader.run_cached(
                     Arc::new(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id]))),
                     ctx.branch(false),
                 )).await?;
 
                 let motif_for_net = Arc::clone(&motif);
 
-                let motif_meta = track_await(motif.extra()).await?;
+                let motif_meta = track_await!(motif.extra()).await?;
                 let motif_width = motif_meta.window;
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
@@ -670,7 +670,7 @@ where
                                         copy_motif(motif.data())
                                     }?;
 
-                                    let motif_specs = track_await(run_stft_as_motif_slices(
+                                    let motif_specs = track_await!(run_stft_as_motif_slices(
                                         &stft,
                                         stft_input,
                                         ctx.branch(false),
@@ -681,7 +681,7 @@ where
 
                                     debug!("TrainMotifNets::run: batch, rc.id={:?} motif_specs={motif_specs:?}", rc.id);
 
-                                    track_await(MotifsBatch::new(motif_specs, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
+                                    track_await!(MotifsBatch::new(motif_specs, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
                                 }.boxed()
                             }
                             MotifNetTypeArgs::CosineNet(args) => {
@@ -690,7 +690,7 @@ where
                                 let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::Raw(Arc::clone(&random_slices_loader_for_batch)));
                                 async move {
-                                    track_await(MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
+                                    track_await!(MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
                                 }.boxed()
                             }
                             _ => {
@@ -699,7 +699,7 @@ where
                                 let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::Raw(Arc::clone(&random_slices_loader_for_batch)));
                                 async move {
-                                    track_await(MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
+                                    track_await!(MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
                                 }.boxed()
                             }
                         }
@@ -718,7 +718,7 @@ where
 
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
-                let train_net_output = track_await(train_net.run(
+                let train_net_output = track_await!(train_net.run(
                     Arc::new(TrainNetInput::new()),
 
                     ctx_run
@@ -726,7 +726,7 @@ where
 
                 info!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", train_net_output.min_loss);
 
-                let (channel, _find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id_rate.0)).await?;
+                let (channel, _find_motifs_run_config_id) = track_await!(store.get_motif_meta(motif_id_rate.0)).await?;
                 Ok(TrainMotifNetResult::new(
                     train_net_output.min_loss,
                     channel as u32,
@@ -745,7 +745,7 @@ where
 
 
         // Every selected motif is required; never publish a partial training result.
-        let results = track_await(collect_futures_with_progress(
+        let results = track_await!(collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
             FuturesOrdering::Unordered,
@@ -803,8 +803,8 @@ impl thoosa_common::runner::common::cachable::BorrowRef for SyncMotifBatchInputW
         Self: 'a,
     {
         async move {
-            let motifs = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.motifs, to_device_idx)).await?;
-            let random_slices = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.random_slices, to_device_idx)).await?;
+            let motifs = track_await!(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.motifs, to_device_idx)).await?;
+            let random_slices = track_await!(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.random_slices, to_device_idx)).await?;
             Ok(SyncMotifBatchInput { id: self.id.clone(), motifs, random_slices, num_slices: self.num_slices, descr: self.descr.clone() })
         }
     }
@@ -1078,7 +1078,7 @@ impl thoosa_common::runner::common::cachable::BorrowRef for SplitMotifIntoTrainV
         Self: 'a,
     {
         async move {
-            let motif = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.motif, to_device_idx)).await?;
+            let motif = track_await!(thoosa_common::runner::common::cachable::BorrowRef::borrow_ref(&self.motif, to_device_idx)).await?;
             Ok(SplitMotifIntoTrainValidInput { id: self.id.clone(), motif: SplitMotifTensorRef::WithExtra(motif) })
         }
     }
@@ -1296,11 +1296,11 @@ where
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
         let sync_motif_batch = SyncMotifBatch::new(ctx.tho_device_idx()).await?;
-        let motif_meta = track_await(motif.extra()).await?;
+        let motif_meta = track_await!(motif.extra()).await?;
         let split_motif = Arc::new(SplitMotifIntoTrainValid::<C>::new(ctx.tho_device_idx()).await?);
         let split_input = Arc::new(SplitMotifIntoTrainValidInputWrapper::new(motif));
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-        let split_output = track_await(oom_handler.run(&split_motif, split_input, ctx.branch(false), NoContexts)).await?;
+        let split_output = track_await!(oom_handler.run(&split_motif, split_input, ctx.branch(false), NoContexts)).await?;
 
         Ok(Self {
             motif_id: split_output.id,
@@ -1318,13 +1318,13 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifsBatch::make_batch"))]
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoError> {
-        let random_slices = track_await(self.current_random_slices(ctx.branch(false))).await?;
+        let random_slices = track_await!(self.current_random_slices(ctx.branch(false))).await?;
         let num_slices = (self.batch_size / 2) as i64;
 
         debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
         let input = Arc::new(SyncMotifBatchInputWrapper::new(motif_id.clone(), motifs, random_slices, num_slices, descr.to_string()));
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-        let output = track_await(oom_handler.run(&self.sync_motif_batch, input, ctx.branch(false), NoContexts)).await?;
+        let output = track_await!(oom_handler.run(&self.sync_motif_batch, input, ctx.branch(false), NoContexts)).await?;
         Ok(output.into_parts())
     }
 
@@ -1343,7 +1343,7 @@ where
         }
 
 
-        let random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = track_await(Arc::clone(&self.random_slices_loader)
+        let random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = track_await!(Arc::clone(&self.random_slices_loader)
             .run(
                 Arc::new(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit)),
                 ctx.branch(false),
@@ -1376,7 +1376,7 @@ where
                 let ctx = ctx.branch(false);
                 async move {
 
-                    track_await(self.make_batch(
+                    track_await!(self.make_batch(
                         train_motifs,
                         &motif_id,
                         "train",
@@ -1403,7 +1403,7 @@ where
                 let ctx = ctx.branch(false);
                 async move {
 
-                    track_await(self.make_batch(
+                    track_await!(self.make_batch(
                         valid_motifs,
                         &motif_id,
                         "valid",
@@ -1912,7 +1912,7 @@ impl SavableResult for TrainMotifNetsResult {
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
             result.push(
-            track_await(r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).await?
+            track_await!(r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).await?
             );
         }
 
@@ -1980,7 +1980,7 @@ impl SavableResult for TrainMotifNetResult {
 
         debug!("TrainMotifNetResult::save: self={:?}", self);
 
-        let train_motif_net_run_config_id = track_await(store.save_run_config(
+        let train_motif_net_run_config_id = track_await!(store.save_run_config(
             Some(p),
             &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
@@ -1995,7 +1995,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         ))?;
 
-        track_await(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).await?;
+        track_await!(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).await?;
 
         Ok(train_motif_net_run_config_id)
 

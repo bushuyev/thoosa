@@ -72,8 +72,8 @@ where
     tokio::spawn(async move {
         futures_util::pin_mut!(source);
 
-        while let Some(item) = track_await(source.next()).await {
-            if track_await(tx.send(item)).await.is_err() {
+        while let Some(item) = track_await!(source.next()).await {
+            if track_await!(tx.send(item)).await.is_err() {
                 break;
             }
         }
@@ -104,11 +104,11 @@ where
 
     tokio::spawn(async move {
         for fut in futures {
-            let permit = match track_await(tx.reserve()).await {
+            let permit = match track_await!(tx.reserve()).await {
                 Ok(permit) => permit,
                 Err(_) => break,
             };
-            permit.send(track_await(fut).await);
+            permit.send(track_await!(fut).await);
         }
     }.instrument(tracing::info_span!(
         "batches::prefetch_next_batch_stream",
