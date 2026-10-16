@@ -658,6 +658,14 @@ impl ThoError {
             Self::Cuda { action: CudaAction::HandleOOM, .. } => true,
             Self::TrainingSessionFailed(failure) => failure.original.is_oom() || failure.recovery.as_ref().is_some_and(Self::is_oom),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_oom(),
+            Self::Anyhow(anyhow) => {
+                let is_oom = cuda_cause_from_msg(&anyhow.to_string()).is_retryable_oom();
+                if is_oom{
+                    warn!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
+                }
+                is_oom
+            }
+
             _ => false,
         }
     }
@@ -684,6 +692,13 @@ impl ThoError {
             Self::Cuda { action: CudaAction::NeedsRestart, .. } => true,
             Self::TrainingSessionFailed(failure) => failure.original.needs_cuda_ctx_reset() || failure.recovery.as_ref().is_some_and(Self::needs_cuda_ctx_reset),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_ctx_reset(),
+            Self::Anyhow(anyhow) => {
+                let needs_reset = cuda_cause_from_msg(&anyhow.to_string()).needs_cuda_ctx_reset();
+                if needs_reset{
+                    warn!("thoosa_shared::ThoError::needs_cuda_ctx_reset: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
+                }
+                needs_reset
+            }
             _ => false,
         }
     }
@@ -2600,14 +2615,23 @@ mod shared_tests {
 
     #[test]
     fn test_tho_error_does_not_classify_application_messages() {
-        for error in [
-            ThoError::new("CUDA out of memory"),
-            ThoError::from(std::io::Error::other("CUDA error: illegal memory access")),
-            anyhow::anyhow!("read failed").context("CUDA out of memory").into(),
-        ] {
-            assert!(matches!(error.what(), ThoError::Anyhow(_)));
-            assert!(!error.is_oom() && !error.is_retryable_oom() && !error.needs_cuda_ctx_reset());
-        }
+        let error = ThoError::new("CUDA out of memory");
+        assert!(matches!(error.what(), ThoError::Anyhow(_)));
+        assert!(error.is_oom(), "is_oom");
+        assert!(error.is_retryable_oom(), "is_retryable_oom");
+        assert!(!error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
+
+        let error = ThoError::from(std::io::Error::other("CUDA error: illegal memory access"));
+        assert!(matches!(error.what(), ThoError::Anyhow(_)));
+        assert!(!error.is_oom(), "is_oom");
+        assert!(!error.is_retryable_oom(), "is_retryable_oom");
+        assert!(error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
+
+        let error:ThoError = anyhow::anyhow!("read failed").context("CUDA out of memory").into();
+        assert!(matches!(error.what(), ThoError::Anyhow(_)));
+        assert!(error.is_oom(), "is_oom");
+        assert!(error.is_retryable_oom(), "is_retryable_oom");
+        assert!(!error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
     }
 
     #[cfg(feature = "tch-error")]
