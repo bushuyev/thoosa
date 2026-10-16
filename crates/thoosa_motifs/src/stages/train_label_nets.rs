@@ -50,7 +50,7 @@ use rand::rng;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::worker_msg::{WorkerInput};
-use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream, preload_one};
+use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::resources::{Labeled, NetResources, SavableResult};
@@ -965,7 +965,7 @@ where
             }
         });
 
-        // preload_one(futures)
+        // TrainNet polls one batch ahead and owns its temporary cache and drain.
         futures.boxed()
     }
 

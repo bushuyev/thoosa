@@ -94,6 +94,177 @@ fn input(train: bool) -> Result<TrainStepInput<AnyDims, AnyDims>, ThoError> {
     ))
 }
 
+fn batch_parts(mut input: TrainStepInput<AnyDims, AnyDims>) -> Result<(ThoBatch<AnyDims>, Option<BatchLengths>, ThoBatch<AnyDims>), ThoError> {
+    Ok((input.x.take().ok_or_else(|| ThoError::new("missing batch input"))?, input.lengths.take(), input.expected_y.take().ok_or_else(|| ThoError::new("missing batch target"))?))
+}
+
+async fn prepared_batch_round_trips() -> Result<(), ThoError> {
+    let mut ctx = RunCtxImpl::new(1, "prepared batches");
+    let pipeline = step(0, "pipeline".into(), PathBuf::from("/tmp/unused-pipeline")).await?;
+    let reference = step(0, "pipeline-reference".into(), PathBuf::from("/tmp/unused-pipeline-reference")).await?;
+
+    // A queued entry owns its registration even after the producer disappears.
+    // Exercise the real registry and GPU/worker-reference offload, not a mock copy.
+    let cache = Arc::new(TmpCached::new("queued_batch_offload").await);
+    let queued = input(true)?.copy_to_device(1).await?;
+    let id = queued.id().clone();
+    let entry = cache.insert_guarded(queued);
+    let wrapped = cache.get(&id).ok_or_else(|| ThoError::new("queued batch missing"))?;
+    let cache_alive = Arc::downgrade(&cache);
+    drop(cache);
+    GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "queued batch test").await?;
+    assert!(wrapped.is_all_on_cpu().await, "queued batch must be visible to OOM offload");
+    drop(wrapped);
+    let actual = pipeline.run_once(entry, ctx.branch(false), 0).await?.loss;
+    let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference.clone(), input(true)?, 1, &ctx).await?.loss;
+    assert!((actual - expected).abs() < 1e-6, "offloaded batch did not reload correctly");
+    assert!(cache_alive.upgrade().is_none(), "consumed batch retained its temporary cache");
+
+    for prefetch in [true, false] {
+        for train in [true, false] {
+            let source = futures_util::stream::iter(0..4).then(move |_| async move {
+                // Label/final preparation also returns device-resident batches.
+                batch_parts(input(train)?.copy_to_device(1).await?)
+            }).boxed();
+            let mut actual = vec![];
+            pipeline.run_batches(source, ctx.branch(false), train, 32, prefetch, |loss| actual.push(loss)).await?;
+            assert_eq!(actual.len(), 4);
+            for actual in actual {
+                let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
+                assert!((actual - expected).abs() < 1e-6, "prefetch={prefetch}, train={train}: batch order or update changed");
+            }
+        }
+    }
+
+    // A failed step must finish its one in-flight preparation before rollback,
+    // and must never poll a third batch or train the speculative second batch.
+    let saved = pipeline.save_epoch_checkpoint(1).await?;
+    let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut failed = input(true)?;
+    failed.expected_y = Some(ThoTensor::new(debug_id!("prefetch OOM"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
+    let source = futures_util::stream::iter([batch_parts(failed)])
+        .chain(futures_util::stream::once({
+            let drained = drained.clone();
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                drained.store(true, std::sync::atomic::Ordering::SeqCst);
+                batch_parts(input(true)?)
+            }
+        }))
+        .chain(futures_util::stream::once(async { panic!("preparation continued after a failed epoch") }))
+        .boxed();
+    let error = pipeline.run_batches(source, ctx.branch(false), true, 32, true, |_| panic!("failed or speculative batch was committed")).await.unwrap_err();
+    assert!(error.is_oom());
+    assert!(drained.load(std::sync::atomic::Ordering::SeqCst), "rollback can race an undrained producer");
+    pipeline.restore_epoch_checkpoint(saved, 1).await?;
+    let actual = GlobalCtx::global().cuda_actor(1).run_stage(pipeline.clone(), input(false)?, 1, &ctx).await?.loss;
+    let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
+    assert!((actual - expected).abs() < 1e-6, "failed epoch changed committed state");
+
+    // Cancellation must drop the pending producer instead of leaving a spawned
+    // task holding its captures (and potentially cached resources) indefinitely.
+    let alive = Arc::new(());
+    let producer = Arc::downgrade(&alive);
+    let preparing = Arc::new(tokio::sync::Notify::new());
+    let source = futures_util::stream::iter([batch_parts(input(true)?)])
+        .chain(futures_util::stream::once({
+            let preparing = preparing.clone();
+            async move {
+                let _alive = alive;
+                preparing.notify_one();
+                std::future::pending().await
+            }
+        })).boxed();
+    let mut run = Box::pin(pipeline.run_batches(source, ctx.branch(false), true, 32, true, |_| {}));
+    tokio::select! {
+        _ = preparing.notified() => {},
+        result = &mut run => panic!("pipeline finished before cancellation: {result:?}"),
+    }
+    assert!(producer.upgrade().is_some());
+    drop(run);
+    assert!(producer.upgrade().is_none(), "cancelled pipeline retained its producer");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_prepared_batches_local() -> Result<(), ThoError> {
+    let global = GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), prepared_batch_round_trips()).await?;
+    global.shutdown().await;
+    result
+}
+
+#[test]
+fn test_prepared_batches_ipc() -> Result<(), ThoError> {
+    crate::ipc::tests::run_ipc_test(module_path!(), async {
+        tokio::time::timeout(std::time::Duration::from_secs(30), prepared_batch_round_trips()).await?
+    }, async |sock| {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), Device::Cuda(0).into()).await
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_prepared_batches_overlap_and_bound() -> Result<(), ThoError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let global = GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+    let started = Arc::new(tokio::sync::Notify::new());
+    let prepared = Arc::new(tokio::sync::Notify::new());
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let mut local = local_step::<RunCtxImpl>(0, 1.into(), PathBuf::from("/tmp/unused-overlap")).await?;
+    let started_for_step = started.clone();
+    let calls = AtomicUsize::new(0);
+    // Hold the first real synchronous forward pass until preparation progresses.
+    local.x_f = Arc::new(Box::new(move |batch| {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            started_for_step.notify_one();
+            release_rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10)).expect("next batch did not overlap training");
+        }
+        batch
+    }));
+    let pipeline = Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(local)));
+    let completed = Arc::new(AtomicUsize::new(0));
+    let loaded = Arc::new(AtomicUsize::new(0));
+    let source = futures_util::stream::iter(0..4).then({
+        let completed = completed.clone();
+        let loaded = loaded.clone();
+        let prepared = prepared.clone();
+        let started = started.clone();
+        move |index| {
+            let completed = completed.clone();
+            let loaded = loaded.clone();
+            let prepared = prepared.clone();
+            let started = started.clone();
+            async move {
+                assert!(index <= completed.load(Ordering::SeqCst) + 1, "prepared more than one batch ahead");
+                // Require preparation to run during the blocked synchronous
+                // invocation, not merely before the runner starts that invocation.
+                if index == 1 { started.notified().await; }
+                let batch = batch_parts(input(true)?)?;
+                loaded.fetch_add(1, Ordering::SeqCst);
+                if index == 1 { prepared.notify_one(); }
+                Ok(batch)
+            }
+        }
+    }).boxed();
+    let observe = async {
+        prepared.notified().await;
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+        assert_eq!(loaded.load(Ordering::SeqCst), 2);
+        release_tx.send(()).expect("training receiver disappeared");
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        tokio::join!(pipeline.run_batches(source, RunCtxImpl::new(1, "overlap"), true, 32, true, |_| { completed.fetch_add(1, Ordering::SeqCst); }), observe)
+    }).await?;
+    result?;
+    assert_eq!(completed.load(Ordering::SeqCst), 4);
+    global.shutdown().await;
+    Ok(())
+}
+
 async fn round_trips() -> Result<(), ThoError> {
     let global = GlobalCtx::global();
     let actor = global.cuda_actor(1);
@@ -117,7 +288,8 @@ async fn round_trips() -> Result<(), ThoError> {
             for (key, tensor) in &newer.tensors { assert!(tensor.as_ref().f_equal(newest.tensors[key].as_ref().as_ref())?); }
             let mut failed = input(true)?;
             failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
-            let error = restored.run_once(failed, RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();
+            let cache = Arc::new(TmpCached::new("failed_epoch_batch").await);
+            let error = restored.run_once(cache.insert_guarded(failed), RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();
             assert!(error.is_oom());
             restored.restore_epoch_checkpoint(Arc::clone(&saved), 1).await?;
             // The checkpoint survives a restore and unrelated CPU purge.
