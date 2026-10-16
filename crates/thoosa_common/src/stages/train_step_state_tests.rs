@@ -109,6 +109,12 @@ async fn round_trips() -> Result<(), ThoError> {
             // successful updates and a failed invocation from the next epoch.
             let saved = restored.save_epoch_checkpoint(1).await?;
             for _ in 0..2 { actor.run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
+            // Capture multiple later epochs while retaining the recovery point.
+            // Staging-buffer reuse must not overwrite saved parameters/moments.
+            let newer = restored.save_epoch_checkpoint(1).await?;
+            let newest = restored.save_epoch_checkpoint(1).await?;
+            assert_eq!(newer.tensors.len(), newest.tensors.len());
+            for (key, tensor) in &newer.tensors { assert!(tensor.as_ref().f_equal(newest.tensors[key].as_ref().as_ref())?); }
             let mut failed = input(true)?;
             failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
             let error = restored.run_once(failed, RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();

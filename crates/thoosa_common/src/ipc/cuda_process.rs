@@ -532,12 +532,27 @@ impl CudaIPCActor {
                 OpResult::Ok(Some(value)) => (value as Box<dyn Any>).downcast::<StageStateInfo>().map_err(|_| ThoError::new("invalid stage export description"))?,
                 OpResult::Ok(None) => return Err(ThoError::new("missing stage export description")),
             };
-            let mut tensors = HashMap::new();
+            let mut tensors = Vec::with_capacity(info.tensors.len());
+            let mut destinations = Vec::with_capacity(info.tensors.len());
             for tensor_info in info.tensors {
                 let key = tensor_info.tensor_key.to_tensor_key();
-                let tensor = Self::do_ref_d2h_copy(worker_id, next_id.fetch_add(1, Ordering::Relaxed), Arc::clone(&pending), tx.clone(), tensor_info, Some(export_id)).await?;
-                tensors.insert(key, tensor);
+                let tensor = Tensor::f_empty(tensor_info.shape.as_slice(), (tensor_info.kind.into(), Cpu))?;
+                let arena_offset = parent_shared_arena_offset(&tensor, tensor_info.tensor_byte_len, "state D2H destination")?;
+                destinations.push(crate::ipc::worker_msg::StageExportDestination { info: tensor_info, arena_offset });
+                tensors.push((key, tensor));
             }
+            // One request takes the worker export mutex once and coalesces its
+            // tensors into reusable pinned staging buffers. The pending registry
+            // retains ALL destinations until reply or confirmed worker exit.
+            let tensors = Arc::new(parking_lot::Mutex::new(tensors));
+            if !destinations.is_empty() {
+                let request = CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), Operation::ExportStageTensors {
+                    endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone(), export_id, destinations,
+                });
+                unit_reply(send_request(tx.clone(), Arc::clone(&pending), request, Some(Box::new(Arc::clone(&tensors))), false).await?)?;
+            }
+            let tensors = Arc::try_unwrap(tensors).map_err(|_| ThoError::new("completed state D2H storage is still leased"))?.into_inner();
+            let tensors = tensors.into_iter().map(|(key, tensor)| Ok((key, ThoTensor::new((), tensor)?))).collect::<Result<_, ThoError>>()?;
             Ok(StageStateDump::new(info.scalars, tensors))
         };
         // Catch polling panics as well as ordinary errors so every accepted actor
@@ -1933,6 +1948,52 @@ mod export_tests {
 
     fn reply(pending: &PendingRequests, request: CudaWorkerMsgIn, status: OpResult) {
         pending.complete(CudaWorkerMsgOut { worker_id: request.worker_id, request_id: request.request_id, status }).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_export_batches_all_tensors_and_finishes_after_success_failure_or_cancellation() {
+        for outcome in 0..3 {
+            let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+            let worker = CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+            let pending = Arc::new(PendingRequests::new(worker));
+            let (tx, mut requests) = mpsc::channel(8);
+            let (send, receive) = oneshot::channel();
+            let activity = thoosa_shared::CudaActivityScope::for_operation(&gate).unwrap();
+            let task = tokio::spawn(activity.run(CudaIPCActor::export_stage(worker, "batch".into(), Some("1".into()), Arc::new(AtomicU64::new(1)), Arc::clone(&pending), tx, Arc::clone(&gate), send)));
+            let begin = requests.recv().await.unwrap();
+            let export_id = begin.request_id;
+            // Zero-byte tensors exercise the real actor protocol without
+            // installing a process-global allocator or requiring CUDA.
+            let tensors = (0..8).map(|index| WorkerTensorInfoPayload::new(TensorKey::stage_state("batch", "1", index.to_string()), tch::Kind::Float.into(), vec![0, index], 0)).collect();
+            reply(&pending, begin, OpResult::Ok(Some(Box::new(StageStateInfo::new(tensors, None)))));
+            let batch = requests.recv().await.unwrap();
+            let Operation::ExportStageTensors { export_id: batch_export_id, destinations, .. } = &batch.operation else { panic!("expected one batched export") };
+            assert_eq!(*batch_export_id, export_id);
+            assert_eq!(destinations.len(), 8);
+            assert!(requests.try_recv().is_err(), "there must be no per-tensor requests");
+            let mut receive = if outcome == 2 { drop(receive); None } else { Some(receive) };
+            reply(&pending, batch, if outcome == 1 { ThoError::oom().into() } else { OpResult::Ok(None) });
+            let keep_live = if outcome == 0 {
+                let mut dump = receive.take().unwrap().await.unwrap().unwrap();
+                assert!(requests.try_recv().is_err(), "publication must precede export completion");
+                Some(tokio::spawn(dump.export.take().unwrap().keep_live()))
+            } else {
+                // Failure must resolve the caller only after abort releases the freeze.
+                if let Some(receive) = receive.as_mut() { assert!(receive.try_recv().is_err()); }
+                None
+            };
+            let finish = requests.recv().await.unwrap();
+            assert!(matches!(finish.operation, Operation::FinishStageExport { commit: false, export_id: id, .. } if id == export_id));
+            let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+            assert!(gate.wait_until_idle().now_or_never().is_none(), "accepted export must retain activity until finish replies");
+            reply(&pending, finish, OpResult::Ok(None));
+            if let Some(keep_live) = keep_live { keep_live.await.unwrap().unwrap(); }
+            if let Some(receive) = receive { assert!(receive.await.unwrap().unwrap_err().is_oom()); }
+            task.await.unwrap();
+            gate.wait_until_idle().await;
+            gate.finish_pause(pause);
+            assert!(!pending.failed.is_cancelled(), "a recoverable batch failure must keep transport usable");
+        }
     }
 
     #[tokio::test]

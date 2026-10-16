@@ -4,7 +4,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
-use thoosa_shared::ipc_types::{H2DTensorKey, IpcTensorKind, TensorKey, WorkerOutput};
+use thoosa_shared::ipc_types::{H2DTensorKey, IpcTensorKind, TensorKey, WorkerOutput, WorkerTensorInfoPayload};
 use thoosa_shared::traits::StageStateInfo;
 use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
 
@@ -56,6 +56,14 @@ impl WorkerOutput for DebugOutput {
 }
 
 
+// A batch has one export lease and one reply, while retaining each tensor's
+// exact shape/type and its independently owned parent allocation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StageExportDestination {
+    pub info: WorkerTensorInfoPayload,
+    pub arena_offset: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Operation {
     DescribeRef {
@@ -87,6 +95,7 @@ pub enum Operation {
     PurgeStage { endpoint_name: String, stage_id: Option<String> },
     // Begin uses its request ID as the transaction identity; finish has its own request ID.
     BeginStageExport { endpoint_name: String, stage_id: Option<String> },
+    ExportStageTensors { endpoint_name: String, stage_id: Option<String>, export_id: u64, destinations: Vec<StageExportDestination> },
     FinishStageExport { endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool },
     ResetStageState { endpoint_name: String, stage_id: Option<String>, info: StageStateInfo },
     DropStage { endpoint_name: String, stage_id: Option<String> },
