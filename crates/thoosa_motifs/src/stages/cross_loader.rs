@@ -1,3 +1,4 @@
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::find::FindMotifsSavableResult;
 use crate::motifs_store::MotifsStore;
 #[cfg(test)]
@@ -278,7 +279,7 @@ where
         input.prepared_outer = prepared_outer;
         debug!("CrossLoader::run_loaded_batch: input={input:?}");
 
-        let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         match track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(

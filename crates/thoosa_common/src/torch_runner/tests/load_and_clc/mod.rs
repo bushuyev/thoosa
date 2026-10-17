@@ -132,10 +132,10 @@ impl AsyncStage for LoadAndClcStage {
 
         debug!("LoadAndMulTask::run: loaded_id={loaded_id:?} output_id={output_id:?}");
 
-        let loaded_id_name = "LoadedTensorId";
-        let output_id_name = "MulTaskOutputId";
+        let loaded_cache_key = TestTensorLoader::cache_key();
+        let output_cache_key = ClcStage::cache_key();
 
-        debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id={:?}" ,output_id);
+        debug!("LoadAndMulTask::run: loaded_cache_key={loaded_cache_key:?} output_id={:?}" ,output_id);
 
         let set_loaded = [&loaded_id as &dyn CachableIdTr]
             .into_iter()
@@ -145,8 +145,8 @@ impl AsyncStage for LoadAndClcStage {
             .collect::<HashSet<&dyn CachableIdTr>>();
 
         let required_ids = HashMap::from([
-            (loaded_id_name, &set_loaded),
-            (output_id_name, &set_mul),
+            (loaded_cache_key, &set_loaded),
+            (output_cache_key, &set_mul),
         ]);
 
         let size = loaded.size().clone();
@@ -759,8 +759,8 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
     multed_tensors_ids.insert(&mult_mul_task_0_inp_loaded_resource_3 as &dyn CachableIdTr);
 
     let mut required_ids = HashMap::new();
-    required_ids.insert("LoadedTensorId", &loaded_tensors_ids);
-    required_ids.insert("MulTaskOutputId", &multed_tensors_ids);
+    required_ids.insert(TestTensorLoader::cache_key(), &loaded_tensors_ids);
+    required_ids.insert(ClcStage::cache_key(), &multed_tensors_ids);
 
     _global_ctx.dump_all_to_cpu(&required_ids, 1, "test").await?;
 

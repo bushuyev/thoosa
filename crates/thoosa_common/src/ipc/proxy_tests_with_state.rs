@@ -689,7 +689,7 @@ mod tests {
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
         let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
 
-        GlobalCtx::global().register_cache(("train_step", Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
+        GlobalCtx::global().register_cache(("train_step".into(), Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 

@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 
 use log::{debug, info};
@@ -508,7 +509,7 @@ where
             let mut ctx = ctx.branch(false);
             let select_config = select_config.clone();
             async move {
-                let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),

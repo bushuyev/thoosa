@@ -1,3 +1,4 @@
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -1237,7 +1238,7 @@ where
                 debug!("MotifStats::run: motif={motif:?}");
                 let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), motif, metrics.clone(), quantiles.clone()));
-                let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
+                let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -1296,7 +1297,7 @@ where
 
                 let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs, metrics.clone(), quantiles.clone()));
-                let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
+                let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -1348,10 +1349,10 @@ where
 
                 debug!("MotifStats::run: MotifStatsSource::Random  channels_slices={channels_slices:?}");
                 let clc_stats_consume = Arc::new(MotifStatsConsumeStage::<C>::new(ctx.tho_device_idx()).await?);
-                let tmp_cache_name = channels_slices.registered_name();
+                let tmp_cache_key = channels_slices.cache_key().clone();
                 let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
                 let required_tmp_cache_ids = HashSet::<&dyn thoosa_shared::traits::CachableIdTr>::new();
-                let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
+                let required_ids = HashMap::from([(tmp_cache_key, &required_tmp_cache_ids)]);
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),

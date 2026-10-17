@@ -1,3 +1,4 @@
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::motifs_store::MotifsStore;
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
@@ -572,8 +573,8 @@ where
                 debug!("LogitsResourcesBatch::build_batch_stream: label_probabilities={label_probabilities:?} labels={labels:?}");
                 let hash_set = label_probabilities.iter().map(|wrap| wrap.id().clone()).collect::<std::collections::HashSet<_>>();
                 let dyn_refs_set = hash_set.iter().map(|id|id as &dyn thoosa_shared::traits::CachableIdTr).collect::<std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>>();
-                let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
-                    (L::name(), &dyn_refs_set)
+                let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
+                    (loader.output_cache_key(), &dyn_refs_set)
                 ]);
                 let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));

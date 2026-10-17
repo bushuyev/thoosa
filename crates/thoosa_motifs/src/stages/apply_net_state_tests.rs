@@ -92,8 +92,8 @@ async fn round_trips() -> Result<(), ThoError> {
         restore_guards(stage.as_ref()).await?;
         DynSyncStageWithStateEnum::Local(stage)
     });
-    global.register_cache(("inference_state_motif", motif.clone() as Arc<dyn FuturesRunnerMapPurger>));
-    global.register_cache(("inference_state_label", label.clone() as Arc<dyn FuturesRunnerMapPurger>));
+    let motif_cache = global.register_cache(("inference_state_motif".into(), motif.clone() as Arc<dyn FuturesRunnerMapPurger>));
+    let label_cache = global.register_cache(("inference_state_label".into(), label.clone() as Arc<dyn FuturesRunnerMapPurger>));
     let mut expected_motif = None;
     let mut expected_label = None;
     for cycle in 0..3 {
@@ -142,8 +142,8 @@ async fn round_trips() -> Result<(), ThoError> {
             assert!(ThoError::from(error).to_string().contains("offloaded"));
         }
     }
-    global.remove_cache("inference_state_motif");
-    global.remove_cache("inference_state_label");
+    global.remove_cache(motif_cache.key());
+    global.remove_cache(label_cache.key());
     Ok(())
 }
 
