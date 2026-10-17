@@ -1,3 +1,4 @@
+use crate::runner::global_ctx::CacheKey;
 use anyhow::Context as _;
 use crate::debug_plot;
 use async_trait::async_trait;
@@ -148,7 +149,7 @@ where
 
         // let stage_id = stage.id();
         //freq. filter is used to apply motif nets up to final training so it's never unregistered
-        GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+        GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         cache.insert(id, Arc::clone(&stage));
 
@@ -868,7 +869,7 @@ where
         let out_id = self.out_id(input.id());
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len].into();
-        let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         // let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self), ctx.tho_device_idx()).await?);
 
         let filtered = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(

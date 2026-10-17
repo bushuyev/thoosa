@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::runner::global_ctx::CacheKey;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -93,7 +94,7 @@ where
         runnable: &Arc<R>,
         input: Arc<W>,
         mut ctx: <R as Stage>::Ctx,
-        required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
+        required_ids: &'z HashMap<CacheKey, &HashSet<&dyn CachableIdTr>>,
         size: <R::In<'z> as Data>::Metrics,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
@@ -941,7 +942,7 @@ mod tests {
                             &self.mul,
                             loaded,
                             ctx.branch(false),
-                            &HashMap::from([("", &HashSet::new())]),
+                            &HashMap::new(),
                             size,
                         )
                         .await?

@@ -133,6 +133,11 @@ where
 
     Self::Out: WithId
 {
+    fn output_cache_key(&self) -> crate::runner::global_ctx::CacheKey {
+        // PairStage owns no cache: run_cached returns the final stage's output.
+        self.stage_b.output_cache_key()
+    }
+
     async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>
     where
         Self: Sized,
@@ -263,6 +268,14 @@ where
 
     Self::Out: WithId
 {
+    fn output_cache_key(&self) -> crate::runner::global_ctx::CacheKey {
+        // The selected branch determines which cache actually owns the output.
+        match self {
+            Self::Single(stage) => stage.output_cache_key(),
+            Self::Pair(stage) => stage.output_cache_key(),
+        }
+    }
+
     async fn cache() -> Result<Arc<thoosa_common::runner::common::cachable::StageCache<Self>>, ThoError>
     where
         Self: Sized,

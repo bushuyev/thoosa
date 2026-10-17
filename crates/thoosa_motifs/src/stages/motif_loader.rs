@@ -732,7 +732,7 @@ where
             ctx.branch(false),
             "motif loader",
         )).await?;
-        let loaded_resources_name = loaded_resources.registered_name();
+        let loaded_resources_key = loaded_resources.cache_key().clone();
         let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
 
         let sync_input = SyncMotifLoaderInputWrapper::new(
@@ -746,7 +746,7 @@ where
             "motif loader wrapper".to_string(),
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
-        let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
+        let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -893,7 +893,7 @@ where
             ctx.branch(false),
             "random loader",
         )).await?;
-        let loaded_resources_name = loaded_resources.registered_name();
+        let loaded_resources_key = loaded_resources.cache_key().clone();
         let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
         let sync_input = SyncMotifLoaderInputWrapper::new(
             mono_key!(*motif_id_value, "random_slices_loader_input").into(),
@@ -906,7 +906,7 @@ where
             "random loader".to_string(),
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
-        let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
+        let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),

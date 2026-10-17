@@ -1,3 +1,4 @@
+use crate::runner::global_ctx::CacheKey;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use log::{debug, warn};
@@ -36,18 +37,18 @@ where
 
 #[delegatable_trait]
 pub trait DumpToCpuContext<'a>: Debug + RunCtxContext {
-    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>;
+    fn ids_to_exclude(&self) -> &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>;
     fn dump_to_cpu_retry_count_mut(&mut self) -> &mut usize;
 }
 
 #[derive(Debug)]
 pub struct DumpToCpuContextImpl<'a> {
-    ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
+    ids_to_exclude: &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>,
     dump_to_cpu_retry_count: usize,
 }
 
 impl<'a> DumpToCpuContextImpl<'a> {
-    pub fn new(ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>) -> Self {
+    pub fn new(ids_to_exclude: &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>) -> Self {
         Self {
             ids_to_exclude,
             dump_to_cpu_retry_count: 0
@@ -56,7 +57,7 @@ impl<'a> DumpToCpuContextImpl<'a> {
 }
 
 impl<'a> DumpToCpuContext<'a> for DumpToCpuContextImpl<'a> {
-    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>> {
+    fn ids_to_exclude(&self) -> &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>> {
         self.ids_to_exclude
     }
 

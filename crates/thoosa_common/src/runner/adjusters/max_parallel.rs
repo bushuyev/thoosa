@@ -1,3 +1,4 @@
+use crate::runner::global_ctx::CacheKey;
 use crate::runner::adjusters::dump_to_cpu::*;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use ambassador::{Delegate, delegatable_trait};

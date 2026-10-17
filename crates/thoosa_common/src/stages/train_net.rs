@@ -120,7 +120,7 @@ struct TrainStepCacheGuard(RegisteredCacheHandle);
 
 impl Drop for TrainStepCacheGuard {
     fn drop(&mut self) {
-        GlobalCtx::global().remove_cache(self.0.name());
+        GlobalCtx::global().remove_cache(self.0.key());
     }
 }
 
@@ -216,7 +216,7 @@ where
             let (train_step, params) = track_await!(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
 
-            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id().leak(), Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
+            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id(), Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
 
             let mut bad_epochs = 0u32;
             let patience = run_config.as_ref().patience;

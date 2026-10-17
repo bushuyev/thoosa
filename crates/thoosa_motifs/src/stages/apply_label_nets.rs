@@ -1,3 +1,4 @@
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
 use crate::motif_tho_tensor::MotifThoTensor;
 use crate::motifs_store::MotifsStore;
@@ -251,7 +252,7 @@ where
         debug!("ApplyLabelNets::run: input={input:?} self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
 
         let tmp_cache = track_await!(TmpCached::new("tmp_stack_applied_label_nets")).await;
-        let tmp_cache_name = tmp_cache.registered_name();
+        let tmp_cache_key = tmp_cache.cache_key().clone();
         let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
         let label_output_order = Arc::new(Mutex::new(vec![None; self.apply_nets.len()]));
 
@@ -292,7 +293,7 @@ where
 
                     //Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
-                    let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                    let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
 
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -341,7 +342,7 @@ where
         let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
         let stack_input = StackAppliedLabelNetsInputWrapper::new(self.out_id(&input_id), order, Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
-        let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
+        let required_ids = HashMap::from([(tmp_cache_key, &required_tmp_cache_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -809,7 +810,7 @@ where
         let ws = Arc::clone(ws);
         APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), trained_net_id, move || async move {
             // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
-            let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+            let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -825,7 +826,7 @@ where
             ).await?;
 
             ////ApplyLabelNet is needed for final net training - no need to unregister
-            GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
         }).await

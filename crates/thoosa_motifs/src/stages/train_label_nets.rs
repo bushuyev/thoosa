@@ -1,3 +1,4 @@
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -673,6 +674,7 @@ where
                         move |_ctx_for_batch:C,rc:&TrainLabelNetRunConfig| {
 
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
+                            let input_cache_key = applied_motif_loader.output_cache_key();
                             let label = label_for_batch.clone();
                             let sync_label_batch = Arc::clone(&sync_label_batch);
                             ready(Ok(ResourcesBatch::new(
@@ -685,12 +687,13 @@ where
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        let label = label.clone();
                                        let sync_label_batch = Arc::clone(&sync_label_batch);
+                                       let input_cache_key = input_cache_key.clone();
                                        async move {
                                            //TODO
                                            let hash_set = x_1_wrapped.iter().chain(x_0_wrapped.iter()).map(|wrap| wrap.id().clone()).collect::<std::collections::HashSet<_>>();
                                            let dyn_refs_set = hash_set.iter().map(|id|id as &dyn thoosa_shared::traits::CachableIdTr).collect::<std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>>();
-                                           let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
-                                               (LM::name(), &dyn_refs_set)
+                                           let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
+                                               (input_cache_key, &dyn_refs_set)
                                            ]);
 
                                            let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));

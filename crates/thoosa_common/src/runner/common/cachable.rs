@@ -313,6 +313,18 @@ where
     for <'i> Self::In<'i>: WithId + Send + Sync,
     <Self as Stage>::Out: CachedPurgeOutput +  WithId + Send + Sync + 'static,//
 {
+    // Identifies the concrete cache returned by cache_for(). For an adapter
+    // output, use output_cache_key() to follow its actual cache owner.
+    fn cache_key() -> crate::runner::global_ctx::CacheKey {
+        crate::runner::global_ctx::CacheKey::of::<Self>()
+    }
+
+    // Adapters can return another stage's cached output. Exclusions must follow
+    // that owner, including adapters which select a stage at runtime.
+    fn output_cache_key(&self) -> crate::runner::global_ctx::CacheKey {
+        Self::cache_key()
+    }
+
     fn run_input_id(input: &Self::In<'static>) -> &'static <Self::In<'static> as WithId>::ID {
         unimplemented!()
     }
