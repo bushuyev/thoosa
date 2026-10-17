@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 
 use crate::dims::MotifProbability;
@@ -1048,7 +1049,7 @@ where
         let key = (trained_net_id, sync_init.slice_step, sync_init.quantize);
         let device_idx = run_context.tho_device_idx();
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device_idx, key, move || async move {
-            let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+            let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -1064,7 +1065,7 @@ where
             ).await?;
 
             // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.
-            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
         }).await

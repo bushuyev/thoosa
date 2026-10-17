@@ -17,7 +17,7 @@ use thoosa_shared::CopyToDevice;
 use crate::runner::common::cachable::{BorrowRef, CachedPurgeOutput, DevicesWrap, ThoDataRef};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::global_ctx::RegisteredCacheHandle;
+use crate::runner::global_ctx::{CacheKey, RegisteredCacheHandle};
 use crate::runner::purge::{FuturesRunnerMapPurger, WeakMapPurger, PURGE_GPU_CONCURRENCY_LIMIT};
 use thoosa_shared::tracked_await::track_await;
 
@@ -66,13 +66,13 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> D
 
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
 {
-    pub fn registered_name(&self) -> &'static str {
-        self.registered_cache.as_ref().expect("TmpCached::registered_name: cache already unregistered").name()
+    pub fn cache_key(&self) -> &CacheKey {
+        self.registered_cache.as_ref().expect("TmpCached::cache_key: cache already unregistered").key()
     }
 
     async fn unregister_cache(&mut self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
         if let Some(cache) = self.registered_cache.take() {
-            GlobalCtx::global().remove_cache(cache.name());
+            GlobalCtx::global().remove_cache(cache.key());
             Some(track_await!(cache.lock_exclusive()).await)
         } else {
             None
@@ -194,11 +194,10 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     pub async fn new(name: &str) -> Self {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
-        let registered_name = name.clone().leak();
 
         let map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Arc::new(Default::default());
         let registered_cache = GlobalCtx::global()
-            .register_cache((registered_name, Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn FuturesRunnerMapPurger>));
+            .register_cache((name.clone(), Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn FuturesRunnerMapPurger>));
 
         Self {
             name,
@@ -297,7 +296,7 @@ where
                 warn!("TmpCached::drop: {}", self.name);//i.e. take_all was not called
             }
 
-            GlobalCtx::global().remove_cache(cache.name());
+            GlobalCtx::global().remove_cache(cache.key());
         }
 
     }
@@ -416,7 +415,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         let mut required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         required_tmp_cache_ids.insert(&foo_id as &dyn CachableIdTr);
-        let required_ids = HashMap::from([(tmp_cache.registered_name(), &required_tmp_cache_ids)]);
+        let required_ids = HashMap::from([(tmp_cache.cache_key().clone(), &required_tmp_cache_ids)]);
         GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "test").await?;
 
         let cached = tmp_cache.get(&foo_id).expect("tmp cache entry missing");

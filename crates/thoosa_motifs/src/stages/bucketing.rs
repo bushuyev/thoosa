@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use thoosa_common::runner::global_ctx::CacheKey;
 use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
@@ -962,7 +963,7 @@ where
                         sync_bucketing_ctx.branch(false),
                     )).await?;
 
-                let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                 let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
                 let oom_handler: OOMHandler<'_, '_, _, NoStageAdjuster, _, SelectBucketsInputSelector> = OOMHandler::new(
                     vec![
