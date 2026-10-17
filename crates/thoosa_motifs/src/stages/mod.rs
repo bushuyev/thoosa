@@ -1,4 +1,5 @@
 pub mod cross_batch_clc;
+pub(crate) mod prepare_cross_batch;
 pub mod cross_dims;
 pub mod cross_loader;
 pub mod convert_precision;

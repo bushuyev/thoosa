@@ -39,12 +39,32 @@ impl Hash for IdSlice {
 pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 
 #[async_trait]
+#[cfg_attr(test, mockall::automock)]
 pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> anyhow::Result<()>;
     async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> anyhow::Result<usize>;
 
     fn run_config_id(&self) -> RunConfigId;
     fn channel(&self) -> u32;
+}
+
+#[cfg(test)]
+pub(crate) mod mock_motif_tracker_store {
+    use super::*;
+
+    // Inject persistence so tests can observe both dump boundaries and contents.
+    pub struct MockMotifTrackerStoreBuilder(MockMotifTrackerStore);
+
+    impl MockMotifTrackerStoreBuilder {
+        pub fn new() -> Self { Self(MockMotifTrackerStore::new()) }
+
+        pub fn with_save_slices(mut self, save: impl FnMut(Vec<SlicesMatch>) -> anyhow::Result<()> + Send + 'static) -> Self {
+            self.0.expect_save_slices().returning(save);
+            self
+        }
+
+        pub fn build(self) -> Box<dyn MotifTrackerStore> { Box::new(self.0) }
+    }
 }
 
 pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: HashMap<u16, HashSet<IdSlice>>) -> HashMap<u16, HashSet<IdSlice>> {

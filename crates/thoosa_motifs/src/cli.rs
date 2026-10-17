@@ -112,6 +112,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::distance::{EucDistConfig, EucDistConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, average_euclidean_distance};
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
 use crate::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
+use crate::stages::prepare_cross_batch::{PREPARE_CROSS_BATCH_ENDPOINT, prepare_cross_batch_endpoint_init};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOMHandler};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
@@ -718,6 +719,10 @@ pub fn cuda_worker_endpoint_inits() -> HashMap<String, MotifsInitFn> {
     endpoints.extend(train_label_step_endpoint_inits());
     endpoints.extend(train_final_step_endpoint_inits());
     endpoints.extend([
+        (
+            PREPARE_CROSS_BATCH_ENDPOINT.to_string(),
+            Box::new(prepare_cross_batch_endpoint_init) as MotifsInitFn,
+        ),
         (
             CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
             Box::new(sync_cross_unfold_clc_endpoint_init) as MotifsInitFn,

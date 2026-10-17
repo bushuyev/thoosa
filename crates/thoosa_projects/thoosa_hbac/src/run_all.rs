@@ -695,7 +695,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 50, end: 250 }, step: Some((50, 0)) },
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),

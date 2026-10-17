@@ -1654,33 +1654,45 @@ where
 
             debug!("DistsTracker::consume: input.id={input_id:?}  match_indices={match_indices:?}");
 
-            match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
+            // Bound temporary matches across all channels. A channel gets one
+            // lock per chunk, with iterator order preserved across chunks; Rayon
+            // only runs independent channel appends and dumps in parallel.
+            const MATCH_BATCH_SIZE: usize = 4096;
+            loop {
+                let mut seen = 0;
+                for (channel, i_0, i_1, dist) in match_indices.by_ref().take(MATCH_BATCH_SIZE) {
+                    seen += 1;
 
-                let channel = channel as usize;
-                let i_0 = i_0 as usize;
-                let i_1 = i_1 as usize;
+                    let channel = channel as usize;
+                    let i_0 = i_0 as usize;
+                    let i_1 = i_1 as usize;
 
-                assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
-                assert!(i_0 < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
-                assert!(i_1 < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
+                    assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
+                    assert!(i_0 < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
+                    assert!(i_1 < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
 
-                let slice_0 = slices_0[i_0];
-                let slice_1 = slices_1[i_1];
+                    let slice_0 = slices_0[i_0];
+                    let slice_1 = slices_1[i_1];
 
-                trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
+                    trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
 
-                if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
-                    trace!("DistsTracker::consume, track: input.id={input_id:?} slice_0={slice_0:?} slice_1={slice_1:?}", );
+                    if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
+                        trace!("DistsTracker::consume, track: input.id={input_id:?} slice_0={slice_0:?} slice_1={slice_1:?}", );
 
-                    thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(channel_trackers[channel]))
-                    .track(slice_0, slice_1, dist as f32);
+                        matches_by_channel[channel].push(SlicesMatch(slice_0, slice_1, dist as f32));
+                    }
                 }
-            });
+                if seen == 0 { break; }
+                channel_trackers.par_iter().zip(matches_by_channel.par_iter_mut()).for_each(|(tracker, matches)| {
+                    if !matches.is_empty() {
+                        thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(tracker)).track_many(std::mem::take(matches));
+                    }
+                });
+            }
 
             channel_trackers
                 .into_par_iter()
-                .zip(matches_by_channel.into_par_iter())
-                .try_for_each(|(mt, matches)| {
+                .try_for_each(|mt| {
                     let mut guard = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(mt));
                     guard.dump();
                     Ok::<(), ThoError>(())
@@ -1728,6 +1740,47 @@ mod tests {
             .iter::<f64>()
             .unwrap()
             .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn test_consume_channel_batches_preserves_matches() -> Result<(), ThoError> {
+        use super::DistsTracker;
+        use crate::find::SimpleMotifTracker;
+        use crate::motif_tracker_store::{SlicesMatch, mock_motif_tracker_store::MockMotifTrackerStoreBuilder};
+        use crate::motifs_store::MockMotifsStoreBuilder;
+        use crate::stages::{cross_batch_clc::CrossUnfoldClcOutput, slices_iter::SlicesIter};
+        use parking_lot::{Mutex, RwLock};
+        use std::{marker::PhantomData, sync::Arc};
+        use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
+        use thoosa_shared::{TensorIdSliceIdx, traits::{ConsumeResult, SyncStage}};
+
+        // More than two chunks, with each chunk crossing channel boundaries and
+        // diagonal self-matches removed without dropping any later matches.
+        let channels = 3;
+        let slices = 65;
+        let recorded: Vec<_> = (0..channels).map(|_| Arc::new(Mutex::new(Vec::<SlicesMatch>::new()))).collect();
+        let trackers = recorded.iter().map(|matches| {
+            let matches = matches.clone();
+            Arc::new(RwLock::new(SimpleMotifTracker::new(MockMotifTrackerStoreBuilder::new()
+                .with_save_slices(move |batch| { matches.lock().extend(batch); Ok(()) }).build(), None)))
+        }).collect();
+        let tracker = Arc::new(DistsTracker::<MockRunCtx> {
+            find_motifs_run_config_id: 1,
+            channel_trackers: trackers,
+            store: MockMotifsStoreBuilder::new().build(),
+            _ctx: PhantomData,
+        });
+        let mask = Tensor::f_ones([channels, slices, slices], (Kind::Bool, Device::Cpu))?;
+        let dists = Tensor::f_arange(channels * slices * slices, (Kind::Float, Device::Cpu))?.f_view([channels, slices, slices])?;
+        let output = CrossUnfoldClcOutput::new(DistsMask::new(mask, Some(dists), DistsMaskType::AsIs)?,
+            SlicesIter::new(2, vec![(10, slices as usize)]), SlicesIter::new(2, vec![(10, slices as usize)]), "channel_batches".into());
+        assert!(matches!(tracker.consume(output, mock_run_ctx::default(0)), ConsumeResult::Ok(())));
+        for channel in 0..channels {
+            let expected: Vec<_> = (0..slices).flat_map(|i| (0..slices).filter(move |j| i != *j).map(move |j|
+                SlicesMatch(TensorIdSliceIdx(10, (i * 2) as u32), TensorIdSliceIdx(10, (j * 2) as u32), (channel * slices * slices + i * slices + j) as f32))).collect();
+            assert_eq!(*recorded[channel as usize].lock(), expected);
+        }
+        Ok(())
     }
 
     #[test]
