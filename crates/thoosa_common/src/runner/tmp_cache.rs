@@ -4,9 +4,9 @@ use std::mem;
 use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures_util::{stream, TryStreamExt};
+use futures_util::{stream, TryStreamExt, StreamExt};
 use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use mockall_double::double;
 use tokio::sync::RwLockReadGuard;
 use thoosa_shared::applicables_runner::Output;
@@ -224,13 +224,9 @@ where
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
-        if ids_to_keep.is_some() {
-            debug!("TmpCached::purge_gpu: skipping required tmp cache name={name}");
-            return Ok(());
-        }
+        info!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
 
-        let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
+        let items: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
             .filter(|entry| {
                 crate::runner::purge::check_ids_to_keep(ids_to_keep, entry)
@@ -238,16 +234,21 @@ where
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
 
-        for (key, val) in keys_vals {
-            debug!("TmpCached::purge_gpu: key={key:?}");
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("TmpCached::purge_gpu_{:?}", name), self.len(), 1);
+        let dump_eta_guard_id = dump_eta_guard.id();
+        track_await!(stream::iter(items)
 
-            if let Err(err) = track_await!(val.dump_to_cpu(device_idx)).await {
-                debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
-            } else {
-                debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
-            }
+            .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, val)| async move {
+                debug!("TmpCached::purge_gpu: key={key:?}");
 
-        }
+                if let Err(err) = track_await!(val.dump_to_cpu(device_idx)).await {
+                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
+                } else {
+                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
+                }
+                collect_eta_record_completion(dump_eta_guard_id);
+        })).await;
+
         Ok(())
     }
 

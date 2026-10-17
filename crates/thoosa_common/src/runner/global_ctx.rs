@@ -273,7 +273,6 @@ impl GlobalCtx {
 
             track_await!(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
-                // .dump_all_to_cpu(&HashMap::new(), tho_device_idx, "drop"))
                 .await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
