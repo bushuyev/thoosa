@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::{debug, error, info};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -141,7 +141,7 @@ pub(crate) async fn run_all(
             let mut select_motifs_run_config_ids = vec![];
 
             for find_motifs_run_config_id in &find_motifs_run_config_ids {
-                select_motifs_run_config_ids.extend( track_await!(run_grid(
+                match track_await!(run_grid(
                     Some(vec![*find_motifs_run_config_id]),
                     select_motifs_run_config.clone(),
                     select_motifs_input.clone(),
@@ -165,8 +165,14 @@ pub(crate) async fn run_all(
                     },
                     || root_ctx.branch(true),
                     "find_motifs"
-                )).await?);
-
+                )).await {
+                    Ok(ids) => {
+                        select_motifs_run_config_ids.extend(ids);
+                    }
+                    Err(e) => {
+                        error!("SelectMotifsStage for find_motifs_run_config_id={find_motifs_run_config_id} failed with {e:?}");
+                    }
+                };
             }
 
             info!("select motifs done: find_motifs_run_config_ids={find_motifs_run_config_ids:?} select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
