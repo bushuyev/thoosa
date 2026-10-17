@@ -18,7 +18,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Instant, SystemTime};
 use tch::Device;

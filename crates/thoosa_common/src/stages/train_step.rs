@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use tch::Tensor;
@@ -51,7 +51,7 @@ pub struct TrainStep<F, DI, DO, C>
 where
     DI: Dims, DO: Dims, C: RunCtx
 {
-    id:u32,
+    id:SynKey,
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of
     // them crosses the local/IPC boundary independently.
@@ -68,7 +68,7 @@ impl <F, DI, DO, C> WithId for TrainStep<F, DI, DO, C>
 where
     DI: Dims, DO: Dims, C: RunCtx
 {
-    type ID = u32;
+    type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -132,9 +132,9 @@ where
     {
         let (train_module, node_params) = train_module_builder(run_config, device).await?;
         debug!("TrainStep::new_local: best_checkpoint_path={best_checkpoint_path:?}");
-        static STEP_COUNT:AtomicU32 = AtomicU32::new(0);
+
         Ok((Self {
-            id: STEP_COUNT.fetch_add(1, Relaxed),
+            id: Self::next_id(),
             device,
             train_module: tokio::sync::Mutex::new(train_module),
             x_f,
@@ -144,6 +144,13 @@ where
             pd: PhantomData,
         }, node_params))
     }
+
+    pub fn next_id() ->SynKey {
+        static STEP_ID: AtomicU32 = AtomicU32::new(0);
+        let stage_id = STEP_ID.fetch_add(1, Ordering::AcqRel);
+        mono_key!(stage_id, "TrainStep").into()
+    }
+
 }
 
 impl<F, DI, DO, C> DynSyncStageWithStateEnum<TrainStep<F, DI, DO, C>>
