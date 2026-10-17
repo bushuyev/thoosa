@@ -731,11 +731,11 @@ where
     async fn new(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
         let node_params = FinalNetParams::new(self.num_label_nets, run_config.net.mid_features, self.labels_len, run_config.net.num_layers);
         if GlobalCtx::global().is_ipc() {
-            static TRAIN_FINAL_STEP_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = TRAIN_FINAL_STEP_ID.fetch_add(1, Ordering::AcqRel);
+
+
             let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: (), state: Default::default() }, node_params))
+            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, Some(SyncTrainFinalStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: (), state: Default::default() }, node_params))
         } else {
             let params_for_module = node_params.clone();
 
