@@ -1453,7 +1453,7 @@ impl From<Arc<clap::Error>> for ThoError {
 #[cfg(feature = "rusqlite-error")]
 impl_from_external_error!(rusqlite::Error);
 
-#[cfg(feature = "tch-error")]
+// #[cfg(feature = "tch-error")]
 impl_from_external_error!(tch::TchError);
 
 #[cfg(feature = "serde-json-error")]
@@ -2634,7 +2634,6 @@ mod shared_tests {
         assert!(!error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
     }
 
-    #[cfg(feature = "tch-error")]
     #[test]
     fn test_tho_error_libtorch_adapter_preserves_source_and_recovery() {
         for (message, oom, reset) in [
@@ -2650,7 +2649,7 @@ mod shared_tests {
         }
 
         let error = ThoError::from(tch::TchError::Shape("CUDA out of memory".into()));
-        assert!(!error.is_oom(), "only the raw Torch variant uses the CUDA message adapter");
+        assert!(error.is_oom(), "CUDA out of memory even if it's in TchError::Shape ");
     }
 
 

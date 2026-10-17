@@ -9,7 +9,7 @@ path = "src/lib.rs"
 [features]
 mock_global_ctx = []
 rusqlite-error = ["dep:rusqlite"]
-tch-error = []
+
 serde-json-error = ["dep:serde_json"]
 serde-json5-error = ["dep:serde_json5"]
 polars-error = ["dep:polars"]
