@@ -11,7 +11,7 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::sync::{Arc, LazyLock};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
@@ -148,8 +148,7 @@ where
 
         // let stage_id = stage.id();
         //freq. filter is used to apply motif nets up to final training so it's never unregistered
-        //TODO instead of format!("{:?}", find_motifs_run_config_id).leak() here should be stage.id
-        GlobalCtx::global().register_cache((format!("{:?}", find_motifs_run_config_id).leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+        GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
         cache.insert(id, Arc::clone(&stage));
 

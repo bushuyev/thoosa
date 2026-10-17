@@ -1064,8 +1064,7 @@ where
             ).await?;
 
             // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.
-            let cache_name = format!("SyncApplyMotifNet<{}>: {device_idx}:{key:?}", std::any::type_name::<C>()).leak();
-            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((cache_name, Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
         }).await

@@ -224,7 +224,8 @@ where
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        info!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
+        debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
+
 
         let items: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
@@ -413,7 +414,8 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));
 
-        let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
+        let mut required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
+        required_tmp_cache_ids.insert(&foo_id as &dyn CachableIdTr);
         let required_ids = HashMap::from([(tmp_cache.registered_name(), &required_tmp_cache_ids)]);
         GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "test").await?;
 
@@ -422,8 +424,6 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
         drop(cached);
 
         let all = tmp_cache.take_all(1).await?;
-
-        println!("{:?}", all);
 
         assert_eq!(all[0].device, 1);
 

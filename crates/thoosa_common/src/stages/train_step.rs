@@ -10,6 +10,8 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use tch::Tensor;
 use thoosa_common::cuda_utils::maybe_cuda_mem;
@@ -45,7 +47,11 @@ use thoosa_shared::ipc_types::WorkerOutput;
 /// Cross-sample objectives and external mutable state are unsupported.
 /// No rollback tensors are allocated per batch. Callers await acknowledgement
 /// before submitting another batch or capturing a checkpoint.
-pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
+pub struct TrainStep<F, DI, DO, C>
+where
+    DI: Dims, DO: Dims, C: RunCtx
+{
+    id:u32,
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of
     // them crosses the local/IPC boundary independently.
@@ -56,6 +62,17 @@ pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     // A retry after reply/stream completion failure must not apply a committed batch twice.
     last_training_batch: std::sync::Mutex<Option<(u64, f32)>>,
     pd: PhantomData<C>,
+}
+
+impl <F, DI, DO, C> WithId for TrainStep<F, DI, DO, C>
+where
+    DI: Dims, DO: Dims, C: RunCtx
+{
+    type ID = u32;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
 }
 
 // Auto traits also check the captured input transform, rather than bypassing its bounds.
@@ -115,7 +132,9 @@ where
     {
         let (train_module, node_params) = train_module_builder(run_config, device).await?;
         debug!("TrainStep::new_local: best_checkpoint_path={best_checkpoint_path:?}");
+        static STEP_COUNT:AtomicU32 = AtomicU32::new(0);
         Ok((Self {
+            id: STEP_COUNT.fetch_add(1, Relaxed),
             device,
             train_module: tokio::sync::Mutex::new(train_module),
             x_f,

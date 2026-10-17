@@ -825,7 +825,7 @@ where
             ).await?;
 
             ////ApplyLabelNet is needed for final net training - no need to unregister
-            GlobalCtx::global().register_cache((format!("ApplyLabelNet: {}", stage.stage_id()).leak()/*TODO*/, Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            GlobalCtx::global().register_cache((stage.stage_id().leak(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
         }).await
