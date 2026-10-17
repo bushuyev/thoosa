@@ -57,6 +57,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Handle;
 use tokio::task::{JoinError, JoinSet};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum};
+use crate::stages::prepare_cross_batch::PrepareCrossBatch;
 
 pub type FilteredLoaderStage<L, C> = PairStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = SingleOrPair<L, FilteredLoaderStage<L, C>>;
@@ -456,6 +457,7 @@ where
                             debug!("FindMotifsStage::new: cross_batch_ctx factory done  ctx.id={:?}", ctx_id);
 
                             let unfold_params = UnfoldParams::new(1, run_config.window as i64, run_config.step as i64);
+                            let prepare_outer = PrepareCrossBatch::<C>::new(unfold_params, ctx.tho_device_idx()).await?;
                             let step = unfold_params.step();
                             let cross_unfold_clc: Arc<DynSyncStageEnum<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>> = CrossUnfoldClc::new_dyn_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(cross_loader_run_config.similarity_metric, fixed_config.keep_slice_matches, radius, masks_ctx, unfold_params), ctx.tho_device_idx()).await?;
                             debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
@@ -493,9 +495,7 @@ where
                                         }
                                     },
                                     fixed_config.max_chunk_size as usize,
-                                    |batch| {
-                                        async { track_await!(batch.to_cpu()).await }.boxed()
-                                    },
+                                    |batch| async { Ok(batch) }.boxed(), // CrossLoader completes D2H before queuing consumption.
                                     |receiver| {
                                         let dists_tracker = Arc::clone(receiver);
                                         async move {
@@ -505,7 +505,7 @@ where
                                     },
                                     CrossUnfoldClcOutputMergeMode::CpuMerge,
                                     step as u32,
-                                )),
+                                ).with_outer_preparation(prepare_outer)),
                             )?
                         }
                     })

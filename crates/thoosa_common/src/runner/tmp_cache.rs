@@ -42,7 +42,7 @@ pub struct TmpCacheTakeAllError<D> {
 // Keep an individual queued value registered until its consumer finishes, even
 // if the producer is cancelled. Dropping the entry also bounds the cache size.
 #[derive(Debug)]
-pub(crate) struct TmpCachedEntry<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> {
+pub struct TmpCachedEntry<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> {
     value: Arc<DevicesWrap<D>>,
     cache: Arc<TmpCached<D>>,
 }
@@ -87,7 +87,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
     // Entries need distinct IDs while alive; replacing a queued entry would
     // leave its old tensors invisible to OOM offload.
-    pub(crate) fn insert_guarded(self: &Arc<Self>, value: D) -> TmpCachedEntry<D> {
+    pub fn insert_guarded(self: &Arc<Self>, value: D) -> TmpCachedEntry<D> {
         let value = Arc::new(DevicesWrap::wrap(value));
         assert!(self.map.insert(value.id().clone(), Arc::clone(&value)).is_none(), "duplicate guarded temporary cache entry");
         TmpCachedEntry { value, cache: Arc::clone(self) }

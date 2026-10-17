@@ -187,11 +187,27 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn track_many(&mut self, mut matches: Vec<SlicesMatch>) {
+    pub fn track_many(&mut self, matches: Vec<SlicesMatch>) {
         if matches.is_empty() {
             return;
         }
-        self.motifs.append(&mut matches);
+        // Appending the whole batch can grow the buffer past its dump threshold.
+        // Fill the existing allocation in chunks, flushing at the same boundary
+        // as track(), and restore the allocation after dump() takes the vector.
+        let mut matches = matches.into_iter();
+        while matches.len() > 0 {
+            if self.motifs.capacity() == 0 {
+                // Match the first push after an explicit dump, including Vec's
+                // initial allocation, before applying the usual dump boundary.
+                self.motifs.push(matches.next().unwrap());
+            }
+            let remaining = self.motifs.capacity() - self.motifs.len();
+            self.motifs.extend(matches.by_ref().take(remaining));
+            if self.motifs.len() == self.motifs.capacity() {
+                self.dump();
+                self.motifs.reserve(CAPACITY);
+            }
+        }
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SimpleMotifTracker::dump"))]
@@ -308,6 +324,37 @@ mod motif_find_tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    #[test]
+    fn test_track_many_preserves_dump_boundaries() {
+        use crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder;
+        use super::SimpleMotifTracker;
+
+        // Compare observable persistence, including crossing a full buffer and
+        // starting a fresh block after its final explicit dump.
+        let single_dumps = Arc::new(Mutex::new(Vec::new()));
+        let batch_dumps = Arc::new(Mutex::new(Vec::new()));
+        let make_tracker = |dumps: Arc<Mutex<Vec<Vec<SlicesMatch>>>>| {
+            let mut tracker = SimpleMotifTracker::new(MockMotifTrackerStoreBuilder::new()
+                .with_save_slices(move |matches| { dumps.lock().push(matches); Ok(()) }).build(), None);
+            tracker.motifs = Vec::with_capacity(4);
+            tracker
+        };
+        let mut single = make_tracker(single_dumps.clone());
+        let mut batched = make_tracker(batch_dumps.clone());
+        let matches: Vec<_> = (0..19).map(|i| SlicesMatch(TensorIdSliceIdx(1, i), TensorIdSliceIdx(2, i + 1), i as f32 / 4.0)).collect();
+        for chunk in matches.chunks(7) {
+            for entry in chunk { single.track(entry.0, entry.1, entry.2); }
+            batched.track_many(chunk.to_vec());
+            assert_eq!(single.motifs(), batched.motifs());
+            single.dump();
+            batched.dump();
+            batched.track_many(vec![]);
+            assert_eq!(*single_dumps.lock(), *batch_dumps.lock());
+        }
+        assert_eq!(batch_dumps.lock().iter().flatten().copied().collect::<Vec<_>>(), matches);
+        assert_eq!(batch_dumps.lock()[0].len(), 4);
     }
 
     #[test]
