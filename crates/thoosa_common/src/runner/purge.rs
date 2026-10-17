@@ -171,7 +171,6 @@ where
     ) -> Result<(), ThoError> {
         debug!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
 
-
         let items: Vec<(
             K,
             thoosa_common::runner::common::cachable::CachedFuture<CO>,
