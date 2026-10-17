@@ -223,12 +223,11 @@ where
                 motif.selector(),
                 motif.ref_worker_id().expect("motif tensor reference identity"),
             );
-            static TRAIN_MOTIF_STEP_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = TRAIN_MOTIF_STEP_ID.fetch_add(1, Ordering::AcqRel);
+          
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, Some(stage_id.to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
+                stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, Some(SyncTrainMotifStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
                 init: (),
                 state: Default::default()
             }, node_params))
