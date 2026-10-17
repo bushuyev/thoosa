@@ -49,7 +49,7 @@ use thoosa_common::resources::{Logits, NetResources, SavableResult};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
+use thoosa_common::runner::oom_handler::{run_ctx_adjuster, Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
@@ -72,6 +72,8 @@ use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mo
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tracing::field::debug;
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjuster, MAX_PARALLEL, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelAdjustContextImpl};
 
 pub const TRAIN_FINAL_STEP_ENDPOINT: &str = "TrainFinalStep";
 
@@ -497,7 +499,7 @@ where
 impl<L, C> LogitsResourcesBatch<L, C>
 where
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
-    C: RunCtx + MaxParallelCtx + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub fn new(loader: Arc<L>, batch_size: u32, train_resources: Arc<Vec<(Resource, Vec<f32>)>>, valid_resources: Arc<Vec<(Resource, Vec<f32>)>>, labels_len: usize) -> Result<Self, ThoError> {
         if train_resources.is_empty() || valid_resources.is_empty() {
@@ -535,23 +537,24 @@ where
 
                     async move {
                         debug!("LogitsResourcesBatch::build_batch_stream: resource={resource:?} labels={labels:?}");
-
-                        let out = track_await!(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
+                        let tho_device_idx = ctx_for_loader.tho_device_idx();
+                        let label_probability: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = track_await!(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
 
                         if log_enabled!(DebugLevel) {
-                            let val = BorrowRef::borrow_ref(&out, 1).await?;
+
+                            let val = BorrowRef::borrow_ref(&label_probability, tho_device_idx).await?;
                             debug!("LogitsResourcesBatch::build_batch_stream: out={val:?} \nlabels={labels:?}");
-                            if log::log_enabled!(Trace) && !GlobalCtx::global().is_ipc() {
+                            if log_enabled!(Trace) && !GlobalCtx::global().is_ipc() {
                                 trace!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.t_ref());
                             }
 
                         }
 
-                        Ok::<_, ThoError>((out, labels))
+                        Ok::<_, ThoError>((label_probability, labels))
                     }
                 });
 
-                let (outputs, labels) = track_await!(collect_futures_with_progress(
+                let (label_probabilities, labels) = track_await!(collect_futures_with_progress(
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
@@ -566,12 +569,28 @@ where
                     a
                 });
 
-                debug!("LogitsResourcesBatch::build_batch_stream: loader.outputs={outputs:?} labels={labels:?}");
-
+                debug!("LogitsResourcesBatch::build_batch_stream: label_probabilities={label_probabilities:?} labels={labels:?}");
+                let hash_set = label_probabilities.iter().map(|wrap| wrap.id().clone()).collect::<std::collections::HashSet<_>>();
+                let dyn_refs_set = hash_set.iter().map(|id|id as &dyn thoosa_shared::traits::CachableIdTr).collect::<std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>>();
+                let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
+                    (L::name(), &dyn_refs_set)
+                ]);
                 let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
-                let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-                let output = track_await!(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
+                let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
+                ], None);
+                let output = track_await!(oom_handler.run(
+                    &stage,
+                    input,
+                    ctx_for_batch.branch(false),
+                    WithRunCtxContext::new(
+                       MaxParallelAndDumpToCpuAdjustableContex::new(
+                           MaxParallelAdjustContextImpl::new(),
+                           DumpToCpuContextImpl::new(&required_ids),
+                       ),
+               ))).await?;
 
                 debug!("LogitsResourcesBatch::build_batch_stream: SyncLogitsBatch::outputs={output:?}");
 
@@ -588,7 +607,7 @@ where
 impl<L, C> AsyncDataBatch<LabelProbability, LabelsProbabilities, C> for LogitsResourcesBatch<L, C>
 where
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
-    C: RunCtx + MaxParallelCtx + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
         Self::build_batch_stream(Arc::clone(&self.loader), Arc::clone(&self.train_resources), self.batch_size, self.labels_len, ctx)

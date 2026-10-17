@@ -215,9 +215,8 @@ where
             let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
             let (train_step, params) = track_await!(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
-            static STEP_COUNT:AtomicU32 = AtomicU32::new(0);//TODO
-            let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
-            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((step_id, Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
+
+            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id().leak(), Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
 
             let mut bad_epochs = 0u32;
             let patience = run_config.as_ref().patience;

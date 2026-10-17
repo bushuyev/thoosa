@@ -198,7 +198,7 @@ pub struct SynKey {//σύνθετος
 impl Display for SynKey{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for val in self.vals.iter() {
-            write!(f, "{}", val)?;
+            write!(f, "/{}", val)?;
         }
 
         Ok(())
