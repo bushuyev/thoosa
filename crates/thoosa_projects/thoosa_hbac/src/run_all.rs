@@ -349,7 +349,7 @@ pub struct RunAllSettings {
 // This alternative test profile is currently not selected.
 pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
-    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1::<FindMotifsRunConfigFields>();
+    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
     let select_motifs_run_config = run_all_select_motifs_config_1::<SelectMotifsRunConfigFields>();
 
@@ -787,26 +787,54 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 
 
 #[allow(dead_code)]
-fn run_all_find_motifs_config_1<P: FieldName + 'static>() -> FindMotifsRunConfigRangeOrValue<P> {
+fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
+    let max_k =2;
+    let min_k =2;
+    let steps =4;
+    let kernel_size = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
+        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+            None => RangeOrValue::Value(100),
+            Some(value) => {
+                let window = value.val().to_i64(0) as u32;
+                debug!("Window: window={window}");
+                let end = window.saturating_mul(max_k);
+                let start = window / min_k;
+                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
+            }
+        }
+    };
+
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(100),
-        window: RangeOrValue::Value(1000),
+        step: RangeOrValue::Value(10),
+        window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
         freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
             band_hz: RangeOrValue::Value(2.),
             // kernel_size: RangeOrValue::Value(10),
-            kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
-            stride: RangeOrValue::Value(1),
+            // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
+            kernel_size: RangeOrValue::dynamic(kernel_size),
+            stride: RangeOrValue::Value(10),
             padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
         })]),
-        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.1) }),
-                slices: RangeOrValue::Value(200),
-            }),
-        }),
+        // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+        //     similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+        //     slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+        //         aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.1) }),
+        //         slices: RangeOrValue::Value(200),
+        //     }),
+        // }),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(
+            CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                        q: RangeOrValue::Value(0.5),
+                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                    }),
+                }),
+            }
+        ),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
     }
 }
@@ -1206,8 +1234,8 @@ mod tests {
             labels: None,
         };
 
-        // let all_configs = run_all_config_1(&run_all_args, &settings);
-        let all_configs = run_all_config_0(&run_all_args);
+        // let all_configs = run_all_config_0(&run_all_args);
+        let all_configs = run_all_config_1(&run_all_args, &settings);
 
         let r = panic_to_err_async!({run_all(
             &ws,
