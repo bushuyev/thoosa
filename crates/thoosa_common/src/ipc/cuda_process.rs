@@ -275,7 +275,7 @@ impl CudaIPCActor {
     }
 
     async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<SpawnedState, ThoError> {
-        debug!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
+        info!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
 
         let (child, stream, device_info) = Self::spawn_worker_for_cuda_device(worker_id, cuda_worker_args, arena_fd).await?;
 
@@ -288,7 +288,7 @@ impl CudaIPCActor {
         let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending), cancel.child_token()));
         let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token()));
 
-        debug!("CudaIPCActor::spawn_worker_and_loops, ok");
+        info!("CudaIPCActor::spawn_worker_and_loops, ok");
 
         Ok( SpawnedState {
             worker_id,
@@ -706,6 +706,7 @@ impl CudaIPCActor {
     }
 
     async fn control(&mut self, control: BackendControl) -> bool {
+        info!("CudaIPCActor::control: control={control:?}");
         match control {
             BackendControl::Retire { authority, respond_to } => {
                 let result = match self.gate.check_recovery_authority(authority, false) {
@@ -723,12 +724,16 @@ impl CudaIPCActor {
                     let worker_id = CudaWorkerId { device_idx: self.tho_device_idx, generation: thoosa_shared::CudaDeviceGeneration(self.gate.device_generation().0.checked_add(1).expect("worker generation overflow")) };
                     let replacement = Self::spawn_worker_and_loops(worker_id, &self.cuda_worker_args, self.arena_fd.as_fd()).await?;
                     if let Err(error) = self.gate.check_recovery_authority(authority, true) {
+                        warn!("CudaIPCActor::control: gate.check_recovery_authority error={error:?}");
+
                         replacement.retire(error.clone()).await?;
                         return Err(error);
                     }
                     self.spawned_state = Some(replacement);
                     Ok(())
                 }.await;
+
+                info!("CudaIPCActor::control: BackendControl::Restart done");
                 let _ = respond_to.send(result);
             }
             BackendControl::Shutdown { respond_to } => {
