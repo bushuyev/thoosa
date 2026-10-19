@@ -786,6 +786,10 @@ where
     let min_loss = Arc::new(RwLock::new(MAX_LOSS));
 
     let min_var_store: Arc<RwLock<Option<(A, N, R, f32)>>> = Arc::new(RwLock::new(None));
+    // Preserve the real failure when every trial fails, and never turn a
+    // device recovery failure into a valid optimization penalty/result.
+    let last_error = Arc::new(RwLock::new(None::<ThoError>));
+    let recovery_error = Arc::new(RwLock::new(None::<ThoError>));
 
     let grid_runs = run_config_source.grid_to_vals_and_opt_params();
 
@@ -798,6 +802,8 @@ where
 
         let min_var_store_clone = Arc::clone(&min_var_store);
         let min_loss_moved = Arc::clone(&min_loss);
+        let last_error_moved = Arc::clone(&last_error);
+        let recovery_error_moved = Arc::clone(&recovery_error);
         let config_space = ConfigurationSpace::new(opt_params);
         let reusable_configs = if reusable_completed_trials.is_empty() {
             vec![]
@@ -813,6 +819,7 @@ where
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
+                if recovery_error_moved.read().is_some() { return MAX_LOSS; }
                 debug!("opt_train: opt_vals={opt_vals:?}  ");
 
                 let run_config: R = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals]
@@ -834,6 +841,10 @@ where
                     Ok(result) => result,
                     Err(e) => {
                         warn!("opt_train failed with {e:?} on {run_config:?} ");
+                        if e.is_cuda_recovery_failed() || e.needs_cuda_ctx_reset() || matches!(e.what(), ThoError::ContextReset) {
+                            *recovery_error_moved.write() = Some(e.clone());
+                        }
+                        *last_error_moved.write() = Some(e);
                         return MAX_LOSS;
                     }
                 };
@@ -858,6 +869,7 @@ where
         opt.enqueue_configs(reusable_configs);
         debug!("opt_train: wait on optimize ");
         let best_config = track_await!(opt.optimize()).await;
+        if let Some(error) = recovery_error.write().take() { return Err(error.into()); }
 
         debug!("opt_train: best_config={:?}", best_config);
 
@@ -868,7 +880,7 @@ where
     Arc::into_inner(min_var_store)
         .expect("min_var_store is used somewhere else")
         .into_inner()
-        .ok_or_else(|| anyhow::anyhow!("no min_var_store"))
+        .ok_or_else(|| last_error.write().take().map(anyhow::Error::from).unwrap_or_else(|| anyhow::anyhow!("no min_var_store")))
 }
 
 pub fn is_nonzero(t_1: &Tensor) -> anyhow::Result<bool> {
