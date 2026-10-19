@@ -1068,22 +1068,27 @@ where
     _ctx: PhantomData<C>,
 }
 
+static MOTIF_STATS_CONSUME_STAGE_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl<C> MotifStatsConsumeStage<C>
 where
     C: RunCtx + 'static,
 {
-    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<MotifStatsConsumeStage<C>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // Use shared consuming dispatch so tensor references are deleted only after success.
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
-                init: ()
-            })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<C>::new_local())))
-        }
+    async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsConsumeStage<C>>>, ThoError> {
+        MOTIF_STATS_CONSUME_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+            if GlobalCtx::global().is_ipc() {
+                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+                let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+                // Use shared consuming dispatch so tensor references are deleted only after success.
+                Ok(Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
+                    init: ()
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsConsumeStage::<C>::new_local()))))
+            }
+        }).await
+
     }
 
     fn new_local() -> Self {
@@ -1348,7 +1353,7 @@ where
                 )).await?;
 
                 debug!("MotifStats::run: MotifStatsSource::Random  channels_slices={channels_slices:?}");
-                let clc_stats_consume = Arc::new(MotifStatsConsumeStage::<C>::new(ctx.tho_device_idx()).await?);
+                let clc_stats_consume = MotifStatsConsumeStage::<C>::new(ctx.tho_device_idx()).await?;
                 let tmp_cache_key = channels_slices.cache_key().clone();
                 let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
                 let required_tmp_cache_ids = HashSet::<&dyn thoosa_shared::traits::CachableIdTr>::new();

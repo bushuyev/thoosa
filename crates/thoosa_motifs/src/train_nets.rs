@@ -22,7 +22,6 @@ use std::fmt::{Debug, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::{fmt, fs};
-
 use tch::Device::Cpu;
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore, init};
 use tch::{Device, Kind, TchError, Tensor, nn};
@@ -31,6 +30,8 @@ use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 use tch::Kind::Float;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_store::Store;
@@ -619,6 +620,11 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     .closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cosine_motif_node: 1. t.size={:?}", t.size());
+            static CALL_COUNTER:AtomicU64 = AtomicU64::new(0);
+
+            if CALL_COUNTER.fetch_add(10, Relaxed) == 10 {
+                return Err(anyhow::anyhow!("device-side assert triggered"))
+            }
             Ok(t.unsqueeze(1))
         })),
         None,

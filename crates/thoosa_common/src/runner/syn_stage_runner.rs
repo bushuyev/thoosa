@@ -639,6 +639,7 @@ impl SyncStageRunner {
                 CudaActivityScope::current().and_then(|scope| scope.generation(recovery.gate())).expect("admitted CUDA generation")
             });
             let mut result = track_await!(fut).await;//<--- wrapped
+            debug!("SyncStageRunner::submit: result={result:?}");
             let error = match &mut result {
                 Err(error) => Some(error),
                 Ok(value) => nested_error(value)
@@ -646,6 +647,8 @@ impl SyncStageRunner {
             let is_oom = error.as_ref().is_some_and(|error| error.is_oom());
             let is_ok = error.is_none();
             if let Some(error) = error {
+                debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_ctx_reset(), error.is_cuda_recovery_failed());
+
                 if (error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed()) && let Some(recovery) = &recovery {
                     retry.clear_exclusive();
                     *error = Self::report_failure(recovery, &cmd_tx, generation.expect("CUDA generation"), error.clone()).err().unwrap_or_else(Self::context_reset_error);

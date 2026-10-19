@@ -43,6 +43,7 @@ use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_shared::ipc_types::WorkerOutput;
+use crate::stages::instance_cache::InstanceCache;
 
 pub const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 

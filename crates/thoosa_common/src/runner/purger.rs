@@ -4,6 +4,7 @@ use log::{debug, error, trace, warn};
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::Instrument;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_shared::{panic_to_err_async, ThoError};
 use thoosa_shared::tracked_await::track_await;
 
@@ -36,6 +37,7 @@ impl Purger {
 
                 match track_await!(track_await!(rx_arc.write()).await.recv()).await {
                     Some(PurgeCmd::Gpu { closures }) => {
+                        GlobalCtx::global().get_runner(1).cuda_gate().unwrap().wait_if_paused().await.unwrap();//TODO unwrap
                         debug!("Purger::new, loop, got cmd: closures.len={}", closures.len());
 
                             for purge_cl in &closures {

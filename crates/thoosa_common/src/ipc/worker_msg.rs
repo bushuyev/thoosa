@@ -134,9 +134,9 @@ pub struct WorkerError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum WorkerErrorKind {
+enum WorkerErrorKind {//TODO remove?
     Cuda(CudaAction),
-    AdjusterFailed,
+    AdjusterFailed,//TODO it can't happen in Worker
     NotFound,//TODO add what
     ContextReset,
     SubmitErrorClosed,

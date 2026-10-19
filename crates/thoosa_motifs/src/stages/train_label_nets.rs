@@ -81,6 +81,7 @@ use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_wit
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tokio::{join, try_join};
+use crate::stages::instance_cache::InstanceCache;
 
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
 pub const TRAIN_LABEL_STEP_ENDPOINT: &str = "TrainLabelStep";
@@ -280,20 +281,26 @@ where
     pd:PhantomData<C>
 }
 
+static SYNC_LABEL_BATCH_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl <C> SyncLabelBatch<C>
 where
     C: RunCtx + 'static
 {
-    pub async fn new(device: ThoDevice) -> Result<DynSyncStageEnum<SyncLabelBatch<C>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            let stage_id = 0;
-            Ok(DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(())).await?),
-                init: (),
-            })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?)))
-        }
+    pub async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLabelBatch<C>>>, ThoError> {
+        SYNC_LABEL_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+            if GlobalCtx::global().is_ipc() {
+                let stage_id = 0;
+                Ok(Arc::new(DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(SYNC_LABEL_BATCH_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
+                    init: (),
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local().await?))))
+            }
+        }).await
+
+
     }
 
     pub async fn new_local() -> Result<Self, ThoError>{
@@ -440,7 +447,8 @@ pub async fn new_train_label_nets<L, AMN, C>(
     store: &Arc<dyn MotifsStore>,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
-    ) -> Result<TrainLabelNets<L, PairStage<L, AMN, C>, C>, ThoError>
+    ctx: C,
+) -> Result<TrainLabelNets<L, PairStage<L, AMN, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     AMN: AppliedMotifNetsStage<C>,
@@ -470,6 +478,7 @@ where
         store,
         opt_config,
         labels,
+        ctx
     )).await
 }
 
@@ -490,6 +499,7 @@ where
         store: &Arc<dyn MotifsStore>,
         opt_config:Arc<OptConfig>,
         labels: Option<Vec<String>>,
+        ctx:C
     ) -> Result<Self, ThoError>
     {
         let labels = labels
@@ -514,7 +524,7 @@ where
             opt_config,
             labels,
 
-            sync_label_batch:  Arc::new(SyncLabelBatch::<C>::new(1.into()).await?),
+            sync_label_batch:  SyncLabelBatch::<C>::new(ctx.tho_device_idx()).await?,
         })
     }
 
@@ -1386,6 +1396,7 @@ mod tests {
             &store,
             Arc::new(OptConfig::new(30, 10)),
             None,
+            mock_run_ctx::default(1),
         ).await?);
 
 
