@@ -59,7 +59,7 @@ use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_shared::tracked_await::track_await;
-
+use crate::stages::stage_ids::APPLY_LABEL_NET;
 
 pub const APPLY_LABEL_NET_ENDPOINT: &str = "APPLY_LABEL_NET_ENDPOINT";
 
@@ -163,19 +163,19 @@ where
 
         for (label, nets) in all_label_nets {
 
-            debug!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
+            info!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
 
             for (train_label_net_run_config_id, label_net_params, _net) in nets {
                 let label_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
-                assert_eq!(label_nets.len(), 1); //for now there is always single net for run_config_id
+                assert_eq!(label_nets.len(), 1); //for now, there is always a single net for run_config_id
                 let label_net = &label_nets[0];
 
                 let motif_net_run_config_ids = track_await!(store.list_input_nets(label_net.id)).await?;
 
-                debug!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
+                info!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
 
                 if motif_net_run_config_ids.is_empty() {
                     warn!("no motifs for train_label_net_run_config_id={train_label_net_run_config_id}");
@@ -196,7 +196,7 @@ where
                 train_label_net_run_config_ids.push(train_label_net_run_config_id);
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(track_await!(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: track_await!(ApplyLabelNet::new(label_net.id, apply_label_net_init, stage_ctx.branch(true), ws)).await?,
+                    apply_label_net: track_await!(ApplyLabelNet::new(apply_label_net_init, stage_ctx.branch(true), ws)).await?,
                 });
             }
         }
@@ -704,6 +704,15 @@ impl ApplyLabelNetInit {
     pub fn new(trained_net_id: u32, label: String, train_label_net_run_config_id: RunConfigId, label_net_path:PathBuf, quantize:bool) -> Self {
         Self { trained_net_id, label, train_label_net_run_config_id, label_net_path, quantize }
     }
+
+    pub(super) fn inference_id(&self) -> SynKey {
+        SynKey::new([
+            mono_key!(APPLY_LABEL_NET, "ApplyLabelNet"),
+            mono_key!(self.trained_net_id, format!("apply label net {}", self.trained_net_id)),
+            mono_key!(self.quantize, "quantize")
+        ])
+    }
+
 }
 
 impl WorkerStageInput for ApplyLabelNetInit {
@@ -720,13 +729,14 @@ where
 {
     async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<ApplyLabelNet<C>, ApplyLabelNetInit>>, ThoError> {
         let device: ThoDevice = run_context.tho_device_idx().into();
-
+        let id = self.inference_id();
         if GlobalCtx::global().is_ipc() {
-            let (_run_config_id, _params, _net) = perf_log!(sync_read_lock!(ws)).load_label_net(&self.label_net_path, &device, self.quantize, false)?;
+            let (_run_config_id, _params, _) = perf_log!(sync_read_lock!(ws)).load_label_net(&self.label_net_path, &device, self.quantize, false)?;
 
             // Keep a cloned initializer as proxy metadata because worker installation consumes its serialized copy.
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, Some(self.trained_net_id.to_string()), device.tho_device_idx(), Box::new(self.clone())).await?),
+
+                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self.clone())).await?),
                 init: self,
                 state: Default::default(),
             }))
@@ -735,6 +745,7 @@ where
             let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load label net from {:?}", self.label_net_path)))?;
 
             Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(ApplyLabelNet::new_local(
+                id,
                 self.label,
                 self.train_label_net_run_config_id,
                 net,
@@ -799,7 +810,6 @@ where
     C: RunCtx + 'static,
 {
     async fn new<RC>(
-        trained_net_id: u32,
         sync_init: ApplyLabelNetInit,
         run_context: RC,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
@@ -808,7 +818,7 @@ where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
     {
         let ws = Arc::clone(ws);
-        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), trained_net_id, move || async move {
+        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), sync_init.trained_net_id, move || async move {
             // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
             let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
@@ -833,12 +843,13 @@ where
     }
 
     async fn new_local(
+        id:SynKey,
         label: String,
         train_label_net_run_config_id: RunConfigId,
         label_net: ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
     ) -> Result<Self, ThoError> {
         Ok(Self {
-            id: mono_key!(label.clone(), "ApplyLabelNet") + label_net.id(),
+            id,
             label,
             train_label_net_run_config_id,
             net: tokio::sync::Mutex::new(label_net),
@@ -863,6 +874,7 @@ pub fn apply_label_net_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn 
         )?;
 
         let stage: ApplyLabelNet<WokerRunCtx> = ApplyLabelNet::new_local(
+           init.inference_id(),
            init.label,
            init.train_label_net_run_config_id,
            net.expect("net"),

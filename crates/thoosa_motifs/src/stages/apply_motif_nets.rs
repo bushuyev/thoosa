@@ -682,7 +682,12 @@ pub struct ApplyMotifNetInit {
 
 impl ApplyMotifNetInit {
     pub(super) fn inference_id(&self) -> SynKey {
-        SynKey::new([mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet"), mono_key!(self.trained_net_id, format!("apply motif net {}", self.trained_net_id)), mono_key!(self.slice_step, "slice_step"), mono_key!(self.quantize, "quantize")])
+        SynKey::new([
+            mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet"),
+            mono_key!(self.trained_net_id, format!("apply motif net {}", self.trained_net_id)),
+            mono_key!(self.slice_step, "slice_step"),
+            mono_key!(self.quantize, "quantize")
+        ])
     }
 
     pub fn new(
@@ -722,14 +727,14 @@ where
 {
     async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
         let device: ThoDevice = run_context.tho_device_idx().into();
-
+        let id = self.inference_id();
         if GlobalCtx::global().is_ipc() {
             let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, false)?;
             let motif_meta = MotifNetMeta::new(self.motif_id, self.channel, params);
 
             // A failed worker installation is retried with a fresh endpoint id by OOMHandler::new_stage.
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some(format!("{}:{}:{}", self.trained_net_id, self.slice_step, self.quantize)), device.tho_device_idx(), Box::new(self)).await?),
+                stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self)).await?),
                 init: motif_meta,
                 state: Default::default(),
             }))
@@ -737,8 +742,9 @@ where
             let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
             let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load motif net from {:?}", self.motif_net_path)))?;
 
+
             Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(SyncApplyMotifNet::new_local(
-                self.inference_id(),
+                id,
                 self.slice_step,
                 params,
                 net,
