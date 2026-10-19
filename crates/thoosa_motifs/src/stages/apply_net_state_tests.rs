@@ -88,7 +88,7 @@ async fn round_trips() -> Result<(), ThoError> {
             init: label_init, state: Default::default(),
         }
     } else {
-        let stage = Arc::new(ApplyLabelNet::new_local("label".into(), 23, label_module(false)?).await?);
+        let stage = Arc::new(ApplyLabelNet::new_local(mono_key!(0, "test").into(), "label".into(), 23, label_module(false)?).await?);
         restore_guards(stage.as_ref()).await?;
         DynSyncStageWithStateEnum::Local(stage)
     });
