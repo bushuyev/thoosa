@@ -1095,34 +1095,34 @@ mod tests {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="do_heavy_test_run_all"))]
     async fn do_heavy_test_run_all(test_name: &str) -> anyhow::Result<()> {
         tch::manual_seed(42);
-        let settings = RunAllSettings {
-            resources_per_label: 30,
-            pure_sets_len: [(10, true), (20, true)],
-            train_resource_group: "pure group 20".to_string(),
-            valid_resource_group: "pure group 10".to_string(),
-
-            motifs_epochs : 30,
-            labels_epochs : 30,
-            final_epochs : 30,
-            train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
-            train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
-            max_batch_size : 10,
-        };
         // let settings = RunAllSettings {
-        //     resources_per_label: 90,
-        //     pure_sets_len: [(30, true), (60, true)],
-        //     train_resource_group: "pure group 60".to_string(),
-        //     valid_resource_group: "pure group 30".to_string(),
+        //     resources_per_label: 30,
+        //     pure_sets_len: [(10, true), (20, true)],
+        //     train_resource_group: "pure group 20".to_string(),
+        //     valid_resource_group: "pure group 10".to_string(),
         //
         //     motifs_epochs : 30,
-        //     labels_epochs : 50,
-        //     final_epochs : 50,
-        //     train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
-        //     train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
-        //     train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
-        //     max_batch_size : 20,
+        //     labels_epochs : 30,
+        //     final_epochs : 30,
+        //     train_motifs_opt_config : Arc::new(OptConfig::new(10, 3)),
+        //     train_labels_opt_config : Arc::new(OptConfig::new(10, 3)),
+        //     train_final_opt_config : Arc::new(OptConfig::new(10, 3)),
+        //     max_batch_size : 10,
         // };
+        let settings = RunAllSettings {
+            resources_per_label: 90,
+            pure_sets_len: [(30, true), (60, true)],
+            train_resource_group: "pure group 60".to_string(),
+            valid_resource_group: "pure group 30".to_string(),
+
+            motifs_epochs : 30,
+            labels_epochs : 50,
+            final_epochs : 50,
+            train_motifs_opt_config : Arc::new(OptConfig::new(30, 10)),
+            train_labels_opt_config : Arc::new(OptConfig::new(50, 10)),
+            train_final_opt_config : Arc::new(OptConfig::new(50, 10)),
+            max_batch_size : 20,
+        };
         // let settings = RunAllSettings {
         //     resources_per_label: 300,
         //     pure_sets_len: [(100, true), (200, true)],

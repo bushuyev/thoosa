@@ -1,3 +1,4 @@
+use std::any::TypeId;
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
