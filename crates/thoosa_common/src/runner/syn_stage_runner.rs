@@ -1242,8 +1242,7 @@ impl SyncStageRunner {
                                 async move {
                                     debug!("SyncStageRunner::try_spawn_ready_jobs: running job job_id={job_id}");
 
-                                    track_await!(job.run())
-                                        .await
+                                    track_await!(job.run()).await
                                 },
                             );
                         let feedback = match activity {

@@ -728,7 +728,7 @@ impl<C> TrainStepFactory<LabelProbability, LabelsProbabilities, C, FinalNetParam
 where
     C: RunCtx + 'static,
 {
-    async fn new(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
+    async fn new_step(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
         let node_params = FinalNetParams::new(self.num_label_nets, run_config.net.mid_features, self.labels_len, run_config.net.num_layers);
         if GlobalCtx::global().is_ipc() {
 

@@ -112,7 +112,7 @@ where
     NP: Debug + Send + Sync + 'static,
     RC: Debug + Send + Sync + 'static,
 {
-    async fn new(&self, run_config: RC, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, NP), ThoError>;
+    async fn new_step(&self, run_config: RC, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DX>, DX, DY, C>>, NP), ThoError>;
 }
 
 // A trial must release the registry's strong stage reference even when it errors or is cancelled.
@@ -239,7 +239,7 @@ where
             std::fs::create_dir_all("/tmp/thoosa")?;
             let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
             let best_checkpoint = TmpFile::new(best_checkpoint_path.clone());
-            let (train_step, params) = track_await!(self.train_step_factory.new(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
+            let (train_step, params) = track_await!(self.train_step_factory.new_step(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
 
             let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id(), Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
@@ -547,7 +547,7 @@ pub mod tests {
 
     #[async_trait]
     impl TrainStepFactory<DummyX, DummyY, MockRunCtx, (), DummyRunConfig> for DummyTrainStepFactory {
-        async fn new(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DummyX>, DummyX, DummyY, MockRunCtx>>, ()), ThoError> {
+        async fn new_step(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<DummyX>, DummyX, DummyY, MockRunCtx>>, ()), ThoError> {
             let x_f: Arc<TrainStepXFn<DummyX>> = Arc::new(Box::new(dummy_x_f));
             let (stage, ()) = TrainStep::new_local(
                 ctx.tho_device_idx().into(),
@@ -582,7 +582,7 @@ pub mod tests {
 
             #[async_trait]
             impl TrainStepFactory<DummyX, DummyY, MockRunCtx, (), DummyRunConfig> for TrainStepFactory {
-                async fn new(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TestTrainStep>, ()), ThoError>;
+                async fn new_step(&self, run_config: DummyRunConfig, ctx: MockRunCtx, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<TestTrainStep>, ()), ThoError>;
             }
         }
 
@@ -594,7 +594,7 @@ pub mod tests {
             pub fn new(stage: DynSyncStageWithStateEnum<TestTrainStep>) -> Self {
                 let mut mock = MockTrainStepFactory::default();
                 // Transfer the only strong stage reference to the trial so a leaked cache keeps the weak probe alive.
-                mock.expect_new().times(1).return_once(move |_, _, _| Ok((stage, ())));
+                mock.expect_new_step().times(1).return_once(move |_, _, _| Ok((stage, ())));
                 Self { mock }
             }
 
@@ -607,7 +607,7 @@ pub mod tests {
     #[cfg(test)]
     async fn trial_with_batch_factory(batch: TestBatchFactory) -> Result<(TestTrial, std::sync::Weak<TestTrainStep>), ThoError> {
         let run_config = DummyRunConfig::new(None, 1);
-        let (stage, ()) = DummyTrainStepFactory.new(run_config.clone(), mock_run_ctx::default(1), PathBuf::from("/tmp/thoosa_train_net_cleanup.safetensors")).await?;
+        let (stage, ()) = DummyTrainStepFactory.new_step(run_config.clone(), mock_run_ctx::default(1), PathBuf::from("/tmp/thoosa_train_net_cleanup.safetensors")).await?;
         let DynSyncStageWithStateEnum::Local(local_stage) = &stage else {
             panic!("test factory must return a local stage");
         };
