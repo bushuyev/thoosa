@@ -193,27 +193,45 @@ fn train_motif_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn Wor
 }
 
 #[derive(Debug)]
-struct TrainMotifStepFactory<C> {
-    motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
+struct TrainMotifStepFactory<C, L>
+where
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
+{
+    motif_loader_input: Arc<MotifLoaderInput>,
+    motif_loader:Arc<MotifLoader<L, C>>,
     motif_width: u32,
+
     pd: PhantomData<C>,
 }
 
-impl<C> TrainMotifStepFactory<C> {
-    fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, motif_width: u32) -> Self {
-        Self { motif, motif_width, pd: PhantomData }
+impl<C, L> TrainMotifStepFactory<C, L>
+where
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
+{
+    fn new(motif_loader_input: Arc<MotifLoaderInput>, motif_loader: Arc<MotifLoader<L, C>>, motif_width: u32) -> Self {
+        Self { motif_loader_input, motif_loader, motif_width, pd: PhantomData }
     }
 }
 
 #[async_trait]
-impl<C> TrainStepFactory<Slice, MotifProbability, C, MotifNetParams, TrainMotifNetRunConfig> for TrainMotifStepFactory<C>
+impl<C, L> TrainStepFactory<Slice, MotifProbability, C, MotifNetParams, TrainMotifNetRunConfig> for TrainMotifStepFactory<C, L>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
+
 {
-    async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
+    async fn new_step(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
         let (node_params, stft_config) = train_motif_step_params(&run_config, self.motif_width)?;
+        //motif is loaded here so that it can be refreshed after reset
+        let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = track_await!(Arc::clone(&self.motif_loader).run_cached(
+            Arc::clone(&self.motif_loader_input),
+            ctx.branch(false),
+        )).await?;
+
         if GlobalCtx::global().is_ipc() {
-            let motif = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+            let motif = track_await!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
             let motif = motif.as_ref().data();
             let motif = ThoTensor::new_ref(
                 motif.id().clone(),
@@ -235,13 +253,13 @@ where
             //TODO extract and use train_motif_step_endpoint_init
             let cosine_motif = match &run_config.net {
                 MotifNetTypeArgs::CosineNet(_) => {
-                    let motif_ref = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                    let motif_ref = track_await!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
                     Some(Arc::new(copy_motif(motif_ref.as_ref().data())?))
                 }
                 MotifNetTypeArgs::Cosine2DNet(args) => {
                     let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone())?);
                     let motif_input = {
-                        let motif_ref = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
+                        let motif_ref = track_await!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
                         copy_motif(motif_ref.as_ref().data())
                     }?;
                     let motif_specs = track_await!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
@@ -625,13 +643,13 @@ where
             let descr = self.descr.clone();
 
             async move {
-
-                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = track_await!(motif_loader.run_cached(
-                    Arc::new(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id]))),
+                let motif_loader_input = Arc::new(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id])));
+                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = track_await!(Arc::clone(&motif_loader).run_cached(
+                    Arc::clone(&motif_loader_input),
                     ctx.branch(false),
                 )).await?;
 
-                let motif_for_net = Arc::clone(&motif);
+
 
                 let motif_meta = track_await!(motif.extra()).await?;
                 let motif_width = motif_meta.window;
@@ -704,7 +722,7 @@ where
                         }
 
                     },
-                    Arc::new(TrainMotifStepFactory::<C>::new(motif_for_net, motif_width)),
+                    Arc::new(TrainMotifStepFactory::<C, L>::new(motif_loader_input, motif_loader, motif_width)),
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone
                     |rc:&TrainMotifNetRunConfig|{
