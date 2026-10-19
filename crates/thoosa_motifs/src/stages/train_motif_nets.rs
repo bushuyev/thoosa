@@ -223,7 +223,7 @@ where
                 motif.selector(),
                 motif.ref_worker_id().expect("motif tensor reference identity"),
             );
-          
+
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
             Ok((DynSyncStageWithStateEnum::Proxy {
@@ -615,7 +615,7 @@ where
             let mut ctx = ctx.branch(false);
             let mut ctx_run = ctx.branch(false);
 
-            let motif_loader = Arc::clone(&self.motif_loader);
+            let motif_loader: Arc<MotifLoader<L, C>> = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
             let opt_config = Arc::clone(&input.opt_config);
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);

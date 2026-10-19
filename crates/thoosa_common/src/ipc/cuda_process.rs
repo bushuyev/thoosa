@@ -455,14 +455,16 @@ impl CudaIPCActor {
                                 input,
                             ).await;
                             // Reporting belongs to the admitted request, even if its
+                            //reset should be handled only in SyncStageRunner
                             // proxy/initializer caller was cancelled before the reply.
-                            let response = response.map(|mut response| {
-                                if let OpResult::Failed(error) = response.status {
-                                    let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
-                                    response.status = error.into();
-                                }
-                                response
-                            });
+                            // let response = response.map(|mut response| {
+                            //     if let OpResult::Failed(error) = response.status {
+                            //         debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");
+                            //         let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
+                            //         response.status = error.into();
+                            //     }
+                            //     response
+                            // });
                             let _ = respond_to.send(response);
 
                             Ok::<_, ThoError>(())

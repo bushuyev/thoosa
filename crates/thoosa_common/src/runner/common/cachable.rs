@@ -852,8 +852,8 @@ where
         to_tho_device_idx: usize,
     ) -> Result<RwLockReadGuard<'_, O>, ThoError>
     {
-        debug!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
-        trace!("DevicesWrap::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
+        debug!("DevicesWrap::load_from_any_device_ id={:?} to_device_idx={to_tho_device_idx}", self.id);
+        trace!("DevicesWrap::load_from_any_device_ id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
         assert!(self.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", self.cached_data.len(), self.id);
 
         // Cleanup can move a GPU source to CPU after a scan passed CPU. Retry
@@ -873,7 +873,7 @@ where
                 drop(read_guard);
             }
 
-            debug!("DevicesWrap::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
+            debug!("DevicesWrap::load_from_any_device_ id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
 
             for (source_device_idx, op) in self.cached_data.iter().enumerate() {
                 if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
@@ -896,6 +896,8 @@ where
                 drop(source_read_guard);
             }
         }
+
+        warn!("DevicesWrap::load_from_any_device_:  self.id={:?} \n{}", self.id, n_trace_line(&Backtrace::capture(), 50));
 
         Err(ThoError::NotFound(Some(format!("load_from_any_device_: id={:?}", self.id))))
     }

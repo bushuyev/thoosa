@@ -1,7 +1,9 @@
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
+use log::debug;
 use parking_lot::Mutex;
 use thoosa_shared::{CudaActivityGate, CudaActivityPauseTicket, CudaActivityScope, CudaDeviceGeneration, ThoError};
 use tokio::sync::oneshot;
@@ -13,6 +15,7 @@ pub(crate) type ProcessFailureFn = Arc<dyn Fn(ThoError) + Send + Sync>;
 const RECOVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_BACKEND_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(Debug)]
 struct RecoveryCycle {
     ticket: CudaActivityPauseTicket,
     task: Option<AbortHandle>,
@@ -69,6 +72,8 @@ impl CudaRecoveryCoordinator {
         if generation != current {
             return Err(ThoError::new("CUDA recovery report refers to a future device generation"));
         }
+        debug!("CudaRecoveryCoordinator::request: needs_cuda_ctx_reset={:?} is_cuda_recovery_failed={:?} process_failure={:?} cycle={:?}", cause.needs_cuda_ctx_reset(), cause.is_cuda_recovery_failed(), self.process_failure.is_some(), cycle.deref());
+
         if (cause.needs_cuda_ctx_reset() || cause.is_cuda_recovery_failed()) && let Some(process_failure) = &self.process_failure {
             // Local fatal errors or an unsuccessful stream drain invalidate the
             // process; neither can be repaired by resetting live LibTorch state.
