@@ -539,6 +539,8 @@ impl CudaWorker {
     }
 
     async fn process_worker_request<W: Workspace + ?Sized + 'static>(request: CudaWorkerMsgIn, context: WorkerRequestContext<W>) -> Result<OpResult, ThoError> {
+        debug!("process_worker_request: request={request:?}");
+
         let request_id = request.request_id;
         let worker_id = context.all_cuda_tensors.worker_id;
         // Every normal request returns exactly one status. Sending is owned by
@@ -558,7 +560,7 @@ impl CudaWorker {
                     Ok(status)
                 }
                 Operation::H2dCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
-                    debug!("run_worker: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
+                    debug!("process_worker_request: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
 
                     let cuda_device = context.tho_device.gpu_ordinal();
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "H2D source")?;

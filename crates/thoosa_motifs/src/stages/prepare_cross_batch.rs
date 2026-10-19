@@ -18,6 +18,7 @@ use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
+use crate::stages::instance_cache::InstanceCache;
 
 pub(crate) const PREPARE_CROSS_BATCH_ENDPOINT: &str = "PrepareCrossBatch";
 

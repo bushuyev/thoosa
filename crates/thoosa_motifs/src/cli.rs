@@ -358,6 +358,7 @@ impl StageCommand for MotifCommands {
                             &store,
                             opt_config,
                             labels_filter.clone(),
+                            init_ctx.branch(false)
                         )).await?))
                     },
                     ||ctx.branch(true),

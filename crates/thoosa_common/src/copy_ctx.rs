@@ -339,9 +339,14 @@ pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) 
 pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc<CudaActivityGate>, generation: CudaDeviceGeneration) -> Result<T, ThoError> {
     result.map_err(|error| {
         if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
-            GlobalCtx::global().get_runner(gate.device_idx()).request_cuda_reset_for_generation(generation, error)
-                .err().unwrap_or(ThoError::ContextReset)
-        } else { error }
+            GlobalCtx::global()
+                .get_runner(gate.device_idx())
+                .request_cuda_reset_for_generation(generation, error)
+                .err()
+                .unwrap_or(ThoError::ContextReset)
+        } else {
+            error
+        }
     })
 }
 

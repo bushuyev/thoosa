@@ -117,7 +117,7 @@ pub enum IpcCopyResult {
     StateInstalled,
 }
 
-//TODO CudaWorkerMsgIn::Operation variants used in CudaIPCActorMessage::PurgeStage and CudaIPCActorMessage::SendMsg must be moved into CudaIPCActorMessage to keep all in single enum. Current structure is left over from replacing json with postcard serialization.
+//TODO CudaWorkerMsgIn::Operation variants used in  CudaIPCActorMessage::SendMsg must be moved into CudaIPCActorMessage to keep all in single enum. Current structure is left over from replacing json with postcard serialization.
 pub enum CudaIPCActorMessage {
     Copy{
         src:ThoTensor,
@@ -126,13 +126,16 @@ pub enum CudaIPCActorMessage {
         respond_to: oneshot::Sender<Result<IpcCopyResult, ThoError>>,
         dst_key: Option<H2DTensorKey>//TODO it's needed only for IPC d2h
     },
+
     DropThoTensor {
         key:u64,
         worker_id: CudaWorkerId,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
     PurgeStage {
-        input: CudaWorkerMsgIn,
+        worker_id: CudaWorkerId,
+        endpoint_name: String,
+        stage_id: Option<String>,
         activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<StageStateDump, ThoError>>
     },
@@ -232,6 +235,7 @@ impl SpawnedState {
 
 impl Drop for SpawnedState {
     fn drop(&mut self) {
+        //TODO this can be skipped when shutting down
         self.pending.close(ThoError::ContextReset);
         self.cancel.cancel();
         self.reader_handle.abort();
@@ -401,16 +405,13 @@ impl CudaIPCActor {
                 });
             }
 
-            CudaIPCActorMessage::PurgeStage { input, activity, respond_to } => {
+            CudaIPCActorMessage::PurgeStage {worker_id,  endpoint_name, stage_id, activity, respond_to } => {
                 // Admission must be checked before borrowing the live worker transport.
-                if let Err(error) = input.worker_id.check(self.worker().worker_id).and_then(|_| activity.check_operation(&self.gate)) {
+                if let Err(error) = worker_id.check(self.worker().worker_id).and_then(|_| activity.check_operation(&self.gate)) {
                     let _ = respond_to.send(Err(error));
                     return Ok(());
                 }
-                let Operation::GetStageStateInfo { endpoint_name, stage_id } = input.operation else {
-                    let _ = respond_to.send(Err(ThoError::new("invalid stage export operation")));
-                    return Ok(());
-                };
+
                 let pending = Arc::clone(&self.worker().pending);
                 let worker_id = self.worker().worker_id;
                 let next_id = Arc::clone(&self.next_id);
@@ -1240,15 +1241,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::PurgeStage {
+                worker_id,
+                endpoint_name,
+                stage_id,
                 activity: self.activity_for(worker_id)?,
-                input: CudaWorkerMsgIn {
-                    worker_id,
-                    request_id: 0,
-                    operation: Operation::GetStageStateInfo {
-                        endpoint_name,
-                        stage_id,
-                    },
-                },
+
                 respond_to,
             }
         ).instrument(tracing::debug_span!(

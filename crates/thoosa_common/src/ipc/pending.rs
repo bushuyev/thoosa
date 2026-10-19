@@ -57,7 +57,9 @@ impl PendingRequests {
     pub fn enqueue(&self, permit: mpsc::Permit<'_, CudaWorkerMsgIn>, request: CudaWorkerMsgIn, reply: Reply, keepalive: Option<KeepAlive>, shutdown: bool) -> Result<(), ThoError> {
         request.worker_id.check(self.worker)?;
         let mut state = self.state.lock();
-        if state.exited { return Err(ThoError::ContextReset); }
+        if state.exited {
+            return Err(ThoError::ContextReset);
+        }
         if !shutdown && let Some(error) = &state.closed { return Err(error.clone()); }
         if state.requests.contains_key(&request.request_id) { return Err(ThoError::new("duplicate worker request identity")); }
         state.requests.insert(request.request_id, Request { reply, keepalive });
