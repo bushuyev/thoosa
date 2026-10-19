@@ -136,6 +136,42 @@ async fn install_and_probe(actor: &CudaIPCActorHandle) -> Result<u32, ThoError> 
 }
 
 #[test]
+fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoError> {
+    super::tests::run_ipc_test(module_path!(), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let global = GlobalCtx::global();
+            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let gate = global.cuda_activity_gate(1).unwrap();
+            let pid = install_and_probe(actor).await?;
+            let generation = gate.device_generation();
+            let mut attempts = 0;
+            // Exercise the same trial boundary as TrainNet, with a real fatal
+            // worker reply. The failed attempt must unwind before waiting.
+            let next_pid = crate::stages::train_net::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+                attempts += 1;
+                let first = attempts == 1;
+                async move {
+                    if first {
+                        let response = actor.invoke_stage(actor.worker_id()?, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await?;
+                        return match response.status { OpResult::Failed(error) => Err(error.into()), _ => panic!("fatal request succeeded") };
+                    }
+                    install_and_probe(actor).await
+                }
+            }).await?;
+            assert_eq!(attempts, 2);
+            assert_eq!(gate.device_generation().0, generation.0 + 1);
+            assert_ne!(pid, next_pid);
+            assert!(!Path::new(&format!("/proc/{pid}")).exists());
+            Ok::<_, ThoError>(())
+        }).await?
+    }, async |sock| {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+    })
+}
+
+#[test]
 fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(120), async {
