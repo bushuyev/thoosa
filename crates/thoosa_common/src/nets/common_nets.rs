@@ -869,7 +869,11 @@ where
         opt.enqueue_configs(reusable_configs);
         debug!("opt_train: wait on optimize ");
         let best_config = track_await!(opt.optimize()).await;
-        if let Some(error) = recovery_error.write().take() { return Err(error.into()); }
+        if let Some(error) = recovery_error.write().take() {
+            debug!("opt_train: recovery_error={recovery_error:?} ");
+
+            return Err(error.into());
+        }
 
         debug!("opt_train: best_config={:?}", best_config);
 

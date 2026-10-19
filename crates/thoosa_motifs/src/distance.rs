@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::format;
 use std::ops::{Add, ControlFlow};
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicI64, AtomicU64};
+use std::sync::atomic::Ordering::Relaxed;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind;
 use tch::Kind::{Bool, Float};
@@ -219,6 +220,13 @@ pub fn clc_d2_similarity_and_mask(
     with_distances: bool,
     mask_makers: &mut [MaskMaker],
 ) -> anyhow::Result<(Tensor, Option<Tensor>)> {
+
+    // static CALL_COUNTER:AtomicU64 = AtomicU64::new(0);
+    // 
+    // if CALL_COUNTER.fetch_add(10, Relaxed) == 10 {
+    //     return Err(anyhow::anyhow!("device-side assert triggered"))
+    // }
+
     let device = t_0.device();
 
     if t_0.size()[1] < 2 {
