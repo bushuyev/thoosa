@@ -1078,7 +1078,7 @@ impl<C> TrainStepFactory<MotifProbability, LabelProbability, C, LabelNetParams, 
 where
     C: RunCtx + 'static,
 {
-    async fn new(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
+    async fn new_step(&self, run_config: TrainLabelNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainLabelStep<C>>, LabelNetParams), ThoError> {
         let node_params = train_label_step_params(&run_config, self.num_nets);
         if GlobalCtx::global().is_ipc() {
 

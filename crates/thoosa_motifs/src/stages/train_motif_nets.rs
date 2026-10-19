@@ -210,7 +210,7 @@ impl<C> TrainStepFactory<Slice, MotifProbability, C, MotifNetParams, TrainMotifN
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn new(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
+    async fn new_step(&self, run_config: TrainMotifNetRunConfig, mut ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainMotifStep<C>>, MotifNetParams), ThoError> {
         let (node_params, stft_config) = train_motif_step_params(&run_config, self.motif_width)?;
         if GlobalCtx::global().is_ipc() {
             let motif = track_await!(self.motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
