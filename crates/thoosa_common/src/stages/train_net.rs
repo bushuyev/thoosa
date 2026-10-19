@@ -124,6 +124,32 @@ impl Drop for TrainStepCacheGuard {
     }
 }
 
+pub(crate) async fn retry_training_after_cuda_reset<T, F, Fut>(gate: Option<Arc<thoosa_shared::CudaActivityGate>>, mut train: F) -> Result<T, ThoError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, ThoError>>,
+{
+    let Some(gate) = gate else { return train().await; };
+    // An admitted ancestor must unwind before recovery can finish. Only the
+    // outer async trial, which owns no CUDA activity, can wait and retry safely.
+    if thoosa_shared::CudaActivityScope::current().is_some() { return train().await; }
+    loop {
+        gate.wait_if_paused().await?;
+        let generation = gate.device_generation();
+        match train().await {
+            Err(error) if matches!(error.what(), ThoError::ContextReset) || error.needs_cuda_ctx_reset() => {
+                // The attempt has returned and released its stage/cache/batches.
+                // A reset is not a bad hyperparameter trial: rebuild all state
+                // on the replacement worker before publishing any loss to TPE.
+                gate.wait_if_paused().await?;
+                if gate.device_generation() == generation { return Err(error); }
+                warn!("Retrying training trial after CUDA device {} recovered from generation {}: {error:#}", gate.device_idx(), generation.0);
+            }
+            result => return result,
+        }
+    }
+}
+
 pub struct TrainNet<C, B, BF, DX, DY, P, RC, NP, FC>
 where
     C: RunCtx + Adjustable + 'static,
@@ -373,14 +399,18 @@ where
                     debug!("TrainNet::run, about to call run_inner: descr={descr:?} run_config={:?}", run_config);
 
                     let self_arc = Arc::clone(&self_for_train);
+                    let mut trial_ctx = ctx.branch(false);
+                    let trial_descr = descr.clone();
 
-                    self_arc.run_inner(
-                        ctx.branch(false),
-                        device_idx_for_train,
-                        run_config,
-                        validation_step,
-                        descr.clone()
-                    )
+                    retry_training_after_cuda_reset(GlobalCtx::global().cuda_activity_gate(device_idx_for_train), move || {
+                        Arc::clone(&self_arc).run_inner(
+                            trial_ctx.branch(false),
+                            device_idx_for_train,
+                            run_config.clone(),
+                            validation_step,
+                            trial_descr.clone()
+                        )
+                    })
                 },
                 run_config_source,
                 &self.descr,
@@ -615,6 +645,95 @@ pub mod tests {
             Ok((x.into(), None, y.into()))
         })();
         stream::iter([input]).boxed()
+    }
+
+    fn recovery_run_configs() -> Arc<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<DummyRunConfigFields>>, Vec<thoosa_shared::val::NamedRange<DummyRunConfigFields>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<DummyRunConfigFields>>, DummyRunConfigFields>> {
+        Arc::new(DummyRunConfigRangeOrValue {
+            id: None,
+            num_layers: RangeOrValue::Value(1),
+            common_config: CommonTrainingRunConfigRangeOrValue {
+                epochs: RangeOrValue::Value(1), batch_size: RangeOrValue::Value(1), lr: RangeOrValue::Range { range: 0.001..0.002, step: None },
+                patience: RangeOrValue::Value(1), min_delta: RangeOrValue::Value(0.0), optimizer: None,
+            },
+        }.opt_run_configs().unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_training_reset_waits_and_retries_without_spending_trial_budget() -> Result<(), ThoError> {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (paused, mut pause) = tokio::sync::oneshot::channel();
+        let mut paused = Some(paused);
+        let train_gate = Arc::clone(&gate);
+        let calls = Arc::clone(&attempts);
+        // Use the actual optimization callback boundary: one evaluation must
+        // survive an interruption without becoming MAX_LOSS/no min_var_store.
+        let mut run = Box::pin(opt_train(
+            Arc::new(OptConfig::new(1, 1)),
+            async move |_config: DummyRunConfig, _listener: &mut (dyn crate::utils::TrainListener + '_)| {
+                super::retry_training_after_cuda_reset(Some(Arc::clone(&train_gate)), || {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                    let activity = thoosa_shared::CudaActivityScope::try_enter(&train_gate).unwrap().unwrap();
+                    if attempt == 0 {
+                        paused.take().unwrap().send(train_gate.request_pause(ThoError::ContextReset).unwrap()).unwrap();
+                    }
+                    async move {
+                        let _activity = activity;
+                        if attempt == 0 { Err(ThoError::ContextReset) } else { Ok((42u32, 0.5, ())) }
+                    }
+                }).await
+            },
+            recovery_run_configs(), "reset trial", vec![],
+        ));
+        assert!(futures::poll!(run.as_mut()).is_pending(), "optimization must wait for recovery instead of exhausting its trials");
+        let ticket = pause.try_recv().unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), gate.wait_until_idle()).await.unwrap();
+        gate.finish_pause(ticket);
+        let (artifact, (), _, loss) = run.await?;
+        assert_eq!((artifact, loss), (42, 0.5));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_training_reset_does_not_wait_inside_cuda_activity_or_retry_without_recovery() {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let calls = AtomicUsize::new(0);
+        let error = super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ready(Err::<(), _>(ThoError::ContextReset))
+        }).await.unwrap_err();
+        assert!(matches!(error.what(), ThoError::ContextReset));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "a bare reset error must not spin without a replacement generation");
+        let activity = thoosa_shared::CudaActivityScope::try_enter(&gate).unwrap().unwrap();
+        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), activity.run(super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || ready(Err::<(), _>(ThoError::ContextReset))))).await.unwrap();
+        assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset), "an admitted ancestor must unwind for recovery to drain");
+        gate.finish_pause(ticket);
+    }
+
+    #[tokio::test]
+    async fn test_opt_train_preserves_recovery_failure_even_after_success() {
+        for successful_first in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let attempts = Arc::clone(&calls);
+            let failure = ThoError::CudaRecoveryFailed(Arc::new(thoosa_shared::CudaRecoveryFailure {
+                original: ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "original worker failure".into() },
+                recovery: Some(ThoError::new("replacement failed")),
+            }));
+            let error: ThoError = opt_train(
+                Arc::new(OptConfig::new(3, 3)),
+                async move |_config: DummyRunConfig, _listener: &mut (dyn crate::utils::TrainListener + '_)| {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    if successful_first && attempt == 0 { Ok((42u32, 0.5, ())) } else { Err(failure.clone()) }
+                },
+                recovery_run_configs(), "failed recovery", vec![],
+            ).await.unwrap_err().into();
+            assert!(error.is_cuda_recovery_failed(), "optimization lost the typed failure: {error:#}");
+            assert!(error.to_string().contains("replacement failed"));
+            assert_eq!(calls.load(Ordering::SeqCst), if successful_first { 2 } else { 1 }, "terminal recovery must stop further training");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
