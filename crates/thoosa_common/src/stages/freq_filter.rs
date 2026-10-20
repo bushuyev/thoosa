@@ -102,7 +102,7 @@ where
     pd:PhantomData<C>
 }
 
-static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<RunConfigId, Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<(TypeId, RunConfigId, usize), Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
 
 
@@ -113,21 +113,19 @@ where
 
     pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
         let find_motifs_run_config_id = init.find_motifs_run_config_id;
-        let id = find_motifs_run_config_id;
+        // Filters outlive training trials. Retain reusable configuration, but
+        // never reuse an endpoint installed in a retired worker generation.
+        let gate = GlobalCtx::global().cuda_activity_gate(init.tho_device_idx);
+        let activity = gate.as_ref().map(thoosa_shared::CudaActivityScope::for_operation).transpose()?;
+        let generation = gate.as_ref().and_then(|gate| activity.as_ref().and_then(|scope| scope.generation(gate)));
+        let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
         let mut instances = INSTANCES.lock().await;
-
-
-        let cache = instances
-            .entry(find_motifs_run_config_id)
-            .or_insert_with(|| {
-                Box::new(HashMap::<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>::new())
-            })
-            .downcast_mut::<HashMap<RunConfigId, Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>>>()
-            .unwrap();
-
-        if let Some(v) = cache.get(&find_motifs_run_config_id) {
-            return Ok(Arc::clone(v))
-        }
+        if let (Some(gate), Some(generation)) = (&gate, generation) { gate.check_generation(generation)?; }
+        let retired_registration = if let Some(cached) = instances.get(&id) {
+            let (cached_generation, stage, registration) = cached.downcast_ref::<(Option<thoosa_shared::CudaDeviceGeneration>, Arc<DynSyncStageWithStateEnum<Self>>, crate::runner::global_ctx::RegisteredCacheHandle)>().ok_or_else(|| ThoError::new("frequency filter cache type mismatch"))?;
+            if *cached_generation == generation { return Ok(Arc::clone(stage)); }
+            Some(registration.clone())
+        } else { None };
 
         let stage = if GlobalCtx::global().is_ipc() {
 
@@ -147,11 +145,12 @@ where
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
         };
 
-        // let stage_id = stage.id();
-        //freq. filter is used to apply motif nets up to final training so it's never unregistered
-        GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+        // Replace the old purger only once construction succeeds, so offload
+        // cannot retain a retired proxy and the registry has no duplicate name.
+        if let Some(registration) = retired_registration { GlobalCtx::global().remove_cache(registration.key()); }
+        let registration = GlobalCtx::global().register_cache((format!("{SYNC_FREQ_FILTER_ENDPOINT}/{}/{find_motifs_run_config_id}", id.2), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
-        cache.insert(id, Arc::clone(&stage));
+        instances.insert(id, Box::new((generation, Arc::clone(&stage), registration)));
 
         Ok(stage)
     }
@@ -462,11 +461,8 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
-    filter_configs: Vec<InputFilter>,
     _ctx: PhantomData<C>,
-    num_channels:i64,
-    sample_rate:f64,
-    sync_freq_filter: Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>,
+    filter_init: SyncFreqFilterIpcInit,
     effective_output_stride:i64,
     min_input_split_len:i64
 }
@@ -492,19 +488,15 @@ where
         let effective_output_stride = Self::effective_output_stride(filter_configs)?;
         let min_input_split_len = Self::min_input_split_len(filter_configs)?;
 
-        let sync_freq_filter= SyncFreqFilter::new(
-            SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx)
-        ).await?;
+        let filter_init = SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx);
+        SyncFreqFilter::<C>::new(filter_init.clone()).await?;
 
 
         Ok(Arc::new(Self {
             //avoids caching each run_config separately when they have same filter - use filter_configs to build unique ids
             id:id.clone(),
-            filter_configs: filter_configs.to_vec(),
             _ctx: PhantomData,
-            num_channels,
-            sample_rate,
-            sync_freq_filter,
+            filter_init,
             effective_output_stride,
             min_input_split_len
         }))
@@ -870,7 +862,11 @@ where
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len].into();
         let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        // let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self), ctx.tho_device_idx()).await?);
+        // The async loader survives resets; resolve its endpoint for the current
+        // generation on each invocation rather than retaining a stale proxy.
+        let mut init = self.filter_init.clone();
+        init.tho_device_idx = ctx.tho_device_idx();
+        let sync_freq_filter = SyncFreqFilter::<C>::new(init).await?;
 
         let filtered = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(
             vec![
@@ -881,7 +877,7 @@ where
             None,
         )
         .run(
-            &self.sync_freq_filter,
+            &sync_freq_filter,
             input,
             ctx.branch(true),
             Contexts::new(
@@ -918,6 +914,7 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner::common::cachable::SelectRef;
     use crate::ipc::cuda_process::CudaIPCActorHandle;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::worker_msg::OpResult;
@@ -1044,6 +1041,55 @@ mod tests {
     fn test_filter_state_ipc() -> Result<(), ThoError> {
         crate::ipc::tests::run_ipc_test(module_path!(), async {
             tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await?
+        }, async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
+        })
+    }
+
+    #[test]
+    fn test_filter_rebuilds_after_worker_reset_ipc() -> Result<(), ThoError> {
+        crate::ipc::tests::run_ipc_test(module_path!(), async {
+            tokio::time::timeout(Duration::from_secs(60), async {
+                let global = GlobalCtx::global();
+                let configs = state_test_filters();
+                let init = SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., 7110, 1);
+                let filter = FreqFilter::<RunCtxImpl>::new(&configs, WsConfigs::new(2, 0, 100), 7110, 1).await?;
+                let reference = SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit { tho_device_idx: 0, ..init.clone() })?;
+                let input = state_test_input(1.)?;
+                let expected = state_test_reference(&reference, &input)?;
+                // As in production, register input copies so reset can discard
+                // their old worker references while retaining the CPU source.
+                let inputs = crate::runner::tmp_cache::TmpCached::new("filter reset input").await;
+                let input_id = input.id().clone();
+                inputs.insert(input);
+                let input = inputs.get(&input_id).unwrap();
+                let mut previous = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
+                let unused = SyncFreqFilter::<RunCtxImpl>::new(SyncFreqFilterIpcInit { find_motifs_run_config_id: 7111, ..init.clone() }).await?;
+                for cycle in 0..3 {
+                    if cycle > 0 {
+                        global.cuda_actor(1).restart().await?;
+                        // Unused filters remain registered without ever being
+                        // rebuilt. They must not poison a later global offload.
+                        assert!(!unused.has_gpu_data(1).await);
+                        unused.purge_gpu(None, 1, "retired filter").await?;
+                        global.dump_all_to_cpu(&HashMap::new(), 1, "before filter rebuild").await?;
+                        let error = global.cuda_actor(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retired filter")).await.unwrap_err();
+                        assert!(matches!(error.what(), ThoError::ContextReset), "offload must not make a retired proxy executable");
+                    }
+                    // Keep the async loader alive across replacement, just as
+                    // RandomSlicesLoader does between training trial attempts.
+                    let output = Arc::clone(&filter).run(Arc::clone(&input), RunCtxImpl::new(1, "filter reset")).await?;
+                    let output = output.select_ref(0, None::<ChannelsDataSelector>).await?;
+                    assert!(output.as_ref().as_ref().f_allclose(&expected, 1e-4, 1e-5, false)?, "filter changed after reset {cycle}");
+                    let current = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
+                    assert_eq!(Arc::ptr_eq(&previous, &current), cycle == 0, "filter endpoint was not rebuilt for the new generation");
+                    assert!(Arc::ptr_eq(&current, &SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?), "same-generation filter was not shared");
+                    previous = current;
+                    global.dump_all_to_cpu(&HashMap::new(), 1, "filter reset test").await?;
+                }
+                Ok(())
+            }).await?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
