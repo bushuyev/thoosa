@@ -6,6 +6,9 @@ edition.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+test-hooks = []
+
 [dependencies]
 thoosa_common = {path = "../thoosa_common", features = ["mock_global_ctx"] }
 thoosa_store = {path = "../thoosa_store" }

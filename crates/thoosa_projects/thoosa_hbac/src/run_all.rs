@@ -900,7 +900,7 @@ mod tests {
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
     use thoosa_motifs::cli::{RunAllArgs, import_resources};
-    use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
+    use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue, TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::motifs_store::{MotifsStore, create_motif_tables};
@@ -910,14 +910,14 @@ mod tests {
     use thoosa_motifs::stages::train_label_nets::TrainLabelNetRunConfigRangeOrValue;
     use thoosa_motifs::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_motifs::train_nets;
-    use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
+    use thoosa_motifs::train_nets::{FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue, TRIGGER_RESET_IN_COSINE_MOTIF_NODE};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::hyperparameter::FieldName;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::run_configs::RUN_ID;
-    use thoosa_shared::test_utils::TestSignalKind;
+    use thoosa_shared::test_utils::{clear_flag, TestSignalKind};
     use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::traits::{OutId, Stage, SyncStage};
     use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
@@ -1055,12 +1055,16 @@ mod tests {
     }
 
 
+    // RUST_LOG=Info cargo nextest run  --no-capture --profile heavy heavy_test_run_all_ipc --features test-hooks > /tmp/heavy_test_run_all_ipc.log 2>&1
     #[test]
     fn heavy_test_run_all_ipc() -> anyhow::Result<()> {
         let test_fn_name = "heavy_test_run_all_ipc";
         Ok(run_ipc_test(
             module_path!(),
             async {
+                clear_flag(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)?;
+                clear_flag(TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK)?;
+
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
                 do_heavy_test_run_all(test_fn_name).await?;

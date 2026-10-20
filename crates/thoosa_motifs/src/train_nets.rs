@@ -31,7 +31,7 @@ use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{SeqCst, Relaxed};
 use tch::Kind::Float;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_store::Store;
@@ -67,6 +67,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
+use thoosa_shared::test_utils::{is_flag_set, set_flag};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, DebugId, ToJsonFile, WithId};
@@ -605,6 +606,8 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
         .end_seq()
 }
 
+pub static TRIGGER_RESET_IN_COSINE_MOTIF_NODE:&'static str = "TRIGGER_RESET_IN_COSINE_MOTIF_NODE.thoosa";
+
 pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> anyhow::Result<Node> {
     debug!("cosine_motif_node: params={params:?}");
 
@@ -620,11 +623,22 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     .closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cosine_motif_node: 1. t.size={:?}", t.size());
-            static CALL_COUNTER:AtomicU64 = AtomicU64::new(0);
 
-            if CALL_COUNTER.fetch_add(10, Relaxed) == 10 {
-                return Err(anyhow::anyhow!("device-side assert triggered"))
+            #[cfg(feature = "test-hooks")]
+            {
+                static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
+                let mut guard = CALL_COUNTER.lock();
+                *guard +=1;
+
+                if *guard == 10 && !is_flag_set(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)? {
+                    set_flag(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)?;
+
+                    info!("cosine_motif_node: trigger restart guard={guard:?} is_TRIGGER_RESET_IN_COSINE_MOTIF_NODE_set={:?}", is_flag_set(TRIGGER_RESET_IN_COSINE_MOTIF_NODE));
+
+                    return Err(anyhow::anyhow!("device-side assert triggered"))
+                }
             }
+
             Ok(t.unsqueeze(1))
         })),
         None,

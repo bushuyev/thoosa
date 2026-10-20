@@ -563,8 +563,6 @@ where
         mut ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
 
-
-
         let run_config_stages_len = self.run_config_stages.len();
         debug!("FindMotifsStage::run: run_config_stages.len={run_config_stages_len}");
 
