@@ -275,6 +275,7 @@ impl GlobalCtx {
             // This device's coordinator invokes the hook after its activity drains.
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
+            //drop slots belonging to the device being reset and remove cache entries with no other devices' (CPU) data, i.e. if the entry was not copied from or dumped to CPU yet
             track_await!(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
                 .await?;
@@ -446,7 +447,6 @@ impl GlobalCtx {
     }
 
 
-    // #[cfg(tho_debug)]
     async fn debug_caches_snapshot(&self, device_idx: usize, descr: &str, maps: &CacheSnapshot) {
         debug!("GlobalCtx::debug_caches: descr={descr:?}");
 
@@ -469,7 +469,6 @@ impl GlobalCtx {
         }
     }
 
-    // #[cfg(tho_debug)]
     pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
         let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
         track_await!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
