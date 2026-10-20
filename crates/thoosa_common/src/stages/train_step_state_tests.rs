@@ -205,6 +205,60 @@ fn test_prepared_batches_ipc() -> Result<(), ThoError> {
     })
 }
 
+#[test]
+fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> {
+    crate::ipc::tests::run_ipc_test(module_path!(), async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let gate = GlobalCtx::global().cuda_activity_gate(1).unwrap();
+            let generation = gate.device_generation();
+            let preparing = Arc::new(tokio::sync::Notify::new());
+            let attempts = std::sync::atomic::AtomicUsize::new(0);
+            let run = crate::stages::train_net::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+                let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let preparing = Arc::clone(&preparing);
+                async move {
+                    let pipeline = step(0, format!("reset-pipeline-{attempt}"), PathBuf::from("/tmp/unused-reset-pipeline")).await?;
+                    let source = futures_util::stream::iter(0..3).then(move |index| {
+                        let preparing = Arc::clone(&preparing);
+                        async move {
+                            // Suspend the producer while run_batches owns its
+                            // first device-resident entry and an in-flight step.
+                            // Reset must discard both, then rebuild the pipeline.
+                            if attempt == 0 && index == 1 {
+                                preparing.notify_one();
+                                std::future::pending::<()>().await;
+                            }
+                            batch_parts(input(true)?.copy_to_device(1).await?)
+                        }
+                    }).boxed();
+                    let mut losses = vec![];
+                    pipeline.run_batches(source, RunCtxImpl::new(1, "reset batches"), true, 32, true, |loss| losses.push(loss)).await?;
+                    Ok(losses)
+                }
+            });
+            let reset = async {
+                preparing.notified().await;
+                GlobalCtx::global().cuda_actor(1).restart().await
+            };
+            let (losses, reset) = tokio::join!(run, reset);
+            reset?;
+            let losses = losses?;
+            assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(gate.device_generation().0, generation.0 + 1);
+            let reference = step(0, "reset-reference".into(), PathBuf::from("/tmp/unused-reset-reference")).await?;
+            assert_eq!(losses.len(), 3);
+            for actual in losses {
+                let expected = GlobalCtx::global().cuda_actor(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss;
+                assert!((actual - expected).abs() < 1e-6, "replacement trial changed batch order or optimizer updates");
+            }
+            Ok(())
+        }).await?
+    }, async |sock| {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), Device::Cuda(0).into()).await
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_prepared_batches_overlap_and_bound() -> Result<(), ThoError> {
     use std::sync::atomic::{AtomicUsize, Ordering};

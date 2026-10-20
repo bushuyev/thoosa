@@ -136,7 +136,19 @@ where
     loop {
         gate.wait_if_paused().await?;
         let generation = gate.device_generation();
-        match train().await {
+        // Prepared batches and their producers can be suspended outside runner
+        // admission when reset clears their GPU data. Cancel the whole attempt
+        // at that boundary, without holding an activity lease that blocks reset.
+        let result = tokio::select! {
+            biased;
+            error = gate.wait_for_generation_end(generation) => Err(error),
+            result = train() => {
+                // Reset can also finish during this poll, before its notification
+                // is observed. Do not publish a stale loss or a cache NotFound.
+                gate.check_generation(generation).and(result)
+            }
+        };
+        match result {
             Err(error) if matches!(error.what(), ThoError::ContextReset) || error.needs_cuda_ctx_reset() => {
                 // The attempt has returned and released its stage/cache/batches.
                 // A reset is not a bad hyperparameter trial: rebuild all state
@@ -693,6 +705,58 @@ pub mod tests {
         let (artifact, (), _, loss) = run.await?;
         assert_eq!((artifact, loss), (42, 0.5));
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_training_reset_cancels_suspended_batch_producer() -> Result<(), ThoError> {
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let calls = AtomicUsize::new(0);
+        let mut owner = Some(Arc::new(()));
+        let producer = Arc::downgrade(owner.as_ref().unwrap());
+        let mut run = Box::pin(super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+            let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+            let owner = owner.take();
+            async move {
+                // A batch producer need not be awaiting a CUDA runner when
+                // another trial triggers reset. It must still be discarded.
+                let _owner = owner;
+                if first { std::future::pending::<()>().await; }
+                Ok(42)
+            }
+        }));
+        assert!(futures::poll!(run.as_mut()).is_pending());
+        let ticket = gate.request_pause(ThoError::ContextReset)?;
+        assert!(futures::poll!(run.as_mut()).is_pending());
+        assert!(producer.upgrade().is_none(), "reset retained the suspended producer");
+        gate.finish_pause(ticket);
+        assert_eq!(run.await?, 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_training_reset_rejects_outcomes_from_retired_generation() -> Result<(), ThoError> {
+        for stale_result in [Ok(7), Err(ThoError::NotFound(Some("prepared batch".into())))] {
+            let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+            let calls = AtomicUsize::new(0);
+            let result = super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+                let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+                let gate = Arc::clone(&gate);
+                let stale_result = stale_result.clone();
+                async move {
+                    if first {
+                        // Complete recovery in the same poll as the old result,
+                        // so the notification cannot win select before it returns.
+                        let ticket = gate.request_pause(ThoError::ContextReset)?;
+                        gate.finish_pause(ticket);
+                        stale_result
+                    } else { Ok(42) }
+                }
+            }).await?;
+            assert_eq!(result, 42, "published an outcome from the retired attempt");
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        }
         Ok(())
     }
 

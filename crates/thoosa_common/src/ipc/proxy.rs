@@ -359,10 +359,16 @@ where
         })).await.context("IPC invocation task failed")?
     }
 
+    fn is_current_worker(&self) -> bool {
+        // Registries can retain unused proxies after reset. The retired worker
+        // owns no live GPU state to offload; invocation still checks its identity.
+        GlobalCtx::global().cuda_activity_gate(self.tho_device_idx).is_some_and(|gate| gate.device_generation() == self.worker_id.generation)
+    }
+
     async fn purge_gpu(self: Arc<Self>, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, _name: &str) -> Result<(), ThoError>
     where St: Send + Sync + 'static
     {
-        if self.tho_device_idx != tho_device_idx { return Ok(()); }
+        if self.tho_device_idx != tho_device_idx || !self.is_current_worker() { return Ok(()); }
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
         let activity = actor.activity_for(self.worker_id)?;
@@ -773,7 +779,7 @@ where
                 stage.has_gpu_data(device_idx).await
             }
             DynSyncStageWithStateEnum::Proxy { stage, .. } => {
-                stage.tho_device_idx == device_idx && stage.state.lock().await.as_ref().is_none_or(|state| state.restore_started)
+                stage.tho_device_idx == device_idx && stage.is_current_worker() && stage.state.lock().await.as_ref().is_none_or(|state| state.restore_started)
             }
         }
     }
