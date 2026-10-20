@@ -932,7 +932,7 @@ async fn reader_loop<R>(
                 match result {
                     Ok(frame) => frame,
                     Err(e) => {
-                        debug!("worker IPC reader stopped: {e}");
+                        warn!("worker IPC reader stopped: {e}");
 
                         pending.transport_failed(ThoError::new(format!("worker IPC reader stopped: {e}")));
 

@@ -56,6 +56,7 @@ use thoosa_shared::traits::ConsumeResult;
 use tokio::task::JoinHandle;
 use thoosa_store::Store;
 use tracing::Instrument;
+use thoosa_common::stages::train_net::retry_training_after_cuda_reset;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrossUnfoldClcOutputMergeMode {
@@ -331,7 +332,13 @@ where
                 }));
             }
             Err(e) => {
-                warn!("CrossLoader::run: got error  find_motifs_run_config_id={} {e:?}", self.find_motifs_run_config_id);
+                let is_resetting = matches!(e,  ThoError::ContextReset);
+                warn!("CrossLoader::run: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
+
+                if is_resetting {
+                    return Err(e)
+                }
+
             }
         };
 
@@ -351,10 +358,12 @@ where
     ) -> Result<(), ThoError> {
         let prepared_outer = if let Some(stage) = &self.prepare_outer {
             let prepared_cache = Arc::new(TmpCached::new("discovery_outer_batch").await);
+
             let input = Arc::new(CrossInputSelectorWrap::new(
                 mono_key!(self.find_motifs_run_config_id, "prepare_outer_batch").into(),
                 t_0_batch.clone(), vec![], t_0_batch_resources.clone(), vec![], CacheArea::default(),
             ));
+
             let required_ids = HashMap::new();
             let result = OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -362,18 +371,21 @@ where
             ], None).run(stage, input, ctx.branch(false), thoosa_common::runner::oom_handler::WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
             )).await;
+
             match result {
                 Ok(prepared) => Some(Arc::new(prepared_cache.insert_guarded(prepared))),
                 Err(error) => {
                     // Preparation is an optimization: retain the existing per-block
                     // retries/skips if the complete outer batch cannot be prepared.
-                    warn!("CrossLoader: outer preparation failed, falling back to per-block preparation: {error:#}");
+                    warn!("CrossLoader::run_inner_batches: outer preparation failed, falling back to per-block preparation: {error:#}");
                     None
                 }
             }
         } else {
             None
         };
+
+        let prepared_outer = None;
         let mut pending_consumer = None;
         let result = async {
             let mut t_1_batch: Vec<_> = vec![];
@@ -385,7 +397,7 @@ where
                 let t_1 = track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await?;
                 let t_1_len = t_1.size().dim_1();
 
-                debug!("CrossLoader::run: t_1={t_1:?} loaded, t_1_len={t_1_len}");
+                debug!("CrossLoader::run_inner_batches: t_1={t_1:?} loaded, t_1_len={t_1_len}");
 
                 if t_1_len > max_batch {
                     if !t_1_batch.is_empty() {
@@ -442,6 +454,9 @@ where
 
             Ok::<_, ThoError>(())
         }.await;
+
+        debug!("CrossLoader::run_inner_batches: result={result:?}");
+
         // Drain even after a loading/transfer error, before the next outer batch
         // or build_groups can access the receiver and its persistence buffers.
         let consumed = match pending_consumer {

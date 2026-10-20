@@ -5,7 +5,7 @@ edition.workspace = true
 
 
 [features]
-test-hooks = ["thoosa_motifs/test-hooks"]
+test-restart-hooks = ["thoosa_motifs/test-restart-hooks"]
 
 [dependencies]
 thoosa_common = {path = "../../thoosa_common" }

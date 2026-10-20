@@ -178,7 +178,12 @@ impl GlobalCtx {
         devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
-            let recovery = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(GlobalCtx::reset_cuda_context), None, Some(Arc::new(GlobalCtx::fail_process)));
+            let recovery = CudaRecoveryCoordinator::with_backend(
+                Arc::clone(&gate),
+                Arc::new(GlobalCtx::reset_cuda_context),
+                None,
+                Some(Arc::new(GlobalCtx::fail_process))
+            );
             let actor = CudaLocalActorHandle::new(Arc::clone(&gate))?;
             devices.push(DeviceExecutionCtx {
                 runner: SyncStageRunner::new_with_recovery(1024, recovery),

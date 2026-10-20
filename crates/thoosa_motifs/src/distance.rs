@@ -224,7 +224,7 @@ pub fn clc_d2_similarity_and_mask(
     mask_makers: &mut [MaskMaker],
 ) -> anyhow::Result<(Tensor, Option<Tensor>)> {
 
-    #[cfg(feature = "test-hooks")]
+    #[cfg(feature = "test-restart-hooks")]
     {
         static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
         let mut guard = CALL_COUNTER.lock();
