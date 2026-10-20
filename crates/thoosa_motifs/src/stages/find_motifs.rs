@@ -147,7 +147,9 @@ where
 
     pub async fn run(&self, input: Arc<ResourcesConfigInput<RC>>, mut ctx:C) -> Result<Arc<()>, ThoError> {
         match self {
-            Self::CrossLoader { cross_loader, .. } => track_await!(Arc::clone(cross_loader).run(input, ctx)).await,
+            Self::CrossLoader { cross_loader, .. } => {
+                track_await!(Arc::clone(cross_loader).run(input, ctx)).await
+            },
             Self::Bucketing { bucketing_stage, .. } => {
                 let input = input.resources_config().clone();
                 track_await!(Arc::clone(bucketing_stage).run(Arc::new(BucketingInput::new(input)), ctx)).await?;
@@ -577,7 +579,9 @@ where
                 let ctx_for_stage = ctx.branch(true);
                 let input = Arc::clone(&input);
 
-                async move { stage.run(input, ctx_for_stage).await }
+                async move {
+                    stage.run(input, ctx_for_stage).await
+                }
             });
 
         let _/*cross loader's out is ()*/ = track_await!(collect_futures_with_progress(
@@ -587,6 +591,7 @@ where
             "FindMotifsStage::run",
         )).await?;
 
+        info!("FindMotifsStage::run: done");
         //FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
         Ok(Arc::new(FindMotifsSavableResult::new()))
     }

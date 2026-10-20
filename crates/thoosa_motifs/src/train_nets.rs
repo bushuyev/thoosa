@@ -624,7 +624,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cosine_motif_node: 1. t.size={:?}", t.size());
 
-            #[cfg(feature = "test-hooks")]
+            #[cfg(feature = "test-restart-hooks")]
             {
                 static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
                 let mut guard = CALL_COUNTER.lock();

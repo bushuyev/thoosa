@@ -1044,6 +1044,9 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
+        clear_flag(TRIGGER_RESET_IN_COSINE_MOTIF_NODE)?;
+        clear_flag(TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK)?;
+
         // log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2)?;
         do_heavy_test_run_all("heavy_test_run_all_local").await?;
@@ -1055,7 +1058,7 @@ mod tests {
     }
 
 
-    // RUST_LOG=Info cargo nextest run  --no-capture --profile heavy heavy_test_run_all_ipc --features test-hooks > /tmp/heavy_test_run_all_ipc.log 2>&1
+    // RUST_LOG=Info cargo nextest run  --no-capture --profile heavy heavy_test_run_all_ipc --features test-restart-hooks > /tmp/heavy_test_run_all_ipc.log 2>&1
     #[test]
     fn heavy_test_run_all_ipc() -> anyhow::Result<()> {
         let test_fn_name = "heavy_test_run_all_ipc";

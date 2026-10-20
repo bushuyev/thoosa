@@ -81,7 +81,7 @@ impl CudaRecoveryCoordinator {
             // notify the application, and never attempt an in-process repair.
             // A maintenance cycle may already own the pause. Failure must also
             // supersede that cycle, without borrowing a non-owner pause ticket.
-            gate.fail_process(cause);
+            //gate.fail_process(cause);
             let failure = gate.failure().expect("failed local CUDA process");
             let task = cycle.take().and_then(|cycle| cycle.task);
             let _ = drain();

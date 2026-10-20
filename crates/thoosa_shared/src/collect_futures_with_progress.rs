@@ -4,7 +4,7 @@ use std::{
     future::Future,
     sync::Arc,
 };
-
+use log::warn;
 use tokio::sync::watch;
 use tokio::task::{Id, JoinSet};
 use tracing::{debug, error};
@@ -70,7 +70,16 @@ where
             }
         }
     }
-    match failure { Some(error) => Err(error), None => Ok(values) }
+    //TODO param to ignore failures - usually it's ok to skip few failed cycles in big batches 
+    if !values.is_empty() {
+        Ok(values)
+    } else if failure.is_some() {
+        warn!("collect_futures_with_progress_with_limit: skipping error: {failure:?}");
+        Err(failure.unwrap())
+    } else {
+        Ok(values)
+    }
+    // match failure { Some(error) => Err(error), None => Ok(values) }
 }
 
 async fn collect_outcomes<T, F>(

@@ -124,7 +124,7 @@ impl Drop for TrainStepCacheGuard {
     }
 }
 
-pub(crate) async fn retry_training_after_cuda_reset<T, F, Fut>(gate: Option<Arc<thoosa_shared::CudaActivityGate>>, mut train: F) -> Result<T, ThoError>
+pub async fn retry_training_after_cuda_reset<T, F, Fut>(gate: Option<Arc<thoosa_shared::CudaActivityGate>>, mut train: F) -> Result<T, ThoError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, ThoError>>,
