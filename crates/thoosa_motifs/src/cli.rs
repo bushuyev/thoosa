@@ -1757,12 +1757,16 @@ where
 
     let stage = track_await!(f(run_configs)).await?;
 
-    debug!("run_grid: stage={stage:?}");
+    info!("run_grid: stage={stage:?}");
 
     // let mut savable = track_await(CachedStageOutput::take_data(track_await(stage.run(input, ctx_f())).await?, 0)).await?;
-    let mut savable = track_await!(stage.run(input, ctx_f())).await?;
+    let savable_r = track_await!(stage.run(input, ctx_f())).await;
 
-    debug!("run_grid: savable={savable:?}");
+    info!("run_grid: savable_result={savable_r:?}");
+
+    let mut savable = savable_r?;
+
+    info!("run_grid: savable={savable:?}");
 
     track_await!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default())).await?;
 
