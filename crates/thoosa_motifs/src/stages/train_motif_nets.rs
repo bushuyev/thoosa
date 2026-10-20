@@ -659,7 +659,10 @@ where
                 debug!("TrainMotifNets::run: motif={motif:?}");
 
                 let mut ctx_net = ctx.branch(false);
-                let motif_batch = Arc::clone(&motif);
+                // Trial retries must reload the motif after reset; a captured
+                // DevicesWrap can remain alive after its GPU data is discarded.
+                let motif_loader_for_batch = Arc::clone(&motif_loader);
+                let motif_input_for_batch = Arc::clone(&motif_loader_input);
 
 
                 let  ctx_net_0 = ctx_net.branch(false);
@@ -668,11 +671,13 @@ where
 
                 let train_net = Arc::new(TrainNet::new(
                     move |mut ctx:C, rc:&TrainMotifNetRunConfig| {
+                        let motif_loader = Arc::clone(&motif_loader_for_batch);
+                        let motif_input = Arc::clone(&motif_input_for_batch);
+                        let motif = motif_loader.run_cached(motif_input, ctx.branch(false));
                         match &rc.net {
                             MotifNetTypeArgs::Cosine2DNet(args) => {
-                                debug!("TrainMotifNets::run: batch, rc={rc:?} motif={motif_batch:?}");
+                                debug!("TrainMotifNets::run: batch, rc={rc:?}");
 
-                                let motif = Arc::clone(&motif_batch);
                                 let raw_random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
                                 let stft = Arc::new(RandomSlicesStft::new_for_dims(args.stft_config.clone()).unwrap());//TODO unwrap
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::WithStft(Arc::new(PairStage::new(
@@ -681,6 +686,7 @@ where
                                 ))));
                                 let motif_meta = motif_meta.clone();
                                 async move {
+                                    let motif = motif.await?;
                                     let stft_input = {
                                         let motif_ref = motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                                         let motif = motif_ref.as_ref();
@@ -704,18 +710,18 @@ where
                             MotifNetTypeArgs::CosineNet(args) => {
                                 debug!("TrainMotifNets::run: batch, rc={rc:?}");
 
-                                let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::Raw(Arc::clone(&random_slices_loader_for_batch)));
                                 async move {
+                                    let motif = motif.await?;
                                     track_await!(MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
                                 }.boxed()
                             }
                             _ => {
                                 debug!("TrainMotifNets::run: batch, rc={rc:?}");
 
-                                let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::Raw(Arc::clone(&random_slices_loader_for_batch)));
                                 async move {
+                                    let motif = motif.await?;
                                     track_await!(MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size)).await
                                 }.boxed()
                             }
