@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 
+[features]
+test-hooks = ["thoosa_motifs/test-hooks"]
+
 [dependencies]
 thoosa_common = {path = "../../thoosa_common" }
 thoosa_motifs = {path = "../../thoosa_motifs" }

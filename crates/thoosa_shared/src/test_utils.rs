@@ -5,8 +5,10 @@ use crate::perf_logging::{
 };
 use log::{trace, LevelFilter};
 use num_traits::{Num, Signed, ToPrimitive};
-use std::env;
+use std::{env, fs, io};
 use std::fmt::Debug;
+use std::fs::File;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use tracing::Level;
@@ -395,4 +397,31 @@ pub fn random_v(n: u32, amplitude: f32, max_slope: f32) -> Vec<f32> {
         });
 
     signal
+}
+
+
+
+pub  fn flag_path(flag: &str) -> PathBuf {
+    std::env::temp_dir().join(flag)
+
+}
+
+/// Create the flag file.
+pub fn set_flag(flag: &str) -> io::Result<()> {
+    File::create(flag_path(flag))?;
+    Ok(())
+}
+
+/// Check whether the flag exists.
+pub fn is_flag_set(flag: &str) -> io::Result<bool> {
+    flag_path(flag).try_exists()
+}
+
+/// Delete the flag file, if it exists.
+pub  fn clear_flag(flag: &str) -> io::Result<()> {
+    match fs::remove_file(flag_path(flag)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }

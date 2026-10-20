@@ -1,7 +1,7 @@
 use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 use core::f32;
 use log::Level::Trace;
-use log::{debug, error, log_enabled, trace, warn};
+use log::{debug, error, info, log_enabled, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::fmt::format;
@@ -19,6 +19,7 @@ use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_n
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{ThoError, panic_to_err};
+use thoosa_shared::test_utils::{is_flag_set, set_flag};
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
@@ -212,6 +213,8 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
     }
 }
 
+pub static TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK:&'static str = "TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK.thoosa";
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="distance::clc_d2_similarity_and_mask"))]
 pub fn clc_d2_similarity_and_mask(
     t_0: &Tensor,
@@ -221,11 +224,20 @@ pub fn clc_d2_similarity_and_mask(
     mask_makers: &mut [MaskMaker],
 ) -> anyhow::Result<(Tensor, Option<Tensor>)> {
 
-    // static CALL_COUNTER:AtomicU64 = AtomicU64::new(0);
-    // 
-    // if CALL_COUNTER.fetch_add(10, Relaxed) == 10 {
-    //     return Err(anyhow::anyhow!("device-side assert triggered"))
-    // }
+    #[cfg(feature = "test-hooks")]
+    {
+        static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
+        let mut guard = CALL_COUNTER.lock();
+        *guard +=1;
+
+        if *guard == 10 && !is_flag_set(TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK)? {
+            set_flag(TRIGGER_RESET_IN_CLC_D2_SIMILARITY_AND_MASK)?;
+
+            info!("clc_d2_similarity_and_mask: trigger restart");
+
+            return Err(anyhow::anyhow!("device-side assert triggered"))
+        }
+    }
 
     let device = t_0.device();
 
