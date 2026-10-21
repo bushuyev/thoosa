@@ -117,8 +117,9 @@ pub enum IpcCopyResult {
     StateInstalled,
 }
 
-//TODO CudaWorkerMsgIn::Operation variants used in  CudaIPCActorMessage::SendMsg must be moved into CudaIPCActorMessage to keep all in single enum. Current structure is left over from replacing json with postcard serialization.
-pub enum CudaIPCActorMessage {
+//TODO  Current structure is left over from replacing json with postcard serialization.
+#[derive(Debug)]
+enum CudaIPCActorMessage {
     Copy{
         src:ThoTensor,
         dst_device:ThoDevice,
@@ -363,6 +364,8 @@ impl CudaIPCActor {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_message"))]
     async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
+        info!("CudaIPCActor::handle_message: msg={msg:?}");
+
         if self.spawned_state.is_none() {
             Self::reject(msg, ThoError::ContextReset);
             return Ok(());
@@ -382,7 +385,7 @@ impl CudaIPCActor {
                     assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
                      self.handle_ref_d2h_copy(src, dst_device, activity, respond_to)
                 } else {
-                    debug!("handle_message: src={src:?} dst_device={dst_device:?}");
+                    debug!("CudaIPCActor::handle_message: src={src:?} dst_device={dst_device:?}");
                     assert_ne!(*dst_device, Cpu, "If source is concrete tensor it should be on CPU and can be copied only to GPU");
 
                     self.handle_h2d_copy(src, dst_device, activity, respond_to, dst_key)
@@ -455,8 +458,9 @@ impl CudaIPCActor {
                                 input,
                             ).await;
                             // Reporting belongs to the admitted request, even if its
-                            //reset should be handled only in SyncStageRunner
+                            // reset should be handled only in SyncStageRunner
                             // proxy/initializer caller was cancelled before the reply.
+                            // TODO: this breaks CudaAworker restart
                             // let response = response.map(|mut response| {
                             //     if let OpResult::Failed(error) = response.status {
                             //         debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");

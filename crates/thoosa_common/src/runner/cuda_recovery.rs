@@ -51,7 +51,7 @@ impl CudaRecoveryCoordinator {
         &self.gate
     }
 
-    /// Closing admission and arranging this device's executor drain are one
+    /// Closing admission and arranging this device's SyncStageRunner drain are one
     /// synchronous operation. Publication uses the same mutex, so late reports
     /// either join this cycle or are recognized as belonging to a retired worker.
     pub(crate) fn request(

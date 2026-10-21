@@ -676,7 +676,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
-       Ok(CudaWorkerMsgOut{ worker_id: crate::ipc::worker_msg::CudaWorkerId { device_idx: self.tho_device_idx, generation: self.gate.device_generation() }, request_id: 0, status: OpResult::Ok(None) })
+       Ok(CudaWorkerMsgOut{ worker_id: CudaWorkerId { device_idx: self.tho_device_idx, generation: self.gate.device_generation() }, request_id: 0, status: OpResult::Ok(None) })
     }
 }
 
