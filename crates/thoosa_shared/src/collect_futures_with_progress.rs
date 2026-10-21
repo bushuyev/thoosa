@@ -22,7 +22,7 @@ where
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
 {
     let registration = crate::futures_limits::futures_limits().register(descr);
-    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, descr).await
+    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, true, descr).await
 }
 
 /// Explicit opt-in for independent, best-effort operations such as plot export.
@@ -47,7 +47,9 @@ where
 
 async fn collect_futures_with_progress_with_limit<T, F>(
     futures: impl Iterator<Item = F>, len: usize, buffer_limit: Arc<watch::Receiver<usize>>,
-    buffering: FuturesOrdering, descr: &str,
+    buffering: FuturesOrdering,
+    ignore_failures: bool,
+    descr: &str,
 ) -> Result<Vec<T>, ThoError>
 where
     T: Debug + Send + 'static,
@@ -71,7 +73,7 @@ where
         }
     }
     //TODO param to ignore failures - usually it's ok to skip few failed cycles in big batches 
-    if !values.is_empty() {
+    if ignore_failures && !values.is_empty() {
         Ok(values)
     } else if failure.is_some() {
         warn!("collect_futures_with_progress_with_limit: skipping error: {failure:?}");
@@ -213,6 +215,7 @@ mod tests {
                     6,
                     Arc::new(limit_rx),
                     buffering,
+                    true,
                     "assert_limit_increase_is_applied",
                 ).await
             })
@@ -265,6 +268,7 @@ mod tests {
                     5,
                     Arc::new(limit_rx),
                     FuturesOrdering::Unordered,
+                    true,
                     "limit_decrease_waits_for_active_futures_before_starting_more",
                 ).await
             })
@@ -298,17 +302,18 @@ mod tests {
                 let permits = Arc::clone(&permits);
                 tokio::spawn(async move {
                     collect_futures_with_progress_with_limit((0..4).map(move |idx| {
-                        let started = Arc::clone(&started);
-                        let completed = Arc::clone(&completed);
-                        let permits = Arc::clone(&permits);
-                        async move {
-                            started.fetch_add(1, Ordering::SeqCst);
-                            if idx == 0 { return Err(ThoError::ContextReset); }
-                            permits.acquire().await.expect("test keeps semaphore open").forget();
-                            completed.fetch_add(1, Ordering::SeqCst);
-                            Ok(idx)
-                        }
-                    }), 4, Arc::new(limit_rx), ordering, "required pipeline work").await
+                                            let started = Arc::clone(&started);
+                                            let completed = Arc::clone(&completed);
+                                            let permits = Arc::clone(&permits);
+                                            async move {
+                                                started.fetch_add(1, Ordering::SeqCst);
+                                                if idx == 0 { return Err(ThoError::ContextReset); }
+                                                permits.acquire().await.expect("test keeps semaphore open").forget();
+                                                completed.fetch_add(1, Ordering::SeqCst);
+                                                Ok(idx)
+                                            }
+                                        }), 4, Arc::new(limit_rx), ordering,
+                                                             false, "required pipeline work").await
                 })
             };
             // The error has freed a slot and another task has started, but the
@@ -336,7 +341,7 @@ mod tests {
                     Ok(idx)
                 }
             });
-            let error = tokio::time::timeout(Duration::from_secs(2), collect_futures_with_progress_with_limit(futures, 5, Arc::new(limit_rx), ordering, "panic regression")).await.expect("panic must not stall collection").unwrap_err();
+            let error = tokio::time::timeout(Duration::from_secs(2), collect_futures_with_progress_with_limit(futures, 5, Arc::new(limit_rx), ordering, false, "panic regression")).await.expect("panic must not stall collection").unwrap_err();
             assert_eq!(completed.load(Ordering::SeqCst), 4);
             assert!(error.to_string().contains("input index 1"));
             assert!(format!("{error:#}").contains("parallel task panic"));
@@ -349,7 +354,7 @@ mod tests {
             let (_limit_tx, limit_rx) = watch::channel(1);
             let failures = [ThoError::oom(), ThoError::from_cuda_error("fatal completion", 700)];
             let futures = failures.into_iter().map(|error| async move { Err::<(), _>(error) });
-            let error = collect_futures_with_progress_with_limit(futures, 2, Arc::new(limit_rx), ordering, "fatal precedence").await.unwrap_err();
+            let error = collect_futures_with_progress_with_limit(futures, 2, Arc::new(limit_rx), ordering, false, "fatal precedence").await.unwrap_err();
             assert!(error.needs_cuda_restart());
             assert!(!error.is_oom());
             assert!(error.to_string().contains("input index 1"));
@@ -368,7 +373,7 @@ mod tests {
             ThoError::from_cuda_error("late restart error", 700),
         ];
         let futures = failures.into_iter().map(|error| async move { Err::<(), _>(error) });
-        let error = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Unordered, "terminal precedence").await.unwrap_err();
+        let error = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Unordered, false, "terminal precedence").await.unwrap_err();
         assert!(error.is_cuda_recovery_failed());
         assert!(error.to_string().contains("input index 1"));
     }
@@ -396,7 +401,7 @@ mod tests {
                 Ok::<_, ThoError>(idx)
             }
         });
-        let values = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Ordered, "ordered success").await.expect("all work succeeds");
+        let values = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Ordered, true, "ordered success").await.expect("all work succeeds");
         assert_eq!(values, vec![0, 1, 2]);
     }
 

@@ -364,7 +364,7 @@ impl CudaIPCActor {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_message"))]
     async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
-        info!("CudaIPCActor::handle_message: msg={msg:?}");
+        debug!("CudaIPCActor::handle_message: msg={msg:?}");
 
         if self.spawned_state.is_none() {
             Self::reject(msg, ThoError::ContextReset);
@@ -460,7 +460,6 @@ impl CudaIPCActor {
                             // Reporting belongs to the admitted request, even if its
                             // reset should be handled only in SyncStageRunner
                             // proxy/initializer caller was cancelled before the reply.
-                            // TODO: this breaks CudaWorker restart
                             let response = response.map(|mut response| {
                                 if let OpResult::Failed(error) = response.status {
                                     debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");
