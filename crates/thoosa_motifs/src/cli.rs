@@ -1070,7 +1070,7 @@ where
 
             debug!("run_plot: MotifsBy::RunId find_run_config_ids={find_motifs_run_config_ids:?} select_run_config_ids={select_motifs_run_config_ids:?}");
             for find_motifs_run_config_id in find_motifs_run_config_ids {
-                track_await!(plot_found_motifs(
+                if let Err(e) = track_await!(plot_found_motifs(
                     ws,
                     store,
                     find_motifs_run_config_id,
@@ -1080,13 +1080,15 @@ where
                     resolution,
                     print_to_stdout,
                     ctx.branch(true),
-                )).await?;
+                )).await {
+                    warn!("run_plot: failed with e={e:} on find_motifs_run_config_id={find_motifs_run_config_id}");
+                }
             }
         }
 
         DataBy::SelectedMotifs { select_motifs_run_config_ids } => {
             for select_motifs_run_config_id in select_motifs_run_config_ids {
-                track_await!(plot_selected_motifs(
+                if let Err(e) = track_await!(plot_selected_motifs(
                     ws,
                     store,
                     select_motifs_run_config_id,
@@ -1095,7 +1097,9 @@ where
                     resolution,
                     print_to_stdout,
                     ctx.branch(true),
-                )).await?;
+                 )).await {
+                    warn!("run_plot: failed with e={e:} on select_motifs_run_config_id={select_motifs_run_config_id}");
+                }
             }
         }
 
@@ -1302,8 +1306,10 @@ where
     let channels = ws.read().channels();
     debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
 
-    let (_run_config_id, motifs) = track_await!(store
-        .list_selected_motifs(&[select_motifs_run_config_id], channels, None)).await?.into_iter().next().expect("no selected motif");;
+    let (_run_config_id, motifs) = track_await!(store.list_selected_motifs(&[select_motifs_run_config_id], channels, None)).await?
+        .into_iter()
+        .next()
+        .context("no selected motif")?;
 
     debug!("plot_selected_motifs: motifs={motifs:?}");
 
