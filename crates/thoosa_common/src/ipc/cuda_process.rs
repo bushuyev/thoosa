@@ -460,7 +460,7 @@ impl CudaIPCActor {
                             // Reporting belongs to the admitted request, even if its
                             // reset should be handled only in SyncStageRunner
                             // proxy/initializer caller was cancelled before the reply.
-                            // TODO: this breaks CudaAworker restart
+                            // TODO: this breaks CudaWorker restart
                             // let response = response.map(|mut response| {
                             //     if let OpResult::Failed(error) = response.status {
                             //         debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");
@@ -532,7 +532,7 @@ impl CudaIPCActor {
         let export_id = next_id.fetch_add(1, Ordering::Relaxed);
         let mut begun = false;
         let prepare = async {
-            let response = send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, export_id, Operation::BeginStageExport { endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone() })).await?;
+            let response = send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, export_id, Operation::BeginStageStatePurge { endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone() })).await?;
             if matches!(response.status, OpResult::Ok(_)) { begun = true; }
             let info = match response.status {
                 OpResult::Failed(error) => return Err(error.into()),
@@ -545,7 +545,7 @@ impl CudaIPCActor {
                 let key = tensor_info.tensor_key.to_tensor_key();
                 let tensor = Tensor::f_empty(tensor_info.shape.as_slice(), (tensor_info.kind.into(), Cpu))?;
                 let arena_offset = parent_shared_arena_offset(&tensor, tensor_info.tensor_byte_len, "state D2H destination")?;
-                destinations.push(crate::ipc::worker_msg::StageExportDestination { info: tensor_info, arena_offset });
+                destinations.push(crate::ipc::worker_msg::StageStatePurgeDestination { info: tensor_info, arena_offset });
                 tensors.push((key, tensor));
             }
             // One request takes the worker export mutex once and coalesces its
@@ -565,7 +565,7 @@ impl CudaIPCActor {
         // Catch polling panics as well as ordinary errors so every accepted actor
         // operation resolves its sender and attempts to release the worker lease.
         let prepared = std::panic::AssertUnwindSafe(prepare).catch_unwind().await.unwrap_or_else(|_| Err(ThoError::new("stage export preparation panicked")));
-        let finish = |commit| send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), Operation::FinishStageExport { endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone(), export_id, commit }));
+        let finish = |commit| send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), Operation::FinishStageStatePurge { endpoint_name: endpoint_name.clone(), stage_id: stage_id.clone(), export_id, commit }));
         match prepared {
             Err(error) => {
                 if begun {
@@ -583,7 +583,7 @@ impl CudaIPCActor {
             Ok(mut dump) => {
                 let (decision, decided) = oneshot::channel();
                 let (completed, completion) = oneshot::channel();
-                dump.export = Some(crate::ipc::proxy::PreparedStageExport { decision, completed: completion });
+                dump.export = Some(crate::ipc::proxy::PreparedStageStatePurge { decision, completed: completion });
                 // A dropped response or dump closes decided, selecting abort.
                 let _ = respond_to.send(Ok(dump));
                 let commit = tokio::select! {
@@ -1991,7 +1991,7 @@ mod export_tests {
                 None
             };
             let finish = requests.recv().await.unwrap();
-            assert!(matches!(finish.operation, Operation::FinishStageExport { commit: false, export_id: id, .. } if id == export_id));
+            assert!(matches!(finish.operation, Operation::FinishStageStatePurge { commit: false, export_id: id, .. } if id == export_id));
             let pause = gate.request_pause(ThoError::ContextReset).unwrap();
             assert!(gate.wait_until_idle().now_or_never().is_none(), "accepted export must retain activity until finish replies");
             reply(&pending, finish, OpResult::Ok(None));
@@ -2023,7 +2023,7 @@ mod export_tests {
         let mut exports = HashMap::new();
         for _ in 0..2 {
             let request = requests.recv().await.unwrap();
-            let Operation::BeginStageExport { endpoint_name, .. } = &request.operation else { panic!("expected begin") };
+            let Operation::BeginStageStatePurge { endpoint_name, .. } = &request.operation else { panic!("expected begin") };
             exports.insert(endpoint_name.clone(), request.request_id);
             assert!(ids.insert(request.request_id));
             reply(&pending, request, OpResult::Ok(Some(Box::new(StageStateInfo::empty()))));
@@ -2037,7 +2037,7 @@ mod export_tests {
         let commits = tokio::spawn(futures_util::future::join_all(commits));
         for _ in 0..2 {
             let request = requests.recv().await.unwrap();
-            let Operation::FinishStageExport { endpoint_name, export_id, commit: true, .. } = &request.operation else { panic!("expected commit") };
+            let Operation::FinishStageStatePurge { endpoint_name, export_id, commit: true, .. } = &request.operation else { panic!("expected commit") };
             assert_eq!(*export_id, exports[endpoint_name]);
             assert!(ids.insert(request.request_id), "every wire message needs a fresh request ID");
             reply(&pending, request, OpResult::Ok(None));
@@ -2060,7 +2060,7 @@ mod export_tests {
         drop(receive);
         reply(&pending, request, OpResult::Ok(Some(Box::new(StageStateInfo::empty()))));
         let abort = requests.recv().await.unwrap();
-        assert!(matches!(abort.operation, Operation::FinishStageExport { commit: false, .. }));
+        assert!(matches!(abort.operation, Operation::FinishStageStatePurge { commit: false, .. }));
         let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
         assert!(gate.wait_until_idle().now_or_never().is_none(), "the transaction must retain activity through the abort reply");
         reply(&pending, abort, OpResult::Ok(None));

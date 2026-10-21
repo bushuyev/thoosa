@@ -731,12 +731,12 @@ where
 // Dropping an uncommitted dump closes decision and makes the actor abort the
 // worker transaction. The actor owns activity until that cleanup has replied.
 #[derive(Debug)]
-pub(crate) struct PreparedStageExport {
+pub(crate) struct PreparedStageStatePurge {
     pub decision: tokio::sync::oneshot::Sender<bool>,
     pub completed: tokio::sync::oneshot::Receiver<Result<(), ThoError>>,
 }
 
-impl PreparedStageExport {
+impl PreparedStageStatePurge {
     // A checkpoint releases the export freeze without evicting live GPU state.
     pub(crate) async fn keep_live(self) -> Result<(), ThoError> {
         let _ = self.decision.send(false);
@@ -754,7 +754,7 @@ pub struct StageStateDump {
     scalars:Option<Box<dyn WorkerOutput>>,
     tensors:HashMap<String, ThoTensor>,
     restore_started: bool,
-    pub(crate) export: Option<PreparedStageExport>,
+    pub(crate) export: Option<PreparedStageStatePurge>,
 }
 
 impl StageStateDump {
