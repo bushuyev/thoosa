@@ -78,7 +78,7 @@ async fn step(optimizer: u8, id: String, checkpoint: PathBuf) -> Result<Arc<DynS
     Ok(Arc::new(if GlobalCtx::global().is_ipc() {
         DynSyncStageWithStateEnum::Proxy {
             stage: Arc::new(ProxyStage::proxy_with_input_cloner(ENDPOINT, Some(id), 1, Box::new(Init { optimizer, checkpoint }), Arc::new(|input: &TrainStepInput<AnyDims, AnyDims>| Ok(Box::new(WireInput(input.clone_refs_for_worker()?))))).await?),
-            init: (), state: Default::default(),
+            init: (),
         }
     } else {
         DynSyncStageWithStateEnum::Local(Arc::new(local_step(optimizer, 1.into(), checkpoint).await?))

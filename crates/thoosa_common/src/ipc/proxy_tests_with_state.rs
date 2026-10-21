@@ -234,7 +234,6 @@ where
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(TEST_ENDPOINT, Some(stage_id), tho_device_idx, Box::new(init)).await?),
                 init: (),
-                state: Default::default(),
             }))
 
         } else {
