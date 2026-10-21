@@ -19,7 +19,7 @@ use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_n
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{ThoError, panic_to_err};
-use thoosa_shared::test_utils::{is_flag_set, set_flag};
+
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
@@ -226,6 +226,8 @@ pub fn clc_d2_similarity_and_mask(
 
     #[cfg(feature = "test-restart-hooks")]
     {
+        use thoosa_shared::test_utils::{is_flag_set, set_flag};
+
         static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
         let mut guard = CALL_COUNTER.lock();
         *guard +=1;
