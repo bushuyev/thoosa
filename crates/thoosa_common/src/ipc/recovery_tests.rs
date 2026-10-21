@@ -13,7 +13,7 @@ use thoosa_shared::{CudaAction, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use super::cuda_process::CudaIPCActorHandle;
 use super::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx};
-use super::worker_msg::{DebugOutput, OpResult, WorkerInput};
+use super::worker_msg::{CudaWorkerMsgOut, DebugOutput, OpResult, WorkerInput};
 use super::wraps::SyncStageIpcWrapper;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
@@ -25,6 +25,7 @@ const ENDPOINT: &str = "recovery-lifecycle";
 enum RecoveryAction {
     Probe,
     Fatal,
+    StageFailure,
     Poison,
     Hold { started: String },
     DeferredFatal { started: String, release: String },
@@ -89,6 +90,7 @@ impl MockRecoveryEndpointBuilder {
 fn endpoint_result(input: &dyn WorkerInput) -> Result<Box<dyn WorkerOutput>, ThoError> {
     match &(input as &dyn Any).downcast_ref::<RecoveryInput>().unwrap().action {
         RecoveryAction::Fatal => return Err(fatal()),
+        RecoveryAction::StageFailure => return Err(ThoError::new("device-side assert triggered")),
         RecoveryAction::Poison => enqueue_cuda_poison()?,
         RecoveryAction::Probe => {},
         _ => panic!("initializer-only input"),
@@ -105,6 +107,7 @@ fn initialize<'a>(tage_id:Option<String>, input: Box<dyn WorkerInput>, _ws: Arc<
         let input: Box<dyn Any> = input;
         match input.downcast::<RecoveryInput>().unwrap().action {
             RecoveryAction::Fatal => return Err(fatal()),
+            RecoveryAction::StageFailure => return Err(ThoError::new("device-side assert triggered")),
             RecoveryAction::Poison => {
                 // Fault injection only: suppress this initializer's CUDA error
                 // so the next direct copy, rather than install, must report it.
@@ -135,6 +138,76 @@ async fn install_and_probe(actor: &CudaIPCActorHandle) -> Result<u32, ThoError> 
     Ok(output.downcast::<DebugOutput>().unwrap().debug_data_snap()[0].parse()?)
 }
 
+async fn submit_worker_request(request: impl std::future::Future<Output = anyhow::Result<CudaWorkerMsgOut>> + Send + 'static) -> Result<(), ThoError> {
+    // Stage errors must cross the same runner boundary as production requests;
+    // invoking the transport alone does not exercise stage recovery reporting.
+    GlobalCtx::global().get_runner(1).submit(0, async move {
+        match request.await?.status {
+            OpResult::Failed(error) => Err(error.into()),
+            OpResult::Ok(_) => Ok(()),
+        }
+    }, None).await
+}
+
+#[test]
+fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
+    super::tests::run_ipc_test(module_path!(), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let global = GlobalCtx::global();
+            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let gate = global.cuda_activity_gate(1).unwrap();
+            let mut pid = install_and_probe(actor).await?;
+            for mode in ["install", "invoke", "consume", "cancelled"] {
+                let worker = actor.worker_id()?;
+                let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                let caller = tokio::spawn({
+                    let actor = actor.clone();
+                    async move {
+                        global.get_runner(1).submit(0, async move {
+                            let response = if mode == "install" {
+                                actor.install_stage(worker, ENDPOINT.into(), Some(2.to_string()), input(RecoveryAction::StageFailure)).await?
+                            } else {
+                                actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::StageFailure), mode == "consume").await?
+                            };
+                            let OpResult::Failed(error) = response.status else { panic!("fatal stage succeeded") };
+                            // Hold the stage result before the runner observes it:
+                            // the transport must preserve it without starting recovery.
+                            observed_tx.send(error.clone()).unwrap();
+                            release_rx.await.unwrap();
+                            Err::<(), ThoError>(error.into())
+                        }, None).await
+                    }
+                });
+                let error = ThoError::from(observed_rx.await.unwrap());
+                assert_eq!(error.to_string(), "device-side assert triggered", "stage reply was rewritten");
+                assert!(error.needs_cuda_restart());
+                assert!(gate.check_admission().is_ok(), "actor reported a stage failure before the runner");
+                if mode == "cancelled" {
+                    caller.abort();
+                    assert!(caller.await.unwrap_err().is_cancelled());
+                    // The admitted runner job still owns error reporting after
+                    // its submitting task disappears.
+                    release_tx.send(()).unwrap();
+                    gate.wait_for_generation_end(worker.generation).await;
+                } else {
+                    release_tx.send(()).unwrap();
+                    assert!(matches!(caller.await?.unwrap_err().what(), ThoError::ContextReset));
+                }
+                gate.wait_if_paused().await?;
+                assert_eq!(gate.device_generation().0, worker.generation.0 + 1);
+                assert!(!Path::new(&format!("/proc/{pid}")).exists());
+                pid = install_and_probe(actor).await?;
+            }
+            Ok::<_, ThoError>(())
+        }).await?
+    }, async |sock| {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+    })
+}
+
 #[test]
 fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoError> {
     super::tests::run_ipc_test(module_path!(), async {
@@ -153,8 +226,9 @@ fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoErro
                 let first = attempts == 1;
                 async move {
                     if first {
-                        let response = actor.invoke_stage(actor.worker_id()?, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await?;
-                        return match response.status { OpResult::Failed(error) => Err(error.into()), _ => panic!("fatal request succeeded") };
+                        let actor = actor.clone();
+                        submit_worker_request(async move { actor.invoke_stage(actor.worker_id()?, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await }).await?;
+                        panic!("fatal request succeeded");
                     }
                     install_and_probe(actor).await
                 }
@@ -199,13 +273,13 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                         let actor = actor.clone();
                         let started = started.clone();
                         let release = release.clone();
-                        async move { actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::DeferredFatal { started, release })).await }
+                        async move { submit_worker_request(async move { actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::DeferredFatal { started, release })).await }).await }
                     });
                     wait_for_file(&started).await;
                     caller.abort();
                     assert!(caller.await.unwrap_err().is_cancelled());
                     std::fs::write(&release, "fail now")?;
-                    // No live caller is available to report this failure.
+                    // The admitted runner job must report despite caller cancellation.
                     gate.wait_for_generation_end(worker.generation).await;
                 } else if mode == "copy" {
                     use crate::copy_ctx::CudaActorHandle;
@@ -214,15 +288,14 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                     let error = actor.copy(Tensor::f_from_slice(&[1f32])?.into(), 1.into()).await.unwrap_err();
                     assert!(matches!(error.what(), ThoError::ContextReset), "fatal direct copy did not report recovery: {error:#}");
                 } else {
-                    let response = if mode == "install" {
-                        actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Fatal)).await
-                    } else {
-                        actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(if mode == "poison" { RecoveryAction::Poison } else { RecoveryAction::Fatal }), mode == "consume").await
-                    };
-                    let error: ThoError = match response {
-                        Ok(response) => match response.status { OpResult::Failed(error) => error.into(), _ => panic!("fatal request succeeded") },
-                        Err(error) => error.into(),
-                    };
+                    let actor = actor.clone();
+                    let error = submit_worker_request(async move {
+                        if mode == "install" {
+                            actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Fatal)).await
+                        } else {
+                            actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(if mode == "poison" { RecoveryAction::Poison } else { RecoveryAction::Fatal }), mode == "consume").await
+                        }
+                    }).await.unwrap_err();
                     assert!(matches!(error.what(), ThoError::ContextReset), "fatal actor path {mode}: {error:#}");
                 }
                 assert!(pending.await.unwrap().is_err(), "retirement must resolve outstanding requests");
@@ -253,7 +326,8 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
             let pid = install_and_probe(actor).await?;
             let worker = actor.worker_id()?;
             let gate = global.cuda_activity_gate(1).unwrap();
-            let _ = actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await;
+            let failed_actor = actor.clone();
+            let _ = submit_worker_request(async move { failed_actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await }).await;
             assert_eq!(global.get_runner(0).submit(0, async { Ok(42) }, None).await?, 42);
             let failure = gate.wait_if_paused().await.unwrap_err();
             assert!(failure.is_cuda_recovery_failed());
