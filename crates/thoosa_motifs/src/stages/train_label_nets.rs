@@ -1088,7 +1088,6 @@ where
             Ok((DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_LABEL_STEP_ENDPOINT, Some(SyncTrainLabelStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
                 init: (),
-                state: Default::default()
             }, node_params))
         } else {
             let params_for_module = node_params.clone();

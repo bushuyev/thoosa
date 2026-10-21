@@ -139,7 +139,6 @@ where
                     Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
                 ).await?),
                 init: (),
-                state: Default::default(),
             })
         } else {
             Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))

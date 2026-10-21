@@ -738,7 +738,6 @@ where
 
                 stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self.clone())).await?),
                 init: self,
-                state: Default::default(),
             }))
         } else {
             let (_run_config_id, _params, net) = perf_log!(sync_read_lock!(ws)).load_label_net(&self.label_net_path, &device, self.quantize, true)?;
