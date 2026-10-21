@@ -436,45 +436,15 @@ impl CudaIPCActor {
                     let _ = respond_to.send(response);
                     return Ok(());
                 }
-                let self_tx = self.worker().tx.clone();
-                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.worker().pending);
-                let gate = Arc::clone(&self.gate);
-                let generation = input.worker_id.generation;
-
-                input.request_id = next_id;
-                let worker_id = self.worker().worker_id;
-                let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                input.request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.worker().pending);
                 let tx = self.worker().tx.clone();
                 tokio::spawn(activity.run(async move {
-
-                    match input.operation {
-
-                        _=> {
-                            let response = send_request_and_wait_msg(
-                                self_tx,
-                                pending,
-                                input,
-                            ).await;
-                            // Reporting belongs to the admitted request, even if its
-                            // reset should be handled only in SyncStageRunner
-                            // proxy/initializer caller was cancelled before the reply.
-                            let response = response.map(|mut response| {
-                                if let OpResult::Failed(error) = response.status {
-                                    debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");
-                                    let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
-                                    response.status = error.into();
-                                }
-                                response
-                            });
-                            let _ = respond_to.send(response);
-
-                            Ok::<_, ThoError>(())
-                        }
-
-                    }
-
+                    // Stage failures belong to SyncStageRunner::submit_observed.
+                    // Forward the original reply so the admitted job observes it
+                    // before initiating recovery, even if its submitter cancelled.
+                    let response = send_request_and_wait_msg(tx, pending, input).await;
+                    let _ = respond_to.send(response);
                 }));
             }
 
