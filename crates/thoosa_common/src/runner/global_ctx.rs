@@ -180,7 +180,7 @@ impl GlobalCtx {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
             let recovery = CudaRecoveryCoordinator::with_backend(
                 Arc::clone(&gate),
-                Arc::new(GlobalCtx::reset_cuda_context),
+                Arc::new(GlobalCtx::cuda_restart),
                 None,
                 Some(Arc::new(GlobalCtx::fail_process))
             );
@@ -244,7 +244,7 @@ impl GlobalCtx {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
             let recovery = CudaRecoveryCoordinator::with_backend(
                 Arc::clone(&gate),
-                Arc::new(GlobalCtx::reset_cuda_context),
+                Arc::new(GlobalCtx::cuda_restart),
                 Some(Arc::new(|device, authority| Box::pin(async move { GlobalCtx::global().cuda_actor(device).retire_backend(authority).await }))),
                 None
             );
@@ -275,16 +275,16 @@ impl GlobalCtx {
         })
     }
 
-    fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
+    fn cuda_restart(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
         async move {
             // This device's coordinator invokes the hook after its activity drains.
-            info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
+            info!("GlobalCtx::cuda_restart: tho_device_idx={tho_device_idx}");
 
             //drop slots belonging to the device being reset and remove cache entries with no other devices' (CPU) data, i.e. if the entry was not copied from or dumped to CPU yet
             track_await!(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
                 .await?;
-            info!("GlobalCtx::reset_cuda_context: drop_device done");
+            info!("GlobalCtx::cuda_restart: drop_device done");
 
             let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("no CUDA gate");
             let authority = thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?;
@@ -294,7 +294,7 @@ impl GlobalCtx {
                 .await?;
 
 
-            info!("GlobalCtx::reset_cuda_context: all done");
+            info!("GlobalCtx::cuda_restart: all done");
 
             Ok(())
         }.boxed()

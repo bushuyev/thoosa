@@ -64,7 +64,7 @@ where
                 // or ordinary error. Context retains the original typed cause.
                 let replace = failure.as_ref().is_none_or(|original| {
                     (error.is_cuda_recovery_failed() && !original.is_cuda_recovery_failed()) ||
-                    (error.needs_cuda_ctx_reset() && !original.needs_cuda_ctx_reset() && !original.is_cuda_recovery_failed())
+                    (error.needs_cuda_restart() && !original.needs_cuda_restart() && !original.is_cuda_recovery_failed())
                 });
                 if replace { failure = Some(error.context(format!("{descr}: task at input index {idx} failed"))); }
             }
@@ -350,7 +350,7 @@ mod tests {
             let failures = [ThoError::oom(), ThoError::from_cuda_error("fatal completion", 700)];
             let futures = failures.into_iter().map(|error| async move { Err::<(), _>(error) });
             let error = collect_futures_with_progress_with_limit(futures, 2, Arc::new(limit_rx), ordering, "fatal precedence").await.unwrap_err();
-            assert!(error.needs_cuda_ctx_reset());
+            assert!(error.needs_cuda_restart());
             assert!(!error.is_oom());
             assert!(error.to_string().contains("input index 1"));
         }
