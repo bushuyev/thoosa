@@ -871,14 +871,18 @@ where
 
         let (channel, find_motifs_run_config_id, slices, resources_map) = track_await!(self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize))).await?;
 
+        // Some motifs leave no eligible negative samples. Return a normal load
+        // failure: panicking poisons the cached Shared future, so a later CUDA
+        // reset also panics when its purger inspects this entry.
+        if slices.is_empty() {
+            return Err(ThoError::new(format!("no random slices outside motif {motif_id} for run config {find_motifs_run_config_id}")));
+        }
 
         let motif_id_value = motif_id.clone();
         let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
             acc.entry(slice.0).or_insert_with(Vec::new).push(slice.1);
             acc
         });
-        assert!(!resource_ids_slices.is_empty());
-
         debug!("RandomSlicesLoader::run: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={}", ctx.tho_device_idx());
 
         let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws, ctx.tho_device_idx()).await?;
@@ -1934,6 +1938,43 @@ mod tests {
         // assert_eq!(r, true);
         //TODO check data
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_random_slices_returns_error() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(1)?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 10000)));
+        let run_config_id = 1;
+        let motif_id = 10u32;
+        let motif_width = 100;
+        let store = MockMotifsStoreBuilder::new()
+            .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0, run_config_id, vec![], HashMap::new())))
+            .with_run_config_descr([(
+                run_config_id,
+                Ok(RunConfigRow {
+                    id: run_config_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "no negative samples".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_list_run_config_values([(
+                run_config_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 100, motif_width, None, None).to_properties_iter(None).collect()),
+            )])
+            .with_get_motif_meta([(motif_id, Ok((0, run_config_id)))])
+            .build();
+        let loader = Arc::new(RandomSlicesLoader::new(store, Arc::new(mock_tensor_loader::build().finish()), &ws));
+        let mut ctx = mock_run_ctx::default(0);
+        let input = Arc::new(SlicesLoaderInput::new(DataId(motif_id), 3));
+        // A failed cached load must remain a normal error when inspected again;
+        // a panic poisons Shared and later panics inside CUDA reset's cache purge.
+        for _ in 0..2 {
+            let error = Arc::clone(&loader).run_cached(Arc::clone(&input), ctx.branch(false)).await.unwrap_err();
+            assert!(error.to_string().contains("no random slices outside motif 10"), "{error:#}");
+        }
         Ok(())
     }
 
