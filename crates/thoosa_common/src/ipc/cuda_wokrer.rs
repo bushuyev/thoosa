@@ -58,7 +58,7 @@ async fn stage_state_operation(stages: &InstalledStages, operation: Operation, d
     let (endpoint_name, stage_id, purge, begin_export) = match operation {
         Operation::PurgeStage { endpoint_name, stage_id } => (endpoint_name, stage_id, true, false),
         Operation::GetStageStateInfo { endpoint_name, stage_id } => (endpoint_name, stage_id, false, false),
-        Operation::BeginStageExport { endpoint_name, stage_id } => (endpoint_name, stage_id, false, true),
+        Operation::BeginStageStatePurge { endpoint_name, stage_id } => (endpoint_name, stage_id, false, true),
         _ => unreachable!("state metadata operation"),
     };
     let key = cuda_process::endpoint_stage_key(endpoint_name.clone(), stage_id.as_ref());
@@ -746,11 +746,11 @@ impl CudaWorker {
                     debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");
                     Ok(OpResult::Ok(Some(result)))
                 }
-                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. } | Operation::BeginStageExport { .. }) => {
+                operation @ (Operation::PurgeStage { .. } | Operation::GetStageStateInfo { .. } | Operation::BeginStageStatePurge { .. }) => {
                     stage_state_operation(&context.installed_stages, operation, context.tho_device, request_id).await
                 }
 
-                Operation::FinishStageExport { endpoint_name, stage_id, export_id, commit } => {
+                Operation::FinishStageStatePurge { endpoint_name, stage_id, export_id, commit } => {
                     finish_stage_export(&context.installed_stages, endpoint_name, stage_id, export_id, commit, context.tho_device).await
                 }
                 Operation::ResetStageState { endpoint_name, stage_id, info } => {
@@ -1114,7 +1114,7 @@ mod request_tests {
             let other = InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new()));
             // Begin waits for a previously admitted invocation, including its GPU synchronization.
             let invocation = endpoint.lease.read().await;
-            let begin = stage_state_operation(&stages, Operation::BeginStageExport { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7);
+            let begin = stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7);
             tokio::pin!(begin);
             assert!(futures::poll!(&mut begin).is_pending());
             drop(invocation);
@@ -1137,7 +1137,7 @@ mod request_tests {
                 describe_fails: false, purge_result: Some(Err(ThoError::oom())),
             }.build_with_purge_retry(panics))));
             stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
-            stage_state_operation(&stages, Operation::BeginStageExport { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.unwrap();
+            stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.unwrap();
             let error = finish_stage_export(&stages, "stateful".into(), None, 7, true, 1usize.into()).await.unwrap_err();
             assert_eq!(error.is_oom(), !panics);
             assert!(!error.needs_cuda_ctx_reset() && !error.is_cuda_recovery_failed());
@@ -1180,7 +1180,7 @@ mod request_tests {
             describe_fails: true, purge_result: None,
         }.build())));
         stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
-        assert!(stage_state_operation(&stages, Operation::BeginStageExport { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.is_err());
+        assert!(stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.is_err());
         assert!(endpoint.export.lock().await.is_none());
         assert!(endpoint.lease.try_write().is_ok(), "failed preparation must not strand waiting work");
     }

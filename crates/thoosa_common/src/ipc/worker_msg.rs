@@ -59,7 +59,7 @@ impl WorkerOutput for DebugOutput {
 // A batch has one export lease and one reply, while retaining each tensor's
 // exact shape/type and its independently owned parent allocation.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct StageExportDestination {
+pub struct StageStatePurgeDestination {
     pub info: WorkerTensorInfoPayload,
     pub arena_offset: usize,
 }
@@ -92,11 +92,11 @@ pub enum Operation {
     InstallStage { endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput> },
     InvokeStage { endpoint_name: String, stage_id: Option<String>, input: Box<dyn WorkerInput>, consume: bool },
     GetStageStateInfo { endpoint_name: String, stage_id: Option<String> },
-    PurgeStage { endpoint_name: String, stage_id: Option<String> },
+    PurgeStage { endpoint_name: String, stage_id: Option<String> },//moves CudaWorker's StageWithState's state into thoosa_common::ipc::proxy::ProxyStage::state
     // Begin uses its request ID as the transaction identity; finish has its own request ID.
-    BeginStageExport { endpoint_name: String, stage_id: Option<String> },
-    ExportStageTensors { endpoint_name: String, stage_id: Option<String>, export_id: u64, destinations: Vec<StageExportDestination> },
-    FinishStageExport { endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool },
+    BeginStageStatePurge { endpoint_name: String, stage_id: Option<String> },
+    ExportStageTensors { endpoint_name: String, stage_id: Option<String>, export_id: u64, destinations: Vec<StageStatePurgeDestination> },
+    FinishStageStatePurge { endpoint_name: String, stage_id: Option<String>, export_id: u64, commit: bool },
     ResetStageState { endpoint_name: String, stage_id: Option<String>, info: StageStateInfo },
     DropStage { endpoint_name: String, stage_id: Option<String> },
     Debug,
