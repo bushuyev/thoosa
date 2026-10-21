@@ -1140,7 +1140,7 @@ mod request_tests {
             stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.unwrap();
             let error = finish_stage_export(&stages, "stateful".into(), None, 7, true, 1usize.into()).await.unwrap_err();
             assert_eq!(error.is_oom(), !panics);
-            assert!(!error.needs_cuda_ctx_reset() && !error.is_cuda_recovery_failed());
+            assert!(!error.needs_cuda_restart() && !error.is_cuda_recovery_failed());
             assert!(endpoint.export.lock().await.is_none());
             assert!(endpoint.lease.try_write().is_ok(), "failed commit must release its export freeze");
             assert!(endpoint.check_state().is_err(), "partially purged state must not be invoked or exported");
@@ -1167,7 +1167,7 @@ mod request_tests {
             });
             let input: Box<dyn WorkerInput> = Box::new(());
             let error = endpoint.run_with_state(endpoint.stage.as_with_state().unwrap(), &input, &AllTensors::new(worker_id()), &1usize.into(), &mut stream, &WokerRunCtx::new(1)).await.unwrap_err();
-            assert_eq!(error.needs_cuda_ctx_reset(), fatal_sync);
+            assert_eq!(error.needs_cuda_restart(), fatal_sync);
             assert_eq!(endpoint.check_state().is_err(), !fatal_sync);
             assert_eq!(*state.try_lock().unwrap(), 1, "the panic occurred after mutating state");
         }

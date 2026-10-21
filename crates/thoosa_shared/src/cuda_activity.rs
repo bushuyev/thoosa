@@ -260,9 +260,9 @@ mod tests {
         assert_eq!(wakes.0.load(SeqCst), 2, "both registered waiters must be notified");
         for error in [admission.await.unwrap_err(), completion.await.unwrap_err(), gate.check_admission().unwrap_err()] {
             assert!(error.is_cuda_recovery_failed());
-            assert!(!error.is_oom() && !error.is_retryable_oom() && !error.needs_cuda_ctx_reset());
+            assert!(!error.is_oom() && !error.is_retryable_oom() && !error.needs_cuda_restart());
             let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("terminal error was lost") };
-            assert!(failure.original.needs_cuda_ctx_reset());
+            assert!(failure.original.needs_cuda_restart());
             assert!(failure.recovery.as_ref().unwrap().is_oom());
             assert!(error.to_string().contains("stage failed") && error.to_string().contains("replacement failed"));
         }
@@ -390,7 +390,7 @@ mod tests {
         assert!(matches!(wrapped.what(), ThoError::CudaRecoveryFailed(_)));
         let job = ThoError::from(SyncStageRunnerError::JobError { job_id: 7, inner: Box::new(wrapped) }).context("runner");
         assert!(job.is_cuda_recovery_failed());
-        assert!(!job.is_oom() && !job.is_retryable_oom() && !job.needs_cuda_ctx_reset());
+        assert!(!job.is_oom() && !job.is_retryable_oom() && !job.needs_cuda_restart());
         assert!(std::error::Error::source(&error).unwrap().to_string().contains("stage failed"));
     }
 }

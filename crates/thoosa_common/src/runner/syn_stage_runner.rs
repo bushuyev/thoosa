@@ -647,9 +647,9 @@ impl SyncStageRunner {
             let is_oom = error.as_ref().is_some_and(|error| error.is_oom());
             let is_ok = error.is_none();
             if let Some(error) = error {
-                debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_ctx_reset(), error.is_cuda_recovery_failed());
+                debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_restart(), error.is_cuda_recovery_failed());
 
-                if (error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed()) && let Some(recovery) = &recovery {
+                if (error.needs_cuda_restart() || error.is_cuda_recovery_failed()) && let Some(recovery) = &recovery {
                     retry.clear_exclusive();
                     *error = Self::report_failure(recovery, &cmd_tx, generation.expect("CUDA generation"), error.clone()).err().unwrap_or_else(Self::context_reset_error);
                     // Preserve a consume failure's owned input for the adapter.
@@ -1627,9 +1627,9 @@ mod tests {
     use torch_sys::IntListOption;
     use thoosa_shared::CudaAction;
 
-    fn needs_reset_error() -> ThoError {
+    fn needs_restart_error() -> ThoError {
         ThoError::new_with_cause(
-            "needs reset",
+            "needs restart",
             ThoError::Cuda {
                 action: CudaAction::NeedsRestart,
                 msg: "reset me".into(),
@@ -1884,7 +1884,7 @@ mod tests {
         assert!(error.is_oom());
         assert_eq!(*exec.exclusive_job_id.read(), Some(scope.token.inner.job_id));
         let generation = exec.cuda_gate().unwrap().device_generation();
-        let result = exec.submit_consume(0, async move { Ok(ConsumeResult::<_, ()>::Failed { input, error: needs_reset_error() }) }, Some(scope.token())).await.unwrap();
+        let result = exec.submit_consume(0, async move { Ok(ConsumeResult::<_, ()>::Failed { input, error: needs_restart_error() }) }, Some(scope.token())).await.unwrap();
         let ConsumeResult::Failed { input, error } = result else { panic!("missing fatal failure") };
         assert_eq!(input, vec![7]);
         assert!(matches!(error.what(), ThoError::ContextReset));
@@ -2227,7 +2227,7 @@ mod tests {
         let _ = long_started_rx2.await;
 
         let reset_err: Result<(), ThoError> = exec
-            .submit(usize::MAX, async move { Err(needs_reset_error()) }, None)
+            .submit(usize::MAX, async move { Err(needs_restart_error()) }, None)
             .await;
 
         assert!(matches!(reset_err.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {reset_err:?}");
@@ -2291,7 +2291,7 @@ mod tests {
                     let _ = started_tx1.send(());
                     let _ = release_rx1.await;
                     finished_jobs.fetch_add(1, Ordering::SeqCst);
-                    Err::<(), _>(needs_reset_error())
+                    Err::<(), _>(needs_restart_error())
                 }, None).await
             })
         };
@@ -2304,7 +2304,7 @@ mod tests {
                     let _ = started_tx2.send(());
                     let _ = release_rx2.await;
                     finished_jobs.fetch_add(1, Ordering::SeqCst);
-                    Err::<(), _>(needs_reset_error())
+                    Err::<(), _>(needs_restart_error())
                 }, None).await
             })
         };
@@ -2369,7 +2369,7 @@ mod tests {
 
                         if reset_calls.load(Ordering::Relaxed) == 0 {
                             debug!("test_nested_needs_reset_unwinds_parent_before_reset: Child job failed");
-                            Err(needs_reset_error())
+                            Err(needs_restart_error())
                         } else {
                             debug!(":test_nested_needs_reset_unwinds_parent_before_reset: Child job done");
                             Ok(())
@@ -2485,7 +2485,7 @@ mod tests {
         let generation = exec.cuda_gate().unwrap().device_generation();
         let ticket = exec.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
         exec.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
-        assert!(exec.request_cuda_reset_for_generation(generation, needs_reset_error()).unwrap().is_none());
+        assert!(exec.request_cuda_reset_for_generation(generation, needs_restart_error()).unwrap().is_none());
         assert!(!exec.cuda_gate().unwrap().is_paused());
         exec.shutdown().await;
     }
@@ -2608,7 +2608,7 @@ mod tests {
             assert!(cpu.cuda_gate().is_none());
             assert!(cpu.request_cuda_reset(ThoError::ContextReset).is_err());
             let generation = owner.cuda_gate().unwrap().device_generation();
-            owner.request_cuda_reset(needs_reset_error()).unwrap();
+            owner.request_cuda_reset(needs_restart_error()).unwrap();
             started.notified().await;
             let mut submit = Box::pin(owner.submit(0, async { Ok(()) }, None));
             assert!(futures::poll!(submit.as_mut()).is_pending());
@@ -2617,9 +2617,9 @@ mod tests {
             release.notify_one();
             let error = submit.await.unwrap_err();
             assert!(error.is_cuda_recovery_failed());
-            assert!(!error.is_retryable_oom() && !error.needs_cuda_ctx_reset());
+            assert!(!error.is_retryable_oom() && !error.needs_cuda_restart());
             let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("terminal error was lost") };
-            assert!(failure.original.needs_cuda_ctx_reset());
+            assert!(failure.original.needs_cuda_restart());
             assert!(failure.recovery.as_ref().unwrap().is_oom());
             assert_eq!(owner.cuda_gate().unwrap().device_generation(), generation);
             assert!(owner.submit(0, async { Ok(()) }, None).await.unwrap_err().is_cuda_recovery_failed());
@@ -2658,7 +2658,7 @@ mod tests {
                 callers.push(tokio::spawn(async move {
                     exec.submit(usize::MAX, async move {
                         start.wait().await;
-                        Err::<(), _>(needs_reset_error())
+                        Err::<(), _>(needs_restart_error())
                     }, None).await
                 }));
             }
@@ -2700,7 +2700,7 @@ mod tests {
             let owner = SyncStageRunner::new_inner_with_buffer_limits(1, 1, Some(recovery), Arc::clone(&limits));
             let healthy = runner_with_limits(2, &limits);
             let cpu = runner_with_limits(0, &limits);
-            owner.request_cuda_reset(needs_reset_error()).unwrap();
+            owner.request_cuda_reset(needs_restart_error()).unwrap();
             started.notified().await;
             let mut queued = Box::pin(owner.submit(0, async { Ok(99) }, None));
             assert!(futures::poll!(queued.as_mut()).is_pending());
