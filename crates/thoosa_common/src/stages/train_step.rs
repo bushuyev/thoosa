@@ -198,7 +198,7 @@ where
             // A reset during preparation invalidates the worker generation even
             // if training reported an ordinary OOM first. Do not roll it back.
             if let Some(Err(error)) = &next {
-                if error.needs_cuda_ctx_reset() || error.is_cuda_recovery_failed() {
+                if error.needs_cuda_restart() || error.is_cuda_recovery_failed() {
                     return Err(error.clone());
                 }
             }

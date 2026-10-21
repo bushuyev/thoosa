@@ -162,9 +162,9 @@ fn test_training_commit_and_completion_failures_are_terminal() -> Result<(), Tho
 fn test_training_fatal_commit_error_preserves_cuda_recovery() -> Result<(), ThoError> {
     let mut module = module(0)?;
     let error = module.training_transaction_with(accumulate, |_| Err(ThoError::from_cuda_error("optimizer update", 700)), || Ok(())).unwrap_err();
-    assert!(error.needs_cuda_ctx_reset());
+    assert!(error.needs_cuda_restart());
     let wire: WorkerError = error.into();
-    assert!(ThoError::from(wire).needs_cuda_ctx_reset());
+    assert!(ThoError::from(wire).needs_cuda_restart());
     assert!(module.ensure_training_usable().is_err());
     Ok(())
 }

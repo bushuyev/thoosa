@@ -461,14 +461,14 @@ impl CudaIPCActor {
                             // reset should be handled only in SyncStageRunner
                             // proxy/initializer caller was cancelled before the reply.
                             // TODO: this breaks CudaWorker restart
-                            // let response = response.map(|mut response| {
-                            //     if let OpResult::Failed(error) = response.status {
-                            //         debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");
-                            //         let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
-                            //         response.status = error.into();
-                            //     }
-                            //     response
-                            // });
+                            let response = response.map(|mut response| {
+                                if let OpResult::Failed(error) = response.status {
+                                    debug!("handle_message, CudaIPCActorMessage::SendMsg: error={error:?}");
+                                    let error = crate::copy_ctx::report_cuda_copy_result::<()>(Err(error.into()), &gate, generation).unwrap_err();
+                                    response.status = error.into();
+                                }
+                                response
+                            });
                             let _ = respond_to.send(response);
 
                             Ok::<_, ThoError>(())
@@ -1477,7 +1477,7 @@ mod tests {
             assert!(matches!(&received, ThoError::Cuda { action: received_action, .. } if *received_action == action));
             assert_eq!(received.is_oom(), action == CudaAction::HandleOOM);
             assert_eq!(received.is_retryable_oom(), action == CudaAction::HandleOOM);
-            assert_eq!(received.needs_cuda_ctx_reset(), action == CudaAction::NeedsRestart);
+            assert_eq!(received.needs_cuda_restart(), action == CudaAction::NeedsRestart);
             let message = received.to_string();
             assert!(message.contains("worker request 42") && message.contains("job 27") && message.contains("forward model") && message.contains("device failure detail"));
         }
@@ -1496,13 +1496,13 @@ mod tests {
         ] {
             let received = round_trip_worker_error(error.clone().context("worker operation"));
             assert_eq!(std::mem::discriminant(received.what()), std::mem::discriminant(error.what()));
-            assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_ctx_reset()), (error.is_oom(), error.is_retryable_oom(), error.needs_cuda_ctx_reset()));
+            assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_restart()), (error.is_oom(), error.is_retryable_oom(), error.needs_cuda_restart()));
             assert_eq!(received.what().to_string(), error.to_string());
         }
 
         let received = round_trip_worker_error(ThoError::from(std::io::Error::other("CUDA out of memory")).context("read model"));
         assert!(matches!(received, ThoError::Anyhow(_)));
-        assert!(received.is_oom() && received.is_retryable_oom() && !received.needs_cuda_ctx_reset());
+        assert!(received.is_oom() && received.is_retryable_oom() && !received.needs_cuda_restart());
         assert!(received.to_string().contains("read model") && received.to_string().contains("CUDA out of memory"));
     }
 
@@ -1514,7 +1514,7 @@ mod tests {
             let received = round_trip_worker_error(error.context("training failed"));
             assert!(received.is_oom());
             assert!(!received.is_retryable_oom());
-            assert!(!received.needs_cuda_ctx_reset());
+            assert!(!received.needs_cuda_restart());
             assert!(format!("{received:#}").contains("out of memory"));
             let ThoError::TrainingSessionFailed(failure) = received.what() else { panic!("training failure classification was lost") };
             assert!(failure.original.is_oom());
@@ -1533,9 +1533,9 @@ mod tests {
             let error = ThoError::CudaRecoveryFailed(Arc::new(CudaRecoveryFailure { original, recovery }));
             let received = round_trip_worker_error(error.context("worker recovery"));
             assert!(received.is_cuda_recovery_failed());
-            assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_ctx_reset());
+            assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_restart());
             let ThoError::CudaRecoveryFailed(failure) = received.what() else { panic!("terminal error was lost") };
-            assert!(failure.original.needs_cuda_ctx_reset());
+            assert!(failure.original.needs_cuda_restart());
             assert_eq!(failure.recovery.is_some(), has_recovery);
             assert!(received.to_string().contains("original stage") && received.to_string().contains("illegal address"));
             if let Some(recovery) = &failure.recovery {
@@ -1831,7 +1831,7 @@ mod tests {
             assert!(matches!(error, ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, .. }), "worker OOM action was not propagated: {error:?}");
             assert!(error.is_oom(), "worker OOM classification was lost: {error:?}");
             assert!(error.is_retryable_oom(), "worker OOM retryability was lost: {error:?}");
-            assert!(!error.needs_cuda_ctx_reset(), "ordinary worker OOM must not reset CUDA: {error:?}");
+            assert!(!error.needs_cuda_restart(), "ordinary worker OOM must not reset CUDA: {error:?}");
 
 
             debug!("All ok");

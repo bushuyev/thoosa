@@ -533,7 +533,7 @@ pub enum ThoError {
     Anyhow(Arc<anyhow::Error>),
     NotFound(Option<String>),
     SyncStageRunner(SyncStageRunnerError),
-    ContextReset,
+    ContextReset,// TODO it's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
 }
 
 /// Keep both failures typed: terminal recovery must not be classified as another
@@ -687,15 +687,15 @@ impl ThoError {
         }
     }
 
-    pub fn needs_cuda_ctx_reset(&self) -> bool {
+    pub fn needs_cuda_restart(&self) -> bool {
         match self.what() {
             Self::Cuda { action: CudaAction::NeedsRestart, .. } => true,
-            Self::TrainingSessionFailed(failure) => failure.original.needs_cuda_ctx_reset() || failure.recovery.as_ref().is_some_and(Self::needs_cuda_ctx_reset),
-            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_ctx_reset(),
+            Self::TrainingSessionFailed(failure) => failure.original.needs_cuda_restart() || failure.recovery.as_ref().is_some_and(Self::needs_cuda_restart),
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_restart(),
             Self::Anyhow(anyhow) => {
-                let needs_reset = cuda_cause_from_msg(&anyhow.to_string()).needs_cuda_ctx_reset();
+                let needs_reset = cuda_cause_from_msg(&anyhow.to_string()).needs_cuda_restart();
                 if needs_reset{
-                    warn!("thoosa_shared::ThoError::needs_cuda_ctx_reset: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
+                    warn!("thoosa_shared::ThoError::needs_cuda_restart: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
                 needs_reset
             }
@@ -2589,7 +2589,7 @@ mod shared_tests {
             let wrapped: ThoError = Err::<(), _>(job).context("run stage").unwrap_err().into();
             let shared = wrapped.clone().context("worker request");
             assert!(matches!(shared.what(), ThoError::SyncStageRunner(SyncStageRunnerError::JobError { job_id: 42, .. })));
-            assert_eq!((shared.is_oom(), shared.is_retryable_oom(), shared.needs_cuda_ctx_reset()), (oom, retryable, reset));
+            assert_eq!((shared.is_oom(), shared.is_retryable_oom(), shared.needs_cuda_restart()), (oom, retryable, reset));
         }
 
         let error: ThoError = Err::<(), _>(ThoError::ContextReset).context("cancel stage").unwrap_err().into();
@@ -2607,7 +2607,7 @@ mod shared_tests {
             let wrapped = job.context("training request").clone().context("worker reply");
             assert!(wrapped.is_oom(), "report the cause even though replay is forbidden");
             assert!(!wrapped.is_retryable_oom());
-            assert!(!wrapped.needs_cuda_ctx_reset());
+            assert!(!wrapped.needs_cuda_restart());
             assert!(format!("{wrapped:#}").contains("out of memory"));
             assert!(anyhow::Error::new(error).chain().any(|cause| cause.downcast_ref::<ThoError>().is_some_and(ThoError::is_oom)));
         }
@@ -2619,19 +2619,19 @@ mod shared_tests {
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(error.is_oom(), "is_oom");
         assert!(error.is_retryable_oom(), "is_retryable_oom");
-        assert!(!error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
+        assert!(!error.needs_cuda_restart(), "needs_cuda_restart");
 
         let error = ThoError::from(std::io::Error::other("CUDA error: illegal memory access"));
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(!error.is_oom(), "is_oom");
         assert!(!error.is_retryable_oom(), "is_retryable_oom");
-        assert!(error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
+        assert!(error.needs_cuda_restart(), "needs_cuda_restart");
 
         let error:ThoError = anyhow::anyhow!("read failed").context("CUDA out of memory").into();
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(error.is_oom(), "is_oom");
         assert!(error.is_retryable_oom(), "is_retryable_oom");
-        assert!(!error.needs_cuda_ctx_reset(), "needs_cuda_ctx_reset");
+        assert!(!error.needs_cuda_restart(), "needs_cuda_restart");
     }
 
     #[test]
@@ -2642,7 +2642,7 @@ mod shared_tests {
         ] {
             let source = anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model");
             let error = ThoError::from(source);
-            assert_eq!((error.is_oom(), error.needs_cuda_ctx_reset()), (oom, reset));
+            assert_eq!((error.is_oom(), error.needs_cuda_restart()), (oom, reset));
             let ThoError::Anyhow(source) = &error else { panic!("expected original Torch error") };
             assert!(source.downcast_ref::<tch::TchError>().is_some());
             assert!(format!("{error:#}").contains(message));
