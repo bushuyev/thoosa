@@ -598,7 +598,6 @@ where
     Proxy {
         stage: Arc<ProxyStage<St>>,
         init: Init,//if async stages need to know parameters with which sync stage was initialized (motif_id, out_id etc)
-        state: RwLock<Option<Box<StageStateDump>>>//TODO remove - state was moved to ProxyStage
     },
 }
 
@@ -789,7 +788,7 @@ where
             DynSyncStageWithStateEnum::Local(local) => {
                 local.purge_gpu(ids_to_keep, tho_device_idx, name).await
             }
-            DynSyncStageWithStateEnum::Proxy { stage, init, state, } => {
+            DynSyncStageWithStateEnum::Proxy { stage, init, } => {
                Arc::clone(stage).purge_gpu(ids_to_keep, tho_device_idx, name).await?;
                 Ok(())
             }

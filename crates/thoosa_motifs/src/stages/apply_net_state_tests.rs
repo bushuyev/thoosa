@@ -75,7 +75,7 @@ async fn round_trips() -> Result<(), ThoError> {
     let motif: Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<RunCtxImpl>, MotifNetMeta>> = Arc::new(if global.is_ipc() {
         DynSyncStageWithStateEnum::Proxy {
             stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some("8101".into()), 1, Box::new(motif_init)).await?),
-            init: MotifNetMeta::new(19, 0, motif_params()), state: Default::default(),
+            init: MotifNetMeta::new(19, 0, motif_params()),
         }
     } else {
         let stage = Arc::new(SyncApplyMotifNet::new_local(motif_init.inference_id(), 1, motif_params(), motif_module()?, 0, 19, None).await?);
@@ -85,7 +85,7 @@ async fn round_trips() -> Result<(), ThoError> {
     let label: Arc<DynSyncStageWithStateEnum<ApplyLabelNet<RunCtxImpl>, ApplyLabelNetInit>> = Arc::new(if global.is_ipc() {
         DynSyncStageWithStateEnum::Proxy {
             stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, Some("8102".into()), 1, Box::new(label_init.clone())).await?),
-            init: label_init, state: Default::default(),
+            init: label_init,
         }
     } else {
         let stage = Arc::new(ApplyLabelNet::new_local(mono_key!(0, "test").into(), "label".into(), 23, label_module(false)?).await?);

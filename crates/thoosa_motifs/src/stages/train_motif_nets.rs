@@ -247,7 +247,6 @@ where
             Ok((DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_MOTIF_STEP_ENDPOINT, Some(SyncTrainMotifStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?),
                 init: (),
-                state: Default::default()
             }, node_params))
         } else {
             //TODO extract and use train_motif_step_endpoint_init
@@ -1823,7 +1822,6 @@ mod tests {
                 let train_step: DynSyncStageWithStateEnum<TrainStep<TrainStepXFn<InDims>, InDims, OutDims, RunCtxImpl>> = DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_TEST_STEP_ENDPOINT, Some(stage_id.to_string()), 1, Box::new(init), input_cloner).await?),
                     init: (),
-                    state: Default::default(),
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
                 let input = train_input(cuda_actor).await?;

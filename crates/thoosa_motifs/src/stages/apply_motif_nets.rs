@@ -736,7 +736,6 @@ where
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
                 stage: Arc::new(ProxyStage::proxy(APPLY_MOTIF_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self)).await?),
                 init: motif_meta,
-                state: Default::default(),
             }))
         } else {
             let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
