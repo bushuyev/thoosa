@@ -32,7 +32,8 @@ use thoosa_shared::{panic_to_err, debug_id};
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
 use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput};
-use thoosa_shared::ipc_types::{IpcTensorKind, WorkerOutput};
+use thoosa_shared::ipc_types::{WorkerOutput};
+use thoosa_common::ipc::tensor_info::{IpcTensorKind};
 
 
 // Synchronize the non-Sync Tensor handle instead of asserting Sync for arbitrary IDs.

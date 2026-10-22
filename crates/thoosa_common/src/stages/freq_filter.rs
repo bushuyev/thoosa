@@ -24,7 +24,8 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, ErasedStageWithState, OutId, Stage, StageStateInfo, StageWithState, SyncStage, ThoSelector};
+use thoosa_shared::traits::{AsyncStage, OutId, Stage, ThoSelector};
+use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
@@ -52,7 +53,8 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
-use thoosa_shared::ipc_types::{TensorKey, WorkerTensorInfoPayload};
+use thoosa_shared::ipc_types::{TensorKey};
+use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
@@ -933,7 +935,8 @@ mod tests {
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::traits::{StageHash, SyncStage};
+    use thoosa_shared::traits::{StageHash};
+    use thoosa_common::runner::sync_stage::{SyncStage};
 
     fn state_test_filters() -> Vec<InputFilter> {
         vec![

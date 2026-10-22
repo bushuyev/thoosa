@@ -40,7 +40,8 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::MaxParallelCtx;
-use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_shared::ipc_types::WorkerOutput;
 use crate::stages::instance_cache::InstanceCache;
@@ -827,7 +828,8 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{Stage, SyncStage};
+    use thoosa_shared::traits::{Stage};
+    use thoosa_common::runner::sync_stage::{SyncStage};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {

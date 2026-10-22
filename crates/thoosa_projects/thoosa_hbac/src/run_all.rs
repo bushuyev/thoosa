@@ -919,7 +919,8 @@ mod tests {
     use thoosa_shared::run_configs::RUN_ID;
     use thoosa_shared::test_utils::{clear_flag, TestSignalKind};
     use thoosa_shared::traits::{Adjustable, Data, WithId};
-    use thoosa_shared::traits::{OutId, Stage, SyncStage};
+    use thoosa_shared::traits::{OutId, Stage};
+    use thoosa_common::runner::sync_stage::{SyncStage};
     use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
     use thoosa_shims::context::ThoCudaContext;
     use thoosa_store::rusqlite::Transaction;

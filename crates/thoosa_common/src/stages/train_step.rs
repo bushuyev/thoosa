@@ -34,7 +34,8 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, ErasedStageWithState, OutId, RunCtx, Stage, StageWithState, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
+use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
 use tokio::sync::MutexGuard;
 use tokio::task::coop::cooperative;
@@ -308,11 +309,11 @@ where
         }.boxed()
     }
 
-    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_shared::traits::StageStateInfo, ThoError>> {
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::runner::sync_stage::StageStateInfo, ThoError>> {
         async move { self.train_module.lock().await.state_info() }.boxed()
     }
 
-    fn reset_state(&self, info: thoosa_shared::traits::StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+    fn reset_state(&self, info: thoosa_common::runner::sync_stage::StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
         async move {
             let mut module = self.train_module.lock().await;
             module.reset_state(info)?;

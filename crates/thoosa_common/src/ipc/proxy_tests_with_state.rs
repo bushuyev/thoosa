@@ -34,12 +34,14 @@ use tch::Kind::Int;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{CachableIdTr, Data,  ErasedStageState, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{ErasedStageState, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use tracing::field::debug;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::ipc_types::{TensorKey, WorkerOutput, WorkerTensorInfoPayload};
+use thoosa_shared::ipc_types::{TensorKey, WorkerOutput};
+use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
 use thoosa_store::rusqlite::fallible_iterator::FallibleIterator;
 use crate::cuda_utils::tensor_mem_size;
 
@@ -449,7 +451,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::SyncStage;
+    use thoosa_common::runner::sync_stage::SyncStage;
     use tracing::field::debug;
 
 

@@ -20,7 +20,8 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 
 use crate::stages::stage_ids::STFT;
