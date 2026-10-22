@@ -320,7 +320,7 @@ pub(crate) async fn run_all(
                 &store_in_train_final,
                 init_ctx_in_train_final,
                 Arc::clone(&all_config.train_final_opt_config),
-                50, //TODO
+                10, //TODO
                 run_all_args.selected_motif_nets_limit,
             )).await?))
         },
@@ -742,18 +742,18 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 }),
                 min: RangeOrValue::Value(0.8),
             },
-            // MotifCriterionConstraintRangeOrValue {
-            //     metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
-            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
-            //         lag_min: RangeOrValue::Value(1. / 32.),
-            //         lag_max: RangeOrValue::Value(0.5),
-            //         struct0: RangeOrValue::Value(0.2),
-            //         peak_good: RangeOrValue::Value(0.25),
-            //         peak_bad: RangeOrValue::Value(0.65),
-            //         eps: RangeOrValue::Value(1e-8),
-            //     }),
-            //     min: RangeOrValue::Value(0.80),
-            // },
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
+                    struct_lag_max: RangeOrValue::Value(1. / 64.),
+                    lag_min: RangeOrValue::Value(1. / 32.),
+                    lag_max: RangeOrValue::Value(0.5),
+                    struct0: RangeOrValue::Value(0.2),
+                    peak_good: RangeOrValue::Value(0.25),
+                    peak_bad: RangeOrValue::Value(0.65),
+                    eps: RangeOrValue::Value(1e-8),
+                }),
+                min: RangeOrValue::Value(0.80),
+            },
         ],
     }
 }

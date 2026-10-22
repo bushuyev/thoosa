@@ -256,6 +256,7 @@ where
         let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<Batch<LabelProbability>, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
         let label_output_order = Arc::new(Mutex::new(vec![None; self.apply_nets.len()]));
 
+        //labels order is maintained in StackAppliedLabelNets::consume
         let futures = self.apply_nets
             .iter()
             .enumerate()
