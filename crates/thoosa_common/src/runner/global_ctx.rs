@@ -168,7 +168,8 @@ impl RegisteredCacheHandle {
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
 
-    //TODO num_devices is to be replaces with Cuda devices list. Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda(0)]
+    // TODO num_devices is to be replaces with Cuda devices list kept in a static const.
+    // Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda(0)]
     fn new(num_devices: usize) -> anyhow::Result<Self> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
