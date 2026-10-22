@@ -558,7 +558,7 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
+async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {//TODO flaky
     unsafe {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }

@@ -771,6 +771,7 @@ where
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
             FuturesOrdering::Unordered,
+            true,
             "train motif",
         )).await?;
 

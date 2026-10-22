@@ -258,6 +258,7 @@ where
             futures,
             motif_ids_len,
             FuturesOrdering::Unordered,
+            true,
             "SelectBucketsStage::preload_bucket_mean_energies",
         )).await?;
         if energies.len() != motif_ids_len {
@@ -537,6 +538,7 @@ where
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
+            true,
             "SelectBucketsStage::run",
         )).await?;
         if run_results.len() != run_configs_len {

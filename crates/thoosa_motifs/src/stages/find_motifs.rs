@@ -520,6 +520,7 @@ where
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
+            true,
             "FindMotifsStage::new",
         )).await?
         .into_iter()
@@ -588,6 +589,7 @@ where
             futures,
             run_config_stages_len,
             FuturesOrdering::Unordered,
+            true,
             "FindMotifsStage::run",
         )).await?;
 

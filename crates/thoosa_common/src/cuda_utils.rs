@@ -378,49 +378,50 @@ async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfe
         let batches = d2h_batches(transfers.iter().map(|(transfer, _)| transfer.source.byte_len), buf_size)?;
         let count = batches.len();
         collect_futures_with_progress(batches.into_iter().map(|batch| {
-            let transfers = Arc::clone(&transfers);
-            let pool = Arc::clone(pool);
-            async move {
-                let buffer = pool.acquire().await?;
-                let copy_pool = Arc::clone(&pool);
-                let result = spawn_copy_chunk(transfers, buffer, move |transfers, buffer| {
-                    let stream = Arc::clone(&buffer.1);
-                    let mut completion = CopyCompletion { resources: Some((Arc::clone(transfers), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
-                    let buffer = &completion.resources.as_ref().expect("batch copy resources").1;
-                    let pinned = buffer.0.as_mut_ptr();
-                    let _guard = ThoStreamGuard::new(stream.as_ref())?;
-                    let submitted = (|| -> Result<(), ThoError> {
-                        for slice in &batch {
-                            if slice.pinned_offset + slice.len > buffer.0.len() { return Err(ThoError::new("batch exceeds pinned buffer")); }
-                            let (transfer, on_cpu) = &transfers[slice.tensor];
-                            let source = transfer.source.address + slice.offset;
-                            // Each slice has disjoint pinned/destination ranges;
-                            // completion retains every allocation through DMA.
-                            if *on_cpu {
-                                unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned.add(slice.pinned_offset), slice.len); }
-                            } else {
-                                completion.submitted = true;
-                                let status = unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.add(slice.pinned_offset).cast(), source as _, slice.len, stream.as_mut_ptr()) };
-                                check_cuda_status(status, "batched CUDA D2H submission")?;
+                    let transfers = Arc::clone(&transfers);
+                    let pool = Arc::clone(pool);
+                    async move {
+                        let buffer = pool.acquire().await?;
+                        let copy_pool = Arc::clone(&pool);
+                        let result = spawn_copy_chunk(transfers, buffer, move |transfers, buffer| {
+                            let stream = Arc::clone(&buffer.1);
+                            let mut completion = CopyCompletion { resources: Some((Arc::clone(transfers), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
+                            let buffer = &completion.resources.as_ref().expect("batch copy resources").1;
+                            let pinned = buffer.0.as_mut_ptr();
+                            let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                            let submitted = (|| -> Result<(), ThoError> {
+                                for slice in &batch {
+                                    if slice.pinned_offset + slice.len > buffer.0.len() { return Err(ThoError::new("batch exceeds pinned buffer")); }
+                                    let (transfer, on_cpu) = &transfers[slice.tensor];
+                                    let source = transfer.source.address + slice.offset;
+                                    // Each slice has disjoint pinned/destination ranges;
+                                    // completion retains every allocation through DMA.
+                                    if *on_cpu {
+                                        unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned.add(slice.pinned_offset), slice.len); }
+                                    } else {
+                                        completion.submitted = true;
+                                        let status = unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.add(slice.pinned_offset).cast(), source as _, slice.len, stream.as_mut_ptr()) };
+                                        check_cuda_status(status, "batched CUDA D2H submission")?;
+                                    }
+                                }
+                                Ok(())
+                            })();
+                            // Drain all submitted slices once, also after a partial
+                            // submission failure. Failed batches never publish a snapshot.
+                            let sync = if completion.submitted {
+                                completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()))
+                            } else { Ok(()) };
+                            crate::copy_ctx::finish_cuda_run(submitted, sync)?;
+                            for slice in &batch {
+                                let destination = transfers[slice.tensor].0.destination.address + slice.offset;
+                                unsafe { std::ptr::copy_nonoverlapping(pinned.add(slice.pinned_offset), destination as *mut u8, slice.len); }
                             }
-                        }
-                        Ok(())
-                    })();
-                    // Drain all submitted slices once, also after a partial
-                    // submission failure. Failed batches never publish a snapshot.
-                    let sync = if completion.submitted {
-                        completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()))
-                    } else { Ok(()) };
-                    crate::copy_ctx::finish_cuda_run(submitted, sync)?;
-                    for slice in &batch {
-                        let destination = transfers[slice.tensor].0.destination.address + slice.offset;
-                        unsafe { std::ptr::copy_nonoverlapping(pinned.add(slice.pinned_offset), destination as *mut u8, slice.len); }
+                            Ok(())
+                        }).await;
+                        crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
-                    Ok(())
-                }).await;
-                crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
-            }
-        }), count, FuturesOrdering::Unordered, COPY_D2H).await.map(|_| ())
+                }), count, FuturesOrdering::Unordered,
+                                      false, COPY_D2H).await.map(|_| ())
     }).await
 }
 
@@ -470,47 +471,48 @@ async fn copy_transfer(
         let chunks = make_chunks(transfer.source.byte_len, buf_size, label)?;
         let count = chunks.len();
         collect_futures_with_progress(chunks.into_iter().map(|chunk| {
-            let transfer = Arc::clone(&transfer);
-            let pool = Arc::clone(pool);
-            async move {
-                let buffer = pool.acquire().await?;
-                let copy_pool = Arc::clone(&pool);
-                let result = spawn_copy_chunk(transfer, buffer, move |transfer, buffer| {
-                    let stream = Arc::clone(&buffer.1);
-                    let mut completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
-                    let buffer = &completion.resources.as_ref().expect("copy resources").1;
-                    if chunk.len > buffer.0.len() { return Err(ThoError::new("copy chunk exceeds pinned buffer")); }
-                    let pinned = buffer.0.as_mut_ptr();
-                    let _guard = ThoStreamGuard::new(stream.as_ref())?;
-                    let source = transfer.source.address + chunk.offset;
-                    let destination = transfer.destination.address + chunk.offset;
-                    // Range sizes and address overflow were checked at construction;
-                    // make_chunks partitions the destination into disjoint ranges.
-                    let submitted = match direction {
-                        CopyDirection::ToCpu => {
-                            completion.submitted = true;
-                            unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.cast(), source as _, chunk.len, stream.as_mut_ptr()) }
-                        }
-                        CopyDirection::ToCuda => {
-                            unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned, chunk.len); }
-                            completion.submitted = true;
-                            unsafe { thoosa_shims::memcpy::tho_cu_memcpy_htod_async(destination as _, pinned.cast(), chunk.len, stream.as_mut_ptr()) }
-                        }
-                    };
-                    // Drain even after a failed submission. Preserve the original
-                    // CUDA action when a second synchronization establishes completion.
-                    let sync = completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()));
-                    crate::copy_ctx::finish_cuda_run(check_cuda_status(submitted, "CUDA copy submission"), sync)?;
-                    if matches!(direction, CopyDirection::ToCpu) {
-                        unsafe { std::ptr::copy_nonoverlapping(pinned, destination as *mut u8, chunk.len); }
+                    let transfer = Arc::clone(&transfer);
+                    let pool = Arc::clone(pool);
+                    async move {
+                        let buffer = pool.acquire().await?;
+                        let copy_pool = Arc::clone(&pool);
+                        let result = spawn_copy_chunk(transfer, buffer, move |transfer, buffer| {
+                            let stream = Arc::clone(&buffer.1);
+                            let mut completion = CopyCompletion { resources: Some((Arc::clone(transfer), buffer)), submitted: false, pool: copy_pool, stream: Arc::clone(&stream) };
+                            let buffer = &completion.resources.as_ref().expect("copy resources").1;
+                            if chunk.len > buffer.0.len() { return Err(ThoError::new("copy chunk exceeds pinned buffer")); }
+                            let pinned = buffer.0.as_mut_ptr();
+                            let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                            let source = transfer.source.address + chunk.offset;
+                            let destination = transfer.destination.address + chunk.offset;
+                            // Range sizes and address overflow were checked at construction;
+                            // make_chunks partitions the destination into disjoint ranges.
+                            let submitted = match direction {
+                                CopyDirection::ToCpu => {
+                                    completion.submitted = true;
+                                    unsafe { thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(pinned.cast(), source as _, chunk.len, stream.as_mut_ptr()) }
+                                }
+                                CopyDirection::ToCuda => {
+                                    unsafe { std::ptr::copy_nonoverlapping(source as *const u8, pinned, chunk.len); }
+                                    completion.submitted = true;
+                                    unsafe { thoosa_shims::memcpy::tho_cu_memcpy_htod_async(destination as _, pinned.cast(), chunk.len, stream.as_mut_ptr()) }
+                                }
+                            };
+                            // Drain even after a failed submission. Preserve the original
+                            // CUDA action when a second synchronization establishes completion.
+                            let sync = completion.finish(crate::copy_ctx::complete_cuda_stream(stream.synchronize(), || stream.synchronize()));
+                            crate::copy_ctx::finish_cuda_run(check_cuda_status(submitted, "CUDA copy submission"), sync)?;
+                            if matches!(direction, CopyDirection::ToCpu) {
+                                unsafe { std::ptr::copy_nonoverlapping(pinned, destination as *mut u8, chunk.len); }
+                            }
+                            Ok(())
+                        }).await;
+                        // The collector drains all chunks and prioritizes fatal failures,
+                        // including a task panic alongside a failed stream completion.
+                        crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
-                    Ok(())
-                }).await;
-                // The collector drains all chunks and prioritizes fatal failures,
-                // including a task panic alongside a failed stream completion.
-                crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
-            }
-        }), count, FuturesOrdering::Unordered, label).await.map(|_| ())
+                }), count, FuturesOrdering::Unordered,
+                                      false, label).await.map(|_| ())
     }).await
 }
 
@@ -1285,8 +1287,8 @@ mod transfer_lifetime_tests {
             });
         }
         drop(transfer);
-        let parent = tokio::spawn(collect_futures_with_progress(chunks.into_iter(), 2, FuturesOrdering::Unordered, "test cancelled copy chunks"));
-        for _ in 0..2 { tokio::time::timeout(Duration::from_secs(5), starts.recv()).await.unwrap().unwrap(); }
+        let parent = tokio::spawn(collect_futures_with_progress(chunks.into_iter(), 2, FuturesOrdering::Unordered, false, "test cancelled copy chunks"));
+        for _ in 0..2 { tokio::time::timeout(Duration::from_secs(5), starts.recv()).await?.unwrap(); }
         parent.abort();
         assert!(parent.await.unwrap_err().is_cancelled());
         assert!(weak.upgrade().is_some(), "cancellation must retain both tensor allocations");

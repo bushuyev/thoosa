@@ -217,6 +217,7 @@ where
             futures,
             find_motifs_run_configs_len,
             FuturesOrdering::Ordered,
+            false,
             "SelectMotifsStage::load_stacked_motifs",
         )).await?;
         Ok(run_configs__stacked_motifs)
@@ -270,6 +271,7 @@ where
             futures,
             motif_ids_len,
             FuturesOrdering::Unordered,
+            false,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
         )).await?
             .into_iter()
@@ -393,6 +395,7 @@ where
             futures,
             run_configs__stacked_motifs_len,
             FuturesOrdering::Unordered,
+            false,
             "SelectMotifsStage::extend_motifs_for_run_config",
         )).await?;
 
@@ -588,6 +591,7 @@ where
                 futures,
                 channel_masks_dists_ids_len,
                 FuturesOrdering::Unordered,
+                false,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
             )).await?;
 
@@ -659,7 +663,7 @@ where
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await!(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await?;
+        let _ = track_await!(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, true, "ExtendMotifsStage::run")).await?;
         Ok(Arc::new(ExtendMotifsSavableResult::new()))
     }
 }

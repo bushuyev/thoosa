@@ -15,14 +15,15 @@ use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_compl
 /// before reporting failure: dropping a JoinSet early can abandon CUDA completion
 /// and request lifetimes owned by its tasks.
 pub async fn collect_futures_with_progress<T, F>(
-    futures: impl Iterator<Item = F>, len: usize, buffering: FuturesOrdering, descr: &str,
+    futures: impl Iterator<Item = F>, len: usize, buffering: FuturesOrdering,
+    ignore_failures: bool, descr: &str,
 ) -> Result<Vec<T>, ThoError>
 where
     T: Debug + Send + 'static,
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
 {
     let registration = crate::futures_limits::futures_limits().register(descr);
-    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, true, descr).await
+    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, ignore_failures, descr).await
 }
 
 /// Explicit opt-in for independent, best-effort operations such as plot export.
@@ -383,7 +384,7 @@ mod tests {
         let futures = || (0..3).map(|idx| async move {
             if idx == 1 { Err(ThoError::new("ordinary task failure")) } else { Ok(idx) }
         });
-        let error = super::collect_futures_with_progress(futures(), 3, FuturesOrdering::Ordered, "strict collection").await.unwrap_err();
+        let error = super::collect_futures_with_progress(futures(), 3, FuturesOrdering::Ordered, false, "strict collection").await.unwrap_err();
         assert!(format!("{error:#}").contains("ordinary task failure"));
         let values = super::collect_futures_best_effort_with_progress(futures(), 3, FuturesOrdering::Ordered, "best effort collection").await;
         assert_eq!(values, vec![0, 2]);

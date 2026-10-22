@@ -750,27 +750,27 @@ impl ThoError {
 
 impl From<anyhow::Error> for ThoError {
     fn from(error: anyhow::Error) -> Self {
-        info!("From<anyhow::Error> for ThoError: error={error:?} type_name={}", error.type_name());
+        debug!("From<anyhow::Error> for ThoError: error={error:?} type_name={}", error.type_name());
         // LibTorch exposes no CUDA status in TchError. Confine its legacy text adapter to
         // the raw Torch payload; never classify application context or arbitrary Display text.
         // #[cfg(feature = "tch-error")]
         if Self::typed_error(&error).is_none() {
-            info!("From<anyhow::Error> for ThoError: typed_error(&error).is_none()");
+            debug!("From<anyhow::Error> for ThoError: typed_error(&error).is_none()");
             if let Some(tch::TchError::Torch(msg)) = error.downcast_ref::<tch::TchError>() {
-                info!("From<anyhow::Error> for ThoError: Some(tch::TchError::Torch(msg))");
+                debug!("From<anyhow::Error> for ThoError: Some(tch::TchError::Torch(msg))");
 
                 if msg.to_ascii_lowercase().contains("cuda") {
                     let classification = cuda_cause_from_msg(msg.clone());
                     let Self::Cuda { action, .. } = classification else { unreachable!() };
                     let marker = Self::Cuda { action, msg: "LibTorch operation failed".into() };
 
-                    info!("From<anyhow::Error> for ThoError: classification={classification:?} marker={marker:?}");
+                    debug!("From<anyhow::Error> for ThoError: classification={classification:?} marker={marker:?}");
 
                     return Self::Anyhow(Arc::new(error.context(marker)));
                 }
             }
         }
-        info!("From<anyhow::Error> for ThoError: anyhow");
+        debug!("From<anyhow::Error> for ThoError: anyhow");
         Self::Anyhow(Arc::new(error))
     }
 }
@@ -2419,6 +2419,7 @@ mod shared_tests {
                     }),
                     4,
                     FuturesOrdering::Unordered,
+                    false,
                     "test_collect_futures_with_progress_runs_during_unrelated_cuda_recovery",
                 )
                     .await
