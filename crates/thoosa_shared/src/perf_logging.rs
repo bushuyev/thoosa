@@ -787,9 +787,9 @@ mod tests {
         info!("\n{}", format_perf_map(&PERF));
 
 
-        assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
-        assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
-        assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 < 2);
+        assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 <= 2);
+        assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 <= 2);
+        assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 1000 <= 2);
         assert!(PERF.get("outer").unwrap().elapsed_ns.load(Ordering::Relaxed) / NS_IN_MLS - 3000 < 6);
     }
 

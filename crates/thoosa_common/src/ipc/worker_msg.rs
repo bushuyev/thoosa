@@ -4,6 +4,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
+use tch::TchError;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
 use thoosa_common::runner::sync_stage::StageStateInfo;
@@ -193,7 +194,7 @@ impl WorkerError {
 
 impl From<WorkerError> for ThoError {
     fn from(error: WorkerError) -> Self {
-        warn!("<thoosa_shared::ThoError as core::convert::From>::from: error={error:?}");
+        warn!("ThoError::from: WorkerError error={error:?}");
 
         let WorkerError { kind, message } = error;
         match kind {
