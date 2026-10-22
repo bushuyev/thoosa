@@ -456,8 +456,11 @@ where
             futures,
             apply_motif_nets_len,
             FuturesOrdering::Unordered,
+            false,
             "ApplyMotifNets::run",
         )).await?;
+
+        debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
         // Existing label models expect motif-id order, independently of inference cache identity.
         motif_nets_applied.sort_by_key(|(motif_id, net_id, _)| (*motif_id, *net_id));
         let stack_input = Arc::new(StackAppliedMotifNetsInputWrapper {
@@ -649,6 +652,7 @@ where
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let tensors = &input.motif_nets_applied;
         let lengths = tensors.iter().map(|tensor| tensor.as_ref().size()[0]).collect::<Vec<_>>();
+        debug!("StackAppliedMotifNets::do_run: lengths={lengths:?}");
         let max_len = lengths.iter().copied().max().unwrap_or(0);
         let options = tensors.first().map(|tensor| (tensor.as_ref().kind(), tensor.as_ref().t_ref().device())).unwrap_or((Float, ThoDevice::from(input.device_idx).into()));
         let output = Tensor::f_zeros([tensors.len() as i64, max_len], options)?;
@@ -1595,7 +1599,7 @@ pub mod tests {
         MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
     {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
-        log::set_max_level(Debug);
+        // log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -1698,7 +1702,7 @@ pub mod tests {
             run_ctx_branch
         ).await?;
 
-        debug!("test_apply_motif_nets_3_channels_1_motif: PERF={:?}", PERF);
+        debug!("test_apply_motif_nets_3_channels_1_motif: out={:?}", out);
 
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_intervals={resource_a_intervals:?}");

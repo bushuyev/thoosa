@@ -765,6 +765,7 @@ where
                 futures,
                 labels_train_and_valid_sets_len,
                 FuturesOrdering::Unordered,
+                true,
                 "train labels",
             )).await?;
 
@@ -957,6 +958,7 @@ where
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
+                    false,
                     "ResourcesBatch::build_batch_stream",
                 )).await?
                     .into_iter()

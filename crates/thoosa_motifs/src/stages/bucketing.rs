@@ -1002,6 +1002,7 @@ where
             futures,
             resources_len,
             FuturesOrdering::Unordered,
+            true,
             "BucketingStage/resources",
         )).await?
         .into_iter()

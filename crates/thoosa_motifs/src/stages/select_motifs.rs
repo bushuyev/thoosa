@@ -366,6 +366,7 @@ where
             futures,
             motifs_len,
             FuturesOrdering::Unordered,
+            true,
             "filter_motifs_by_criteria",
         )).await?
         .into_iter().filter_map(|v| v).collect::<Vec<SelectedMotifEvaluation>>();
@@ -444,6 +445,7 @@ where
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
+            true,
             "SelectMotifsStage::run",
         )).await?;
 

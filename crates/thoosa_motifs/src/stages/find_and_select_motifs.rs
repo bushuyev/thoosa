@@ -421,6 +421,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
             futures,
             grid_runs_len,
             FuturesOrdering::Unordered,
+            true,
             "FindAndSelectMotifsStage::run",
         )).await?;
 

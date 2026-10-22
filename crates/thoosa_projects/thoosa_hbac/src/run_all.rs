@@ -1265,7 +1265,7 @@ mod tests {
     fn tensor_0() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
 
         let r = resource_tensor_two_easy_motifs(
-            1000, //rng().random_range(1000..2000),
+            rng().random_range(1000..2000),
             CHANNELS as usize,
             100,
             2,
@@ -1283,7 +1283,7 @@ mod tests {
     fn tensor_1() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
 
         let r = resource_tensor_two_easy_motifs(
-            1000, //rng().random_range(1000..2000),
+            rng().random_range(1000..2000),
             CHANNELS as usize,
             100,
             2,
@@ -1301,7 +1301,7 @@ mod tests {
     fn tensor_2() -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
 
         let r = resource_tensor_two_easy_motifs(
-            1000, //2000, //rng().random_range(1000..2000),
+            rng().random_range(1000..2000),
             CHANNELS as usize,
             100,
             2,
