@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_store::MockMotifsStoreBuilder;
 use crate::stages::cross_batch_clc::{CrossUnfoldClc, UnfoldParams};
@@ -31,7 +32,7 @@ async fn check_pipeline(fail_consumer: bool) -> Result<(), ThoError> {
     let resources: Vec<Arc<Resource>> = (1..=3).map(|i| Arc::new((i, 1, format!("pipeline_{i}").as_str(), 2).into())).collect();
     let mut fixtures = Vec::new();
     for resource in &resources {
-        fixtures.push((resource.as_ref().clone(), Tensor::f_zeros([1, 2], (Kind::Float, Device::Cpu))?));
+        fixtures.push((resource.as_ref().clone(), tch_result(Tensor::f_zeros([1, 2], (Kind::Float, Device::Cpu)))?));
     }
     let loader = Arc::new(mock_tensor_loader::build().with_run_cached(fixtures).finish());
     let started = Arc::new(Notify::new());
@@ -119,7 +120,7 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
         // valid resources; caching must not shift the resulting slice IDs.
         let len = if resource.id() == 2 { 1 } else { 7 };
         let values: Vec<f32> = (0..len).map(|i| (i * i + resource.id()) as f32).collect();
-        ThoTensor::new(format!("prepared_resource_{}", resource.id()).into(), Tensor::f_from_slice(&values)?.f_view([1, len as i64])?)
+        ThoTensor::new(format!("prepared_resource_{}", resource.id()).into(), tch_result(tch_result(Tensor::f_from_slice(&values))?.f_view([1, len as i64]))?)
     }, ThoDevice::from(Device::Cpu)));
     let resources: Vec<Arc<Resource>> = (1..=5).map(|i| Arc::new((i, 1, format!("prepared_{i}").as_str(), 7).into())).collect();
     let mut tensors = Vec::new();

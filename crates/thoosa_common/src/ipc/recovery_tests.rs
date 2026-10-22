@@ -1,5 +1,6 @@
 //! Exercise the real actor/worker protocol. CUDA poisoning is confined to a
 //! worker or an explicitly spawned child, including under plain `cargo test`.
+use thoosa_common::tch_error::tch_result;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,12 +53,12 @@ fn fatal() -> ThoError {
 // A real out-of-range CUDA gather raises a device assertion. Retain allocations
 // until process exit so their destructors do not obscure the original failure.
 fn enqueue_cuda_poison() -> Result<(), ThoError> {
-    let input = Tensor::f_ones([1], (tch::Kind::Float, Device::Cuda(0)))?;
-    let index = Tensor::f_from_slice(&[2i64])?.f_to_device(Device::Cuda(0))?;
+    let input = tch_result(Tensor::f_ones([1], (tch::Kind::Float, Device::Cuda(0))))?;
+    let index = tch_result(tch_result(Tensor::f_from_slice(&[2i64]))?.f_to_device(Device::Cuda(0)))?;
     let result = input.f_index_select(0, &index);
     std::mem::forget(input);
     std::mem::forget(index);
-    std::mem::forget(result?);
+    std::mem::forget(tch_result(result)?);
     Ok(())
 }
 
@@ -285,7 +286,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                     use crate::copy_ctx::CudaActorHandle;
                     let response = actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Poison)).await?;
                     assert!(matches!(response.status, OpResult::Ok(_)));
-                    let error = actor.copy(Tensor::f_from_slice(&[1f32])?.into(), 1.into()).await.unwrap_err();
+                    let error = actor.copy(tch_result(Tensor::f_from_slice(&[1f32]))?.into(), 1.into()).await.unwrap_err();
                     assert!(matches!(error.what(), ThoError::ContextReset), "fatal direct copy did not report recovery: {error:#}");
                 } else {
                     let actor = actor.clone();
@@ -366,7 +367,7 @@ fn test_fatal_local_cuda_error_requests_process_shutdown_in_child() -> Result<()
                     error
                 }
                 "copy" => {
-                    let source = Tensor::f_from_slice(&[1f32])?;
+                    let source = tch_result(Tensor::f_from_slice(&[1f32]))?;
                     assert!(tokio::task::spawn_blocking(poison_and_synchronize).await?.unwrap_err().needs_cuda_restart());
                     global.cuda_actor(1).copy(source.into(), 1.into()).await.unwrap_err()
                 }

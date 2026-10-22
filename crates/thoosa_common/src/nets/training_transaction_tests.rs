@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::ipc::worker_msg::WorkerError;
 use std::cell::Cell;
@@ -20,7 +21,7 @@ fn module(optimizer: u8) -> Result<ThoTrainModule<AnyDims, AnyDims>, ThoError> {
             let _ = vs.root().add("running_stat", Tensor::f_from_slice(&[0.25f32])?, false);
             tch::no_grad(|| -> Result<(), ThoError> {
                 for var in &vs.variables_.lock().or_else(|_| Err(ThoError::new("test VarStore lock poisoned")))?.trainable_variables {
-                    let _ = var.tensor.f_alias()?.f_fill_(0.5)?;
+                    let _ = tch_result(tch_result(var.tensor.f_alias())?.f_fill_(0.5))?;
                 }
                 Ok(())
             })?;
@@ -33,14 +34,14 @@ fn variable(module: &ThoTrainModule<AnyDims, AnyDims>, name: &str) -> Result<Ten
     let OptSnapshot::Opt { vs, .. } = &module.opt_state else { return Err(ThoError::new("test module not loaded")); };
     let variables = vs.variables();
     let tensor = variables.get(name).ok_or_else(|| ThoError::NotFound(Some(name.into())))?;
-    Ok(tensor.f_alias()?)
+    Ok(tch_result(tensor.f_alias())?)
 }
 
 fn accumulate(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(), ThoError> {
-    let input = ThoTensor::new(thoosa_shared::debug_id!("training phases"), Tensor::f_ones([2, 1], (Kind::Float, Cpu))?)?;
+    let input = ThoTensor::new(thoosa_shared::debug_id!("training phases"), tch_result(Tensor::f_ones([2, 1], (Kind::Float, Cpu)))?)?;
     let output = module.module().tho_forward(&input, None, true)?;
-    output.as_ref().f_square()?.f_mean(Kind::Float)?.f_backward()?;
-    let _ = variable(module, "running_stat")?.f_fill_(42.0)?;
+    tch_result(tch_result(tch_result(output.as_ref().f_square())?.f_mean(Kind::Float))?.f_backward())?;
+    let _ = tch_result(variable(module, "running_stat")?.f_fill_(42.0))?;
     Ok(())
 }
 
@@ -63,14 +64,14 @@ fn checkpoint(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(Vec<u8>,
     for tensor in &info.tensors {
         let key = tensor.tensor_key.to_tensor_key();
         let tensor = module.state_tensor(&key)?;
-        tensors.push((key, tensor.f_to_device_(Cpu, tensor.kind(), false, true)?));
+        tensors.push((key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?));
     }
     Ok((serde_json::to_vec(&info)?, tensors))
 }
 
 fn restore(module: &mut ThoTrainModule<AnyDims, AnyDims>, checkpoint: &(Vec<u8>, Vec<(String, Tensor)>)) -> Result<(), ThoError> {
     module.reset_state(serde_json::from_slice(&checkpoint.0)?)?;
-    for (key, tensor) in &checkpoint.1 { module.set_state_tensor(key, tensor.f_to_device_(Cpu, tensor.kind(), false, true)?, 0)?; }
+    for (key, tensor) in &checkpoint.1 { module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?; }
     module.ensure_training_usable()
 }
 
@@ -102,13 +103,13 @@ fn test_epoch_checkpoint_restores_complete_optimizer_and_buffers() -> Result<(),
                 assert_eq!(actual.0, reference_state.0, "optimizer metadata must return to the saved epoch, including absent state");
                 for ((actual_key, actual), (expected_key, expected)) in actual.1.iter().zip(&reference_state.1) {
                     assert_eq!(actual_key, expected_key);
-                    assert!(actual.f_allclose(expected, 1e-7, 1e-7, false)?, "checkpoint differs for {actual_key}");
+                    assert!(tch_result(actual.f_allclose(expected, 1e-7, 1e-7, false))?, "checkpoint differs for {actual_key}");
                 }
             }
             // The next update matches uninterrupted training, including momentum.
             restored.training_transaction(accumulate)?;
             reference.training_transaction(accumulate)?;
-            assert_eq!(variable(&restored, "seq_0.output.weight")?.f_double_value(&[0, 0])?, variable(&reference, "seq_0.output.weight")?.f_double_value(&[0, 0])?);
+            assert_eq!(tch_result(variable(&restored, "seq_0.output.weight")?.f_double_value(&[0, 0]))?, tch_result(variable(&reference, "seq_0.output.weight")?.f_double_value(&[0, 0]))?);
             restore(&mut restored, &saved)?;
             assert_eq!(checkpoint(&mut restored)?.0, saved.0, "restoring must not consume the checkpoint");
         }
@@ -136,7 +137,7 @@ fn test_training_commit_and_completion_failures_are_terminal() -> Result<(), Tho
     for optimizer in 0..3 {
         for fail_completion in [false, true] {
             let mut module = module(optimizer)?;
-            let before = variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0])?;
+            let before = tch_result(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0]))?;
             let completions = Cell::new(0);
             let error = module.training_transaction_with(accumulate, |module| {
                 // Simulate an optimizer that modified some state before reporting OOM.
@@ -149,7 +150,7 @@ fn test_training_commit_and_completion_failures_are_terminal() -> Result<(), Tho
             assert_eq!(completions.get(), 2, "a failed commit must still synchronize");
             assert!(error.is_oom(), "commit failure must retain its typed OOM cause");
             assert_terminal_over_ipc(error)?;
-            assert_ne!(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0])?, before, "partial optimizer updates must not be presented as rolled back");
+            assert_ne!(tch_result(variable(&module, "seq_0.output.weight")?.f_double_value(&[0, 0]))?, before, "partial optimizer updates must not be presented as rolled back");
             assert!(module.ensure_training_usable().is_err());
             let retried: Result<(), ThoError> = module.training_transaction(|_| panic!("invalidated session must reject subsequent batches"));
             assert_terminal_over_ipc(retried.unwrap_err())?;

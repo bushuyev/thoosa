@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::distance::MaskMaker::{Le, LocalMin};
 use async_trait::async_trait;
 use log::{debug, trace};
@@ -136,14 +137,14 @@ where
 
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
 
-        let tensor = input
+        let tensor = tch_result(tch_result(input
             .motifs_stats
             .t_ref()
-            .f_unsqueeze(-1)?
+            .f_unsqueeze(-1))?
             .f_expand(
                 [-1, -1, batch_1_t.data().size()[1]],
                 false,
-            )?;
+            ))?;
         let mut mask_makers = vec![
             // dim 1 are motifs - local minimums would be differences between motifs, we're interested in miniums within motifs
             LocalMin { dim: 2, radius: unfold_params.size() as u64  /2 },
@@ -176,9 +177,9 @@ where
                     if ids.is_empty() {
                         Ok(None) //no motifs in channel c
                     } else {
-                        let mask = fold_mask(mask.f_i((c as i64, .., ..))?, ids, 0)?;
+                        let mask = fold_mask(tch_result(mask.f_i((c as i64, .., ..)))?, ids, 0)?;
                         let dists = match dists.as_ref() {
-                            Some(d) => Some(fold_dists(d.f_i((c as i64, .., ..))?, ids, 0)?),
+                            Some(d) => Some(fold_dists(tch_result(d.f_i((c as i64, .., ..)))?, ids, 0)?),
                             None => None,
                         };
                         let mask_type = if mask.device().eq(&Cpu) {
@@ -189,7 +190,7 @@ where
 
                         Ok(Some((
                             //unsqueeze is to put back dimension for channel removed before folding
-                            DistsMask::new(mask.f_unsqueeze(0)?, dists.map(|t| t.f_unsqueeze(0)).transpose()?, mask_type)?,
+                            DistsMask::new(tch_result(mask.f_unsqueeze(0))?, tch_result(dists.map(|t| t.f_unsqueeze(0)).transpose())?, mask_type)?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
                                     if !acc.1.contains(d) {
@@ -543,7 +544,7 @@ where
         let s = start as i64;
         let l = len as i64;
         debug!("fold_mask: s={s} l={l:?}");
-        let chunk = full.f_narrow(dim as i64, s, l)?;
+        let chunk = tch_result(full.f_narrow(dim as i64, s, l))?;
         let reduced = reduce(chunk);
         out.push(reduced);
         Ok::<(), ThoError>(())
@@ -560,5 +561,5 @@ where
     }
     push_group(start, ids.len() - start)?;
 
-    Ok(Tensor::f_cat(&out, dim as i64)?)
+    Ok(tch_result(Tensor::f_cat(&out, dim as i64))?)
 }

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use std::fmt::Debug;
 use tch::{Kind, Tensor};
 use thoosa_shared::ThoError;
@@ -21,12 +22,12 @@ pub struct ThoTensorView<'a, D: Dims, Id: Named + Debug + Clone> {
 impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
     pub fn select(self, dim: i64, index: i64) -> Result<Self, ThoError> {
         Ok(Self {
-            t: self.t.f_select(dim, index)?,
+            t: tch_result(self.t.f_select(dim, index))?,
             ..self
         })
     }
     pub fn sum(self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self._owner.id().clone(), self.t.f_sum(k)?)
+        ThoTensor::new(self._owner.id().clone(), tch_result(self.t.f_sum(k))?)
     }
 }
 

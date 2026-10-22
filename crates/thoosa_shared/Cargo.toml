@@ -57,7 +57,6 @@ libc.workspace = true
 console-subscriber.workspace = true
 file-rotate.workspace = true
 rusqlite = { version = "0.37", optional = true }
-tch.workspace = true
 serde_json = { workspace = true, optional = true }
 serde_json5 = { workspace = true, optional = true }
 polars = { workspace = true, optional = true }

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 use std::collections::{HashMap, HashSet};
@@ -506,7 +507,7 @@ fn merged_motifs_tensor(input_id: &SynKey, motifs: &[&LoadedMotif]) -> Result<Th
     }
 
     let motifs_refs = motifs.iter().map(|motif| motif.data().t_ref()).collect::<Vec<_>>();
-    ThoTensor::new(input_id.clone(), Tensor::f_cat(motifs_refs.as_slice(), 0)?)
+    ThoTensor::new(input_id.clone(), tch_result(Tensor::f_cat(motifs_refs.as_slice(), 0))?)
 }
 
 fn merged_channels_tensor(
@@ -526,7 +527,7 @@ fn merged_channels_tensor(
     }
 
     let channels_motifs_slices_refs = channels_motifs_slices.iter().map(|slices| slices.t_ref()).collect::<Vec<_>>();
-    ThoTensor::new(input_id.clone(), Tensor::f_cat(channels_motifs_slices_refs.as_slice(), 1)?)
+    ThoTensor::new(input_id.clone(), tch_result(Tensor::f_cat(channels_motifs_slices_refs.as_slice(), 1))?)
 }
 
 fn calc_metrics(
@@ -554,9 +555,9 @@ fn calc_metrics(
         let mut metric_channels_values = Vec::with_capacity(channels as usize);
         for channel_idx in 0..channels as usize {
             let motif_slices = if is_flat_motif {
-                channels_motifs_slices.f_i((.., ..))?
+                tch_result(channels_motifs_slices.f_i((.., ..)))?
             } else {
-                channels_motifs_slices.f_get(channel_idx as i64)?
+                tch_result(channels_motifs_slices.f_get(channel_idx as i64))?
             };
             let value = metric_scalar_for_motif(input_id, &motif_slices, metric)?;
             let quantiles = match quantiles {
@@ -711,7 +712,7 @@ impl MotifStatsOutput {
     pub fn channels_motifs_dists(&self, metric: &Metrics) -> Result<ThoTensor<ChannelsMotifsDists, SynKey>, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
         let scalar_values = values.iter().map(|value| value.value()).collect::<Vec<_>>();
-        let t = Tensor::f_from_slice(scalar_values.as_slice())?.f_view([scalar_values.len() as i64, 1])?;
+        let t = tch_result(tch_result(Tensor::f_from_slice(scalar_values.as_slice()))?.f_view([scalar_values.len() as i64, 1]))?;
         ThoTensor::new(self.metric_values_id(metric), t)
     }
 }

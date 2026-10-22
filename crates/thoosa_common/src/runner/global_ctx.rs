@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use log::{debug, error, info};
 #[allow(unused_imports)]
@@ -1067,6 +1068,7 @@ impl MockGlobalCtx {
 
 #[cfg(test)]
 mod tests {
+    use crate::tch_error::tch_result;
     use crate as thoosa_common;
     use crate::dims::AnyDims;
     use crate::runner::common::cachable::{DevicesWrap, SelectRef};
@@ -1238,7 +1240,7 @@ mod tests {
         // ID. The real dump path must exclude only the requested cache's entry.
         let mut outputs = Vec::new();
         for (index, cache) in [first_cache, second_cache, named_cache].into_iter().enumerate() {
-            let output = Arc::new(DevicesWrap::wrap(ThoTensor::<AnyDims, SynKey>::new("same-output".into(), Tensor::f_from_slice(&[index as f32, 4.0])?)?));
+            let output = Arc::new(DevicesWrap::wrap(ThoTensor::<AnyDims, SynKey>::new("same-output".into(), tch_result(Tensor::f_from_slice(&[index as f32, 4.0]))?)?));
             let ready = future::ready(Ok(output.clone())).boxed().shared();
             ready.clone().await?;
             cache.insert("same-output".into(), ready.into());
@@ -1283,7 +1285,7 @@ mod tests {
         for (index, output) in outputs.iter().enumerate() {
             assert!(!output.is_on_device(1));
             let cpu = output.load_from_any_device_(0).await?;
-            assert_eq!(cpu.t_ref().f_double_value(&[0])?, index as f64);
+            assert_eq!(tch_result(cpu.t_ref().f_double_value(&[0]))?, index as f64);
         }
         runtime.remove_cache(named_handle.key());
         Ok(())

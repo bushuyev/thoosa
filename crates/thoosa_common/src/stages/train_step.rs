@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt};
 use futures_util::future::BoxFuture;
@@ -225,7 +226,7 @@ where
                     let keys = info.tensors.iter().map(|tensor| tensor.tensor_key.to_tensor_key()).collect::<Vec<_>>();
                     let sources = keys.iter().map(|key| module.state_tensor(key)).collect::<Result<Vec<_>, _>>()?;
                     let copied = if device == 0 {
-                        sources.into_iter().map(|source| Ok(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true)?)).collect::<Result<Vec<_>, ThoError>>()?
+                        sources.into_iter().map(|source| Ok(tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)).collect::<Result<Vec<_>, ThoError>>()?
                     } else {
                         GlobalCtx::global().cuda_actor(device).copy_batch_to_cpu(sources).await?
                     };
@@ -247,7 +248,7 @@ where
                     module.reset_state(checkpoint.info()?)?;
                     *stage.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
                     for (key, tensor) in &checkpoint.tensors {
-                        let source = tensor.as_ref().f_alias()?;
+                        let source = tch_result(tensor.as_ref().f_alias())?;
                         let restored = copy_state_tensor(source, device).await?;
                         module.set_state_tensor(key, restored, device)?;
                     }
@@ -355,11 +356,11 @@ where
                 let predicted = module.module().tho_forward(&x, lengths.as_mut(), train)?;
                 let loss = (self.loss_fn)(&predicted.as_ref(), &chunk.expected_y_ref()?.as_ref())?;
                 let weight = (end - start) as f64 / batch_len as f64;
-                weighted_loss += loss.f_double_value(&[])? * weight;
+                weighted_loss += tch_result(loss.f_double_value(&[]))? * weight;
                 if train {
                     // Loss is a mean over equally weighted samples. Backward accumulates;
                     // only training_transaction may update the optimizer, after every chunk.
-                    loss.f_mul_scalar(weight)?.f_backward()?;
+                    tch_result(tch_result(loss.f_mul_scalar(weight))?.f_backward())?;
                 }
             }
             Ok(TrainStepOutput::new(weighted_loss as f32))
@@ -501,7 +502,7 @@ fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) 
     let selected_len = (range.end - range.start) as i64;
 
     match &tensor.inner {
-        ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), t.lock().f_narrow(0, range.start as i64, selected_len)?),
+        ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), tch_result(t.lock().f_narrow(0, range.start as i64, selected_len))?),
         ThoTensorInner::Ref { key, size, kind, selector } => {
             let mut ranges = match selector {
                 Some(selector) => selector.tensor_ranges()?,

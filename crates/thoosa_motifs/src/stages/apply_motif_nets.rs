@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 
@@ -185,7 +186,7 @@ impl ApplyMotifNetSplitsContext {
             motif_width,
             slice_step,
             output_id,
-            output: Tensor::f_zeros([output_size], options)?,
+            output: tch_result(Tensor::f_zeros([output_size], options))?,
             added_partial_output_len: 0,
         })
     }
@@ -656,7 +657,7 @@ where
         debug!("StackAppliedMotifNets::do_run: lengths={lengths:?}");
         let max_len = lengths.iter().copied().max().unwrap_or(0);
         let options = tensors.first().map(|tensor| (tensor.as_ref().kind(), tensor.as_ref().t_ref().device())).unwrap_or((Float, ThoDevice::from(input.device_idx).into()));
-        let output = Tensor::f_zeros([tensors.len() as i64, max_len], options)?;
+        let output = tch_result(Tensor::f_zeros([tensors.len() as i64, max_len], options))?;
         for (row, tensor) in tensors.iter().enumerate() {
             // Only the new aggregate is written; cached per-net probabilities remain reusable.
             let source = tensor.as_ref().t_ref();
@@ -667,7 +668,7 @@ where
                 stretched = stretch(&source, max_len as usize, 0)?;
                 &stretched
             };
-            output.f_get(row as i64)?.f_copy_(source)?;
+            tch_result(tch_result(output.f_get(row as i64))?.f_copy_(source))?;
         }
         Ok(DataWithExtra::new(ThoTensor::new(input.id.clone(), output)?, lengths).into())
     }
@@ -1248,7 +1249,7 @@ pub fn apply_motif_net_forward(
 
     debug!("SyncApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.t_ref().size());
     trace!("SyncApplyMotifNet::do_run: batch.t=\n{}", input.t_ref());
-    let t = input.t_ref().f_i((c, ..))?;
+    let t = tch_result(input.t_ref().f_i((c, ..)))?;
     let t = if t.size()[0] >= motif_width {
         t
     } else {
@@ -1256,7 +1257,7 @@ pub fn apply_motif_net_forward(
         pad_to(&t, &[motif_width], 0.0)?
     };
 
-    let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
+    let slices = tch_result(t.f_unfold(0, motif_width, slice_step as i64))?;
     debug!("SyncApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
     // TODO stft config
@@ -1268,13 +1269,13 @@ pub fn apply_motif_net_forward(
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("SyncApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
-    let out_t = out.as_ref().f_view([-1])?; //.f_sigmoid()?;
+    let out_t = tch_result(out.as_ref().f_view([-1]))?; //.f_sigmoid()?;
 
     debug!("SyncApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
     trace!("SyncApplyMotifNet::do_run: out_t=\n{out_t}");
 
-    debug_plot!(&t.f_view((1, -1))?, "apply_motif_net_run_input_{input_id}")?;
-    debug_plot!(&out_t.f_view((1, -1))?, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
+    debug_plot!(&tch_result(t.f_view((1, -1)))?, "apply_motif_net_run_input_{input_id}")?;
+    debug_plot!(&tch_result(out_t.f_view((1, -1)))?, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
 
     ThoTensor::new(out_id, out_t.totype(Float))
 }
@@ -1479,6 +1480,7 @@ pub fn sum_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Int
 
 #[cfg(test)]
 pub mod tests {
+    use thoosa_common::tch_error::tch_result;
     use std::collections::HashMap;
     use crate::dims::MotifProbability;
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore};
@@ -1613,9 +1615,9 @@ pub mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 2; //channel 1 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?)?);
-        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Triangle).f_mul_scalar(0.2)?)?);
-        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Sin).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_result(tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Pulse).f_mul_scalar(0.2))?)?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_result(tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Triangle).f_mul_scalar(0.2))?)?);
+        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_result(tch_test_utils::motifs_tensor_fixed(motif_len, 3, TestSignalKind::Sin).f_mul_scalar(0.2))?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
@@ -1784,8 +1786,8 @@ pub mod tests {
 
         let motif_0_0_id = 0;
         let motif_0_1_id = 1;
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?)?);
-        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(60, 3, TestSignalKind::Triangle).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_0", "motif_id")]), tch_result(tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2))?)?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_1", "motif_id")]), tch_result(tch_test_utils::motifs_tensor_fixed(60, 3, TestSignalKind::Triangle).f_mul_scalar(0.2))?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
@@ -1856,7 +1858,7 @@ pub mod tests {
 
         let input = ThoTensor::new(
             SynKey::new([mono_key!("mixed_motif_input", "test_batch")]),
-            Tensor::f_zeros([1, input_len as i64], FLOAT_CPU)?,
+            tch_result(Tensor::f_zeros([1, input_len as i64], FLOAT_CPU))?,
         )?;
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(input)),
@@ -1894,7 +1896,7 @@ pub mod tests {
         let train_motifs_run_config_id: RunConfigId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_result(tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2))?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
@@ -2006,7 +2008,7 @@ pub mod tests {
 
     #[test]
     fn test_test_net() -> Result<(), ThoError> {
-        let motif_t = tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2)?;
+        let motif_t = tch_result(tch_test_utils::motifs_tensor_fixed(100, 3, TestSignalKind::Pulse).f_mul_scalar(0.2))?;
         let channels_patterns = vec![vec![motif_t.i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(2000, channels_patterns.as_slice(), 200, 1)?;
 

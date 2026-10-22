@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use tch::{Device, Kind, Tensor, nn::VarStore};
@@ -43,7 +44,7 @@ impl StateTensors {
         let slot = self.0.get(key).ok_or_else(|| ThoError::NotFound(Some(key.to_owned())))?;
         let tensor = slot.tensor.as_ref().ok_or_else(|| ThoError::new("model state is offloaded or incompletely restored"))?;
         // The transfer request owns this alias until the device copy completes.
-        Ok(tensor.as_ref().f_alias()?)
+        Ok(tch_result(tensor.as_ref().f_alias())?)
     }
 
     pub(crate) fn set(&mut self, key: &str, tensor: Tensor, device: usize) -> Result<(), ThoError> {
@@ -91,7 +92,7 @@ impl VarStoreState {
         for (name, tensor) in &vars.named_variables {
             let trainable = vars.trainable_variables.iter().enumerate().find_map(|(order, var)| var.tensor.is_set_to(tensor).then_some((order, var.group)));
             variables.push(VariableState { name: name.clone(), trainable, requires_grad: tensor.requires_grad() });
-            tensors.insert(format!("var/{name}"), tensor.f_detach()?)?;
+            tensors.insert(format!("var/{name}"), tch_result(tensor.f_detach())?)?;
         }
         // Optimizer snapshots address parameters by group and registration
         // order, not by the arbitrary iteration order of named_variables.
@@ -109,7 +110,7 @@ impl VarStoreState {
             let mut path = vs.root().set_group(group);
             for component in parent.split('.').filter(|s| !s.is_empty()) { path = path.sub(component); }
             let registered = path.add(name, tensor, trainable);
-            let _ = registered.f_set_requires_grad(var.requires_grad)?;
+            let _ = tch_result(registered.f_set_requires_grad(var.requires_grad))?;
         }
         Ok(vs)
     }
@@ -125,10 +126,10 @@ mod tests {
         original.set_kind(Kind::Double);
         // Registration order deliberately differs from name order, with a
         // frozen trainable parameter and a non-trainable integer buffer.
-        let frozen = original.root().sub("net").set_group(2).add("z", Tensor::f_ones([2], (Kind::Double, Device::Cpu))?, true);
-        let _ = frozen.f_set_requires_grad(false)?;
-        let _ = original.root().set_group(0).add("a", Tensor::f_ones([1], (Kind::Float, Device::Cpu))?, true);
-        let _ = original.root().add("counter", Tensor::f_from_slice(&[7i64])?, false);
+        let frozen = original.root().sub("net").set_group(2).add("z", tch_result(Tensor::f_ones([2], (Kind::Double, Device::Cpu)))?, true);
+        let _ = tch_result(frozen.f_set_requires_grad(false))?;
+        let _ = original.root().set_group(0).add("a", tch_result(Tensor::f_ones([1], (Kind::Float, Device::Cpu)))?, true);
+        let _ = original.root().add("counter", tch_result(Tensor::f_from_slice(&[7i64]))?, false);
         let mut tensors = StateTensors::default();
         let metadata = VarStoreState::capture(&original, &mut tensors)?;
         let cpu_copy = tensors.0.keys().map(|key| Ok((key.clone(), tensors.get(key)?))).collect::<Result<Vec<_>, ThoError>>()?;
@@ -147,7 +148,7 @@ mod tests {
         assert!(vars.named_variables["a"].requires_grad());
         assert_eq!(vars.named_variables["a"].kind(), Kind::Float);
         assert_eq!(vars.named_variables["counter"].kind(), Kind::Int64);
-        assert_eq!(vars.named_variables["counter"].f_int64_value(&[0])?, 7);
+        assert_eq!(tch_result(vars.named_variables["counter"].f_int64_value(&[0]))?, 7);
         Ok(())
     }
 }

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
@@ -462,11 +463,11 @@ pub fn init_loader(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>)
         move |key, _| {
             ThoTensor::new(
                 SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
-                Tensor::load(tensors_path.join(format!(
+                tch_result(Tensor::load(tensors_path.join(format!(
                     "{}_{}.pt",
                     key.import_id(),
                     key.file_stem()
-                )))?,
+                ))))?,
             )
         },
         ThoDevice::from(Cpu), //it's always cpu

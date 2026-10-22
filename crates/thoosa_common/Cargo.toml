@@ -13,6 +13,7 @@ path = "src/lib.rs"
 "mock_global_ctx" = []
 
 [dependencies]
+ctor.workspace = true
 cust = "0.3.2"
 rand.workspace = true
 log.workspace = true
@@ -83,7 +84,6 @@ interprocess.workspace = true
 anyhow.workspace = true
 [dev-dependencies]
 static_assertions = "1.1"
-ctor.workspace = true
 
 [build-dependencies]
 chrono.workspace = true

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use std::backtrace::Backtrace;
 use crate::dims::{AnyDims, ChannelsData, Dims};
 use crate::runner::common::cachable::ThoDataRef;
@@ -94,7 +95,7 @@ where
     pub fn to_kind(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
         Ok(ThoTensor {
             id: self.id.clone(),
-            inner: ThoTensorInner::Val { t: ReentrantMutex::new(self.t_ref().f_to_kind(k)?) }, //TODO ref
+            inner: ThoTensorInner::Val { t: ReentrantMutex::new(tch_result(self.t_ref().f_to_kind(k))?) }, //TODO ref
             pd: PhantomData,
         })
     }
@@ -403,7 +404,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             tensor
         } else {
             warn!("got a non-contiguous ThoTensor: id={id:?}");
-            tensor.f_contiguous()?
+            tch_result(tensor.f_contiguous())?
         };
 
         Ok(Self {
@@ -461,7 +462,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Result<Self, ThoError> {
         Ok(Self {
             id,
-            inner: ThoTensorInner::Val { t: ReentrantMutex::new(Tensor::f_zeros(size, options)?) },
+            inner: ThoTensorInner::Val { t: ReentrantMutex::new(tch_result(Tensor::f_zeros(size, options))?) },
             pd: PhantomData,
         })
     }
@@ -481,8 +482,8 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
     pub fn add(&self, rhs: &ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         // Do not acquire two shared tensor locks at once (including when self == rhs).
-        let rhs = rhs.t_ref().f_alias()?;
-        ThoTensor::new(self.id.clone(), self.t_ref().f_add(&rhs)?)
+        let rhs = tch_result(rhs.t_ref().f_alias())?;
+        ThoTensor::new(self.id.clone(), tch_result(self.t_ref().f_add(&rhs))?)
     }
 
     pub fn id(&self) -> &Id {
@@ -607,10 +608,10 @@ where
                 let src = {
                     let src = src.lock();
                     if src.is_contiguous() {
-                        src.f_alias()?
+                        tch_result(src.f_alias())?
                     } else {
                         warn!("CopyToDevice for ThoTensor: tensor was not contiguous, self.id={:?}", self.id);
-                        src.f_contiguous()?
+                        tch_result(src.f_contiguous())?
                     }
                 };
 
@@ -645,7 +646,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     }
 
     pub fn add_(&mut self, rhs: &ThoTensor<D, Id>) -> Result<(), ThoError> {
-        let _ = self.t.f_add_(&rhs.t_ref())?;
+        let _ = tch_result(self.t.f_add_(&rhs.t_ref()))?;
 
         Ok(())
     }
@@ -752,10 +753,10 @@ mod thread_safety_tests {
         let model = ThoModuleWithStore::<AnyDims, AnyDims>::new(SynKey::new([]), Box::new(module));
         std::thread::scope(|scope| -> Result<(), ThoError> {
             let handles = (0..4).map(|_| scope.spawn(|| -> Result<(), ThoError> {
-                let input = ThoTensor::<AnyDims, DebugId>::new(debug_id!("model lock test"), Tensor::f_from_slice(&[2f32])?)?;
+                let input = ThoTensor::<AnyDims, DebugId>::new(debug_id!("model lock test"), tch_result(Tensor::f_from_slice(&[2f32]))?)?;
                 for _ in 0..10 {
                     let output = model.tho_forward(&input, None, false)?;
-                    assert_eq!(output.t_ref().f_double_value(&[0])?, 3.);
+                    assert_eq!(tch_result(output.t_ref().f_double_value(&[0]))?, 3.);
                 }
                 Ok(())
             })).collect::<Vec<_>>();
@@ -768,11 +769,11 @@ mod thread_safety_tests {
 
     #[test]
     fn test_tensor_guard_excludes_other_threads_and_allows_nested_reads() -> Result<(), ThoError> {
-        let tensor = ThoTensor::<AnyDims, ()>::new((), Tensor::f_from_slice(&[2f32, 3.])?)?;
+        let tensor = ThoTensor::<AnyDims, ()>::new((), tch_result(Tensor::f_from_slice(&[2f32, 3.]))?)?;
         std::thread::scope(|scope| -> Result<(), ThoError> {
             let guard = tensor.t_ref();
             // Repeated reads of the same handle on one thread must not deadlock.
-            assert_eq!(tensor.t_ref().f_double_value(&[0])?, 2.);
+            assert_eq!(tch_result(tensor.t_ref().f_double_value(&[0]))?, 2.);
             let tensor_ref = &tensor;
             scope.spawn(move || {
                 let ThoTensorInner::Val { t } = &tensor_ref.inner else { unreachable!() };
@@ -780,7 +781,7 @@ mod thread_safety_tests {
             }).join().expect("tensor access thread panicked");
             drop(guard);
             scope.spawn(|| -> Result<(), ThoError> {
-                assert_eq!(tensor.t_ref().f_double_value(&[1])?, 3.);
+                assert_eq!(tch_result(tensor.t_ref().f_double_value(&[1]))?, 3.);
                 Ok(())
             }).join().expect("tensor access thread panicked")?;
             Ok(())
@@ -789,16 +790,16 @@ mod thread_safety_tests {
 
     #[test]
     fn test_shared_tensor_addition_in_both_orders() -> Result<(), ThoError> {
-        let a = ThoTensor::<AnyDims, ()>::new((), Tensor::f_from_slice(&[2f32])?)?;
-        let b = ThoTensor::<AnyDims, ()>::new((), Tensor::f_from_slice(&[3f32])?)?;
+        let a = ThoTensor::<AnyDims, ()>::new((), tch_result(Tensor::f_from_slice(&[2f32]))?)?;
+        let b = ThoTensor::<AnyDims, ()>::new((), tch_result(Tensor::f_from_slice(&[3f32]))?)?;
         // Concurrent callers must not hold A then B and B then A simultaneously.
         std::thread::scope(|scope| -> Result<(), ThoError> {
             let forward = scope.spawn(|| -> Result<(), ThoError> {
-                for _ in 0..100 { assert_eq!(a.add(&b)?.t_ref().f_double_value(&[0])?, 5.); }
+                for _ in 0..100 { assert_eq!(tch_result(a.add(&b)?.t_ref().f_double_value(&[0]))?, 5.); }
                 Ok(())
             });
             let reverse = scope.spawn(|| -> Result<(), ThoError> {
-                for _ in 0..100 { assert_eq!(b.add(&a)?.t_ref().f_double_value(&[0])?, 5.); }
+                for _ in 0..100 { assert_eq!(tch_result(b.add(&a)?.t_ref().f_double_value(&[0]))?, 5.); }
                 Ok(())
             });
             forward.join().expect("tensor addition thread panicked")?;

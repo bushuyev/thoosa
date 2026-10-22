@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::motifs_store::MotifsStore;
@@ -450,21 +451,21 @@ where
         if input.outputs.is_empty() {
             return Err(ThoError::new("SyncLogitsBatch: empty outputs"));
         }
-        let x_values = input.outputs.iter()
+        let x_values = tch_result(input.outputs.iter()
             .map(|output| output.as_ref().t_ref().f_flatten(0, 1))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>())?;
 
-        let x = Tensor::f_stack(x_values.as_slice(), 0)?.f_squeeze()?;
+        let x = tch_result(tch_result(Tensor::f_stack(x_values.as_slice(), 0))?.f_squeeze())?;
         let device = input.outputs[0].as_ref().t_ref().device();
 
         let y_values = input.labels.iter().map(|labels| {
             if labels.len() != input.labels_len {
                 return Err(ThoError::new("SyncLogitsBatch: bad label size"));
             }
-            Ok(Tensor::f_from_slice(labels.as_slice())?.f_to_device(device)?)
+            Ok(tch_result(tch_result(Tensor::f_from_slice(labels.as_slice()))?.f_to_device(device))?)
         }).collect::<Result<Vec<_>, ThoError>>()?;
 
-        let y = Tensor::f_stack(y_values.as_slice(), 0)?;
+        let y = tch_result(Tensor::f_stack(y_values.as_slice(), 0))?;
 
         trace!("SyncLogitsBatch::do_run: x=\n{x} \ny=\n{y}");
 
@@ -773,6 +774,7 @@ pub fn train_final_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::dims::{ChannelsMotifsData, LabelProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
     use crate::stages::apply_motif_nets::{motif_sum_net_, motif_test_net_};
@@ -856,8 +858,8 @@ mod tests {
         let device = Device::Cpu;
         let train_group = "train_group";
         let valid_group = "valid_group";
-        let motif_t_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0", "motif_id")]), Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device))?)?);
-        let motif_t_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1", "motif_id")]), Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device))?)?);
+        let motif_t_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0", "motif_id")]), tch_result(Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device)))?)?);
+        let motif_t_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1", "motif_id")]), tch_result(Tensor::f_ones(&[1, motif_width as i64], (Kind::Float, device)))?)?);
 
         let (motif_0_params, motif_0_net) = motif_sum_net_(device, Arc::clone(&motif_t_0), step, motif_width);
         let (motif_1_params, motif_1_net) = motif_sum_net_(device, Arc::clone(&motif_t_1), step, motif_width);
@@ -893,9 +895,9 @@ mod tests {
         let mut resources_map = HashMap::new();
         for (i, r) in resources_train.iter().chain(resources_valid.iter()).enumerate() {
             if i % 2 == 0 {
-                resources_map.insert(r.clone(), Tensor::f_zeros(&[1, 32], (Kind::Float, device))?);
+                resources_map.insert(r.clone(), tch_result(Tensor::f_zeros(&[1, 32], (Kind::Float, device)))?);
             } else {
-                resources_map.insert(r.clone(), Tensor::f_ones(&[1, 32], (Kind::Float, device))?);
+                resources_map.insert(r.clone(), tch_result(Tensor::f_ones(&[1, 32], (Kind::Float, device)))?);
             }
 
         }
@@ -1014,7 +1016,7 @@ mod tests {
         let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
         // Exercise the same checkpoint handoff used by local and IPC training.
         let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
-        VarStore::new(Cpu).save(&checkpoint_path)?;
+        tch_result(VarStore::new(Cpu).save(&checkpoint_path))?;
         let mut result = TrainFinalNetsRunConfigResult::new(
             Some(&vec![label_run_config_id_0, label_run_config_id_1]),
             0.125,
