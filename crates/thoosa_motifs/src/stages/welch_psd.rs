@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -79,7 +80,7 @@ impl LocalSelect<SynKey, WelchChannelsSelector> for ThoTensor<WelchInputChannels
         let size: MonoMetrics<0, 2> = t.size().try_into()?;
         let ranges = MonoMetrics::<0, 2>::map_to_ranges(&selector.0.start, &selector.0.end);
         debug!("WelchChannelsSelector::subview: ranges={ranges:?} size={size:?}");
-        let sub_t = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
+        let sub_t = tch_result(t.f_i((ranges[0].clone(), ranges[1].clone())))?;
         ThoTensor::new(id.clone(), sub_t)
     }
 }
@@ -214,15 +215,15 @@ where
 
         let mut psd_by_channel = Vec::with_capacity(channels as usize);
         for channel in 0..channels {
-            let x = t.f_i((channel, ..))?;
+            let x = tch_result(t.f_i((channel, ..)))?;
             let psd = welch_psd_1d(&x, self.sample_rate, self.nperseg, self.noverlap)?;
             psd_by_channel.push(psd);
         }
 
         let out = if psd_by_channel.is_empty() {
-            Tensor::f_empty([0, welch_freq_bins(self.nperseg)], (Kind::Float, t.device()))?
+            tch_result(Tensor::f_empty([0, welch_freq_bins(self.nperseg)], (Kind::Float, t.device())))?
         } else {
-            Tensor::f_stack(psd_by_channel.as_slice(), 0)?
+            tch_result(Tensor::f_stack(psd_by_channel.as_slice(), 0))?
         };
 
         ThoTensor::new(out_id, out)
@@ -381,7 +382,7 @@ where
 
             psd_sum = Some(match psd_sum {
                 None => resource_psd_t,
-                Some(acc) => acc.f_add(&resource_psd_t)?,
+                Some(acc) => tch_result(acc.f_add(&resource_psd_t))?,
             });
             processed_resources += 1;
 
@@ -391,7 +392,7 @@ where
         }
 
         let psd_sum = psd_sum.ok_or_else(|| ThoError::new("WelchPSD: no PSD values computed"))?;
-        let psd_mean = psd_sum.f_div_scalar(processed_resources as f64)?;
+        let psd_mean = tch_result(psd_sum.f_div_scalar(processed_resources as f64))?;
         let out = ThoTensor::new(self.out_id(&input_id), psd_mean)?;
 
         Ok(Arc::new(DevicesWrap::wrap(out)))
@@ -420,11 +421,11 @@ fn hann_window_periodic(length: i64, device: Device) -> Result<Tensor, ThoError>
         return Err(ThoError::new(format!("hann_window_periodic length must be > 1, got {length}")));
     }
 
-    let n = Tensor::f_arange(length, (Kind::Float, device))?;
+    let n = tch_result(Tensor::f_arange(length, (Kind::Float, device)))?;
     let factor = 2.0 * std::f64::consts::PI / length as f64;
-    let phase = n.f_mul_scalar(factor)?;
-    let cos = phase.f_cos()?;
-    Ok(cos.f_neg()?.f_add_scalar(1.0)?.f_mul_scalar(0.5)?)
+    let phase = tch_result(n.f_mul_scalar(factor))?;
+    let cos = tch_result(phase.f_cos())?;
+    Ok(tch_result(tch_result(tch_result(cos.f_neg())?.f_add_scalar(1.0))?.f_mul_scalar(0.5))?)
 }
 
 pub fn welch_psd_1d(x: &Tensor, fs: f64, nperseg: i64, noverlap: i64) -> Result<Tensor, ThoError> {
@@ -436,8 +437,8 @@ pub fn welch_psd_1d(x: &Tensor, fs: f64, nperseg: i64, noverlap: i64) -> Result<
         return Err(ThoError::new(format!("WelchPSD: expected 1D tensor, got shape {:?}", x.size())));
     }
 
-    let x = x.f_to_kind(Kind::Float)?;
-    let x = x.f_subtract(&x.f_mean(Kind::Float)?)?;
+    let x = tch_result(x.f_to_kind(Kind::Float))?;
+    let x = tch_result(x.f_subtract(&tch_result(x.f_mean(Kind::Float))?))?;
     let t = x.size()[0];
     if t < nperseg {
         return Err(ThoError::new(format!("WelchPSD: signal shorter than nperseg; len={t} nperseg={nperseg}")));
@@ -445,25 +446,26 @@ pub fn welch_psd_1d(x: &Tensor, fs: f64, nperseg: i64, noverlap: i64) -> Result<
 
     let step = nperseg - noverlap;
     let win = hann_window_periodic(nperseg, x.device())?;
-    let win_power = win.f_pow_tensor_scalar(2)?.f_sum(Kind::Float)?;
+    let win_power = tch_result(tch_result(win.f_pow_tensor_scalar(2))?.f_sum(Kind::Float))?;
 
-    let segs = x.f_unfold(0, nperseg, step)?;
+    let segs = tch_result(x.f_unfold(0, nperseg, step))?;
     if segs.size().first().copied().unwrap_or(0) == 0 {
         return Err(ThoError::new("WelchPSD: no segments produced"));
     }
-    let segs = segs.f_mul(&win)?;
+    let segs = tch_result(segs.f_mul(&win))?;
 
-    let x_fft = segs.f_fft_rfft(Some(nperseg), 1, "forward")?;
-    let periodograms = x_fft
-        .f_abs()?
-        .f_pow_tensor_scalar(2)?
-        .f_div(&win_power.f_mul_scalar(fs)?)?;
+    let x_fft = tch_result(segs.f_fft_rfft(Some(nperseg), 1, "forward"))?;
+    let periodograms = tch_result(tch_result(tch_result(x_fft
+        .f_abs())?
+        .f_pow_tensor_scalar(2))?
+        .f_div(&tch_result(win_power.f_mul_scalar(fs))?))?;
 
-    Ok(periodograms.f_mean_dim(0, false, None)?)
+    Ok(tch_result(periodograms.f_mean_dim(0, false, None))?)
 }
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use super::welch_psd_1d;
     use tch::Kind::Float;
     use tch::Tensor;
@@ -474,13 +476,13 @@ mod tests {
         let fs = 1000.0f64;
         let freq = 50.0f64;
         let n = 2000i64;
-        let idx = Tensor::f_arange(n, (Float, tch::Device::Cpu))?;
-        let phase = idx.f_mul_scalar(2.0 * std::f64::consts::PI * freq / fs)?;
-        let x = phase.f_sin()?;
+        let idx = tch_result(Tensor::f_arange(n, (Float, tch::Device::Cpu)))?;
+        let phase = tch_result(idx.f_mul_scalar(2.0 * std::f64::consts::PI * freq / fs))?;
+        let x = tch_result(phase.f_sin())?;
 
         let nperseg = 512i64;
         let psd = welch_psd_1d(&x, fs, nperseg, 256)?;
-        let peak_idx = psd.f_argmax(0, false)?.int64_value(&[]);
+        let peak_idx = tch_result(psd.f_argmax(0, false))?.int64_value(&[]);
         let peak_hz = peak_idx as f64 * fs / nperseg as f64;
 
         assert!((peak_hz - freq).abs() <= fs / nperseg as f64 * 2.0, "peak_hz={peak_hz} freq={freq}");

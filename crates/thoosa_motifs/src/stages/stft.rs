@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{MotifSlices, Spectorgram};
 use cached_derive::Cached;
@@ -178,7 +179,7 @@ where
         debug!("SyncStft::build_spectrogram: input_size={input_size:?} run_config={:?}", self.run_config);
 
         Ok(
-            input.f_totype(Float)?
+            tch_result(tch_result(tch_result(input.f_totype(Float))?
             .f_stft(
                 self.run_config.n_fft,
                 self.run_config.hop_length,
@@ -188,8 +189,8 @@ where
                 self.run_config.onesided,
                 true,
                 self.run_config.align_to_window,
-            )?
-            .f_abs()?
+            ))?
+            .f_abs())?
         )
     }
 }
@@ -251,6 +252,7 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use tch::{Device, Kind, Tensor};
     use thoosa_common::nets::common_nets::StftRunConfig;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
@@ -261,7 +263,7 @@ mod tests {
     #[test]
     fn test_sync_stft_build_spectrogram_stacks_batched_motifs() -> Result<(), ThoError> {
         let run_config = StftRunConfig::new(4, Some(2), Some(4), false, true, true);
-        let input = Tensor::from_slice(&[0.0f32, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0]).f_view([2, 8])?;
+        let input = tch_result(Tensor::from_slice(&[0.0f32, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0]).f_view([2, 8]))?;
         let stage = SyncStft::<RunCtxImpl>::new(stft_stage_id(&run_config), run_config)?;
 
         let output = stage.build_spectrogram(&input)?;

@@ -32,3 +32,5 @@ pub mod commands;
 pub mod progress_socket;
 
 mod version;
+
+pub mod tch_error;

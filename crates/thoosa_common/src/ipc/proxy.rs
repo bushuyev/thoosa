@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
@@ -441,7 +442,7 @@ where
                 // Keep the CPU allocation until every upload and reconstruction
                 // succeeds. OOM recovery can then discard partial GPU state and retry.
                 // Release the synchronous tensor guard before awaiting the upload.
-                let upload = ThoTensor::new((), tensor.as_ref().f_alias()?)?;
+                let upload = ThoTensor::new((), tch_result(tensor.as_ref().f_alias())?)?;
                 actor.copy_stage_state(upload, tho_device_idx.into(), Some(key)).await?;
             }
             *guard = None;

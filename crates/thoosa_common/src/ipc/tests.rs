@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::ipc::wraps::SyncStageIpcWrapper;
@@ -173,6 +174,7 @@ fn get_test_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::tch_error::tch_result;
     use anyhow::Context as _;
     use super::run_ipc_test;
     use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
@@ -270,10 +272,10 @@ mod tests {
         }
 
         fn consume_input(&self, input: &ThoTensor<LoadedTensor, SynKey>) -> Result<ThoTensor<LoadedTensor, SynKey>, ThoError> {
-            if input.t_ref().f_double_value(&[0, 0])? < 0.0 {
+            if tch_result(input.t_ref().f_double_value(&[0, 0]))? < 0.0 {
                 return Err(ThoError::new("consume test failure"));
             }
-            ThoTensor::new(self.out_id(input.id()), input.t_ref().f_mul_scalar(2.0)?)
+            ThoTensor::new(self.out_id(input.id()), tch_result(input.t_ref().f_mul_scalar(2.0))?)
         }
     }
 
@@ -371,7 +373,7 @@ mod tests {
                 let actor = GlobalCtx::global().cuda_actor(1);
                 let mut inputs = Vec::new();
                 for _ in 0..12 {
-                    let source: ThoTensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?.into();
+                    let source: ThoTensor = tch_result(tch_result(Tensor::f_from_slice(&[1.0f32, 2.0]))?.f_view([1, 2]))?.into();
                     let reference = actor.copy(source, 1usize.into()).await?;
                     inputs.push(ThoTensor::<LoadedTensor, SynKey>::new_ref(mono_key!("dispatch", "input").into(), reference.ref_key().unwrap(), reference.size(), reference.kind(), None, reference.ref_worker_id().unwrap()));
                 }
@@ -402,8 +404,8 @@ mod tests {
                                 }
                             }, None).await?;
                             let output = actor.copy(output.strip_types(), 0usize.into()).await?;
-                            assert_eq!(output.t_ref().f_double_value(&[0, 0])?, 2.0);
-                            assert_eq!(output.t_ref().f_double_value(&[0, 1])?, 4.0);
+                            assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 2.0);
+                            assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 1]))?, 4.0);
                             Ok::<_, ThoError>(())
                         });
                     }
@@ -433,7 +435,7 @@ mod tests {
                 let stage = Arc::new(new_sync_consume_test_stage(1).await?);
                 let oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
 
-                let input_tensor:ThoTensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?.into();
+                let input_tensor:ThoTensor = tch_result(tch_result(Tensor::f_from_slice(&[1.0f32, 2.0]))?.f_view([1, 2]))?.into();
                 let input_ref = cuda_actor.copy(input_tensor.shallow_clone(), ThoDevice::from(1)).await?;
                 let input_worker_id = input_ref.ref_worker_id().unwrap();
                 let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected worker input ref"))?;
@@ -445,12 +447,12 @@ mod tests {
                 let new_ref = ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, output_worker_id);
                 let output_cpu = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
 
-                assert!(output_cpu.t_ref().f_allclose(&Tensor::f_from_slice(&[2.0f32, 4.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
+                assert!(tch_result(output_cpu.t_ref().f_allclose(&tch_result(tch_result(Tensor::f_from_slice(&[2.0f32, 4.0]))?.f_view([1, 2]))?, 0.0, 0.0, false))?);
 
                 let consumed_input = cuda_actor.copy(ThoTensor::new_ref((), input_key, vec![1, 2], Float, None, input_worker_id), ThoDevice::from(0)).await;
                 assert!(consumed_input.is_err(), "successful consume must remove the worker input tensor");
 
-                let failed_tensor:ThoTensor = Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?.into();
+                let failed_tensor:ThoTensor = tch_result(tch_result(Tensor::f_from_slice(&[-1.0f32, 2.0]))?.f_view([1, 2]))?.into();
                 let failed_ref = cuda_actor.copy(failed_tensor, ThoDevice::from(1)).await?;
                 let failed_worker_id = failed_ref.ref_worker_id().unwrap();
                 let failed_key = failed_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected failed worker input ref"))?;
@@ -460,7 +462,7 @@ mod tests {
                 let new_ref = ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, failed_worker_id);
                 let preserved_input = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
                 debug!("preserved_input=\n{}", preserved_input.t_ref());
-                assert!(preserved_input.t_ref().f_allclose(&Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
+                assert!(tch_result(preserved_input.t_ref().f_allclose(&tch_result(tch_result(Tensor::f_from_slice(&[-1.0f32, 2.0]))?.f_view([1, 2]))?, 0.0, 0.0, false))?);
 
                 Ok(())
             },

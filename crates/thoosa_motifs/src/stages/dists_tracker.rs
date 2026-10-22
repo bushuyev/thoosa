@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use crate::fs_store::FileMotifTrackerStore;
 use crate::motif_tracker_store::{SlicesMatch, SqlMotifTrackerStore};
@@ -530,7 +531,7 @@ impl DistsMask {
                 let t = if t.is_contiguous() {
                     t
                 } else {
-                    t.f_contiguous()?
+                    tch_result(t.f_contiguous())?
                 };
                 let device = ThoDevice::from(t.device());
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying local tensor device={device:?}");
@@ -607,24 +608,24 @@ impl DistsMask {
                 if let Some(dists) = dists.as_ref() {
                     assert!(dists.device().ne(&Cpu), "DistsMask::new: MaskIndexes expects non-CPU dists");
                 }
-                let indices = mask.f_nonzero()?;
+                let indices = tch_result(mask.f_nonzero())?;
                 debug!("DistsMask::new, MaskIndexes: indices={indices}");
 
-                let indices = indices.f_to_kind(Kind::Int64)?;
-                let weights = Tensor::f_from_slice(&[
+                let indices = tch_result(indices.f_to_kind(Kind::Int64))?;
+                let weights = tch_result(tch_result(tch_result(Tensor::f_from_slice(&[
                     mask_size[1].saturating_mul(mask_size[2]),
                     mask_size[2],
                     1i64,
-                ])?
-                .f_to_device(mask.device())?
-                .f_to_kind(Kind::Int64)?;
+                ]))?
+                .f_to_device(mask.device()))?
+                .f_to_kind(Kind::Int64))?;
 
-                let flat = (&indices * &weights).f_sum_dim_intlist(&[1i64][..], false, Kind::Int64)?;
+                let flat = tch_result((&indices * &weights).f_sum_dim_intlist(&[1i64][..], false, Kind::Int64))?;
                 // CopyCtx assumes contiguous tensors for raw pointer copies.
                 let flat = if flat.is_contiguous() {
                     flat
                 } else {
-                    flat.f_contiguous()?
+                    tch_result(flat.f_contiguous())?
                 };
                 let dists = match dists {
                     Some(dists) => {
@@ -632,7 +633,7 @@ impl DistsMask {
                         Some(if gathered.is_contiguous() {
                             gathered
                         } else {
-                            gathered.f_contiguous()?
+                            tch_result(gathered.f_contiguous())?
                         })
                     }
                     None => None,
@@ -700,7 +701,7 @@ impl DistsMask {
                 let mask = if mask.is_contiguous() {
                     mask
                 } else {
-                    mask.f_contiguous()?
+                    tch_result(mask.f_contiguous())?
                 };
                 let mask_size = mask.size();
                 assert_eq!(mask_size.len(), 3, "DistsMask::into_indices_iter: expected 3D mask, got {mask_size:?}");
@@ -713,7 +714,7 @@ impl DistsMask {
                         let dists = if dists.is_contiguous() {
                             dists
                         } else {
-                            dists.f_contiguous()?
+                            tch_result(dists.f_contiguous())?
                         };
                         Some(dists)
                     }
@@ -728,7 +729,7 @@ impl DistsMask {
                 let mask = if mask.is_contiguous() {
                     mask
                 } else {
-                    mask.f_contiguous()?
+                    tch_result(mask.f_contiguous())?
                 };
                 let dists = match dists {
                     Some(dists) => {
@@ -736,7 +737,7 @@ impl DistsMask {
                         let dists = if dists.is_contiguous() {
                             dists
                         } else {
-                            dists.f_contiguous()?
+                            tch_result(dists.f_contiguous())?
                         };
                         Some(dists)
                     }
@@ -750,7 +751,7 @@ impl DistsMask {
                 let mask = if mask.is_contiguous() {
                     mask
                 } else {
-                    mask.f_contiguous()?
+                    tch_result(mask.f_contiguous())?
                 };
                 let indices_size = mask.size();
                 assert_eq!(mask_size.len(), 3, "DistsMask::into_indices_iter: expected 3D mask, got {mask_size:?}");
@@ -769,9 +770,9 @@ impl DistsMask {
                         let dists = if dists.is_contiguous() {
                             dists
                         } else {
-                            dists.f_contiguous()?
+                            tch_result(dists.f_contiguous())?
                         };
-                        let dists = dists.f_reshape([-1])?;
+                        let dists = tch_result(dists.f_reshape([-1]))?;
                         assert_eq!(
                             dists.numel() as i64,
                             indices_count,
@@ -810,15 +811,15 @@ impl DistsMask {
                 if &bits.device() == device {
                     Ok(bits)
                 } else {
-                    Ok(bits.f_to_device(*device)?)
+                    Ok(tch_result(bits.f_to_device(*device))?)
                 }
             }
             DistsMaskType::AsIs => {
                 let mask = Self::local_tensor_ref(&self.mask, "unpack_mask_device")?;
                 if &mask.device() == device {
-                    Ok(mask.f_alias()?)
+                    Ok(tch_result(mask.f_alias())?)
                 } else {
-                    Ok(mask.f_to_device(*device)?)
+                    Ok(tch_result(mask.f_to_device(*device))?)
                 }
             }
         }
@@ -876,17 +877,17 @@ impl WorkerStageOutput for DistsMask {
 
 pub fn tensor_to_ipc_bytes(tensor: &Tensor) -> Result<Vec<u8>, ThoError> {
     let tensor = if tensor.device().eq(&Cpu) {
-        tensor.f_alias()?
+        tch_result(tensor.f_alias())?
     } else {
-        tensor.f_to_device(Cpu)?
+        tch_result(tensor.f_to_device(Cpu))?
     };
     let tensor = if tensor.is_contiguous() {
         tensor
     } else {
-        tensor.f_contiguous()?
+        tch_result(tensor.f_contiguous())?
     };
     let mut bytes = Vec::new();
-    tensor.save_to_stream(&mut bytes)?;
+    tch_result(tensor.save_to_stream(&mut bytes))?;
     Ok(bytes)
 }
 
@@ -911,20 +912,20 @@ fn rebase_flat_indices_last_dim(
     let dim_2 = size[2];
     let d1d2 = dim_1.saturating_mul(dim_2);
 
-    let d1d2_t = Tensor::f_from_slice(&[d1d2])?.f_to_device(device)?;
-    let dim_2_t = Tensor::f_from_slice(&[dim_2])?.f_to_device(device)?;
-    let dim_1_t = Tensor::f_from_slice(&[dim_1])?.f_to_device(device)?;
-    let new_last_t = Tensor::f_from_slice(&[new_last])?.f_to_device(device)?;
-    let offset_t = Tensor::f_from_slice(&[last_offset])?.f_to_device(device)?;
+    let d1d2_t = tch_result(tch_result(Tensor::f_from_slice(&[d1d2]))?.f_to_device(device))?;
+    let dim_2_t = tch_result(tch_result(Tensor::f_from_slice(&[dim_2]))?.f_to_device(device))?;
+    let dim_1_t = tch_result(tch_result(Tensor::f_from_slice(&[dim_1]))?.f_to_device(device))?;
+    let new_last_t = tch_result(tch_result(Tensor::f_from_slice(&[new_last]))?.f_to_device(device))?;
+    let offset_t = tch_result(tch_result(Tensor::f_from_slice(&[last_offset]))?.f_to_device(device))?;
 
-    let i_0 = flat.f_floor_divide(&d1d2_t)?;
+    let i_0 = tch_result(flat.f_floor_divide(&d1d2_t))?;
     let rem = &flat - &i_0 * &d1d2_t;
-    let i_1 = rem.f_floor_divide(&dim_2_t)?;
+    let i_1 = tch_result(rem.f_floor_divide(&dim_2_t))?;
     let i_2 = rem - &i_1 * &dim_2_t;
     let i_2 = i_2 + offset_t;
 
     let row = &i_0 * &dim_1_t + &i_1;
-    Ok((&row * new_last_t + i_2).f_to_kind(Kind::Int64)?)
+    Ok(tch_result((&row * new_last_t + i_2).f_to_kind(Kind::Int64))?)
 }
 
 fn unpack_packed_mask(mask: &Tensor, mask_size: &[i64]) -> Result<Tensor, ThoError> {
@@ -933,9 +934,9 @@ fn unpack_packed_mask(mask: &Tensor, mask_size: &[i64]) -> Result<Tensor, ThoErr
     let total_bits = mask_size
         .iter()
         .fold(1i64, |a, v| a.saturating_mul(*v));
-    Ok(unpack_bits_u8(mask, Some(total_bits))
-        .f_to_kind(Bool)?
-        .f_view(mask_size)?)
+    Ok(tch_result(tch_result(unpack_bits_u8(mask, Some(total_bits))
+        .f_to_kind(Bool))?
+        .f_view(mask_size))?)
 }
 
 fn gather_dists_for_indices(
@@ -951,24 +952,24 @@ fn gather_dists_for_indices(
     assert!(indices_size.len() == 2 && indices_size[1] == 3, "DistsMask::gather_dists_for_indices: expected Nx3 indices, got {indices_size:?}");
 
     if indices_size[0] == 0 {
-        return Ok(Tensor::f_zeros([0], (dists.kind(), dists.device()))?);
+        return Ok(tch_result(Tensor::f_zeros([0], (dists.kind(), dists.device())))?);
     }
 
-    let indices = indices.f_contiguous()?.f_to_kind(Kind::Int64)?;
-    let dists_flat = dists.f_contiguous()?.f_reshape([-1])?;
+    let indices = tch_result(tch_result(indices.f_contiguous())?.f_to_kind(Kind::Int64))?;
+    let dists_flat = tch_result(tch_result(dists.f_contiguous())?.f_reshape([-1]))?;
 
     let stride_0 = mask_size[1] * mask_size[2];
     let stride_1 = mask_size[2];
 
-    let c = indices.f_select(1, 0)?;
-    let i_0 = indices.f_select(1, 1)?;
-    let i_1 = indices.f_select(1, 2)?;
+    let c = tch_result(indices.f_select(1, 0))?;
+    let i_0 = tch_result(indices.f_select(1, 1))?;
+    let i_1 = tch_result(indices.f_select(1, 2))?;
 
-    let stride_0_t = Tensor::f_from_slice(&[stride_0])?.f_to_device(dists.device())?;
-    let stride_1_t = Tensor::f_from_slice(&[stride_1])?.f_to_device(dists.device())?;
+    let stride_0_t = tch_result(tch_result(Tensor::f_from_slice(&[stride_0]))?.f_to_device(dists.device()))?;
+    let stride_1_t = tch_result(tch_result(Tensor::f_from_slice(&[stride_1]))?.f_to_device(dists.device()))?;
 
-    let lin = (&c * stride_0_t + &i_0 * stride_1_t + &i_1).f_to_kind(Kind::Int64)?;
-    Ok(dists_flat.f_gather(0, &lin, false)?)
+    let lin = tch_result((&c * stride_0_t + &i_0 * stride_1_t + &i_1).f_to_kind(Kind::Int64))?;
+    Ok(tch_result(dists_flat.f_gather(0, &lin, false))?)
 }
 
 impl CrossClcResultMerge for DistsMask {
@@ -996,9 +997,9 @@ impl CrossClcResultMerge for DistsMask {
 
         match (left_type, right_type) {
             (DistsMaskType::AsIs, DistsMaskType::AsIs) => {
-                let mask = Tensor::f_concat(&[left_mask, right_mask], 2)?;
+                let mask = tch_result(Tensor::f_concat(&[left_mask, right_mask], 2))?;
                 let dists = match (left_dists, right_dists) {
-                    (Some(left), Some(right)) => Some(Tensor::f_concat(&[left, right], 2)?),
+                    (Some(left), Some(right)) => Some(tch_result(Tensor::f_concat(&[left, right], 2))?),
                     (None, None) => None,
                     _ => return Err(ThoError::new("DistsMask merge: dists mismatch")),
                 };
@@ -1028,20 +1029,20 @@ impl CrossClcResultMerge for DistsMask {
                 let packed_mask = if left_last % 8 == 0 && right_last % 8 == 0 {
                     let left_bytes = left_last / 8;
                     let right_bytes = right_last / 8;
-                    let left_view = left_mask.f_view([rows, left_bytes])?;
-                    let right_view = right_mask.f_view([rows, right_bytes])?;
-                    Tensor::f_concat(&[left_view, right_view], 1)?
-                        .f_reshape([-1])?
-                        .f_contiguous()?
+                    let left_view = tch_result(left_mask.f_view([rows, left_bytes]))?;
+                    let right_view = tch_result(right_mask.f_view([rows, right_bytes]))?;
+                    tch_result(tch_result(tch_result(Tensor::f_concat(&[left_view, right_view], 1))?
+                        .f_reshape([-1]))?
+                        .f_contiguous())?
                 } else {
-                    let left_bits = unpack_bits_u8(&left_mask, Some(total_left_bits))
-                        .f_to_kind(Bool)?
-                        .f_view([rows, left_last])?;
-                    let right_bits = unpack_bits_u8(&right_mask, Some(total_right_bits))
-                        .f_to_kind(Bool)?
-                        .f_view([rows, right_last])?;
-                    let merged_bits = Tensor::f_concat(&[left_bits, right_bits], 1)?;
-                    pack_bits_bool(&merged_bits.f_reshape([-1])?)?
+                    let left_bits = tch_result(tch_result(unpack_bits_u8(&left_mask, Some(total_left_bits))
+                        .f_to_kind(Bool))?
+                        .f_view([rows, left_last]))?;
+                    let right_bits = tch_result(tch_result(unpack_bits_u8(&right_mask, Some(total_right_bits))
+                        .f_to_kind(Bool))?
+                        .f_view([rows, right_last]))?;
+                    let merged_bits = tch_result(Tensor::f_concat(&[left_bits, right_bits], 1))?;
+                    pack_bits_bool(&tch_result(merged_bits.f_reshape([-1]))?)?
                 };
 
                 let dists = match (left_dists, right_dists) {
@@ -1056,7 +1057,7 @@ impl CrossClcResultMerge for DistsMask {
                         let dists_last = left_size.len() - 1;
 
                         assert_eq!(left_size[..dists_last], right_size[..dists_last], "DistsMask merge: dists size mismatch");
-                        Some(Tensor::f_concat(&[left, right], dists_last as i64)?)
+                        Some(tch_result(Tensor::f_concat(&[left, right], dists_last as i64))?)
                     }
                     (None, None) => None,
                     _ => return Err(ThoError::new("DistsMask merge: dists mismatch")),
@@ -1109,9 +1110,9 @@ impl CrossClcResultMerge for DistsMask {
                 } else {
                     let mut right_indices = right_mask;
                     if right_count > 0 {
-                        let offset = Tensor::f_from_slice(&[left_size[last_dim]])?
-                            .f_to_device(right_indices.device())?;
-                        let _ = right_indices.narrow(1, 2, 1).f_add_(&offset)?;
+                        let offset = tch_result(tch_result(Tensor::f_from_slice(&[left_size[last_dim]]))?
+                            .f_to_device(right_indices.device()))?;
+                        let _ = tch_result(right_indices.narrow(1, 2, 1).f_add_(&offset))?;
                     }
                     (left_mask, right_indices)
                 };
@@ -1121,14 +1122,14 @@ impl CrossClcResultMerge for DistsMask {
                 } else if right_count == 0 {
                     left_indices
                 } else {
-                    Tensor::f_concat(&[left_indices, right_indices], 0)?
+                    tch_result(Tensor::f_concat(&[left_indices, right_indices], 0))?
                 };
 
                 let dists = match (left_dists, right_dists) {
                     (Some(left), Some(right)) => {
                         assert_eq!(left.device(), right.device(), "DistsMask merge: dists device mismatch");
                         assert!(left.numel() as i64 == left_count && right.numel() as i64 == right_count, "DistsMask merge: dists size mismatch");
-                        Some(Tensor::f_concat(&[left, right], 0)?)
+                        Some(tch_result(Tensor::f_concat(&[left, right], 0))?)
                     }
                     (None, None) => None,
                     _ => return Err(ThoError::new("DistsMask merge: dists mismatch")),
@@ -1184,7 +1185,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let mut merged_mask_sizes = first_size;
                 merged_mask_sizes[last_dim] = total_last;
-                let mut mask_out = Tensor::f_zeros(merged_mask_sizes.as_slice(), (Bool, device))?;
+                let mut mask_out = tch_result(Tensor::f_zeros(merged_mask_sizes.as_slice(), (Bool, device)))?;
 
                 let mut offset = 0;
                 for part in parts.iter() {
@@ -1222,7 +1223,7 @@ impl CrossClcResultMerge for DistsMask {
 
                     let mut merged_dists_sizes = dists_size;
                     merged_dists_sizes[dists_last_dim] = total_dists_last;
-                    let mut dists_out = Tensor::f_zeros(merged_dists_sizes.as_slice(), (dists_kind, dists_device))?;
+                    let mut dists_out = tch_result(Tensor::f_zeros(merged_dists_sizes.as_slice(), (dists_kind, dists_device)))?;
 
                     let mut offset = 0;
                     for part in parts.iter() {
@@ -1277,7 +1278,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let packed_mask = if all_aligned {
                     let total_bytes = total_last / 8;
-                    let mut out = Tensor::f_zeros([rows, total_bytes], (Uint8, device))?;
+                    let mut out = tch_result(Tensor::f_zeros([rows, total_bytes], (Uint8, device)))?;
                     let mut byte_offset = 0;
                     for part in parts.iter() {
                         let sizes = match &part.mask_type {
@@ -1285,13 +1286,13 @@ impl CrossClcResultMerge for DistsMask {
                             _ => return Err(ThoError::new("DistsMask merge: type mismatch")),
                         };
                         let bytes = sizes[last_dim] / 8;
-                        let part_view = part.mask.f_view([rows, bytes])?;
+                        let part_view = tch_result(part.mask.f_view([rows, bytes]))?;
                         out.narrow(1, byte_offset, bytes).copy_(&part_view);
                         byte_offset += bytes;
                     }
-                    out.f_reshape([-1])?
+                    tch_result(out.f_reshape([-1]))?
                 } else {
-                    let mut out_bits = Tensor::f_zeros([rows, total_last], (Bool, device))?;
+                    let mut out_bits = tch_result(Tensor::f_zeros([rows, total_last], (Bool, device)))?;
                     let mut offset = 0;
                     for part in parts.iter() {
                         let sizes = match &part.mask_type {
@@ -1301,13 +1302,13 @@ impl CrossClcResultMerge for DistsMask {
                         let part_last = sizes[last_dim];
                         let total_bits =
                             sizes.iter().fold(1i64, |a, v| a.saturating_mul(*v));
-                        let bits = unpack_bits_u8(&part.mask, Some(total_bits))
-                            .f_to_kind(Bool)?
-                            .f_view([rows, part_last])?;
+                        let bits = tch_result(tch_result(unpack_bits_u8(&part.mask, Some(total_bits))
+                            .f_to_kind(Bool))?
+                            .f_view([rows, part_last]))?;
                         out_bits.narrow(1, offset, part_last).copy_(&bits);
                         offset += part_last;
                     }
-                    pack_bits_bool(&out_bits.f_reshape([-1])?)?
+                    pack_bits_bool(&tch_result(out_bits.f_reshape([-1]))?)?
                 };
 
                 let has_dists = parts[0].dists.is_some();
@@ -1357,7 +1358,7 @@ impl CrossClcResultMerge for DistsMask {
                     merged_dists_sizes[dists_last_dim] = total_dists_last;
                     let device = dists_device.unwrap();
                     let kind = dists_kind.unwrap();
-                    let mut dists_out = Tensor::f_zeros(merged_dists_sizes.as_slice(), (kind, device))?;
+                    let mut dists_out = tch_result(Tensor::f_zeros(merged_dists_sizes.as_slice(), (kind, device)))?;
 
                     let mut offset = 0;
                     for part in parts.iter() {
@@ -1467,8 +1468,8 @@ impl CrossClcResultMerge for DistsMask {
                         mask
                     };
                     if indices_count > 0 && indices_rank == 2 {
-                        let offset_t = Tensor::f_from_slice(&[offset])?.f_to_device(device)?;
-                        let _ = indices.narrow(1, 2, 1).f_add_(&offset_t)?;
+                        let offset_t = tch_result(tch_result(Tensor::f_from_slice(&[offset]))?.f_to_device(device))?;
+                        let _ = tch_result(indices.narrow(1, 2, 1).f_add_(&offset_t))?;
                     }
 
                     if has_dists {
@@ -1489,13 +1490,13 @@ impl CrossClcResultMerge for DistsMask {
                 let indices = if indices_parts.len() == 1 {
                     indices_parts.remove(0)
                 } else {
-                    Tensor::f_concat(&indices_parts, 0)?
+                    tch_result(Tensor::f_concat(&indices_parts, 0))?
                 };
                 let dists = if has_dists {
                     if dists_parts.len() == 1 {
                         Some(dists_parts.remove(0))
                     } else {
-                        Some(Tensor::f_concat(&dists_parts, 0)?)
+                        Some(tch_result(Tensor::f_concat(&dists_parts, 0))?)
                     }
                 } else {
                     None
@@ -1708,6 +1709,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use futures_util::StreamExt;
     use log::debug;
     use tch::Device::Cuda;
@@ -1772,8 +1774,8 @@ mod tests {
             store: MockMotifsStoreBuilder::new().build(),
             _ctx: PhantomData,
         });
-        let mask = Tensor::f_ones([channels, slices, slices], (Kind::Bool, Device::Cpu))?;
-        let dists = Tensor::f_arange(channels * slices * slices, (Kind::Float, Device::Cpu))?.f_view([channels, slices, slices])?;
+        let mask = tch_result(Tensor::f_ones([channels, slices, slices], (Kind::Bool, Device::Cpu)))?;
+        let dists = tch_result(tch_result(Tensor::f_arange(channels * slices * slices, (Kind::Float, Device::Cpu)))?.f_view([channels, slices, slices]))?;
         let output = CrossUnfoldClcOutput::new(DistsMask::new(mask, Some(dists), DistsMaskType::AsIs)?,
             SlicesIter::new(2, vec![(10, slices as usize)]), SlicesIter::new(2, vec![(10, slices as usize)]), "channel_batches".into());
         assert!(matches!(tracker.consume(output, mock_run_ctx::default(0)), ConsumeResult::Ok(())));
@@ -1797,10 +1799,10 @@ mod tests {
         let left_dists = Tensor::from_slice(&[1.0f32, 2.0]).view([1, 1, 2]);
         let right_dists = Tensor::from_slice(&[3.0f32, 4.0]).view([1, 1, 2]);
 
-        let left_mask = left_mask.f_to_device(device)?;
-        let right_mask = right_mask.f_to_device(device)?;
-        let left_dists = left_dists.f_to_device(device)?;
-        let right_dists = right_dists.f_to_device(device)?;
+        let left_mask = tch_result(left_mask.f_to_device(device))?;
+        let right_mask = tch_result(right_mask.f_to_device(device))?;
+        let left_dists = tch_result(left_dists.f_to_device(device))?;
+        let right_dists = tch_result(right_dists.f_to_device(device))?;
 
         let left = DistsMask::new(
             left_mask,
@@ -1815,8 +1817,8 @@ mod tests {
 
         let merged = left.merge_batch_1(right)?;
         let (mask, dists) = merged.unpack()?;
-        let mask = mask.f_to_device(Device::Cpu)?;
-        let dists = dists.expect("dists").f_to_device(Device::Cpu)?;
+        let mask = tch_result(mask.f_to_device(Device::Cpu))?;
+        let dists = tch_result(dists.expect("dists").f_to_device(Device::Cpu))?;
 
         assert_eq!(mask.size(), vec![1, 1, 4]);
         assert_eq!(dists.size(), vec![1, 1, 4]);
@@ -1874,7 +1876,7 @@ mod tests {
         let left_mask = Tensor::from_slice(&[0.0f32]).view([1, 1, 1]).lt(0.5);
         let right_mask = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]).lt(0.5);
 
-        let left_mask = left_mask.f_to_device(device)?;
+        let left_mask = tch_result(left_mask.f_to_device(device))?;
         let left = DistsMask::new(
             left_mask,
             None,
@@ -1908,12 +1910,12 @@ mod tests {
         let mid_dists = Tensor::from_slice(&[3.0f32, 4.0]).view([1, 1, 2]);
         let right_dists = Tensor::from_slice(&[5.0f32, 6.0]).view([1, 1, 2]);
 
-        let left_mask = left_mask.f_to_device(device)?;
-        let mid_mask = mid_mask.f_to_device(device)?;
-        let right_mask = right_mask.f_to_device(device)?;
-        let left_dists = left_dists.f_to_device(device)?;
-        let mid_dists = mid_dists.f_to_device(device)?;
-        let right_dists = right_dists.f_to_device(device)?;
+        let left_mask = tch_result(left_mask.f_to_device(device))?;
+        let mid_mask = tch_result(mid_mask.f_to_device(device))?;
+        let right_mask = tch_result(right_mask.f_to_device(device))?;
+        let left_dists = tch_result(left_dists.f_to_device(device))?;
+        let mid_dists = tch_result(mid_dists.f_to_device(device))?;
+        let right_dists = tch_result(right_dists.f_to_device(device))?;
 
         let left = DistsMask::new(
             left_mask,
@@ -1933,8 +1935,8 @@ mod tests {
 
         let merged = left.merge_batch_1_many(vec![mid, right])?;
         let (mask, dists) = merged.unpack()?;
-        let mask = mask.f_to_device(Device::Cpu)?;
-        let dists = dists.expect("dists").f_to_device(Device::Cpu)?;
+        let mask = tch_result(mask.f_to_device(Device::Cpu))?;
+        let dists = tch_result(dists.expect("dists").f_to_device(Device::Cpu))?;
 
         assert_eq!(mask.size(), vec![1, 1, 6]);
         assert_eq!(dists.size(), vec![1, 1, 6]);
@@ -1999,7 +2001,7 @@ mod tests {
         let left_mask = Tensor::from_slice(&[0.0f32]).view([1, 1, 1]).lt(0.5);
         let mid_mask = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]).lt(0.5);
 
-        let left_mask = left_mask.f_to_device(device)?;
+        let left_mask = tch_result(left_mask.f_to_device(device))?;
         let left = DistsMask::new(
             left_mask,
             None,

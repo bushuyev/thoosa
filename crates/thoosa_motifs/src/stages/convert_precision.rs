@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use clap::ValueEnum;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -90,6 +91,7 @@ pub type ConvertPrecisionStage<C> = CommonConvertPrecisionStage<C, dyn MotifsWor
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use super::{ConvertPrecisionArgs, ConvertPrecisionBy, ConvertPrecisionInput, ConvertPrecisionNetType, ConvertPrecisionStage, ConvertPrecisionTarget};
     use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, final_net, lin_label_node};
     use parking_lot::RwLock;
@@ -194,13 +196,13 @@ mod tests {
         let weights_path = net_dir.join("weights.safetensors");
         let weight = Tensor::randn([1, 1, 4], (Kind::Float, Device::Cpu));
         let bias = Tensor::zeros([1], (Kind::Float, Device::Cpu));
-        Tensor::write_safetensors(
+        tch_result(Tensor::write_safetensors(
             &[
                 ("seq_4.motif_0_conv.weight", &weight),
                 ("seq_4.motif_0_conv.bias", &bias),
             ],
             &weights_path,
-        )?;
+        ))?;
 
         let ws = Arc::new(RwLock::new(ws_box));
         let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::Motifs), ConvertPrecisionTarget::Fp16);
@@ -214,7 +216,7 @@ mod tests {
         let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
-        let converted = Tensor::read_safetensors(&weights_path)?;
+        let converted = tch_result(Tensor::read_safetensors(&weights_path))?;
         assert!(converted.iter().any(|(name, _)| name == "seq_4.motif_0_conv.weight"));
         for (_, tensor) in converted {
             assert_eq!(tensor.kind(), Kind::Half);

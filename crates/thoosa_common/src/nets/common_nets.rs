@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::dims::Dims;
 use crate::nets::batches::BatchLengths;
 use crate::nets::nodes::{BinaryHeadPool, ThoModule};
@@ -246,7 +247,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         self.ensure_ready()?;
         let variables = self.var_store.variables();
         let tensor = key.strip_prefix("var/").and_then(|name| variables.get(name)).ok_or_else(|| ThoError::NotFound(Some(key.to_owned())))?;
-        Ok(tensor.f_detach()?)
+        Ok(tch_result(tensor.f_detach())?)
     }
 
     pub fn drop_gpu(&mut self, device: usize) -> Result<(), ThoError> {

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
@@ -367,7 +368,7 @@ fn d2h_batches(lengths: impl IntoIterator<Item = usize>, capacity: usize) -> Res
 // CPU synchronously so no newly queued GPU packing work escapes its stream.
 fn prepare_d2h_batch_source(source: Tensor, device: Device) -> Result<(Tensor, bool), ThoError> {
     if source.device() != device && source.device() != Cpu { return Err(ThoError::new("D2H source belongs to another device")); }
-    let source = if source.is_contiguous() { source } else { source.f_to(Cpu)?.f_contiguous()? };
+    let source = if source.is_contiguous() { source } else { tch_result(tch_result(source.f_to(Cpu))?.f_contiguous())? };
     let on_cpu = source.device() == Cpu;
     Ok((source, on_cpu))
 }
@@ -429,7 +430,7 @@ pub(crate) async fn copy_d2h_batch(gate: &Arc<thoosa_shared::CudaActivityGate>, 
     CudaActivityScope::for_operation(gate)?.run(async move {
         let transfers = sources.into_iter().map(|source| {
             let (source, on_cpu) = prepare_d2h_batch_source(source, Device::Cuda(gate.device_idx() - 1))?;
-            let destination = Tensor::f_empty(source.size(), (source.kind(), Cpu))?;
+            let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), Cpu)))?;
             Ok((CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?, on_cpu))
         }).collect::<Result<Vec<_>, ThoError>>()?;
         let transfers = Arc::new(transfers);
@@ -529,8 +530,8 @@ pub async fn copy_d2h(
         if source.device() != Device::Cuda(gate.device_idx() - 1) { return Err(ThoError::new("D2H source belongs to another device")); }
         // LibTorch handles small or strided tensors synchronously while this
         // frame owns the source. Only contiguous ranges enter the chunk engine.
-        if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size { return Ok(source.f_to(Cpu)?); }
-        let destination = Tensor::f_empty(source.size(), (source.kind(), Cpu))?;
+        if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size { return Ok(tch_result(source.f_to(Cpu))?); }
+        let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), Cpu)))?;
         let transfer = CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?;
         copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCpu).await?;
         transfer.into_tensor()
@@ -550,8 +551,8 @@ pub async fn copy_h2d(
         pool.check()?;
         if source.device() != Cpu || dst_tho_device_idx != gate.device_idx() { return Err(ThoError::new("invalid H2D source or destination device")); }
         let device = Device::Cuda(dst_tho_device_idx - 1);
-        if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size { return Ok(source.f_to(device)?); }
-        let destination = Tensor::f_empty(source.size(), (source.kind(), device))?;
+        if !source.is_contiguous() || tensor_mem_size(source.kind(), &source.size()) < buf_size { return Ok(tch_result(source.f_to(device))?); }
+        let destination = tch_result(Tensor::f_empty(source.size(), (source.kind(), device)))?;
         let transfer = CopyTransfer::new(CopyStorage::tensor(source)?, CopyStorage::tensor(destination)?)?;
         copy_transfer(gate, Arc::clone(&transfer), buf_size, pool, CopyDirection::ToCuda).await?;
         transfer.into_tensor()
@@ -571,7 +572,7 @@ pub(crate) async unsafe fn copy_h2d_from_ptr(
     CudaActivityScope::for_operation(gate)?.run(async move {
         pool.check()?;
         if dst_tho_device_idx != gate.device_idx() { return Err(ThoError::new("H2D destination belongs to another device")); }
-        let destination = CopyStorage::tensor(Tensor::f_empty(size, (kind, Device::Cuda(dst_tho_device_idx - 1)))?)?;
+        let destination = CopyStorage::tensor(tch_result(Tensor::f_empty(size, (kind, Device::Cuda(dst_tho_device_idx - 1))))?)?;
         // SAFETY: this function's caller supplies the source allocation contract.
         let source = unsafe { CopyStorage::external(source, destination.byte_len, source_owner)? };
         let transfer = CopyTransfer::new(source, destination)?;
@@ -607,31 +608,31 @@ pub fn pack_bits_bool(b: &Tensor) -> Result<Tensor, ThoError> {
     let dev = b.device();
 
     // 1) Flatten.
-    let mut flat = b.f_reshape([-1])?;
+    let mut flat = tch_result(b.f_reshape([-1]))?;
 
     // 2) Pad to multiple of 8.
     let n = flat.numel();
     let pad: i64 = (8 - (n % 8)) as i64 % 8;
     if pad != 0 {
-        let zeros = Tensor::f_zeros([pad], (Kind::Bool, dev))?;
-        flat = Tensor::f_cat(&[flat, zeros], 0)?;
+        let zeros = tch_result(Tensor::f_zeros([pad], (Kind::Bool, dev)))?;
+        flat = tch_result(Tensor::f_cat(&[flat, zeros], 0))?;
     }
 
     // 3) Group by 8 and cast {false,true}->{0u8,1u8}.
-    let x_u8 = flat.f_view([-1, 8])?.f_to_kind(Kind::Uint8)?;
+    let x_u8 = tch_result(tch_result(flat.f_view([-1, 8]))?.f_to_kind(Kind::Uint8))?;
 
     // 4) Weights (MSB->LSB).
-    let w_i64 = Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1])
-        .f_to_device(dev)?
-        .f_to_kind(Kind::Int64)?;
+    let w_i64 = tch_result(tch_result(Tensor::from_slice(&[128u8, 64, 32, 16, 8, 4, 2, 1])
+        .f_to_device(dev))?
+        .f_to_kind(Kind::Int64))?;
 
     // 5) Dot(each row, weights) -> one byte per row.
-    Ok(x_u8
-        .f_to_kind(Kind::Int64)?
-        .f_mul(&w_i64)?
-        .f_sum_dim_intlist(1, /*keepdim=*/false, Kind::Int64)?
-        .f_to_kind(Kind::Uint8)?
-        .f_contiguous()?)
+    Ok(tch_result(tch_result(tch_result(tch_result(tch_result(x_u8
+        .f_to_kind(Kind::Int64))?
+        .f_mul(&w_i64))?
+        .f_sum_dim_intlist(1, /*keepdim=*/false, Kind::Int64))?
+        .f_to_kind(Kind::Uint8))?
+        .f_contiguous())?)
 }
 
 /// Unpack bytes back to Bool bits (MSB-first).
@@ -707,6 +708,7 @@ pub fn fail_with_unrecoverable_error(){
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
+    use crate::tch_error::tch_result;
     use crate::copy_ctx::CopyCtx;
     use crate::cuda_utils::{
         PinnedHostBuffer,
@@ -863,7 +865,7 @@ mod tests {
             let mut src_t = Tensor::rand([dim_0, dim_1], (Float, Cpu));
 
             let inst_0 = Instant::now();
-            let tensor = ctx.copy(src_t.f_alias()?, 1).await?;
+            let tensor = ctx.copy(tch_result(src_t.f_alias())?, 1).await?;
             h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
 
@@ -919,7 +921,7 @@ mod tests {
 
             let dst = copy_d2h(
                 &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
-                src_t.f_alias()?,
+                tch_result(src_t.f_alias())?,
                 buf_size,
                 &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| {
                     (
@@ -986,7 +988,7 @@ mod tests {
 
             let dst = copy_d2h(
                 &Arc::new(thoosa_shared::CudaActivityGate::new(1)),
-                src_t.f_alias()?,
+                tch_result(src_t.f_alias())?,
                 buf_size,
                 &Arc::new(super::CopyBufferPool::new((0..buffs).map(|_i| {
                     (
@@ -1082,7 +1084,7 @@ mod tests {
                         let t_0 = Instant::now();
 
                         let cuda_t = copy_ctx
-                            .copy(t.f_alias()?, 1)
+                            .copy(tch_result(t.f_alias())?, 1)
                             .await?;
                         let unfolded = cuda_t.unfold(1, 100, 10).contiguous();
 
@@ -1092,7 +1094,7 @@ mod tests {
                         let t = t.unfold(1, 100, 10).contiguous();
 
                         let cuda_t = copy_ctx
-                            .copy(t.f_alias()?, 1)
+                            .copy(tch_result(t.f_alias())?, 1)
                             .await;
 
                         unfold_copy_time += t_0.elapsed().as_millis();
@@ -1222,23 +1224,23 @@ mod transfer_lifetime_tests {
         let pool = Arc::new(CopyBufferPool::new([(PinnedHostBuffer::new(capacity, 0)?, Arc::new(ThoCudaStream::from_pool(0, true)?))]));
         let mut expected = Vec::new();
         for kind in [Kind::Uint8, Kind::Int64, Kind::Float, Kind::Double, Kind::Bool] {
-            expected.push(Tensor::f_ones([], (kind, Cpu))?);
-            expected.push(Tensor::f_zeros([0, 3], (kind, Cpu))?);
-            expected.push(Tensor::f_arange(9, (Kind::Int64, Cpu))?.f_to_kind(kind)?.f_reshape([3, 3])?);
+            expected.push(tch_result(Tensor::f_ones([], (kind, Cpu)))?);
+            expected.push(tch_result(Tensor::f_zeros([0, 3], (kind, Cpu)))?);
+            expected.push(tch_result(tch_result(tch_result(Tensor::f_arange(9, (Kind::Int64, Cpu)))?.f_to_kind(kind))?.f_reshape([3, 3]))?);
         }
-        expected.push(Tensor::f_arange(12, (Kind::Int64, Cpu))?.f_reshape([3, 4])?.f_transpose(0, 1)?);
-        let mut sources = expected.iter().map(|tensor| Ok(tensor.f_to(Device::Cuda(0))?)).collect::<Result<Vec<_>, ThoError>>()?;
+        expected.push(tch_result(tch_result(tch_result(Tensor::f_arange(12, (Kind::Int64, Cpu)))?.f_reshape([3, 4]))?.f_transpose(0, 1))?);
+        let mut sources = expected.iter().map(|tensor| Ok(tch_result(tensor.f_to(Device::Cuda(0)))?)).collect::<Result<Vec<_>, ThoError>>()?;
         // State can contain CPU tensors as well; their copies must also be independent.
-        sources.push(Tensor::f_from_slice(&[42i64, 7])?);
-        expected.push(Tensor::f_from_slice(&[42i64, 7])?);
-        let saved = copy_d2h_batch(&gate, sources.iter().map(Tensor::f_alias).collect::<Result<_, _>>()?, capacity, &pool).await?;
-        for source in &mut sources { let _ = source.f_zero_()?; }
+        sources.push(tch_result(Tensor::f_from_slice(&[42i64, 7]))?);
+        expected.push(tch_result(Tensor::f_from_slice(&[42i64, 7]))?);
+        let saved = copy_d2h_batch(&gate, tch_result(sources.iter().map(Tensor::f_alias).collect::<Result<_, _>>())?, capacity, &pool).await?;
+        for source in &mut sources { let _ = tch_result(source.f_zero_())?; }
         let newer = copy_d2h_batch(&gate, sources, capacity, &pool).await?;
         for ((saved, newer), expected) in saved.iter().zip(&newer).zip(&expected) {
             assert_eq!(saved.kind(), expected.kind());
             assert_eq!(saved.size(), expected.size());
-            assert!(saved.f_equal(expected)?);
-            assert_eq!(newer.f_count_nonzero(None)?.f_int64_value(&[])?, 0);
+            assert!(tch_result(saved.f_equal(expected))?);
+            assert_eq!(tch_result(tch_result(newer.f_count_nonzero(None))?.f_int64_value(&[]))?, 0);
         }
         assert_eq!(pool.remaining_capacity(), 1);
         assert!(copy_d2h_batch(&gate, Vec::new(), capacity, &pool).await?.is_empty());
@@ -1247,8 +1249,8 @@ mod transfer_lifetime_tests {
 
     fn tensor_transfer() -> Result<Arc<CopyTransfer>, ThoError> {
         CopyTransfer::new(
-            CopyStorage::tensor(Tensor::f_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8])?)?,
-            CopyStorage::tensor(Tensor::f_zeros([8], (Kind::Uint8, Cpu))?)?,
+            CopyStorage::tensor(tch_result(Tensor::f_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]))?)?,
+            CopyStorage::tensor(tch_result(Tensor::f_zeros([8], (Kind::Uint8, Cpu)))?)?,
         )
     }
 
@@ -1313,7 +1315,7 @@ mod transfer_lifetime_tests {
             // SAFETY: move the sole mapping owner into the transfer; only its
             // blocking chunk accesses these bytes until completion.
             let mapped = unsafe { CopyStorage::external(address, 8, mapping)? };
-            let tensor = CopyStorage::tensor(Tensor::f_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8])?)?;
+            let tensor = CopyStorage::tensor(tch_result(Tensor::f_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]))?)?;
             let transfer = if to_cpu { CopyTransfer::new(tensor, mapped)? } else { CopyTransfer::new(mapped, tensor)? };
             let weak_transfer = Arc::downgrade(&transfer);
             let (started, start) = tokio::sync::oneshot::channel();
@@ -1410,8 +1412,8 @@ mod transfer_lifetime_tests {
         }).collect::<Result<Vec<_>, ThoError>>()?));
         for kind in [Kind::Uint8, Kind::Int64, Kind::Float, Kind::Double] {
             for size in [0, 1, 31, 257] {
-                let source = Tensor::f_arange(size, (Kind::Int64, Cpu))?.f_to_kind(kind)?;
-                let cuda = copy_h2d(&gate, source.f_alias()?, buf_size, &pool, 1).await?;
+                let source = tch_result(tch_result(Tensor::f_arange(size, (Kind::Int64, Cpu)))?.f_to_kind(kind))?;
+                let cuda = copy_h2d(&gate, tch_result(source.f_alias())?, buf_size, &pool, 1).await?;
                 let restored = copy_d2h(&gate, cuda, buf_size, &pool).await?;
                 assert_eq!(restored.size(), source.size());
                 assert_eq!(restored.kind(), kind);

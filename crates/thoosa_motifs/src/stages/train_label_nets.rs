@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
@@ -358,8 +359,8 @@ where
 
         // Borrow one handle at a time: collecting guards could lock shared inputs in opposite orders.
         // These aliases stay in this synchronous call and are copied into the padded batches.
-        let x_1_tensors = x_1.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>()?;
-        let x_0_tensors = x_0.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>()?;
+        let x_1_tensors = tch_result(x_1.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>())?;
+        let x_0_tensors = tch_result(x_0.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>())?;
         let x_1_refs = x_1_tensors.iter().collect::<Vec<_>>();
         let x_0_refs = x_0_tensors.iter().collect::<Vec<_>>();
 
@@ -1125,6 +1126,7 @@ pub fn train_label_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::dims::{LabelProbability, MotifProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
     use crate::stages::apply_motif_nets::{ApplyMotifNets, motif_test_net_};
@@ -1600,7 +1602,7 @@ mod tests {
         let train_motif_nets_run_config_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
         // Trained results now own a worker-written checkpoint rather than an in-memory VarStore.
         let checkpoint_path = test_dir.join("train_label_checkpoint.safetensors");
-        VarStore::new(Cpu).save(&checkpoint_path)?;
+        tch_result(VarStore::new(Cpu).save(&checkpoint_path))?;
 
         let mut result = TrainLabelNetRunConfigResult::new(
             // vec![source_run_config_id],

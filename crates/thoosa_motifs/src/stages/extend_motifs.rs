@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use crate::dims::{ChannelsMotifsDists, MotifSlices};
 use crate::motif_tracker_store::IdSlice;
@@ -282,7 +283,7 @@ where
             .enumerate()
             .map(|(channel, channel_motif_ids)| {
                 if channel_motif_ids.is_empty() {
-                    return Ok(Tensor::f_zeros([max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into()))?);
+                    return Ok(tch_result(Tensor::f_zeros([max_motif_slices as i64], (Float, ThoDevice::from(device_idx).into())))?);
                 }
                 let channel_stats = channel_motif_ids
                     .iter()
@@ -293,7 +294,7 @@ where
                             .ok_or_else(|| ThoError::new(format!("no motif stat found for motif_id={motif_id} channel={channel}")))
                     })
                     .collect::<Result<Vec<_>, ThoError>>()?;
-                let channel_stats_t = Tensor::f_from_slice(channel_stats.as_slice())?.f_to_device(ThoDevice::from(device_idx).into())?;
+                let channel_stats_t = tch_result(tch_result(Tensor::f_from_slice(channel_stats.as_slice()))?.f_to_device(ThoDevice::from(device_idx).into()))?;
                 if channel_stats_t.size()[0] < max_motif_slices as i64 {
                     //same padding as in StackedMotifsLoader::run
                     Ok(pad_to(
@@ -307,7 +308,7 @@ where
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
 
-        let channels_motifs_stats_t = Tensor::f_stack(&channels_motifs_stats_tensors, 0)?;
+        let channels_motifs_stats_t = tch_result(Tensor::f_stack(&channels_motifs_stats_tensors, 0))?;
         let find_motifs_run_config_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("SelectMotifsStage::clc_stacked_motifs_statistics: no id in find_motifs_run_config"))?;
         let motifs_stats = ThoTensor::new(
             SynKey::new([
@@ -879,7 +880,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                 Ok(Some(
                     (
                         DistsMask::new(
-                            Tensor::f_concat(&channel_masks_motif_ids.0, 2)?, //1 dim - resources
+                            tch_result(Tensor::f_concat(&channel_masks_motif_ids.0, 2))?, //1 dim - resources
                             None,
                             DistsMaskType::AsIs,
                         )?,
@@ -1189,6 +1190,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
     use crate::stages::extend_motifs::{ExtendMotifsStage, SelectMotifsSavableResultBuilder};
@@ -1303,7 +1305,7 @@ mod tests {
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0, vec![]), num_channels as u32, 50).await);
 
         let mask_0 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
-        let expected_mask_0 = mask_0.f_to_device(tch::Device::Cpu)?;
+        let expected_mask_0 = tch_result(mask_0.f_to_device(tch::Device::Cpu))?;
         let mask_0_size = mask_0.size();
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
@@ -1333,7 +1335,7 @@ mod tests {
         ).await;
 
         let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
-        let expected_mask_1 = mask_1.f_to_device(tch::Device::Cpu)?;
+        let expected_mask_1 = tch_result(mask_1.f_to_device(tch::Device::Cpu))?;
         let mask_1_size = mask_1.size();
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
@@ -1369,7 +1371,7 @@ mod tests {
 
         assert_eq!(channel_masks_dists_ids.len(), num_channels);
         let mut channel_masks_dists_ids = channel_masks_dists_ids.into_iter();
-        let expected_mask = Tensor::f_concat(&[expected_mask_0, expected_mask_1], 2)?;
+        let expected_mask = tch_result(Tensor::f_concat(&[expected_mask_0, expected_mask_1], 2))?;
         let channel_0 = channel_masks_dists_ids.next().expect("channel 0").expect("channel 0 mask");
         let (mask, _) = channel_0.0.unpack()?;
         debug!("mask=\t{mask}");

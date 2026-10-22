@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::cuda_utils::cuda_mem;
 use crate::dims::{AnyDims, Dims};
@@ -296,7 +297,7 @@ async fn do_test_loaded(
 
     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
-    assert!(tensor_data_0_0.t_ref().f_equal(&tensor_data_0_1.as_ref().t_ref())?);
+    assert!(tch_result(tensor_data_0_0.t_ref().f_equal(&tensor_data_0_1.as_ref().t_ref()))?);
 
     // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
 

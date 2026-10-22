@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
@@ -238,7 +239,7 @@ where
         }
         debug("TestStage::do_run: input={input:?}");
         Ok(TestOutputA {
-            value: input.value.as_ref().f_mul_scalar(self.k)?.into(),
+            value: tch_result(input.value.as_ref().f_mul_scalar(self.k))?.into(),
         })
     }
 }

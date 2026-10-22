@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 
@@ -553,6 +554,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use super::{BestSelectionMode, BucketEvaluation, SelectBucketsRunConfig, SelectBucketsStage, SelectionMode};
     use crate::motifs_store::MockMotifsStoreBuilder;
     use parking_lot::RwLock;
@@ -615,8 +617,8 @@ mod tests {
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached([
-                    (resource_a.clone(), Tensor::f_ones([1, 4], (Kind::Float, tch::Device::Cpu))?),
-                    (resource_b.clone(), Tensor::f_full([1, 4], 2.0, (Kind::Float, tch::Device::Cpu))?),
+                    (resource_a.clone(), tch_result(Tensor::f_ones([1, 4], (Kind::Float, tch::Device::Cpu)))?),
+                    (resource_b.clone(), tch_result(Tensor::f_full([1, 4], 2.0, (Kind::Float, tch::Device::Cpu)))?),
                 ])
                 .finish(),
         );
@@ -626,11 +628,11 @@ mod tests {
                 .with_run_cached([
                     (
                         MotifLoaderInput::find_motif_slices_only((low_motif_id, "motif_id").into()),
-                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::f_full([1, 4], 2.0, (Kind::Float, tch::Device::Cpu))?),
+                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, tch_result(Tensor::f_full([1, 4], 2.0, (Kind::Float, tch::Device::Cpu)))?),
                     ),
                     (
                         MotifLoaderInput::find_motif_slices_only((high_motif_id, "motif_id").into()),
-                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::f_full([1, 4], 3.0, (Kind::Float, tch::Device::Cpu))?),
+                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, tch_result(Tensor::f_full([1, 4], 3.0, (Kind::Float, tch::Device::Cpu)))?),
                     ),
                 ])
                 .finish(),

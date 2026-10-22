@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use crate::dims::{AnyDims, Batch, Dims};
 use crate::copy_ctx::{complete_cuda_stream, finish_cuda_run};
@@ -314,7 +315,7 @@ where
         // Separate scalar metadata from tensor storage so checkpoint restoration
         // recovers options, absent-state markers, and counters from the same epoch.
         let optimizer = snapshot.map_tensors(0, |key, tensor| {
-            tensors.insert(key.to_owned(), tensor.f_detach()?)?;
+            tensors.insert(key.to_owned(), tch_result(tensor.f_detach())?)?;
             Ok(Tensor::new())
         })?;
         Ok(TrainingState { variables, tensors, optimizer })

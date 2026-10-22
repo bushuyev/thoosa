@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use crate::stages::bucketing::{BucketingInput, BucketingStage};
 use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
@@ -173,8 +174,8 @@ pub struct MeanDistsCtx {
 
 impl MeanDistsCtx {
     pub fn new(channels: u32, device: Device) -> Result<Self, ThoError> {
-        let means_acc = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Float, device))?);
-        let total_samples = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Int64, device))?);
+        let means_acc = Mutex::new(tch_result(Tensor::f_zeros([channels as i64, 1], (Kind::Float, device)))?);
+        let total_samples = Mutex::new(tch_result(Tensor::f_zeros([channels as i64, 1], (Kind::Int64, device)))?);
 
         Ok(Self {
             means_acc,
@@ -190,8 +191,8 @@ pub struct QuantileDistsCtx {
 
 impl QuantileDistsCtx {
     pub fn new(channels: u32, device: Device) -> Result<Self, ThoError> {
-        let quantiles_acc = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Float, device))?);
-        let total_samples = Mutex::new(Tensor::f_zeros([channels as i64, 1], (Kind::Int64, device))?);
+        let quantiles_acc = Mutex::new(tch_result(Tensor::f_zeros([channels as i64, 1], (Kind::Float, device)))?);
+        let total_samples = Mutex::new(tch_result(Tensor::f_zeros([channels as i64, 1], (Kind::Int64, device)))?);
 
         Ok(Self {
             quantiles_acc,
@@ -249,9 +250,9 @@ impl FindMotifsMasksCtxInit {
         match self {
             FindMotifsMasksCtxInit::AccumulatedMean { k, channels } => Ok(MasksCtx::AccumulatedMeanDist { k: *k, ctx: MeanDistsCtx::new(*channels, ThoDevice::from(ctx.tho_device_idx()).into())? }),
             FindMotifsMasksCtxInit::AccumulatedQuantile { q, channels } => Ok(MasksCtx::AccumulatedQuantileDist { q: *q, ctx: QuantileDistsCtx::new(*channels, ThoDevice::from(ctx.tho_device_idx()).into())? }),
-            FindMotifsMasksCtxInit::Precalculated { dists_id, dists } => Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new(dists_id.clone(), tensor_from_ipc_bytes(dists.clone())?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)? }),
+            FindMotifsMasksCtxInit::Precalculated { dists_id, dists } => Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new(dists_id.clone(), tch_result(tensor_from_ipc_bytes(dists.clone())?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into()))?)? }),
             FindMotifsMasksCtxInit::ExactS { euc_dist, channels } => {
-                let exact_stats_t = Tensor::f_from_slice(&[*euc_dist])?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?.f_broadcast_to([*channels as i64, 1])?;
+                let exact_stats_t = tch_result(tch_result(tch_result(Tensor::f_from_slice(&[*euc_dist]))?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into()))?.f_broadcast_to([*channels as i64, 1]))?;
                 debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
                 Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new("ExactStats".into(), exact_stats_t)? })
             }
@@ -448,7 +449,7 @@ where
                                     let metric_val = motif_stats_output.channels_motifs_dists(&comparison_metric)?;
                                     let metric_val_id = metric_val.id().clone();
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
-                                    FindMotifsMasksCtxInit::Precalculated { dists_id: metric_val_id, dists: tensor_to_ipc_bytes(&metric_val.t().f_view((-1, 1, 1))?)? }
+                                    FindMotifsMasksCtxInit::Precalculated { dists_id: metric_val_id, dists: tensor_to_ipc_bytes(&tch_result(metric_val.t().f_view((-1, 1, 1)))?)? }
                                 }
                                 SlicesFilter::ExactS(v) => {
                                     FindMotifsMasksCtxInit::ExactS { euc_dist: v.euc_dist, channels }

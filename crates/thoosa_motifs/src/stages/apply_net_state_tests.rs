@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_ws::MotifsWsMockBuilder;
 use crate::stages::apply_motif_nets::{ApplyMotifNetInit, ApplyMotifNetInput, ApplyMotifNetInputWrapper, apply_motif_net_endpoint_init};
@@ -45,21 +46,21 @@ async fn restore_guards<S: StageWithState + FuturesRunnerMapPurger>(stage: &S) -
     let mut tensors = Vec::new();
     for info in info.tensors {
         let key = info.tensor_key.to_tensor_key();
-        tensors.push((key.clone(), stage.get_state_tensor(1, key).await?.f_to_device(Device::Cpu)?));
+        tensors.push((key.clone(), tch_result(stage.get_state_tensor(1, key).await?.f_to_device(Device::Cpu))?));
     }
     stage.drop_gpu(1, "test worker drop").await?;
     stage.drop_gpu(1, "repeat worker drop").await?;
     assert!(!stage.has_gpu_data(1).await);
     assert!(stage.pre_run(1).await.is_err());
-    assert!(stage.set_state_tensor(1, "unknown".into(), Tensor::f_zeros([1], (tch::Kind::Float, Device::Cuda(0)))?).await.is_err());
+    assert!(stage.set_state_tensor(1, "unknown".into(), tch_result(Tensor::f_zeros([1], (tch::Kind::Float, Device::Cuda(0))))?).await.is_err());
     let (key, tensor) = &tensors[0];
-    assert!(stage.set_state_tensor(1, key.clone(), tensor.f_alias()?).await.is_err());
-    assert!(stage.set_state_tensor(1, key.clone(), tensor.f_to_device(Device::Cuda(0))?.f_to_kind(tch::Kind::Double)?).await.is_err());
-    assert!(stage.set_state_tensor(1, key.clone(), Tensor::f_zeros([999], (tensor.kind(), Device::Cuda(0)))?).await.is_err());
+    assert!(stage.set_state_tensor(1, key.clone(), tch_result(tensor.f_alias())?).await.is_err());
+    assert!(stage.set_state_tensor(1, key.clone(), tch_result(tch_result(tensor.f_to_device(Device::Cuda(0)))?.f_to_kind(tch::Kind::Double))?).await.is_err());
+    assert!(stage.set_state_tensor(1, key.clone(), tch_result(Tensor::f_zeros([999], (tensor.kind(), Device::Cuda(0))))?).await.is_err());
     let count = tensors.len();
     for (index, (key, tensor)) in tensors.into_iter().rev().enumerate() {
-        stage.set_state_tensor(1, key.clone(), tensor.f_to_device(Device::Cuda(0))?).await?;
-        assert!(stage.set_state_tensor(1, key, tensor.f_to_device(Device::Cuda(0))?).await.is_err());
+        stage.set_state_tensor(1, key.clone(), tch_result(tensor.f_to_device(Device::Cuda(0)))?).await?;
+        assert!(stage.set_state_tensor(1, key, tch_result(tensor.f_to_device(Device::Cuda(0)))?).await.is_err());
         if index + 1 < count { assert!(stage.pre_run(1).await.is_err()); }
     }
     assert!(stage.pre_run(1).await?.is_some());
@@ -97,9 +98,9 @@ async fn round_trips() -> Result<(), ThoError> {
     let mut expected_motif = None;
     let mut expected_label = None;
     for cycle in 0..3 {
-        let motif_input = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("motif input", "test").into(), Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu))?.f_reshape([1, 16])?.f_div_scalar(16.)?)?));
+        let motif_input = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("motif input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([1, 16]))?.f_div_scalar(16.))?)?));
         let motif_output = actor.run_stage(motif.clone(), ApplyMotifNetInputWrapper::new(motif_input), 1, &ctx).await?.copy_to_device(0).await?;
-        let label_input = Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(mono_key!("label input", "test").into(), Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu))?.f_reshape([2, 8])?.f_div_scalar(16.)?)?, vec![8, 6])));
+        let label_input = Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(mono_key!("label input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([2, 8]))?.f_div_scalar(16.))?)?, vec![8, 6])));
         if global.is_ipc() && cycle == 1 {
             for _ in 0..2 {
                 let result = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input.clone()), 1, &ctx).await;
@@ -111,8 +112,8 @@ async fn round_trips() -> Result<(), ThoError> {
         }
         let label_output = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input), 1, &ctx).await?.copy_to_device(0).await?;
         if let (Some(expected_motif), Some(expected_label)) = (&expected_motif, &expected_label) {
-            assert!(motif_output.t_ref().f_allclose(expected_motif, 1e-6, 1e-6, false)?, "motif output changed after restore {cycle}");
-            assert!(label_output.t_ref().f_allclose(expected_label, 1e-6, 1e-6, false)?, "label output changed after restore {cycle}");
+            assert!(tch_result(motif_output.t_ref().f_allclose(expected_motif, 1e-6, 1e-6, false))?, "motif output changed after restore {cycle}");
+            assert!(tch_result(label_output.t_ref().f_allclose(expected_label, 1e-6, 1e-6, false))?, "label output changed after restore {cycle}");
         } else {
             expected_motif = Some(motif_output.t());
             expected_label = Some(label_output.t());
@@ -130,12 +131,12 @@ async fn round_trips() -> Result<(), ThoError> {
             let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
             // Direct worker calls skip the proxy restore; neither model may run
             // after its GPU state was dropped.
-            let input = ThoTensor::<ChannelsData, SynKey>::new(mono_key!("raw", "test").into(), Tensor::f_ones([1, 16], (tch::Kind::Float, Device::Cpu))?)?.copy_to_device(1).await?;
+            let input = ThoTensor::<ChannelsData, SynKey>::new(mono_key!("raw", "test").into(), tch_result(Tensor::f_ones([1, 16], (tch::Kind::Float, Device::Cpu)))?)?.copy_to_device(1).await?;
             let wire = ApplyMotifNetInput::new(&input).clone_refs()?;
             let result = ipc.invoke_stage(ipc.worker_id()?, APPLY_MOTIF_NET_ENDPOINT.into(), Some("8101".into()), wire, false).await?;
             let OpResult::Failed(error) = result.status else { panic!("worker retained motif model") };
             assert!(ThoError::from(error).to_string().contains("offloaded"));
-            let input = DataWithExtra::new(ThoTensor::<MotifProbability, SynKey>::new(mono_key!("raw label", "test").into(), Tensor::f_ones([2, 8], (tch::Kind::Float, Device::Cpu))?)?.copy_to_device(1).await?, vec![8, 6]);
+            let input = DataWithExtra::new(ThoTensor::<MotifProbability, SynKey>::new(mono_key!("raw label", "test").into(), tch_result(Tensor::f_ones([2, 8], (tch::Kind::Float, Device::Cpu)))?)?.copy_to_device(1).await?, vec![8, 6]);
             let wire = ApplyLabelNetInput { id: input.id().clone(), input: ThoDataRef::Borrowed(&input) }.clone_refs()?;
             let result = ipc.invoke_stage(ipc.worker_id()?, APPLY_LABEL_NET_ENDPOINT.into(), Some("8102".into()), wire, false).await?;
             let OpResult::Failed(error) = result.status else { panic!("worker retained label model") };

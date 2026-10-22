@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::{tch_error, tch_result};
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
 use crate::motif_tho_tensor::MotifThoTensor;
@@ -589,7 +590,7 @@ where
                 Ok(tensor) => tensor,
                 Err(error) => {
                     input.label_outputs = label_outputs;
-                    return ConsumeResult::Failed { input, error: error.into() };
+                    return ConsumeResult::Failed { input, error: tch_error(error) };
                 }
             }
         } else {
@@ -603,7 +604,7 @@ where
                 Ok(tensor) => tensor,
                 Err(error) => {
                     input.label_outputs = label_outputs;
-                    return ConsumeResult::Failed { input, error: error.into() };
+                    return ConsumeResult::Failed { input, error: tch_error(error) };
                 }
             }
         };
@@ -987,6 +988,7 @@ pub fn logit(x: f64) -> Result<f64, ThoError> {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::apply_label_nets::{ApplyLabelNet, ApplyLabelNetInput, ApplyLabelNets, logit, sigmoid};
@@ -1097,9 +1099,9 @@ mod tests {
     }
 
     fn sum_label_t(k: f64, t: &Tensor) -> Result<Tensor, ThoError> {
-        let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
-        let mut sum = sum.f_unsqueeze(1)?;
-        let out = sum.f_mul_scalar_(k)?;
+        let sum = tch_result(t.f_sum_dim_intlist(&[1, 2][..], false, None))?;
+        let mut sum = tch_result(sum.f_unsqueeze(1))?;
+        let out = tch_result(sum.f_mul_scalar_(k))?;
         Ok(out)
     }
 
@@ -1143,13 +1145,13 @@ mod tests {
 
     fn weighted_label_t(weights: &[f64], t: &Tensor) -> Result<Tensor, ThoError> {
         let weights = weights.iter().map(|v| *v as f32).collect::<Vec<_>>();
-        let weights = Tensor::from_slice(&weights)
-            .f_to_device(t.device())?
-            .f_totype(t.kind())?
-            .f_view([1, weights.len() as i64, 1])?;
-        let weighted = t.f_mul(&weights)?;
-        let sum = weighted.f_sum_dim_intlist(&[1, 2][..], false, None)?;
-        Ok(sum.f_unsqueeze(1)?)
+        let weights = tch_result(tch_result(tch_result(Tensor::from_slice(&weights)
+            .f_to_device(t.device()))?
+            .f_totype(t.kind()))?
+            .f_view([1, weights.len() as i64, 1]))?;
+        let weighted = tch_result(t.f_mul(&weights))?;
+        let sum = tch_result(weighted.f_sum_dim_intlist(&[1, 2][..], false, None))?;
+        Ok(tch_result(sum.f_unsqueeze(1))?)
     }
 
     #[derive(Clone, Debug)]
@@ -1383,7 +1385,7 @@ mod tests {
         let make_input = |resource: u32| -> Result<_, ThoError> {
             Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new(
                 SynKey::new([mono_key!(resource, "resource")]),
-                Tensor::f_ones([channels as i64, motif_width as i64 * 3], (Kind::Float, device))?,
+                tch_result(Tensor::f_ones([channels as i64, motif_width as i64 * 3], (Kind::Float, device)))?,
             )?)))
         };
         let first = make_input(1u32)?;
@@ -1402,9 +1404,9 @@ mod tests {
         let out = SelectRef::select_ref(&out, 0, None::<SyncStftSelector>).await?;
         for other in [&other, &later] {
             let other = SelectRef::select_ref(other, 0, None::<SyncStftSelector>).await?;
-            assert!(out.as_ref().t_ref().f_allclose(&other.as_ref().t_ref(), 1e-6, 1e-6, false)?, "per-resource output ids must not change label order");
+            assert!(tch_result(out.as_ref().t_ref().f_allclose(&other.as_ref().t_ref(), 1e-6, 1e-6, false))?, "per-resource output ids must not change label order");
         }
-        let out = out.as_ref().t_ref().f_squeeze_dim(-1)?;
+        let out = tch_result(out.as_ref().t_ref().f_squeeze_dim(-1))?;
         Ok((out.size(), to_vec_f32(&out)))
     }
 

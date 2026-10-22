@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -299,9 +300,9 @@ where
                 debug!("StackedMotifsLoader::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
 
                 let motifs_t = if channel_motifs_tensors.is_empty() {
-                    Tensor::f_zeros([max_motif_slices as i64, find_motifs_run_config.window as i64], (Float, ThoDevice::from(device_idx).into()))?
+                    tch_result(Tensor::f_zeros([max_motif_slices as i64, find_motifs_run_config.window as i64], (Float, ThoDevice::from(device_idx).into())))?
                 } else {
-                    let channel_t = Tensor::f_cat(&channel_motifs_tensors, 0)?;
+                    let channel_t = tch_result(Tensor::f_cat(&channel_motifs_tensors, 0))?;
 
                     if channel_t.size()[0] < max_motif_slices as i64 {
                         debug!("StackedMotifsLoader::run: c={c}, channel_t.size={:?} padding to {:?}", channel_t.size(), [max_motif_slices as i64, find_motifs_run_config.window  as i64]);
@@ -318,7 +319,7 @@ where
 
             debug!("StackedMotifsLoader::run: channels_motifs_tensors_vec={channels_motifs_tensors_vec:?}");
 
-            let channels_motifs_t = Tensor::f_stack(&channels_motifs_tensors_vec, 0)?;
+            let channels_motifs_t = tch_result(Tensor::f_stack(&channels_motifs_tensors_vec, 0))?;
 
             debug!("StackedMotifsLoader::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
             trace!("StackedMotifsLoader::run: channels_motifs_t=\n{channels_motifs_t}");
