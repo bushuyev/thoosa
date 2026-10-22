@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 use crate::stages::cross_loader::ResourcesConfigInput;
@@ -435,8 +436,8 @@ fn score_resource_in_chunks(
             .min(last_slice_start);
         let last_slice_start_in_chunk = next_slice_start + ((max_start_in_chunk - next_slice_start) / step) * step;
         let chunk_end = last_slice_start_in_chunk.saturating_add(window);
-        let chunk_t = resource_t.f_slice(1, next_slice_start, chunk_end, 1)?;
-        let slices = chunk_t.f_unfold(1, window, step)?;
+        let chunk_t = tch_result(resource_t.f_slice(1, next_slice_start, chunk_end, 1))?;
+        let slices = tch_result(chunk_t.f_unfold(1, window, step))?;
         let score_values = score_slices_to_vec(&run_config.metric, &slices)?;
         let channels_count = score_values.len();
         let chunk_len = score_values.first().map(Vec::len).unwrap_or(0);
@@ -498,7 +499,7 @@ fn score_slices(metric: &SeqScanMetric, slices: &Tensor) -> Result<Tensor, ThoEr
 
 fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<SeqScanChannelScores, ThoError> {
     let scores = score_slices(metric, slices)?;
-    let scores_cpu = scores.f_to_device(Cpu)?;
+    let scores_cpu = tch_result(scores.f_to_device(Cpu))?;
     let size = scores_cpu.size();
     let channels_count = usize::try_from(*size.first().ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
         .with_context(|| format!("score_slices_to_vec: invalid channels_count in size={size:?}"))?;
@@ -507,9 +508,9 @@ fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<SeqSca
     let mut per_channel_scores = Vec::with_capacity(channels_count);
 
     for channel_idx in 0..channels_count {
-        let channel_scores = scores_cpu.f_get(channel_idx as i64)?;
-        let channel_scores_flat = channel_scores.f_reshape([slices_count as i64])?;
-        per_channel_scores.push(Vec::<f32>::try_from(&channel_scores_flat)?);
+        let channel_scores = tch_result(scores_cpu.f_get(channel_idx as i64))?;
+        let channel_scores_flat = tch_result(channel_scores.f_reshape([slices_count as i64]))?;
+        per_channel_scores.push(tch_result(Vec::<f32>::try_from(&channel_scores_flat))?);
     }
 
     Ok(per_channel_scores)
@@ -517,10 +518,10 @@ fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<SeqSca
 
 fn score_mean_abs(slices: &Tensor, config: &MeanAbsSeqScanMetricConfig) -> Result<Tensor, ThoError> {
     let absolute = if config.center {
-        let mean = slices.f_mean_dim([2].as_slice(), true, Kind::Float)?;
-        slices.f_sub(&mean)?.f_abs()?
+        let mean = tch_result(slices.f_mean_dim([2].as_slice(), true, Kind::Float))?;
+        tch_result(tch_result(slices.f_sub(&mean))?.f_abs())?
     } else {
-        slices.f_abs()?
+        tch_result(slices.f_abs())?
     };
 
     reduce_slice_scores(&absolute)
@@ -528,18 +529,18 @@ fn score_mean_abs(slices: &Tensor, config: &MeanAbsSeqScanMetricConfig) -> Resul
 
 fn score_mean_power(slices: &Tensor, config: &MeanPowerSeqScanMetricConfig) -> Result<Tensor, ThoError> {
     let values = if config.center {
-        let mean = slices.f_mean_dim([2].as_slice(), true, Kind::Float)?;
-        slices.f_sub(&mean)?
+        let mean = tch_result(slices.f_mean_dim([2].as_slice(), true, Kind::Float))?;
+        tch_result(slices.f_sub(&mean))?
     } else {
-        slices.f_abs()?
+        tch_result(slices.f_abs())?
     };
-    let powered = values.f_abs()?.f_pow_tensor_scalar(config.power)?;
+    let powered = tch_result(tch_result(values.f_abs())?.f_pow_tensor_scalar(config.power))?;
 
     reduce_slice_scores(&powered)
 }
 
 fn reduce_slice_scores(values: &Tensor) -> Result<Tensor, ThoError> {
-    let per_channel = values.f_mean_dim([2].as_slice(), false, Kind::Float)?;
+    let per_channel = tch_result(values.f_mean_dim([2].as_slice(), false, Kind::Float))?;
 
     Ok(per_channel)
 }

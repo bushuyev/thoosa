@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use log::debug;
@@ -252,7 +253,7 @@ impl SyncStage for SyncClassifierStage {
         let vs = nn::VarStore::new(t.device());
         let root = &vs.root();
         let linear = nn::linear(root, feat, 1, Default::default());
-        let mut opt = nn::Sgd::default().build(&vs, self.lr)?;
+        let mut opt = tch_result(nn::Sgd::default().build(&vs, self.lr))?;
 
         for _epoch in 0..self.epochs {
             let logits = xs.apply(&linear);

@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
@@ -161,8 +162,8 @@ fn train_motif_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn Wor
                 let stft_config = init.stft_config.clone().ok_or_else(|| ThoError::new("TrainMotifStepIpcInit missing STFT config for Cosine2DNet"))?;
                 let stft = SyncStft::<RunCtxImpl, MotifSlices, MotifSlices>::new(SynKey::new([mono_key!("TrainMotifStepIpc", "stft")]), stft_config)?;
                 let motif_specs = stft.build_spectrogram(&motif.t_ref())?;
-                let mut copied = motif_specs.f_zeros_like()?;
-                copied.f_copy_(&motif_specs)?;
+                let mut copied = tch_result(motif_specs.f_zeros_like())?;
+                tch_result(copied.f_copy_(&motif_specs))?;
                 Some(Arc::new(ThoTensor::new(motif.id().clone(), copied)?))
             }
             _ => None,
@@ -265,8 +266,8 @@ where
                     let motif_specs = track_await!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
                     let motif_id = motif_specs.id().clone();
                     let cosine_motif = motif_specs.as_ref();
-                    let mut copied = cosine_motif.f_zeros_like()?;
-                    copied.f_copy_(&cosine_motif)?;
+                    let mut copied = tch_result(cosine_motif.f_zeros_like())?;
+                    tch_result(copied.f_copy_(&cosine_motif))?;
                     Some(Arc::new(ThoTensor::new(motif_id, copied)?))
                 }
                 _ => None,
@@ -426,8 +427,8 @@ impl TrainMotifNetInput {
 }
 
 fn copy_motif(input: &ThoTensor<MotifSlices, SynKey>) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
-    let mut copied = input.t_ref().f_zeros_like()?;
-    copied.f_copy_(&input.t_ref())?;
+    let mut copied = tch_result(input.t_ref().f_zeros_like())?;
+    tch_result(copied.f_copy_(&input.t_ref()))?;
     ThoTensor::new(input.id().clone(), copied)
 }
 
@@ -1009,8 +1010,8 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("SyncMotifBatch::do_run: descr={} num_slices={}", input.descr, input.num_slices);
 
-        let motifs = make_batch_with(&input.motifs.t_ref(), input.num_slices, None)?;
-        let random = make_batch_with(&input.random_slices.t_ref(), input.num_slices, None)?;
+        let motifs = tch_result(make_batch_with(&input.motifs.t_ref(), input.num_slices, None))?;
+        let random = tch_result(make_batch_with(&input.random_slices.t_ref(), input.num_slices, None))?;
 
         #[cfg(tho_debug_plots)]
         plot_spectrogram(&motifs.i((0, .., ..)), format!("/tmp/plots/spectrogram_motif_{}.png", input.id), 1200, 600)?;
@@ -1270,8 +1271,8 @@ where
 
         let motifs_t = motif.t_ref();
         debug_plot!(&motifs_t, "motifs_t{}", input.id)?;
-        let train_motifs = motifs_t.f_narrow(0, 0, split)?;
-        let valid_motifs = motifs_t.f_narrow(0, split, num_validation_slices)?;
+        let train_motifs = tch_result(motifs_t.f_narrow(0, 0, split))?;
+        let valid_motifs = tch_result(motifs_t.f_narrow(0, split, num_validation_slices))?;
 
         Ok(SplitMotifIntoTrainValidOutput {
             id: input.id.clone(),
@@ -1447,6 +1448,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices};
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
@@ -1662,7 +1664,7 @@ mod tests {
             // the module registry before loading its saved weights for this test.
             let mut vs = VarStore::new(Cuda(0));
             let net = params.motif_net(None)?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
-            vs.load(vs_path.path())?;
+            tch_result(vs.load(vs_path.path()))?;
 
             let (t, intervals) = resource_tensor(
                 1000usize,
@@ -1807,9 +1809,9 @@ mod tests {
 
         async fn train_input(cuda_actor: &Box<dyn CudaActorHandle>) -> Result<TrainStepInput<InDims, OutDims>, ThoError> {
             Ok(TrainStepInput::<InDims, OutDims>::new(
-                cuda_actor.copy(ThoTensor::new((), Tensor::f_ones([3, 100], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("2"))?,
+                cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([3, 100], FLOAT_CPU))?)?, 1.into()).await?.to_types(debug_id!("2"))?,
                 None,
-                cuda_actor.copy(ThoTensor::new((), Tensor::f_zeros([3, 1], FLOAT_CPU)?)?, 1.into()).await?.to_types(debug_id!("3"))?,
+                cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_zeros([3, 1], FLOAT_CPU))?)?, 1.into()).await?.to_types(debug_id!("3"))?,
                 false,
             ))
         }

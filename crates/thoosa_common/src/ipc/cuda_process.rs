@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::pending::{KeepAlive, PendingRequests};
 use crate::copy_ctx::{CudaActorHandle, HandleCtx};
 use crate::cuda_utils::tensor_mem_size;
@@ -570,7 +571,7 @@ impl CudaIPCActor {
             let mut destinations = Vec::with_capacity(info.tensors.len());
             for tensor_info in info.tensors {
                 let key = tensor_info.tensor_key.to_tensor_key();
-                let tensor = Tensor::f_empty(tensor_info.shape.as_slice(), (tensor_info.kind.into(), Cpu))?;
+                let tensor = tch_result(Tensor::f_empty(tensor_info.shape.as_slice(), (tensor_info.kind.into(), Cpu)))?;
                 let arena_offset = parent_shared_arena_offset(&tensor, tensor_info.tensor_byte_len, "state D2H destination")?;
                 destinations.push(crate::ipc::worker_msg::StageStatePurgeDestination { info: tensor_info, arena_offset });
                 tensors.push((key, tensor));
@@ -630,7 +631,7 @@ impl CudaIPCActor {
     async fn do_ref_d2h_copy(worker_id: CudaWorkerId, transfer_id: u64, pending: Arc<PendingRequests>, tx: Sender<CudaWorkerMsgIn>, info: WorkerTensorInfoPayload, export_id: Option<u64>) -> Result<ThoTensor, ThoError> {
 
 
-        let destination = Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?;
+        let destination = tch_result(Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu)))?;
         let arena_offset = parent_shared_arena_offset(&destination, info.tensor_byte_len, "D2H destination")?;
         let destination = Arc::new(parking_lot::Mutex::new(destination));
         // The registry retains this allocation even if this task aborts
@@ -883,8 +884,8 @@ fn ensure_parent_shared_arena_tensor(source: Tensor, tensor_byte_len: usize) -> 
 
     // Tensors created before IPC initialization still use LibTorch's old CPU allocator; migrate them without reintroducing per-transfer memfds.
     warn!("ensure_parent_shared_arena_tensor: got tensor created out of arena: source={source:?}");
-    let mut shared_source = Tensor::f_empty(source.size().as_slice(), (source.kind(), Cpu))?;
-    shared_source.f_copy_(&source)?;
+    let mut shared_source = tch_result(Tensor::f_empty(source.size().as_slice(), (source.kind(), Cpu)))?;
+    tch_result(shared_source.f_copy_(&source))?;
     let arena_offset = parent_shared_arena_offset(&shared_source, tensor_byte_len, "staged H2D source")?;
     Ok((shared_source, arena_offset))
 }
@@ -1439,6 +1440,7 @@ pub(crate) struct DeviceInfo {
 
 #[cfg(test)]
 mod tests {
+    use crate::tch_error::tch_result;
     use super::{BackendControl, PendingRequests};
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
@@ -1515,6 +1517,23 @@ mod tests {
             assert_eq!(received.needs_cuda_restart(), action == CudaAction::NeedsRestart);
             let message = received.to_string();
             assert!(message.contains("worker request 42") && message.contains("job 27") && message.contains("forward model") && message.contains("device failure detail"));
+        }
+    }
+
+    #[test]
+    fn test_worker_error_round_trip_preserves_libtorch_recovery() {
+        // Exercise both direct tensor-result conversion and the shared anyhow boundary.
+        for (message, oom, reset) in [
+            ("CUDA out of memory", true, false),
+            ("CUDA error: an illegal memory access was encountered", false, true),
+        ] {
+            let direct = crate::tch_error::tch_error(tch::TchError::Torch(message.into()));
+            let contextual = ThoError::from(anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model"));
+            for error in [direct, contextual] {
+                let received = round_trip_worker_error(error.context("worker request"));
+                assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_restart()), (oom, oom, reset));
+                assert!(received.to_string().contains(message));
+            }
         }
     }
 
@@ -1843,11 +1862,11 @@ mod tests {
             let dim_0 = elements.div_ceil(dim_1);//10_000; //
             debug!("test_copy_ipc_cuda_worker_propagates_oom, dim_0={dim_0} dim_1={dim_1} ");
 
-            let _rand = Tensor::f_rand([dim_0 as i64, dim_1 as i64-1], FLOAT_CUDA)?;
+            let _rand = tch_result(Tensor::f_rand([dim_0 as i64, dim_1 as i64-1], FLOAT_CUDA))?;
             debug!("test_copy_ipc_cuda_worker_propagates_oom, _rand={_rand:?}");
 
 
-            let too_large_tensor = Tensor::f_rand([dim_0 as i64, 1], FLOAT_CPU)?;
+            let too_large_tensor = tch_result(Tensor::f_rand([dim_0 as i64, 1], FLOAT_CPU))?;
 
             let copy_result = tokio::time::timeout(
                 std::time::Duration::from_secs(600),
@@ -1923,7 +1942,7 @@ mod tests {
                 let tho_device_idx = 1;
 
             let main_process_cpu_tensor = Tensor::rand(&[5_000, 10_000], FLOAT_CPU);
-            let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
+            let expected_digest = tch_result(tensor_digest(&main_process_cpu_tensor))?;
 
 
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
@@ -1943,7 +1962,7 @@ mod tests {
 
             debug!("run_main: cpu_tensor={cpu_tensor:?}");
 
-            let actual_digest = tensor_digest(&cpu_tensor.t_ref())?;
+            let actual_digest = tch_result(tensor_digest(&cpu_tensor.t_ref()))?;
             if actual_digest.hex != expected_digest.hex {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }

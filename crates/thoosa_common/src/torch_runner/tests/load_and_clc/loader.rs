@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
@@ -100,7 +101,7 @@ impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
     fn local_subview(id:&SynKey, t:&Tensor, selector: LoadedRange) -> Result<Self::Output, ThoError> {
         let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end);
 
-        let sub_tensor = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
+        let sub_tensor = tch_result(t.f_i((ranges[0].clone(), ranges[1].clone())))?;
 
         let new_id = id.clone(); //SimpleId::from(format!("{}:{ranges:?}", self.id().0));
 
@@ -173,12 +174,12 @@ impl LoadedTensor {
 
         debug!("LoadedTensor::clc_sum: multed={multed:?}");
 
-        let sum = multed?
+        let sum = tch_result(multed)?
             .f_sum_dim_intlist(1, false, loaded.t_ref().kind());
 
         debug!("LoadedTensor::clc_sum: sum={sum:?}");
 
-        let tensor = sum?.view((-1, 1));
+        let tensor = tch_result(sum)?.view((-1, 1));
 
         debug!("LoadedTensor::clc_sum: device={:?}", tensor.device());
 

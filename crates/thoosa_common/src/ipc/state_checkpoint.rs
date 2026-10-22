@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::cuda_utils::tensor_mem_size;
 use thoosa_shared::ipc_types::{TensorKey};
@@ -27,7 +28,7 @@ impl CpuStateCheckpoint {
     }
 
     fn restore_dump(&self) -> Result<StageStateDump, ThoError> {
-        let tensors = self.tensors.iter().map(|(key, tensor)| Ok((key.clone(), ThoTensor::new((), tensor.as_ref().f_alias()?)?))).collect::<Result<_, ThoError>>()?;
+        let tensors = self.tensors.iter().map(|(key, tensor)| Ok((key.clone(), ThoTensor::new((), tch_result(tensor.as_ref().f_alias())?)?))).collect::<Result<_, ThoError>>()?;
         Ok(StageStateDump::new(None, tensors))
     }
 }
@@ -44,7 +45,7 @@ pub(crate) async fn copy_state_tensor(tensor: Tensor, device: usize) -> Result<T
     let source = crate::tho_device::ThoDevice::from(tensor.device()).tho_device_idx();
     if source == device {
         // CPU training must not mutate the saved CPU allocation through an alias.
-        return Ok(tensor.f_to_device_(tensor.device(), tensor.kind(), false, true)?);
+        return Ok(tch_result(tensor.f_to_device_(tensor.device(), tensor.kind(), false, true))?);
     }
     let actor = GlobalCtx::global().cuda_actor(source.max(device));
     Ok(actor.copy(ThoTensor::new((), tensor)?, device.into()).await?.into())

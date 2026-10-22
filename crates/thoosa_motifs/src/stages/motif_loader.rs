@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 
 use async_trait::async_trait;
@@ -1192,10 +1193,10 @@ where
             }
         }
 
-        let mut dst = Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.t_ref().kind(), input.raw_tensor.t_ref().device()))?;
+        let mut dst = tch_result(Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.t_ref().kind(), input.raw_tensor.t_ref().device())))?;
         for (slice_i, slice) in valid_slices.into_iter().enumerate() {
-            let src = input.raw_tensor.t_ref().f_i((input.channel, slice as i64..(slice + input.window) as i64))?;
-            dst.f_get(slice_i as i64)?.f_copy_(&src)?;
+            let src = tch_result(input.raw_tensor.t_ref().f_i((input.channel, slice as i64..(slice + input.window) as i64)))?;
+            tch_result(tch_result(dst.f_get(slice_i as i64))?.f_copy_(&src))?;
         }
 
         ThoTensor::new(input.raw_tensor.id().clone(), dst).map(Into::into)
@@ -1464,13 +1465,13 @@ where
             }
         }
 
-        let mut output = Tensor::f_zeros(
+        let mut output = tch_result(Tensor::f_zeros(
             [input.channels, valid_slices.len() as i64, input.window as i64],
             (Float, input.raw_tensor.t_ref().device()),
-        )?;
+        ))?;
         for (slice_i, (slice, slice_end)) in valid_slices.into_iter().enumerate() {
-            let src = input.raw_tensor.t_ref().f_i((0..input.channels, slice as i64..slice_end as i64))?;
-            output.f_i((0..input.channels, slice_i as i64, ..))?.f_copy_(&src)?;
+            let src = tch_result(input.raw_tensor.t_ref().f_i((0..input.channels, slice as i64..slice_end as i64)))?;
+            tch_result(tch_result(output.f_i((0..input.channels, slice_i as i64, ..)))?.f_copy_(&src))?;
         }
 
         ThoTensor::new(mono_key!(input.resource_id, format!("random_slices_resource_id={}", input.resource_id)).into(), output).map(Into::into)
@@ -1572,9 +1573,9 @@ fn build_motif_from_loaded_resources(
         .collect::<Vec<_>>();
 
     let tensor = if motif_refs.is_empty() {
-        Tensor::f_zeros([0, window as i64], (Float, ThoDevice::from(device_idx).into()))?
+        tch_result(Tensor::f_zeros([0, window as i64], (Float, ThoDevice::from(device_idx).into())))?
     } else {
-        Tensor::f_cat(motif_refs.as_slice(), 0)?.f_totype(Float)?
+        tch_result(tch_result(Tensor::f_cat(motif_refs.as_slice(), 0))?.f_totype(Float))?
     };
 
     ThoTensor::new(mono_key!(*motif_id, descr).into(), tensor)

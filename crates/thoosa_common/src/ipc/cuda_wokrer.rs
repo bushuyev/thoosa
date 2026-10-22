@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::copy_ctx::{CopyCtx, ExecutionStreamPool};
 use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::data_with_extra::DataWithExtra;
@@ -369,7 +370,7 @@ fn prepare_d2h_source(all_cuda_tensors: &AllTensors, tensor_key: u64, kind: IpcT
         return Err(ThoError::new(format!("worker tensor key={tensor_key} device={source_cuda_device} does not match worker CUDA device={cuda_device}")));
     }
     // A fallible alias keeps the CUDA storage alive after releasing the tensor map while CopyCtx awaits its chunk stages.
-    Ok(source.f_alias()?)
+    Ok(tch_result(source.f_alias())?)
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -883,7 +884,7 @@ where
 
             debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} source={source:?}");
 
-            let mut tensor = source.f_alias()?;
+            let mut tensor = tch_result(source.f_alias())?;
 
 
             if let Some(selector) = input_ref.selector() {
@@ -901,7 +902,7 @@ where
                     if range.start > end {
                         return Err(ThoError::new(format!("selector {selector:?} starts outside dimension {dim} with size {dim_size}")));
                     }
-                    tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
+                    tensor = tch_result(tensor.f_narrow(dim as i64, range.start, end - range.start))?;
                 }
             }
 

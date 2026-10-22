@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use std::cmp::min;
 use async_trait::async_trait;
 use thoosa_common::dims::ChannelsData;
@@ -440,6 +441,7 @@ where
 #[cfg(test)]
 pub mod tests {
     #![allow(unused_assignments)]
+use crate::tch_error::tch_result;
     use futures::stream::{self, BoxStream};
     use futures_util::StreamExt;
     use std::future::ready;
@@ -652,8 +654,8 @@ pub mod tests {
     fn oom_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>, ThoBatch<DummyY>), ThoError>> {
         // Failure originates inside TrainStep after forward, not in the loader.
         let input = (|| {
-            let x = Tensor::f_zeros([1, 1, 1], (tch::Kind::Float, tch::Device::Cpu))?;
-            let y = Tensor::f_full([1, 1, 1], -999.0, (tch::Kind::Float, tch::Device::Cpu))?;
+            let x = tch_result(Tensor::f_zeros([1, 1, 1], (tch::Kind::Float, tch::Device::Cpu)))?;
+            let y = tch_result(Tensor::f_full([1, 1, 1], -999.0, (tch::Kind::Float, tch::Device::Cpu)))?;
             Ok((x.into(), None, y.into()))
         })();
         stream::iter([input]).boxed()
@@ -864,8 +866,8 @@ pub mod tests {
         // The only validation is in the final epoch. The old deferred save never ran.
         let train_net = Arc::new(TrainNet::new(batch_factory_with_stream_errors(None, None), Arc::new(DummyTrainStepFactory), Arc::new(OptConfig::new(1, 1)), Arc::new(configs), |_rc: &DummyRunConfig| 1, 1, "final checkpoint regression".to_string()));
         let (checkpoint, loss, ()) = train_net.run_inner(mock_run_ctx::default(1), 1, DummyRunConfig::new(None, 1), 1, "final checkpoint regression".to_string()).await?;
-        let tensors = Tensor::read_safetensors(checkpoint.path())?;
-        let bias = tensors.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("checkpoint has no bias"))?.1.f_double_value(&[0])?;
+        let tensors = tch_result(Tensor::read_safetensors(checkpoint.path()))?;
+        let bias = tch_result(tensors.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("checkpoint has no bias"))?.1.f_double_value(&[0]))?;
         assert!((loss as f64 - bias * bias).abs() < 1e-6, "best loss must describe the completed checkpoint");
         Ok(())
     }

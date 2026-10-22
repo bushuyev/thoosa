@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::find::FindMotifsSavableResult;
 use crate::motifs_store::MotifsStore;
@@ -1754,8 +1755,8 @@ mod tests {
                     }
                 }
                 debug!("test_cross_cls, batch_clc, no OOM: t_0={:?}, t_1={:?}", t_0.size(), t_1.size());
-                let sum_0 = t_0.f_sum_dim_intlist(2, false, Kind::Float)?;
-                let sum_1 = t_1.f_sum_dim_intlist(2, false, Kind::Float)?;
+                let sum_0 = tch_result(t_0.f_sum_dim_intlist(2, false, Kind::Float))?;
+                let sum_1 = tch_result(t_1.f_sum_dim_intlist(2, false, Kind::Float))?;
                 let dists = sum_0.unsqueeze(2) + sum_1.unsqueeze(1);
                 let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
                 let mask_size = mask.size();

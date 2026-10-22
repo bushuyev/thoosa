@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use log::{debug, trace};
 use std::cmp::min;
 use std::ops::Range;
@@ -32,9 +33,9 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
 
         let stacked = if subs.is_empty() {
             //TODO the size then should be checked to decide if tensor is valid. Should be a better solution
-            Tensor::f_empty([0], (t.kind(), t.device()))?
+            tch_result(Tensor::f_empty([0], (t.kind(), t.device())))?
         } else {
-            Tensor::f_vstack(subs.as_slice())?
+            tch_result(Tensor::f_vstack(subs.as_slice()))?
         };
 
         let sub = ThoTensor::new(id + &mono_key!(0, format!("{ranges:?}")), stacked)?;

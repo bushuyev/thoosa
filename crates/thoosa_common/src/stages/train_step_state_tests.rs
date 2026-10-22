@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::dims::AnyDims;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
@@ -87,9 +88,9 @@ async fn step(optimizer: u8, id: String, checkpoint: PathBuf) -> Result<Arc<DynS
 
 fn input(train: bool) -> Result<TrainStepInput<AnyDims, AnyDims>, ThoError> {
     Ok(TrainStepInput::new(
-        ThoTensor::new(debug_id!("train state x"), Tensor::f_from_slice(&[1f32, 2., 3., 2., -1., 1.])?.f_reshape([2, 3])?)?,
+        ThoTensor::new(debug_id!("train state x"), tch_result(tch_result(Tensor::f_from_slice(&[1f32, 2., 3., 2., -1., 1.]))?.f_reshape([2, 3]))?)?,
         None,
-        ThoTensor::new(debug_id!("train state y"), Tensor::f_zeros([2, 1], (Kind::Float, Device::Cpu))?)?,
+        ThoTensor::new(debug_id!("train state y"), tch_result(Tensor::f_zeros([2, 1], (Kind::Float, Device::Cpu)))?)?,
         train,
     ))
 }
@@ -141,7 +142,7 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
     let saved = pipeline.save_epoch_checkpoint(1).await?;
     let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut failed = input(true)?;
-    failed.expected_y = Some(ThoTensor::new(debug_id!("prefetch OOM"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
+    failed.expected_y = Some(ThoTensor::new(debug_id!("prefetch OOM"), tch_result(Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu)))?)?);
     let source = futures_util::stream::iter([batch_parts(failed)])
         .chain(futures_util::stream::once({
             let drained = drained.clone();
@@ -339,9 +340,9 @@ async fn round_trips() -> Result<(), ThoError> {
             let newer = restored.save_epoch_checkpoint(1).await?;
             let newest = restored.save_epoch_checkpoint(1).await?;
             assert_eq!(newer.tensors.len(), newest.tensors.len());
-            for (key, tensor) in &newer.tensors { assert!(tensor.as_ref().f_equal(newest.tensors[key].as_ref().as_ref())?); }
+            for (key, tensor) in &newer.tensors { assert!(tch_result(tensor.as_ref().f_equal(newest.tensors[key].as_ref().as_ref()))?); }
             let mut failed = input(true)?;
-            failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu))?)?);
+            failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), tch_result(Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu)))?)?);
             let cache = Arc::new(TmpCached::new("failed_epoch_batch").await);
             let error = restored.run_once(cache.insert_guarded(failed), RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();
             assert!(error.is_oom());
@@ -416,20 +417,20 @@ fn test_train_state_ipc() -> Result<(), ThoError> {
 
 fn uneven_input(train: bool) -> Result<TrainStepInput<AnyDims, AnyDims>, ThoError> {
     Ok(TrainStepInput::new(
-        ThoTensor::new(debug_id!("transaction x"), Tensor::f_from_slice(&[1f32, 2., 3., 2., -1., 1., 0.5, 0.25, -0.5])?.f_reshape([3, 3])?)?,
+        ThoTensor::new(debug_id!("transaction x"), tch_result(tch_result(Tensor::f_from_slice(&[1f32, 2., 3., 2., -1., 1., 0.5, 0.25, -0.5]))?.f_reshape([3, 3]))?)?,
         None,
-        ThoTensor::new(debug_id!("transaction y"), Tensor::f_from_slice(&[0f32, 0., 1.])?.f_reshape([3, 1])?)?,
+        ThoTensor::new(debug_id!("transaction y"), tch_result(tch_result(Tensor::f_from_slice(&[0f32, 0., 1.]))?.f_reshape([3, 1]))?)?,
         train,
     ))
 }
 
 fn checkpoint_loss(path: &std::path::Path) -> Result<f32, ThoError> {
-    let variables = Tensor::read_safetensors(path)?;
+    let variables = tch_result(Tensor::read_safetensors(path))?;
     let weight = variables.iter().find(|(name, _)| name.ends_with("weight")).ok_or_else(|| ThoError::new("missing checkpoint weight"))?;
     let bias = variables.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("missing checkpoint bias"))?;
     let input = uneven_input(false)?;
-    let predicted = input.x_ref()?.as_ref().f_linear(&weight.1, Some(&bias.1))?;
-    Ok(predicted.f_mse_loss(&input.expected_y_ref()?.as_ref(), Reduction::Mean)?.f_double_value(&[])? as f32)
+    let predicted = tch_result(input.x_ref()?.as_ref().f_linear(&weight.1, Some(&bias.1)))?;
+    Ok(tch_result(tch_result(predicted.f_mse_loss(&input.expected_y_ref()?.as_ref(), Reduction::Mean))?.f_double_value(&[]))? as f32)
 }
 
 #[tokio::test]
@@ -457,7 +458,7 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             for tensor in &saved_info.tensors {
                 let key = tensor.tensor_key.to_tensor_key();
                 let tensor = state.state_tensor(&key)?;
-                saved_tensors.push((key, tensor.f_to_device_(Device::Cpu, tensor.kind(), false, true)?));
+                saved_tensors.push((key, tch_result(tensor.f_to_device_(Device::Cpu, tensor.kind(), false, true))?));
             }
             FAIL_LAST_CHUNK.store(true, Ordering::SeqCst);
             let error = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx).unwrap_err();

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_ws::{MotifsWorkspace, MotifsWsMockBuilder};
 use std::time::Duration;
@@ -11,7 +12,7 @@ async fn request(resource: u32, models: &[u32], retry: bool) -> Result<StackAppl
     let order = models.iter().enumerate().map(|(index, model)| (SynKey::new([mono_key!(*model, "model"), mono_key!(resource, "resource")]), index)).collect::<HashMap<_, _>>();
     // Temporary-cache iteration order is arbitrary; the request must determine the output order.
     for (id, index) in &order {
-        cache.insert(ThoTensor::new(id.clone(), Tensor::f_from_slice(&[resource as f32 * 10. + models[*index] as f32])?.f_view([1, 1])?)?);
+        cache.insert(ThoTensor::new(id.clone(), tch_result(tch_result(Tensor::f_from_slice(&[resource as f32 * 10. + models[*index] as f32]))?.f_view([1, 1]))?)?);
     }
     let input = StackAppliedLabelNetsInputWrapper::new(mono_key!(resource, "aggregate").into(), order, cache);
     if !retry { return Ok(input); }
@@ -28,7 +29,7 @@ async fn run_request(stage: Arc<DynSyncStageEnum<StackAppliedLabelNets<RunCtxImp
     let output = handler.consume(&stage, input, RunCtxImpl::new(1, "reusable label stack"), NoContexts).await?.into_inner();
     assert_eq!(output.id(), &expected_id);
     let output = output.copy_to_device(0).await?;
-    let actual = Vec::<f32>::try_from(&output.t_ref().f_view([-1])?)?;
+    let actual = tch_result(Vec::<f32>::try_from(&tch_result(output.t_ref().f_view([-1]))?))?;
     let expected = models.iter().map(|model| resource as f32 * 10. + *model as f32).collect::<Vec<_>>();
     assert_eq!(actual, expected, "resource-specific membership and order must survive IPC and retries");
     Ok(())

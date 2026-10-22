@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use log::{debug, error, info};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -869,6 +870,7 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::run_all::{run_all, run_all_config_0, AllConfigs, FindAndSelect, RunAllSettings, run_all_config_1};
     use futures::executor::block_on;
     use futures::future::BoxFuture;
@@ -1030,7 +1032,7 @@ mod tests {
                     let (t, _intervals) = maker()?;
                     let stem = format!("t_{label_i}_{i}");
                     debug_plot!(&t, &stem)?;
-                    t.save(input.tensors_path.join(format!("{stem}.pt")))?;
+                    tch_result(t.save(input.tensors_path.join(format!("{stem}.pt"))))?;
 
                     import_hash.insert(stem, vec![(format!("label_{label_i}"), 1.0)]);
                 }
@@ -1218,7 +1220,7 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
-                let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
+                let tensor = tch_result(Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem()))))?;
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },

@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::tho_tensor::{KeyHolder, ThoTensor, ThoTensorInner};
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -90,7 +91,7 @@ impl LocalSelect<u32, RangeSelector> for ThoTensor<AnyDims, u32> {
     fn local_subview(id: &u32, t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
         let start = i64::try_from(selector.start[0]).context("range selector start does not fit i64")?;
         let end = i64::try_from(selector.end[0]).context("range selector end does not fit i64")?;
-        ThoTensor::new(*id, t.f_i(start..end)?)
+        ThoTensor::new(*id, tch_result(t.f_i(start..end))?)
     }
 }
 

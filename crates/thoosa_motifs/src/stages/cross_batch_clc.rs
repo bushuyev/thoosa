@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::distance::clc_dist_d2;
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
@@ -709,7 +710,7 @@ where
             }
             // This alias lives only inside this synchronous calculation. The
             // registered prepared batch owns the storage across invocations.
-            (prepared.tensor.t_ref().f_alias()?, prepared.sizes.clone(), 0)
+            (tch_result(prepared.tensor.t_ref().f_alias())?, prepared.sizes.clone(), 0)
         } else {
             let (tensor, sizes) = unfold_and_cat(&tensors[0..input.resources_0.len()], unfold_params)?;
             (tensor, sizes, input.resources_0.len())
@@ -779,11 +780,11 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params:
         if t.size().dim_1() >= unfold_params.size  {
             // A failed unfold must retry through OOM handling, not cache a
             // partially prepared batch with that resource silently omitted.
-            let unfolded = t.t_ref().f_unfold(
+            let unfolded = tch_result(t.t_ref().f_unfold(
                 unfold_params.dimension,
                 unfold_params.size,
                 unfold_params.step,
-            )?;
+            ))?;
             debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?} unfolded.size={:?}", t.id(), t.size(), unfold_params, unfolded.size());
             sizes.push(unfolded.size()[1]); //number of blocks
             unfolded_tensors.push(unfolded);
@@ -800,7 +801,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params:
     }
 
 
-    let batch_0_t = Tensor::f_concat(tensors.as_slice(), 1)?;
+    let batch_0_t = tch_result(Tensor::f_concat(tensors.as_slice(), 1))?;
     Ok((batch_0_t, sizes))
 }
 

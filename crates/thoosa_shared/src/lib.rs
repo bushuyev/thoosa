@@ -748,29 +748,25 @@ impl ThoError {
     }
 }
 
+// Backends may classify their own typed errors without making this crate depend on
+// their libraries. The adapter is installed before main and never replaces a typed
+// ThoError already present in the source chain.
+static EXTERNAL_ERROR_ADAPTER: std::sync::OnceLock<fn(anyhow::Error) -> anyhow::Error> = std::sync::OnceLock::new();
+
+pub fn register_error_adapter(adapter: fn(anyhow::Error) -> anyhow::Error) {
+    EXTERNAL_ERROR_ADAPTER.set(adapter).expect("external error adapter is already registered");
+}
+
 impl From<anyhow::Error> for ThoError {
     fn from(error: anyhow::Error) -> Self {
-        debug!("From<anyhow::Error> for ThoError: error={error:?} type_name={}", error.type_name());
-        // LibTorch exposes no CUDA status in TchError. Confine its legacy text adapter to
-        // the raw Torch payload; never classify application context or arbitrary Display text.
-        // #[cfg(feature = "tch-error")]
-        if Self::typed_error(&error).is_none() {
-            debug!("From<anyhow::Error> for ThoError: typed_error(&error).is_none()");
-            if let Some(tch::TchError::Torch(msg)) = error.downcast_ref::<tch::TchError>() {
-                debug!("From<anyhow::Error> for ThoError: Some(tch::TchError::Torch(msg))");
-
-                if msg.to_ascii_lowercase().contains("cuda") {
-                    let classification = cuda_cause_from_msg(msg.clone());
-                    let Self::Cuda { action, .. } = classification else { unreachable!() };
-                    let marker = Self::Cuda { action, msg: "LibTorch operation failed".into() };
-
-                    debug!("From<anyhow::Error> for ThoError: classification={classification:?} marker={marker:?}");
-
-                    return Self::Anyhow(Arc::new(error.context(marker)));
-                }
+        let error = if Self::typed_error(&error).is_none() {
+            match EXTERNAL_ERROR_ADAPTER.get() {
+                Some(adapter) => adapter(error),
+                None => error,
             }
-        }
-        debug!("From<anyhow::Error> for ThoError: anyhow");
+        } else {
+            error
+        };
         Self::Anyhow(Arc::new(error))
     }
 }
@@ -1452,9 +1448,6 @@ impl From<Arc<clap::Error>> for ThoError {
 
 #[cfg(feature = "rusqlite-error")]
 impl_from_external_error!(rusqlite::Error);
-
-// #[cfg(feature = "tch-error")]
-impl_from_external_error!(tch::TchError);
 
 #[cfg(feature = "serde-json-error")]
 impl_from_external_error!(serde_json::Error);
@@ -2635,23 +2628,6 @@ mod shared_tests {
         assert!(!error.needs_cuda_restart(), "needs_cuda_restart");
     }
 
-    #[test]
-    fn test_tho_error_libtorch_adapter_preserves_source_and_recovery() {
-        for (message, oom, reset) in [
-            ("CUDA out of memory. Tried to allocate 128 MiB", true, false),
-            ("CUDA error: an illegal memory access was encountered", false, true),
-        ] {
-            let source = anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model");
-            let error = ThoError::from(source);
-            assert_eq!((error.is_oom(), error.needs_cuda_restart()), (oom, reset));
-            let ThoError::Anyhow(source) = &error else { panic!("expected original Torch error") };
-            assert!(source.downcast_ref::<tch::TchError>().is_some());
-            assert!(format!("{error:#}").contains(message));
-        }
-
-        let error = ThoError::from(tch::TchError::Shape("CUDA out of memory".into()));
-        assert!(error.is_oom(), "CUDA out of memory even if it's in TchError::Shape ");
-    }
 
 
     #[test]
@@ -2947,7 +2923,8 @@ macro_rules! panic_to_err_async {
                     },
                     Err(err) => {
                         log::debug!("panic_to_err_async: err: {err:?}");
-                        Err(thoosa_shared::ThoError::from(err))
+                        // Erase backend-specific errors before entering the shared error adapter.
+                        Err(thoosa_shared::ThoError::from(thoosa_shared::anyhow::Error::from(err)))
                     }
                 }
             },
@@ -2975,7 +2952,8 @@ macro_rules! panic_to_err {
             //no panic
             Ok(inner_result) => match inner_result {
                 Ok(val) => Ok(val),
-                Err(err) => Err(ThoError::from(err)),
+                // This macro accepts backend errors without requiring their From impls here.
+                Err(err) => Err(thoosa_shared::ThoError::from(thoosa_shared::anyhow::Error::from(err))),
             },
             //panic
             Err(e) => {

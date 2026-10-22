@@ -1,3 +1,4 @@
+use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use log::{debug, error, info, trace, warn};
@@ -460,6 +461,7 @@ where
 
 #[cfg(test)]
 pub mod tests {
+    use thoosa_common::tch_error::tch_result;
     use crate::criteria::mock_criteria;
     use crate::motif_tracker_store::IdSlice;
     use crate::motifs_store::{MockMotifsStore, MockMotifsStoreBuilder, MotifsStore};
@@ -1264,7 +1266,7 @@ pub mod tests {
             0,
         );
         let motif_12_t = Tensor::stack(
-            &[Tensor::zeros([100], FLOAT_CPU), Tensor::ones([100], FLOAT_CPU).f_mul_scalar(2.0)?],
+            &[Tensor::zeros([100], FLOAT_CPU), tch_result(Tensor::ones([100], FLOAT_CPU).f_mul_scalar(2.0))?],
             0,
         );
 

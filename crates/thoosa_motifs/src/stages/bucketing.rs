@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
@@ -476,7 +477,7 @@ where
                         }
                         let sample_range = bucket_selector_sample_range(&selector, audio_size[1], self.bucket_window_samples, self.bucket_step_samples)?;
                         let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::borrow_to: invalid sample_range={sample_range:?}")))?;
-                        (audio.f_narrow(1, sample_range.start, sample_len)?, sample_range)
+                        (tch_result(audio.f_narrow(1, sample_range.start, sample_len))?, sample_range)
                     };
                     let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
                     drop(tensor);
@@ -606,7 +607,7 @@ where
 
     fn save_resource_mel_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
         let patches = audio_to_log_mel_patches(&input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
-        let patch_ranges = patch_sample_ranges_flat(&patches, mel_config, self.window, self.step)?;
+        let patch_ranges = tch_result(patch_sample_ranges_flat(&patches, mel_config, self.window, self.step))?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
 
         if patch_ranges.len() != channels_bucket_ids.len() {
@@ -658,7 +659,7 @@ where
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: audio too short samples={} window={}", audio_size[1], self.window)));
         }
 
-        let slices = audio.f_unfold(1, self.window, self.step)?;
+        let slices = tch_result(audio.f_unfold(1, self.window, self.step))?;
         debug!("SyncBucketingStage::save_resource_plain_buckets: id={:?} slices={slices:?}", input.id());
 
         let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, self.sample_rate as f64, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
@@ -781,7 +782,7 @@ pub fn audio_to_log_mel_patches(
     let device = audio.device();
 
     // Work in float.
-    let audio = audio.f_to_kind(Kind::Float)?;
+    let audio = tch_result(audio.f_to_kind(Kind::Float))?;
 
     // ---------------------------------------------------------------------
     // 1. Frame audio with unfold.
@@ -789,7 +790,7 @@ pub fn audio_to_log_mel_patches(
     // audio:  [C, samples]
     // frames: [C, frames, n_fft]
     // ---------------------------------------------------------------------
-    let frames = audio.f_unfold(1, window, step)?;
+    let frames = tch_result(audio.f_unfold(1, window, step))?;
     debug!("audio_to_log_mel_patches: frames={frames:?}");
     // ---------------------------------------------------------------------
     // 2. Apply Hann window.
@@ -797,10 +798,10 @@ pub fn audio_to_log_mel_patches(
     // window: [n_fft]
     // frames: [C, frames, n_fft]
     // ---------------------------------------------------------------------
-    let hann = Tensor::f_hann_window(window, (Kind::Float, device))?;
+    let hann = tch_result(Tensor::f_hann_window(window, (Kind::Float, device)))?;
     debug!("audio_to_log_mel_patches: hann={hann:?}");
 
-    let frames = frames.f_mul(&hann.f_view([1, 1, window])?)?;
+    let frames = tch_result(frames.f_mul(&tch_result(hann.f_view([1, 1, window]))?))?;
     debug!("audio_to_log_mel_patches: frames x hann={frames:?}");
 
     // ---------------------------------------------------------------------
@@ -809,10 +810,10 @@ pub fn audio_to_log_mel_patches(
     // spectrum: [C, frames, freq_bins] complex
     // power:    [C, frames, freq_bins] real
     // ---------------------------------------------------------------------
-    let spectrum = frames.f_fft_rfft(None, -1, "backward")?;
+    let spectrum = tch_result(frames.f_fft_rfft(None, -1, "backward"))?;
     debug!("audio_to_log_mel_patches: spectrum={spectrum:?}");
 
-    let power = spectrum.f_abs()?.f_pow_tensor_scalar(2.0)?;
+    let power = tch_result(tch_result(spectrum.f_abs())?.f_pow_tensor_scalar(2.0))?;
 
     debug!("audio_to_log_mel_patches: power={power:?}");
 
@@ -841,17 +842,17 @@ pub fn audio_to_log_mel_patches(
 
     let n_frames = power.size()[1];
 
-    let power_flat = power.f_view([channels * n_frames, freq_bins])?;
+    let power_flat = tch_result(power.f_view([channels * n_frames, freq_bins]))?;
 
     debug!("audio_to_log_mel_patches: power_flat={power_flat:?}");
 
-    let mel_flat = power_flat.f_matmul(&mel_fb.f_transpose(0, 1)?)?;
+    let mel_flat = tch_result(power_flat.f_matmul(&tch_result(mel_fb.f_transpose(0, 1))?))?;
 
     debug!("audio_to_log_mel_patches: mel_flat={mel_flat:?}");
 
-    let mel = mel_flat
-        .f_view([channels, n_frames, cfg.n_mels])?
-        .f_transpose(1, 2)?; // [C, M, frames]
+    let mel = tch_result(tch_result(mel_flat
+        .f_view([channels, n_frames, cfg.n_mels]))?
+        .f_transpose(1, 2))?; // [C, M, frames]
 
     debug!("audio_to_log_mel_patches: mel={mel:?}");
     // ---------------------------------------------------------------------
@@ -859,7 +860,7 @@ pub fn audio_to_log_mel_patches(
     //
     // log_mel: [C, M, frames]
     // ---------------------------------------------------------------------
-    let log_mel = mel.f_clamp_min(LOG_EPS)?.f_log()?;
+    let log_mel = tch_result(tch_result(mel.f_clamp_min(LOG_EPS))?.f_log())?;
 
     // ---------------------------------------------------------------------
     // 6. Slice time axis into patches.
@@ -872,8 +873,8 @@ pub fn audio_to_log_mel_patches(
         return Err(ThoError::new(format!("not enough STFT frames for one patch: frames={}, patch_frames={}", log_mel.size()[2], cfg.mel_patch_size)));
     }
 
-    let patches = log_mel.f_unfold(2, cfg.mel_patch_size, cfg.mel_patch_step)?;
-    let patches = patches.f_permute(&[0, 2, 1, 3])?;
+    let patches = tch_result(log_mel.f_unfold(2, cfg.mel_patch_size, cfg.mel_patch_step))?;
+    let patches = tch_result(patches.f_permute(&[0, 2, 1, 3]))?;
 
     Ok(patches)
 }
@@ -1070,8 +1071,8 @@ fn bucket_ids_from_one_hot_3d(buckets: &Tensor) -> Result<Vec<Vec<usize>>, ThoEr
     let channels = size[0];
     let slices = size[1];
     // TODO(perf): this forces a device-to-CPU roundtrip for every bucketed tensor; keep bucket assignment/grouping on device or batch the CPU conversion per resource.
-    let bucket_ids = buckets.f_argmax(Some(2), false)?.f_to_device(Device::Cpu)?.f_to_kind(Kind::Int64)?.f_contiguous()?;
-    let flat = Vec::<i64>::try_from(&bucket_ids.f_reshape([-1])?)?;
+    let bucket_ids = tch_result(tch_result(tch_result(tch_result(buckets.f_argmax(Some(2), false))?.f_to_device(Device::Cpu))?.f_to_kind(Kind::Int64))?.f_contiguous())?;
+    let flat = tch_result(Vec::<i64>::try_from(&tch_result(bucket_ids.f_reshape([-1]))?))?;
     let mut result = vec![Vec::with_capacity(slices as usize); channels as usize];
     for channel in 0..channels {
         for slice in 0..slices {
@@ -1330,6 +1331,7 @@ impl Default for BucketRunConfig {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_common::tch_error::tch_result;
     use super::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups};
     use crate::cli::{import_resources, plot_motif};
     use crate::cli::{plot_resource, run_opt};
@@ -1542,7 +1544,7 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
-                let tensor = Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem())))?;//1_ for import id
+                let tensor = tch_result(Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem()))))?;//1_ for import id
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
@@ -1796,7 +1798,7 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
-                let tensor = Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem())))?;//1_ for import id
+                let tensor = tch_result(Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem()))))?;//1_ for import id
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
@@ -1892,7 +1894,7 @@ mod tests {
                     let motif_t = motif.data().as_ref().unsqueeze(0);
                     debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
                     let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
-                    best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(distance.f_min()?.f_double_value(&[])?);
+                    best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(tch_result(tch_result(distance.f_min())?.f_double_value(&[]))?);
                     debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
                 }
                 Ok::<_, ThoError>(())
