@@ -86,7 +86,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     }
 
     #[cfg(test)]
-    async fn restart(&self) -> Result<(), ThoError>;
+    async fn restart(&self) -> Result<(), ThoError>;//shortcut bypassing SyncStageRunner
 
     // Backend work is called by GlobalCtx's coordinator hook after draining.
     // It must neither request a new cycle nor change admission state.
@@ -224,6 +224,8 @@ impl dyn CudaActorHandle + '_ {
         out
     }
 
+
+    ///runs sync stage selecting slice of its original input
     pub async fn run_stage_with_select<S, W, SL>(
         &self,
         stage: Arc<S>,
