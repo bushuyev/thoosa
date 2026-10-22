@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{MaxParallelCtx, Stage, SyncStage};
+use thoosa_shared::traits::{MaxParallelCtx, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::ThoError;
 
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};

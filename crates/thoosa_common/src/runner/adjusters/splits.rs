@@ -225,7 +225,8 @@ mod tests {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::mock_cachable_id::MockCachableId;
-    use thoosa_shared::traits::{Adjustable, Data, Stage, SyncStage, WithId};
+    use thoosa_shared::traits::{Adjustable, Data, Stage, WithId};
+    use thoosa_common::runner::sync_stage::{SyncStage};
     use thoosa_shared::ThoError;
 
     mock! {

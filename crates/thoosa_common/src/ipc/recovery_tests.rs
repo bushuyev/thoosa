@@ -356,7 +356,7 @@ fn test_fatal_local_cuda_error_requests_process_shutdown_in_child() -> Result<()
             let error = match mode.as_str() {
                 "execution" => global.get_runner(1).submit(0, async { tokio::task::spawn_blocking(poison_and_synchronize).await? }, None).await.unwrap_err(),
                 "consume" => {
-                    use thoosa_shared::traits::ConsumeResult;
+                    use thoosa_common::runner::sync_stage::ConsumeResult;
                     let result = global.get_runner(1).submit_consume(0, async {
                         let error = tokio::task::spawn_blocking(poison_and_synchronize).await?.unwrap_err();
                         Ok(ConsumeResult::<_, ()>::Failed { input: vec![7], error })

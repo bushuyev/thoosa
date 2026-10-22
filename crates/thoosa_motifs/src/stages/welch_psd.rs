@@ -21,7 +21,8 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 use thoosa_store::Store;
 

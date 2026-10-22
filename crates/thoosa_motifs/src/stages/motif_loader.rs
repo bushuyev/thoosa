@@ -18,7 +18,8 @@ use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_common::runner::common::DropIf;
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{ConsumeResult, MaxParallelCtx};
+use thoosa_shared::traits::{MaxParallelCtx};
+use thoosa_common::runner::sync_stage::{ConsumeResult};
 
 use crate::dims::{ChannelsMotifsSlices, MotifSlices};
 use crate::motif_tho_tensor::MotifThoTensor;
@@ -39,7 +40,8 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
-use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage, SyncStage};
+use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, OutId, RunCtx, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_store::Store;
@@ -1669,7 +1671,8 @@ pub mod mock_motif_loader {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
+    use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
+    use thoosa_common::runner::sync_stage::{SyncStage};
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     mock! {

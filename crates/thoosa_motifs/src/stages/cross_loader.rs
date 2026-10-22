@@ -51,8 +51,9 @@ use thoosa_shared::mono_key;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Select, ThoSelector, WithId};
-use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage, SyncStage};
-use thoosa_shared::traits::ConsumeResult;
+use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
+use thoosa_common::runner::sync_stage::ConsumeResult;
 use tokio::task::JoinHandle;
 use thoosa_store::Store;
 use tracing::Instrument;
@@ -1078,7 +1079,8 @@ pub mod mock_cross_loader_clc {
     use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{Adjustable, OutId, RunCtx, Stage, SyncStage, WithId};
+    use thoosa_shared::traits::{Adjustable, OutId, RunCtx, Stage, WithId};
+    use thoosa_common::runner::sync_stage::{SyncStage};
 
     type RunBatchFn<Out, C> = dyn for<'a> Fn(
         &CrossInput<'a, Arc<Resource>>,
@@ -1210,8 +1212,9 @@ pub mod mock_cross_loader_receiver {
     use std::fmt::Debug;
     use std::sync::Arc;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::ConsumeResult;
-    use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
+    use thoosa_common::runner::sync_stage::ConsumeResult;
+    use thoosa_shared::traits::{RunCtx, Stage};
+    use thoosa_common::runner::sync_stage::{SyncStage};
 
     trait CrossLoaderReceiverMockApi<In, C>
     where
@@ -1356,7 +1359,7 @@ mod tests {
     use thoosa_shared::perf_logging::set_perf_log_level;
     use thoosa_shared::resource::{Resource, ResourceStats};
     use thoosa_shared::run_configs::RUN_ID;
-    use thoosa_shared::traits::ConsumeResult;
+    use thoosa_common::runner::sync_stage::ConsumeResult;
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir};
     use thoosa_store::SqlStore;
     use tokio::task::yield_now;

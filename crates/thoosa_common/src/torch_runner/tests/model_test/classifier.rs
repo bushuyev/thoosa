@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tch::{Kind, Tensor, nn, nn::OptimizerConfig};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{Adjustable, AsyncStage, AsyncStageDispatch, ConsumeResult, Data, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError};
 
 use super::common::{ABData, ClsOut, ModelTestId};

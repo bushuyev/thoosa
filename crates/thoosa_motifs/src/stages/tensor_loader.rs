@@ -32,7 +32,8 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, ConsumeResult, MaxParallelCtx, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{ConsumeResult, SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 // use crate::stages::stages_seq::StagesSeq;
 use thoosa_shared::ipc_types::WorkerOutput;
@@ -183,7 +184,8 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{AsyncStage, OutId, Stage, SyncStage, WithId};
+    use thoosa_shared::traits::{AsyncStage, OutId, Stage, WithId};
+    use thoosa_common::runner::sync_stage::{SyncStage};
     mock! {
         #[derive(Debug, Named)]
         pub TensorLoader {}

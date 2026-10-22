@@ -1,6 +1,7 @@
 use super::*;
 use crate::cuda_utils::tensor_mem_size;
-use thoosa_shared::ipc_types::{TensorKey, WorkerTensorInfoPayload};
+use thoosa_shared::ipc_types::{TensorKey};
+use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
 
 /// An immutable CPU recovery point, retained independently of live/offloaded state.
 /// Metadata is encoded so every restoration gets its own owned copy.

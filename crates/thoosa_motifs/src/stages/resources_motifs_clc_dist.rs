@@ -30,7 +30,8 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 pub struct ClcResourcesMotifsDist<C>

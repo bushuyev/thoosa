@@ -569,15 +569,15 @@ impl SyncStageRunner {
         self.submit_observed(max_other_parallel, fut, retry, |_| None).await
     }
 
-    pub(crate) async fn submit_consume<F, I, T>(&self, max_other_parallel: usize, fut: F, retry: Option<RetryToken>) -> Result<thoosa_shared::traits::ConsumeResult<I, T>, ThoError>
+    pub(crate) async fn submit_consume<F, I, T>(&self, max_other_parallel: usize, fut: F, retry: Option<RetryToken>) -> Result<thoosa_common::runner::sync_stage::ConsumeResult<I, T>, ThoError>
     where
-        F: Future<Output = Result<thoosa_shared::traits::ConsumeResult<I, T>, ThoError>> + Send + 'static,
+        F: Future<Output = Result<thoosa_common::runner::sync_stage::ConsumeResult<I, T>, ThoError>> + Send + 'static,
         I: Send + Debug + 'static,
         T: Send + Debug + 'static,
     {
         self.submit_observed(max_other_parallel, fut, retry, |result| match result {
-            thoosa_shared::traits::ConsumeResult::Failed { error, .. } => Some(error),
-            thoosa_shared::traits::ConsumeResult::Ok(_) => None,
+            thoosa_common::runner::sync_stage::ConsumeResult::Failed { error, .. } => Some(error),
+            thoosa_common::runner::sync_stage::ConsumeResult::Ok(_) => None,
         }).await
     }
 
@@ -1875,7 +1875,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_consume_failures_reach_oom_and_recovery_classification() {
-        use thoosa_shared::traits::ConsumeResult;
+        use thoosa_common::runner::sync_stage::ConsumeResult;
         let exec = SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })));
         let scope = exec.retry_scope();
         let result = exec.submit_consume(0, async { Ok(ConsumeResult::<_, ()>::Failed { input: vec![7], error: ThoError::oom() }) }, Some(scope.token())).await.unwrap();

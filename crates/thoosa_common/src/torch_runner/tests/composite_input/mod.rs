@@ -51,7 +51,7 @@ where
     for<'a> ABClcStage<S>:  thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = Arc<DevicesWrap<ABClcStageOutput>>>,
     // ABClcStage<S>: crate::runner::common::runnable::AsyncStage<In<'static> = Arc<ABClcStageInput>>,
     // ABClcStage<S>: Cached + crate::runner::common::OutId,
-    S:  thoosa_shared::traits::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    S:  thoosa_common::runner::sync_stage::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
     S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
     for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
     F: Fn() -> usize,
@@ -115,7 +115,7 @@ async fn test_ab_clc_sync_with_selector() -> Result<(), ThoError> {
 
 pub async fn ab_clc_sync_with_selector<S>(ab_stage: Arc<ABClcStage<S>>) -> Result<(), ThoError>
 where
-    S:  thoosa_shared::traits::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    S:  thoosa_common::runner::sync_stage::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
     for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
     let mut run_ctx = RunCtxImpl::new(1, "root");

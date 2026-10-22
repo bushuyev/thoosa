@@ -28,7 +28,8 @@ use std::sync::{Arc, LazyLock};
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, ErasedStageWithState, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{ErasedStageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
 use thoosa_shared::ipc_types::WorkerOutput;
@@ -284,7 +285,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::SyncStage;
+    use thoosa_common::runner::sync_stage::SyncStage;
     use tracing::field::debug;
 
 

@@ -25,7 +25,8 @@ use tch::Device::{Cpu, Cuda};
 use tch::{Device, Tensor};
 use thoosa_shared::CudaActivityPauseTicket;
 use thoosa_shared::ThoError;
-use thoosa_shared::ipc_types::{H2DTensorKey, IpcTensorKind, TensorKey};
+use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey};
+use thoosa_common::ipc::tensor_info::{IpcTensorKind};
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
 use thoosa_shims::context::ThoCudaContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -38,8 +39,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
-use thoosa_shared::ipc_types::WorkerTensorInfoPayload;
-use thoosa_shared::traits::StageStateInfo;
+use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
+use thoosa_common::runner::sync_stage::StageStateInfo;
 use crate::ipc::proxy::StageStateDump;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU

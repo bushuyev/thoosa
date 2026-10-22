@@ -33,9 +33,10 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::ConsumeResult;
+use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::Data;
-use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
+use thoosa_shared::traits::{RunCtx, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_store::Store;
 
 type DistsMaskTensor = ThoTensor<AnyDims, SynKey>;
@@ -1752,7 +1753,8 @@ mod tests {
         use parking_lot::{Mutex, RwLock};
         use std::{marker::PhantomData, sync::Arc};
         use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
-        use thoosa_shared::{TensorIdSliceIdx, traits::{ConsumeResult, SyncStage}};
+        use thoosa_shared::TensorIdSliceIdx;
+        use thoosa_common::runner::sync_stage::{ConsumeResult, SyncStage};
 
         // More than two chunks, with each chunk crossing channel boundaries and
         // diagonal self-matches removed without dropping any later matches.

@@ -29,7 +29,8 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::perf_logging::{PERF, format_perf_map};
-use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
+use thoosa_shared::traits::{RunCtx, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 
 const SIMP_ENDPOINT: &str = "SimpStage";
 
