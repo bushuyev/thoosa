@@ -30,7 +30,7 @@ use thoosa_shared::n_trace_line;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::ConsumeResult;
+use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::{AsyncStage, Stage, WithId};
 use thoosa_shared::traits::{CachableIdTr, Data, Named, OutId, RunCtx, Select, ThoSelector};
 use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock};

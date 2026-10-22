@@ -61,7 +61,8 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId, hump};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, WithId, hump};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::Store;
 

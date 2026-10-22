@@ -27,7 +27,8 @@ use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
 use tch::Tensor;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, AsyncStageDispatch, CachableIdTr, ConsumeResult, ErasedStageWithState, OutId, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, OutId, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLockReadGuard};
 use thoosa_shared::ipc_types::{H2DTensorKey, WorkerOutput};
 

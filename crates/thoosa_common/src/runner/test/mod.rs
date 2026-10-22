@@ -10,7 +10,8 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError};
 use tokio::task::JoinSet;
 
@@ -623,7 +624,8 @@ mod tests {
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::MaxParallelCtx;
-    use thoosa_shared::traits::{Adjustable, AsyncStage, Stage, SyncStage};
+    use thoosa_shared::traits::{Adjustable, AsyncStage, Stage};
+    use thoosa_common::runner::sync_stage::{SyncStage};
     use thoosa_shared::traits::{Data, OutId, RunCtx, WithId};
     use thoosa_shared::ThoError;
     use tokio::process::{Child, Command};

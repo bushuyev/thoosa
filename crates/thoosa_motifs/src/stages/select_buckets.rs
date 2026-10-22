@@ -33,7 +33,8 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 use thoosa_store::Store;
 

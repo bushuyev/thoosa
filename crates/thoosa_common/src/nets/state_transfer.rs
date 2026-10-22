@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use tch::{Device, Kind, Tensor, nn::VarStore};
 use thoosa_shared::ThoError;
-use thoosa_shared::ipc_types::{TensorKey, WorkerTensorInfoPayload};
-use thoosa_shared::traits::StageStateInfo;
+use thoosa_shared::ipc_types::{TensorKey};
+use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
+use thoosa_common::runner::sync_stage::StageStateInfo;
 use crate::tho_device::ThoDevice;
 use crate::cuda_utils::tensor_mem_size;
 use crate::tho_tensor::ThoTensor;
@@ -72,7 +73,7 @@ impl StateTensors {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct VarStoreState {
-    kind: thoosa_shared::ipc_types::IpcTensorKind,
+    kind: thoosa_common::ipc::tensor_info::IpcTensorKind,
     variables: Vec<VariableState>,
 }
 

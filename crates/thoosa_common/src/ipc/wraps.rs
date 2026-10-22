@@ -24,7 +24,8 @@ use std::sync::Arc;
 use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, ConsumeResult, ErasedStageWithState, RunCtx, Stage, StageStateInfo, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, RunCtx, Stage};
+use thoosa_common::runner::sync_stage::{ConsumeResult, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use tokio::sync::{MappedMutexGuard, MutexGuard};
 use thoosa_shared::ipc_types::WorkerOutput;
 

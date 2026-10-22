@@ -22,9 +22,10 @@ use std::time::Duration;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::ConsumeResult;
+use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::{Named, ThoSelector};
-use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
+use thoosa_shared::traits::{RunCtx, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CudaActivityGate, CudaActivityScope, CudaDeviceGeneration, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -863,7 +864,7 @@ mod mock_stateful_stage {
     use crate::runner::common::MockRunCtx;
     use crate::runner::oom_handler::test_types::{TestInput, TestOutput};
     use futures_util::FutureExt;
-    use thoosa_shared::traits::{ErasedStageWithState, StageWithState};
+    use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState};
 
     mockall::mock! {
         #[derive(Debug)]

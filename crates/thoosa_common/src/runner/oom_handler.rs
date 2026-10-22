@@ -7,8 +7,9 @@ use mockall_double::double;
 use parking_lot::RwLock;
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
-use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{OutId, Stage, SyncStage};
+use thoosa_common::runner::sync_stage::ConsumeResult;
+use thoosa_shared::traits::{OutId, Stage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
@@ -1606,7 +1607,8 @@ pub mod mock_runnable {
     use mockall::mock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use thoosa_shared::traits::{Stage, SyncStage, WithId};
+    use thoosa_shared::traits::{Stage, WithId};
+    use thoosa_common::runner::sync_stage::{SyncStage};
 
     mock! {
         #[derive(Clone, Debug)]
@@ -1910,7 +1912,7 @@ mod tests {
     async fn test_consume_without_recoverable_input_stops_retry_and_releases_runner() {
         use crate::runner::global_ctx::{MockGlobalCtx, mock_global_ctx};
         use crate::runner::syn_stage_runner::SyncStageRunner;
-        use thoosa_shared::traits::ConsumeResult;
+        use thoosa_common::runner::sync_stage::ConsumeResult;
         let global_context = MockGlobalCtx::global_context();
         let mock = Box::leak(Box::new(mock_global_ctx::build().with_runner(
             SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })))
@@ -1939,7 +1941,7 @@ mod tests {
     #[tokio::test]
     async fn test_consume_retry_adapter_preserves_failed_input() {
         use super::RunnerRetryAdapter;
-        use thoosa_shared::traits::ConsumeResult;
+        use thoosa_common::runner::sync_stage::ConsumeResult;
         let (task, _) = mock_runnable([]);
         let input = TestInput::new(3);
         let original_allocation = input.data.0.as_ptr();

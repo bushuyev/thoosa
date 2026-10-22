@@ -16,3 +16,5 @@ mod perf_test;
 mod pending;
 #[cfg(test)]
 mod recovery_tests;
+
+pub mod tensor_info;

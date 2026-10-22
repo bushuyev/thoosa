@@ -41,8 +41,9 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::{SynKey, hashmap_as_vec};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, ErasedStageWithState, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, StageWithState, SyncStage, WithId};
+use thoosa_common::runner::sync_stage::ConsumeResult;
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, WithId};
+use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
 
@@ -928,7 +929,7 @@ where
     }
 
     // The module owns the transfer schema and releases all parameter aliases.
-    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_shared::traits::StageStateInfo, ThoError>> {
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::runner::sync_stage::StageStateInfo, ThoError>> {
         async move { self.net.lock().await.state_info() }.boxed()
     }
 
@@ -1017,7 +1018,8 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, StageWithState, WithId};
+    use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, WithId};
+    use thoosa_common::runner::sync_stage::{StageWithState};
     use thoosa_shared::{ThoError, mono_key};
     use thoosa_store::{RunConfigRow, TrainedNet};
 

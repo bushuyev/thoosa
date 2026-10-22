@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tch::{Kind, Tensor};
 use tokio::net::UnixStream;
 
-use thoosa_shared::ipc_types::IpcTensorKind;
+use thoosa_common::ipc::tensor_info::IpcTensorKind;
 use thoosa_shared::ThoError;
 
 
