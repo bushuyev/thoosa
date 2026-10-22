@@ -240,6 +240,7 @@ where
             futures,
             motif_ids_len,
             FuturesOrdering::Ordered,
+            false,
             "StackedMotifsLoader::run",
         )).await?;
 

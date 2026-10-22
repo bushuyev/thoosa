@@ -2054,11 +2054,12 @@ mod tests {
                                             let _copy = CudaActivityScope::for_operation(&gate)?;
                                             Ok::<_, ThoError>(i)
                                         }
-                                    }), 3, ordering, "nested copy chunks",
+                                    }), 3, ordering, false, "nested copy chunks",
                                 ).await?;
                                 assert_eq!(values.len(), 3);
                                 Ok::<_, ThoError>(values)
-                            }), 1, ordering, "copy chunks",
+                            }), 1, ordering,
+                            false, "copy chunks",
                         ).await?;
                         assert_eq!(results.len(), 1);
                         completed.store(true, Ordering::SeqCst);

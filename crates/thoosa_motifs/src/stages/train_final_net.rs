@@ -559,6 +559,7 @@ where
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
+                    false,
                     "LogitsResourcesBatch::build_batch_stream",
                 )).await?
                 .into_iter()

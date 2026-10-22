@@ -326,6 +326,7 @@ where
             futures,
             self.apply_nets.len(),
             FuturesOrdering::Ordered,
+            false,
             "ApplyLabelNets::run",
         )
         .await?
