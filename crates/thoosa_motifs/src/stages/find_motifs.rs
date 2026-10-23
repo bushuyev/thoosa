@@ -488,6 +488,7 @@ where
                                                 &store,
                                                 &run_config,
                                                 &fixed_config,
+                                                run_config.min_slices,
                                                 run_config.max_slices.as_ref().map(|max_slices| {
                                                     match max_slices {
                                                         MaxSlices::ByResourcesCount(max_by_resources) => { resources.len() as u32 * max_by_resources.k }
