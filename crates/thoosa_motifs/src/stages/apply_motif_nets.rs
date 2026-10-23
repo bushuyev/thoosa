@@ -469,7 +469,10 @@ where
             id: self.out_id(input.id()),
             motif_nets_applied: motif_nets_applied.into_iter().map(|(_, _, output)| output).collect(),
         });
-        let required_ids = HashMap::new();
+        // Stacking needs every cached motif-net result, including equal IDs in distinct caches.
+        let mut required_inputs = HashMap::new();
+        for output in &stack_input.motif_nets_applied { output.add_required_ids(&mut required_inputs); }
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
 
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
@@ -481,7 +484,7 @@ where
         let motif_nets_applied = track_await!(oom_handler
         .run(
             &self.stack_applied_motif_nets,
-            stack_input,
+            Arc::clone(&stack_input),
             ctx.branch(true),
             WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(
@@ -924,7 +927,10 @@ where
         let input_len = input.size().dim::<1>();
         let slices = if input_len >= width { (input_len - width) / step + 1 } else { 1 };
         let out_id = self.out_id(input.id());
-        let required_ids = HashMap::new();
+        // Inference and its split retries reuse the same filtered input.
+        let mut required_inputs = HashMap::new();
+        input.add_required_ids(&mut required_inputs);
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
         let output = OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::MID))),
@@ -1060,6 +1066,7 @@ where
         let key = (trained_net_id, sync_init.slice_step, sync_init.quantize);
         let device_idx = run_context.tho_device_idx();
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device_idx, key, move || async move {
+            // Construction loads model state and has no cached tensor inputs to retain.
             let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![

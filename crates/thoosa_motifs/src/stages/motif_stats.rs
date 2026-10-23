@@ -1,7 +1,6 @@
 use thoosa_common::tch_error::tch_result;
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
@@ -361,6 +360,8 @@ pub struct MotifStatsLoadedChannelsInput {
     channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
     metrics: Vec<Metrics>,
     quantiles: Option<Vec<f32>>,
+    // Preserve the cache identity when failed consumption reconstructs its inputs.
+    cache_name: String,
 }
 
 impl MotifStatsLoadedChannelsInput {
@@ -369,12 +370,13 @@ impl MotifStatsLoadedChannelsInput {
         mut channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
         metrics: Vec<Metrics>,
         quantiles: Option<Vec<f32>>,
+        cache_name: String,
     ) -> Self {
         // MotifStatsLoadedChannelsInput is to be consumed
         for t in &mut channels_motifs_slices {
             t.no_drop();
         }
-        Self { id, channels_motifs_slices, metrics, quantiles }
+        Self { id, channels_motifs_slices, metrics, quantiles, cache_name }
     }
 
     fn channels_motifs_slices(&self) -> &[ThoTensor<ChannelsMotifsSlices, SynKey>] {
@@ -429,6 +431,7 @@ impl CopyToDevice for MotifStatsLoadedChannelsInput {
             channels_motifs_slices,
             metrics: self.metrics.clone(),
             quantiles: self.quantiles.clone(),
+            cache_name: self.cache_name.clone(),
         })
     }
 }
@@ -473,17 +476,18 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
                 quantiles,
             } = self;
 
+            let cache_name = channels_motifs_slices.name.clone();
             let channels_motifs_slices = match track_await!(channels_motifs_slices.take_all_recovering(to_device_idx)).await {
                 Ok(channels_motifs_slices) => channels_motifs_slices,
                 Err(err) => {
                     return ConsumeResult::Failed {
-                        input: MotifStatsLoadedChannelsInput::new(id, err.data, metrics, quantiles),
+                        input: MotifStatsLoadedChannelsInput::new(id, err.data, metrics, quantiles, cache_name),
                         error: err.error,
                     };
                 }
             };
 
-            let input = MotifStatsLoadedChannelsInput::new(id, channels_motifs_slices, metrics, quantiles);
+            let input = MotifStatsLoadedChannelsInput::new(id, channels_motifs_slices, metrics, quantiles, cache_name);
 
             do_run(input, run_ctx)
         }
@@ -492,10 +496,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsTmpCachedChannelsInput::burp"))]
     fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
         async move {
-            let cache = track_await!(TmpCached::new("tmp_motif_stats_channels_burp")).await;
-            for channels_motifs_slices in o.channels_motifs_slices {
-                cache.insert(channels_motifs_slices);
-            }
+            let cache = TmpCached::restore(o.cache_name, o.channels_motifs_slices);
             MotifStatsTmpCachedChannelsInput::new(o.id, cache, o.metrics, o.quantiles)
         }
     }
@@ -1000,6 +1001,7 @@ struct MotifStatsConsumeStageIpcInputRef<'a> {
     channels_motifs_slices: &'a [ThoTensor<ChannelsMotifsSlices, SynKey>],
     metrics: Vec<HashMap<String, MotifStatsIpcVal>>,
     quantiles: &'a Option<Vec<f32>>,
+    cache_name: &'a str,
 }
 
 impl<'a> MotifStatsConsumeStageIpcInputRef<'a> {
@@ -1009,6 +1011,7 @@ impl<'a> MotifStatsConsumeStageIpcInputRef<'a> {
             channels_motifs_slices: input.channels_motifs_slices.as_slice(),
             metrics: input.metrics.iter().map(metric_to_ipc).collect(),
             quantiles: &input.quantiles,
+            cache_name: &input.cache_name,
         }
     }
 }
@@ -1019,6 +1022,7 @@ struct MotifStatsConsumeStageIpcInput {
     channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
     metrics: Vec<HashMap<String, MotifStatsIpcVal>>,
     quantiles: Option<Vec<f32>>,
+    cache_name: String,
 }
 
 impl Serialize for MotifStatsLoadedChannelsInput {
@@ -1037,7 +1041,7 @@ impl<'de> Deserialize<'de> for MotifStatsLoadedChannelsInput {
     {
         let input = MotifStatsConsumeStageIpcInput::deserialize(deserializer)?;
         let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>().map_err(serde::de::Error::custom)?;
-        Ok(Self::new(input.id, input.channels_motifs_slices, metrics, input.quantiles))
+        Ok(Self::new(input.id, input.channels_motifs_slices, metrics, input.quantiles, input.cache_name))
     }
 }
 
@@ -1051,12 +1055,12 @@ impl WorkerStageInput for MotifStatsLoadedChannelsInput {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
         // Clone only worker tensor references; the metrics remain ordinary owned metadata.
         let tensors = self.channels_motifs_slices.iter().map(ThoTensor::clone_ref).collect::<Result<Vec<_>, _>>()?;
-        Ok(Box::new(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone())))
+        Ok(Box::new(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone(), self.cache_name.clone())))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let tensors = self.channels_motifs_slices.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
-        Ok(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone()))
+        Ok(Self::new(self.id.clone(), tensors, self.metrics.clone(), self.quantiles.clone(), self.cache_name.clone()))
     }
 
 }
@@ -1244,8 +1248,11 @@ where
 
                 debug!("MotifStats::run: motif={motif:?}");
                 let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
-                let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), motif, metrics.clone(), quantiles.clone()));
-                let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
+                // Statistics retries need the loaded motif, not the output statistics ID.
+                let mut required_inputs = HashMap::new();
+                motif.add_required_ids(&mut required_inputs);
+                let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+                let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), Arc::clone(&motif), metrics.clone(), quantiles.clone()));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -1303,8 +1310,11 @@ where
                 }
 
                 let clc_stats_run = MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?;
-                let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs, metrics.clone(), quantiles.clone()));
-                let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
+                // Merged statistics read every loaded motif during each attempt.
+                let mut required_inputs = HashMap::new();
+                for motif in &motifs { motif.add_required_ids(&mut required_inputs); }
+                let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+                let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs.clone(), metrics.clone(), quantiles.clone()));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -1356,9 +1366,11 @@ where
 
                 debug!("MotifStats::run: MotifStatsSource::Random  channels_slices={channels_slices:?}");
                 let clc_stats_consume = MotifStatsConsumeStage::<C>::new(ctx.tho_device_idx()).await?;
+                // The consuming stage owns the cache, so retain an independent snapshot of its IDs.
+                let channel_slice_ids = channels_slices.ids();
                 let tmp_cache_key = channels_slices.cache_key().clone();
                 let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
-                let required_tmp_cache_ids = HashSet::<&dyn thoosa_shared::traits::CachableIdTr>::new();
+                let required_tmp_cache_ids = channel_slice_ids.iter().map(|id| id as &dyn thoosa_shared::traits::CachableIdTr).collect();
                 let required_ids = HashMap::from([(tmp_cache_key, &required_tmp_cache_ids)]);
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![

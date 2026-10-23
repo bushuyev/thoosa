@@ -1,5 +1,4 @@
 use thoosa_common::tch_error::tch_result;
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::find::FindMotifsSavableResult;
 use crate::motifs_store::MotifsStore;
 #[cfg(test)]
@@ -14,7 +13,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, info, warn};
 use mockall_double::double;
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -51,7 +50,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::mono_key;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Select, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, OutId, RunCtx, Select, ThoSelector, WithId};
 use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_common::runner::sync_stage::ConsumeResult;
@@ -282,7 +281,12 @@ where
         input.prepared_outer = prepared_outer;
         debug!("CrossLoader::run_loaded_batch: input={input:?}");
 
-        let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        // Both batches and any prepared outer batch are reused after an OOM.
+        let input = Arc::new(input);
+        let mut required_inputs = HashMap::new();
+        for tensor in input.batch_0.iter().chain(&input.batch_1) { tensor.add_required_ids(&mut required_inputs); }
+        if let Some(prepared) = &input.prepared_outer { prepared.add_required_ids(&mut required_inputs); }
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
         match track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
@@ -295,7 +299,7 @@ where
             None,
         ).run(
             &cross_unfold_clc,
-            Arc::new(input),
+            Arc::clone(&input),
             ctx.branch(false),
             Contexts::new(
                 CrossSplitterContext::new(t_1_batch_resources.len() as i64, batch_1_slice_lengths),
@@ -366,7 +370,10 @@ where
                 t_0_batch.clone(), vec![], t_0_batch_resources.clone(), vec![], CacheArea::default(),
             ));
 
-            let required_ids = HashMap::new();
+            // Preparing the outer batch reads each of its cached resource tensors.
+            let mut required_inputs = HashMap::new();
+            for tensor in &t_0_batch { tensor.add_required_ids(&mut required_inputs); }
+            let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
             let result = OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("prepare_outer_batch"))),

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
@@ -47,6 +47,13 @@ pub struct TmpCachedEntry<D: Data + CopyToDevice + WithId + Output + Debug + Sen
     cache: Arc<TmpCached<D>>,
 }
 
+impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCachedEntry<D> {
+    // A queued input must retain its temporary cache entry during OOM retries.
+    pub fn add_required_ids<'a>(&'a self, required_ids: &mut HashMap<CacheKey, HashSet<&'a dyn CachableIdTr>>) {
+        self.value.add_required_ids(required_ids);
+    }
+}
+
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> BorrowRef for TmpCachedEntry<D> {
     type Out<'a> = ThoDataRef<'a, D> where Self: 'a;
 
@@ -70,6 +77,12 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
         self.registered_cache.as_ref().expect("TmpCached::cache_key: cache already unregistered").key()
     }
 
+    // Consuming stages move this cache into their input. Snapshot its IDs first
+    // so the OOM exclusion set can outlive that move without holding map guards.
+    pub fn ids(&self) -> Vec<D::ID> {
+        self.map.iter().map(|entry| entry.key().clone()).collect()
+    }
+
     async fn unregister_cache(&mut self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
         if let Some(cache) = self.registered_cache.take() {
             GlobalCtx::global().remove_cache(cache.key());
@@ -80,15 +93,16 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     }
 
     pub fn insert(&self, value: D) {
-
-        self.map.insert(value.id().clone(), Arc::new(DevicesWrap::wrap(value)));
-
+        let value = Arc::new(DevicesWrap::wrap(value));
+        value.register_cache_key(self.cache_key().clone());
+        self.map.insert(value.id().clone(), value);
     }
 
     // Entries need distinct IDs while alive; replacing a queued entry would
     // leave its old tensors invisible to OOM offload.
     pub fn insert_guarded(self: &Arc<Self>, value: D) -> TmpCachedEntry<D> {
         let value = Arc::new(DevicesWrap::wrap(value));
+        value.register_cache_key(self.cache_key().clone());
         assert!(self.map.insert(value.id().clone(), Arc::clone(&value)).is_none(), "duplicate guarded temporary cache entry");
         TmpCachedEntry { value, cache: Arc::clone(self) }
     }
@@ -193,8 +207,18 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
     pub async fn new(name: &str) -> Self {
 
-        let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
+        Self::register(format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)))
+    }
 
+    // Restore only after consuming the old cache. Keeping its unique name makes
+    // the caller's OOM exclusions valid when failed inputs are cached again.
+    pub fn restore(name: String, values: impl IntoIterator<Item = D>) -> Self {
+        let cache = Self::register(name);
+        for value in values { cache.insert(value); }
+        cache
+    }
+
+    fn register(name: String) -> Self {
         let map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Arc::new(Default::default());
         let registered_cache = GlobalCtx::global()
             .register_cache((name.clone(), Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn FuturesRunnerMapPurger>));
@@ -348,6 +372,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_tmp_cache() -> Result<(), ThoError> {
 
+        use std::sync::Arc;
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2)?;
 
@@ -413,18 +438,39 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));
 
-        let mut required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
-        required_tmp_cache_ids.insert(&foo_id as &dyn CachableIdTr);
+        let input_ids = tmp_cache.ids();
+        assert_eq!(input_ids, vec![foo_id.clone()]);
+        let required_tmp_cache_ids = input_ids.iter().map(|id| id as &dyn CachableIdTr).collect();
         let required_ids = HashMap::from([(tmp_cache.cache_key().clone(), &required_tmp_cache_ids)]);
+        let other_id = debug_id!("other");
+        tmp_cache.insert(TestData::new(other_id.clone(), 1));
         GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "test").await?;
 
         let cached = tmp_cache.get(&foo_id).expect("tmp cache entry missing");
         assert!(!cached.is_all_on_cpu().await);
+        assert!(tmp_cache.get(&other_id).unwrap().is_all_on_cpu().await);
         drop(cached);
 
+        let cache_name = tmp_cache.name.clone();
         let all = tmp_cache.take_all(1).await?;
+        assert!(all.iter().all(|data| data.device == 1));
 
-        assert_eq!(all[0].device, 1);
+        // Consumption recovery must keep the original exclusion map effective.
+        let restored = TmpCached::restore(cache_name, all);
+        GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "restored inputs").await?;
+        assert!(!restored.get(&foo_id).unwrap().is_all_on_cpu().await);
+        assert!(restored.get(&other_id).unwrap().is_all_on_cpu().await);
+
+        // A queued prepared batch protects only its own entry in its named cache.
+        let queued = Arc::new(TmpCached::new("queued inputs").await);
+        let entry = queued.insert_guarded(TestData::new(foo_id.clone(), 1));
+        queued.insert(TestData::new(other_id.clone(), 1));
+        let mut required_inputs = HashMap::new();
+        entry.add_required_ids(&mut required_inputs);
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+        GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "queued input").await?;
+        assert!(!entry.value.is_all_on_cpu().await);
+        assert!(queued.get(&other_id).unwrap().is_all_on_cpu().await);
 
         Ok(())
 
