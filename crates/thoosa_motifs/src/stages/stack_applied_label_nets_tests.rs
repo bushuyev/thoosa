@@ -16,10 +16,19 @@ async fn request(resource: u32, models: &[u32], retry: bool) -> Result<StackAppl
     }
     let input = StackAppliedLabelNetsInputWrapper::new(mono_key!(resource, "aggregate").into(), order, cache);
     if !retry { return Ok(input); }
+    let cache_key = input.tmp_cache.cache_key().clone();
+    let input_ids = input.tmp_cache.ids().into_iter().collect::<HashSet<_>>();
     // Exercise the same ownership handoff used after a failed consume, without allocating until real OOM.
-    let failed: ConsumeResult<StackAppliedLabelNetsInput, ()> = input.consume(0, RunCtxImpl::new(0, "retry handoff"), |input, _| ConsumeResult::Failed { input, error: ThoError::oom() }).await;
+    let device = if GlobalCtx::global().is_ipc() { 1 } else { 0 };
+    let failed: ConsumeResult<StackAppliedLabelNetsInput, ()> = input.consume(device, RunCtxImpl::new(device, "retry handoff"), |input, _| ConsumeResult::Failed { input, error: ThoError::oom() }).await;
     let ConsumeResult::Failed { input, .. } = failed else { panic!("injected consume failure must retain its input") };
-    Ok(StackAppliedLabelNetsInputWrapper::burp(input).await)
+    // Only worker tensor references are serializable. Exercise their wire
+    // round trip in IPC mode and the owned tensor handoff in local mode.
+    let input = if device == 1 { JsonIpcCodec::decode::<StackAppliedLabelNetsInput>(&JsonIpcCodec::encode(&input)?)? } else { input };
+    let recovered = StackAppliedLabelNetsInputWrapper::burp(input).await;
+    assert_eq!(recovered.tmp_cache.cache_key(), &cache_key);
+    assert_eq!(recovered.tmp_cache.ids().into_iter().collect::<HashSet<_>>(), input_ids);
+    Ok(recovered)
 }
 
 async fn run_request(stage: Arc<DynSyncStageEnum<StackAppliedLabelNets<RunCtxImpl>>>, resource: u32, models: &[u32], retry: bool) -> Result<(), ThoError> {

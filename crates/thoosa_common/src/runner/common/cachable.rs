@@ -20,7 +20,8 @@ use crate::data_with_extra::DataWithExtra;
 use parking_lot::Mutex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Formatter};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use crate::runner::global_ctx::CacheKey;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -54,6 +55,10 @@ where
 }
 
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
+    // Tensor outputs remember their cache owners so downstream stages can
+    // exclude their inputs from OOM offload without knowing the producer type.
+    fn register_cache_key(&self, _cache_key: CacheKey) {}
+
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
     fn cleanup_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
@@ -75,6 +80,10 @@ impl<O> CachedPurgeOutput for Arc<DevicesWrap<O>>
 where
     O: Data + Send + Sync + 'static,
 {
+    fn register_cache_key(&self, cache_key: CacheKey) {
+        self.cache_keys.write().insert(cache_key);
+    }
+
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
     }
@@ -111,6 +120,10 @@ impl<O> CachedPurgeOutput for Arc<O>
 where
     O: CachedPurgeOutput
 {
+    fn register_cache_key(&self, cache_key: CacheKey) {
+        self.as_ref().register_cache_key(cache_key);
+    }
+
     fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async { Ok(()) }.boxed()
     }
@@ -374,6 +387,9 @@ where
         // Keep this context through completion; computation uses the same area.
         ctx.add_purge_gpu_closure(cleanup);
         let result = track_await!(shared.clone()).await;
+        if let Ok(output) = &result {
+            output.register_cache_key(Self::cache_key());
+        }
         if result.is_err() {
             // A failed computation has no reusable output. Evict it without
             // requiring a device-generation change to permit a later attempt.
@@ -396,6 +412,9 @@ where
     // operations do not need it; this erased field only keeps the stable reference required
     // by the conditional WithId impl when the wrapper is a Cached AsyncStage output.
     id: Box<dyn CachableIdTr>,
+    // One wrapper can be returned by multiple cached stages. Protect each
+    // owner; excluding an ID in an unrelated cache would retain wrong inputs.
+    cache_keys: parking_lot::RwLock<HashSet<CacheKey>>,
 
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,//cached data never changes
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
@@ -713,6 +732,7 @@ where
 
         Self {
             id: Box::new(id),
+            cache_keys: Default::default(),
             cached_data: device_futures,
             inflights,
             size,
@@ -725,6 +745,12 @@ where
         }
     }
 
+
+    pub fn add_required_ids<'a>(&'a self, required_ids: &mut HashMap<CacheKey, HashSet<&'a dyn CachableIdTr>>) {
+        for key in self.cache_keys.read().iter() {
+            required_ids.entry(key.clone()).or_default().insert(self.id.as_ref());
+        }
+    }
 
     pub fn size(&self) -> &O::Metrics {
         &self.size

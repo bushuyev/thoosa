@@ -512,6 +512,7 @@ where
             let mut ctx = ctx.branch(false);
             let select_config = select_config.clone();
             async move {
+                // Selection reads configuration and stored scores, with no cached tensor inputs.
                 let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
