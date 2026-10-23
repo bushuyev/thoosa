@@ -536,7 +536,6 @@ net.closure(
 
             let r1 = Tensor::f_cat(&[max.shallow_clone(), min.shallow_clone()], 1)?;
 
-            // debug!("conv_motif_node: 1. t.size={:?} r.size={:?} r1.size={:?} max.size={:?}, min.size={:?}", t.size(), r.size(), r1.size(), max.size(), min.size());
             debug!("conv_motif_node: 1. t.size={:?}  r.size={:?}", t.size(), r.size());
 
             Ok(r1) //r/max
@@ -914,7 +913,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> anyhow::Result<Node
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: transpose input={t:?} _lengths={_lengths:?}");
-                Ok(t.transpose(1, 2))
+                Ok(t.f_transpose(1, 2)?)
             })),
             Some(params.motif_nets),
         )?
@@ -962,43 +961,34 @@ pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
         panic!("Unexpected params type: {:?}", params.net_type);
     };
 
-    let num_features = lin_params.features;//params.motif_nets;
+    let num_features = lin_params.features;
     debug!("lin_label_node: num_features={num_features}");
 
     let mut seq_builder = SeqBuilder::new(0, None)?;
-    let mut builder = seq_builder
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-        //         debug!("lin_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
-        //         // Ok(t.transpose(1, 2))
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     Some(params.motif_nets),
-        // )?
-        .adaptive_avg_pool(lin_params.features,lin_params.features )?;
+    let mut builder = seq_builder.adaptive_avg_pool(lin_params.features,lin_params.features )?;
 
-        for layer in 0..lin_params.layers {
-            builder = builder.linear_feats(
-                "lin_label_node",
-                lin_params.features,
-                lin_params.features,
-            )?
-            .func(|t|Ok(Tensor::f_relu(t)?))?;
-        }
+    for layer in 0..lin_params.layers {
+        builder = builder.linear_feats(
+            "lin_label_node",
+            lin_params.features,
+            lin_params.features,
+        )?
+        .func(|t|Ok(Tensor::f_relu(t)?))?;
+    }
 
 
     builder.linear_s(
         1,
         "lin_label_node last",
     )?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("lin_label_node: out={:?}", t.size());
-                Ok(t.f_mean_dim(1, false, None)?)
-            })),
-            Some(params.motif_nets),
-        )?
-        .end_seq()
+    .closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            debug!("lin_label_node: out={:?}", t.size());
+            Ok(t.f_mean_dim(1, false, None)?)
+        })),
+        Some(params.motif_nets),
+    )?
+    .end_seq()
 
 }
 
@@ -1062,12 +1052,10 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
     }
 
 net
-    // .func(|t|Ok(Tensor::f_relu(t)?))
     .linear_s(
         params.out_features,
         "final_net_last_layer",
     )?
-    // .func(|t|Ok(Tensor::f_relu(t)?))?
     .end_seq()
 }
 

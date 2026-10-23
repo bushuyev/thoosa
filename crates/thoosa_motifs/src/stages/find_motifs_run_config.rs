@@ -55,6 +55,11 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
+    pub min_slices: Option<u32>,
+
+
+    #[run_config]
+    #[in_map]
     pub max_slices: Option<MaxSlices>,
 
     #[run_config]
@@ -243,7 +248,7 @@ impl FindMotifsRunConfig {
     }
 
     pub fn new(id: Option<RunConfigId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
-        Self { id, step, window, freq_filter, max_slices, finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(similarity_metric, slices_filter)) }
+        Self { id, step, window, freq_filter, min_slices: Some(2), max_slices, finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(similarity_metric, slices_filter)) }
     }
 }
 impl FindMotifsRunConfig {
@@ -260,6 +265,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
+            min_slices: Some(2),
             max_slices: None,
             finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(
                 SimilarityMetric::default(),
@@ -283,6 +289,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
+            min_slices: Some(2),
             max_slices: None,
             finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(
                 SimilarityMetric::default(),
@@ -466,6 +473,7 @@ mod tests {
                 ),
             }),
             max_slices: None,
+            min_slices: Some(RangeOrValue::Value(2)),
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
         let grid = rc.grid_run_configs().expect("FindMotifsRunConfigRangeOrValue::grid_run_configs should not fail");
@@ -585,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })), finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))) };
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), min_slices: Some(2), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })), finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))) };
 
         let keys = run_config.to_stats_keys();
         
@@ -608,6 +616,7 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() })]),
+            min_slices: Some(2),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
             finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
         };
@@ -633,6 +642,7 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![MedianFilter(MedianFilterParams { window: 11 })]),
+            min_slices: Some(2),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
             finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
         };
@@ -658,6 +668,7 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]),
+            min_slices: Some(2),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
             finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
         };

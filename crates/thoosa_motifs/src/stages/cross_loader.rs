@@ -1787,6 +1787,7 @@ mod tests {
                         &store,
                         &run_config,
                         &fixed_config,
+                        Some(2),
                         None,
                     ))
                 }

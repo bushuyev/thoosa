@@ -1542,12 +1542,10 @@ where
         store: &Arc<dyn MotifsStore>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,
+        min_slices_counts: Option<u32>,
         max_slices_counts: Option<u32>,
     ) -> Self {
-        debug!(
-            "DistsTracker:new: fixed_config={fixed_config:?} channels={}",
-            thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).channels()
-        );
+        debug!("DistsTracker:new: fixed_config={fixed_config:?} channels={}",thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).channels());
 
         let channel_trackers = (0
             ..thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws))
@@ -1573,6 +1571,7 @@ where
                         )
                         .expect("can't create tmp store")
                     },
+                    min_slices_counts,
                     max_slices_counts,
                 )))
             })
@@ -1592,12 +1591,12 @@ where
     pub async fn build_groups(&self) -> Result<(), ThoError>{
         let mut channels_groups = Vec::with_capacity(self.channel_trackers.len());
         for (channel, mt) in self.channel_trackers.iter().enumerate() {
-            let (mut dumper, max_slices_counts) = {
+            let (mut dumper, min_slices_counts, max_slices_counts) = {
                 let mut tracker = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(mt));
-                (tracker.take_dumper()?, tracker.max_slices_counts())
+                (tracker.take_dumper()?,tracker.min_slices_counts(), tracker.max_slices_counts())
             };
             // Trackers now consume the motif store directly because both APIs share the same crate boundary.
-            let groups_inserted = track_await!(dumper.load_slices_into_groups(self.store.as_ref(), max_slices_counts)).await?;
+            let groups_inserted = track_await!(dumper.load_slices_into_groups(self.store.as_ref(), min_slices_counts, max_slices_counts)).await?;
             channels_groups.push((channel, groups_inserted));
         }
 
@@ -1766,7 +1765,8 @@ mod tests {
         let trackers = recorded.iter().map(|matches| {
             let matches = matches.clone();
             Arc::new(RwLock::new(SimpleMotifTracker::new(MockMotifTrackerStoreBuilder::new()
-                .with_save_slices(move |batch| { matches.lock().extend(batch); Ok(()) }).build(), None)))
+                            .with_save_slices(move |batch| { matches.lock().extend(batch); Ok(()) }).build(),
+                                                         Some(2), None)))
         }).collect();
         let tracker = Arc::new(DistsTracker::<MockRunCtx> {
             find_motifs_run_config_id: 1,

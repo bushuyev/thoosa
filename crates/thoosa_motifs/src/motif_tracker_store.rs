@@ -42,7 +42,7 @@ pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 #[cfg_attr(test, mockall::automock)]
 pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> anyhow::Result<()>;
-    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> anyhow::Result<usize>;
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, min_slices_counts: Option<u32>, max_slices_counts: Option<u32>) -> anyhow::Result<usize>;
 
     fn run_config_id(&self) -> RunConfigId;
     fn channel(&self) -> u32;
@@ -67,20 +67,30 @@ pub(crate) mod mock_motif_tracker_store {
     }
 }
 
-pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: HashMap<u16, HashSet<IdSlice>>) -> HashMap<u16, HashSet<IdSlice>> {
-    match max_slices_counts {
-        None => groups,
-        Some(max_slices_counts) => groups.into_iter().fold(HashMap::new(), |mut a, v| {
-            if v.1.len() >= 2 && v.1.len() < max_slices_counts as usize {//TODO conf
-                a.insert(v.0, v.1);
-            } else {
-                warn!("skipping group with {} slices",v.1.len());
-            }
-            a
-        }),
+pub fn filter_groups_by_slices_count(
+    min_slices_counts: Option<u32>,
+    max_slices_counts: Option<u32>,
+    mut groups: HashMap<u16, HashSet<IdSlice>>,
+) -> HashMap<u16, HashSet<IdSlice>> {
+    if min_slices_counts.is_none() && max_slices_counts.is_none() {
+        return groups;
     }
-}
 
+    groups.retain(|group_id, slices| {
+        let count = slices.len();
+
+        let keep = min_slices_counts.is_none_or(|min| count >= min as usize)
+            && max_slices_counts.is_none_or(|max| count < max as usize);
+
+        if !keep {
+            warn!("skipping group {group_id} with {count} slices");
+        }
+
+        keep
+    });
+
+    groups
+}
 pub struct SqlMotifTrackerStore {
     run_config_id: RunConfigId,
     channel: u32,
@@ -168,6 +178,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
     async fn load_slices_into_groups(
         &mut self,
         store: &dyn MotifsStore,
+        min_slices_counts: Option<u32>,
         max_slices_counts: Option<u32>,
     ) -> anyhow::Result<usize> {
         let groups = {
@@ -192,7 +203,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
             groups
         };
 
-        let groups_by_slices_count = filter_groups_by_slices_count(max_slices_counts, groups);
+        let groups_by_slices_count = filter_groups_by_slices_count(Some(2), max_slices_counts, groups);
         let groups_len = groups_by_slices_count.len();
         store.save_groups_as_motifs_with_slices_matches(
             self.run_config_id,
