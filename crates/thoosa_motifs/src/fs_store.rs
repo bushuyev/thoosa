@@ -150,7 +150,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, max_slices_counts: Option<u32>) -> anyhow::Result<usize> {
+    async fn load_slices_into_groups(&mut self, store: &dyn MotifsStore, min_slices_counts: Option<u32>, max_slices_counts: Option<u32>) -> anyhow::Result<usize> {
         debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;
@@ -164,7 +164,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         }));
         debug!("MotifTrackerStore::load_slices_into_groups: inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
         let groups_len = groups.len();
-        store.save_groups_as_motifs(self.run_config_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups)).await?;
+        store.save_groups_as_motifs(self.run_config_id, self.channel as i64, filter_groups_by_slices_count(min_slices_counts, max_slices_counts, groups)).await?;
 
         fs::remove_file(&self.path)?;
 

@@ -2154,7 +2154,7 @@ mod store_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.load_slices_into_groups(store.as_ref(), None).await?;
+        let groups = slices_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         {
             let store_guard = Arc::clone(&store);
@@ -3302,7 +3302,7 @@ mod fs_store_tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(store.as_ref(), None).await?;
+        file_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
         let map = store.list_motifs_slices(run_config_id, None).await?;
@@ -3338,7 +3338,7 @@ mod fs_store_tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[1], 400), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(store.as_ref(), None).await?;
+        file_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
         let map = store.list_motifs_slices(run_config_id, None).await?;
@@ -3384,7 +3384,7 @@ mod fs_store_tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[1], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(store.as_ref(), None).await?;
+        file_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
         let map = store.list_motifs_slices(run_config_id, None).await?;
@@ -3430,7 +3430,7 @@ mod fs_store_tests {
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
-        file_store.load_slices_into_groups(store.as_ref(), None).await?;
+        file_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
         let map = store.list_motifs_slices(run_config_id, None).await?;
@@ -3460,7 +3460,7 @@ mod fs_store_tests {
 
         let mut file_store = FileMotifTrackerStore::new(test_dir, run_config_id, 3)?;
 
-        file_store.load_slices_into_groups(store.as_ref(), None).await?;
+        file_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         let map = store.list_motifs_slices(run_config_id, None).await?;
 

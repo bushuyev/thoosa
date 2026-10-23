@@ -158,6 +158,7 @@ pub struct SimpleMotifTracker<'a> {
     last: Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>,                //i_0, match_0, match_1, dist
     dumper: Option<Box<dyn MotifTrackerStore + 'a>>, //lifetime is for DummyDumper
+    min_slices_counts: Option<u32>,
     max_slices_counts: Option<u32>,
 }
 
@@ -166,12 +167,14 @@ const CAPACITY: usize = 10_000_000;
 impl<'a> SimpleMotifTracker<'a> {
     pub fn new(
         dumper: Box<dyn MotifTrackerStore + 'a>,
+        min_slices_counts: Option<u32>,
         max_slices_counts: Option<u32>,
     ) -> SimpleMotifTracker {
         Self {
             last: None,
             motifs: Vec::with_capacity(CAPACITY),//TODO config + merge Vec::with_capacity + dump when capacity reached from origin/codex/fractional_splitter_async_consume
             dumper: Some(dumper),
+            min_slices_counts,
             max_slices_counts,
         }
     }
@@ -229,6 +232,11 @@ impl<'a> SimpleMotifTracker<'a> {
     pub fn take_dumper(&mut self) -> anyhow::Result<Box<dyn MotifTrackerStore + 'a>> {
         self.dumper.take().ok_or_else(|| anyhow::anyhow!("SimpleMotifTracker::take_dumper: dumper is already taken"))
     }
+
+    pub fn min_slices_counts(&self) -> Option<u32> {
+        self.min_slices_counts
+    }
+
 
     pub fn max_slices_counts(&self) -> Option<u32> {
         self.max_slices_counts
@@ -337,7 +345,8 @@ mod motif_find_tests {
         let batch_dumps = Arc::new(Mutex::new(Vec::new()));
         let make_tracker = |dumps: Arc<Mutex<Vec<Vec<SlicesMatch>>>>| {
             let mut tracker = SimpleMotifTracker::new(MockMotifTrackerStoreBuilder::new()
-                .with_save_slices(move |matches| { dumps.lock().push(matches); Ok(()) }).build(), None);
+                            .with_save_slices(move |matches| { dumps.lock().push(matches); Ok(()) }).build(),
+                                                      Some(2), None);
             tracker.motifs = Vec::with_capacity(4);
             tracker
         };
@@ -490,6 +499,7 @@ mod motif_find_tests {
         async fn load_slices_into_groups(
             &mut self,
             _store: &dyn MotifsStore,
+            min_slices_counts: Option<u32>,
             max_slices_counts: Option<u32>,
         ) -> anyhow::Result<usize> {
             todo!()
@@ -511,6 +521,7 @@ mod motif_find_tests {
             DummyDumper::new(&mut motifs);
             let mut mt = super::SimpleMotifTracker::new(
                 Box::new(DummyDumper::new(&mut motifs)),
+                Some(2),
                 Some(100),
             );
 
@@ -563,6 +574,7 @@ mod motif_find_tests {
         let mut motifs = vec![];
         let mut mt = super::SimpleMotifTracker::new(
             Box::new(DummyDumper::new(&mut motifs)),
+            Some(2),
             Some(100),
         );
 

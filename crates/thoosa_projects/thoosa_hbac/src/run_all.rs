@@ -665,6 +665,7 @@ where
             }),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        min_slices: Some(RangeOrValue::Value(2)),
     }
 }
 
@@ -716,6 +717,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
             //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
+        min_slices: Some(RangeOrValue::Value(2)),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
         finder_kind: FinderKindRangeOrValue::CrossLoader(
             CrossLoaderRunConfigRangeOrValue {
@@ -838,6 +840,7 @@ fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsR
             }
         ),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
+        min_slices: Some(RangeOrValue::Value(4)),
     }
 }
 
@@ -850,6 +853,18 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
                 min: RangeOrValue::Value(0.8),
             },
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
+                    struct_lag_max: RangeOrValue::Value(1. / 64.),
+                    lag_min: RangeOrValue::Value(1. / 32.),
+                    lag_max: RangeOrValue::Value(0.5),
+                    struct0: RangeOrValue::Value(0.2),
+                    peak_good: RangeOrValue::Value(0.25),
+                    peak_bad: RangeOrValue::Value(0.65),
+                    eps: RangeOrValue::Value(1e-8),
+                }),
+                min: RangeOrValue::Value(0.80),
+            }
             // MotifCriterionConstraintRangeOrValue {
             //     metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
             //         k: RangeOrValue::Value(3.0),
