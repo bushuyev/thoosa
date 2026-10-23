@@ -1266,7 +1266,13 @@ mod tests {
             assert!(Arc::ptr_eq(&output, &outputs[expected]));
             assert_eq!(loader.output_cache_key(), if expected == 0 { First::cache_key() } else { Second::cache_key() });
             for output in &outputs { drop(output.load_from_any_device_(1).await?); }
-            runtime.dump_all_to_cpu(&HashMap::from([(loader.output_cache_key(), &keep)]), 1, "adapter cache exclusion").await?;
+            // Downstream tensor stages only see this wrapper, not its producer.
+            let mut required_inputs = HashMap::new();
+            output.add_required_ids(&mut required_inputs);
+            assert_eq!(required_inputs.len(), 1);
+            assert_eq!(required_inputs[&loader.output_cache_key()], keep);
+            let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+            runtime.dump_all_to_cpu(&required_ids, 1, "adapter cache exclusion").await?;
             for (index, output) in outputs.iter().enumerate() { assert_eq!(output.is_on_device(1), index == expected); }
         }
 
@@ -1283,6 +1289,19 @@ mod tests {
             assert_eq!(tch_result(cpu.t_ref().f_double_value(&[0]))?, index as f64);
         }
         runtime.remove_cache(named_handle.key());
+        // A pass-through stage can cache the same wrapper under another owner.
+        // Both entries must be excluded or either purger could offload it.
+        let ready = future::ready(Ok(outputs[0].clone())).boxed().shared();
+        ready.clone().await?;
+        Second::cache().await?.insert(id.clone(), ready.into());
+        let alias = Arc::new(GenericCacheStage::<AnyDims, 1>(std::marker::PhantomData)).run_cached(outputs[0].clone(), ctx.branch(false)).await?;
+        let mut required_inputs = HashMap::new();
+        alias.add_required_ids(&mut required_inputs);
+        assert_eq!(required_inputs.len(), 2);
+        drop(alias.load_from_any_device_(1).await?);
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+        runtime.dump_all_to_cpu(&required_ids, 1, "aliased cache exclusions").await?;
+        assert!(alias.is_on_device(1));
         Ok(())
     }
 

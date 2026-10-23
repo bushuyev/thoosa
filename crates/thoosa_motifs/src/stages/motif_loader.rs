@@ -251,6 +251,8 @@ pub struct SyncMotifLoaderInput {
     window: u32,
     loaded_resources: Vec<LoadedMotifResource>,
     descr: String,
+    // The same named cache must protect recovered inputs on every retry.
+    cache_name: String,
 }
 
 impl SyncMotifLoaderInput {
@@ -263,12 +265,13 @@ impl SyncMotifLoaderInput {
         window: u32,
         mut loaded_resources: Vec<LoadedMotifResource>,
         descr: String,
+        cache_name: String,
     ) -> Self {
         for loaded_resource in &mut loaded_resources {
             loaded_resource.raw_tensor.no_drop();
         }
 
-        Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr }
+        Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr, cache_name }
     }
 }
 
@@ -320,6 +323,7 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
             window: self.window,
             loaded_resources,
             descr: self.descr.clone(),
+            cache_name: self.cache_name.clone(),
         })
     }
 }
@@ -376,6 +380,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                 descr,
             } = self;
 
+            let cache_name = loaded_resources.name.clone();
             let loaded_resources = match track_await!(loaded_resources.take_all_recovering(to_device_idx)).await {
                 Ok(loaded_resources) => loaded_resources,
                 Err(err) => {
@@ -389,6 +394,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                             window,
                             err.data,
                             descr,
+                            cache_name,
                         ),
                         error: err.error,
                     };
@@ -404,6 +410,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                 window,
                 loaded_resources,
                 descr,
+                cache_name,
             );
 
             do_run(input, run_ctx)
@@ -413,10 +420,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifLoaderLoadedInput::burp"))]
     fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
         async move {
-            let loaded_resources = track_await!(TmpCached::new(&format!("tmp_loaded_motif_resources_burp_{}", o.id))).await;
-            for resource in o.loaded_resources {
-                loaded_resources.insert(resource);
-            }
+            let loaded_resources = TmpCached::restore(o.cache_name, o.loaded_resources);
             SyncMotifLoaderInputWrapper::new(
                 o.id,
                 o.motif_id,
@@ -484,6 +488,7 @@ struct SyncMotifLoaderIpcInputRef<'a> {
     window: u32,
     loaded_resources: Vec<SyncMotifLoaderResourceIpcRef<'a>>,
     descr: &'a str,
+    cache_name: &'a str,
 }
 
 impl<'a> SyncMotifLoaderIpcInputRef<'a> {
@@ -497,6 +502,7 @@ impl<'a> SyncMotifLoaderIpcInputRef<'a> {
             window: input.window,
             loaded_resources: input.loaded_resources.iter().map(|resource| SyncMotifLoaderResourceIpcRef { resource_id: resource.resource_id, slices: resource.slices.as_slice(), raw_tensor: &resource.raw_tensor }).collect(),
             descr: input.descr.as_str(),
+            cache_name: input.cache_name.as_str(),
         }
     }
 }
@@ -518,6 +524,7 @@ struct SyncMotifLoaderIpcInput {
     window: u32,
     loaded_resources: Vec<SyncMotifLoaderResourceIpcInput>,
     descr: String,
+    cache_name: String,
 }
 
 impl Serialize for SyncMotifLoaderInput {
@@ -541,7 +548,7 @@ impl<'de> Deserialize<'de> for SyncMotifLoaderInput {
             slices: resource.slices,
             raw_tensor: resource.raw_tensor,
         }).collect();
-        Ok(Self::new(input.id, input.motif_id.into(), input.select_motifs_run_config_id, input.find_motifs_run_config_id, input.channel, input.window, loaded_resources, input.descr))
+        Ok(Self::new(input.id, input.motif_id.into(), input.select_motifs_run_config_id, input.find_motifs_run_config_id, input.channel, input.window, loaded_resources, input.descr, input.cache_name))
     }
 }
 
@@ -558,7 +565,7 @@ impl WorkerStageInput for SyncMotifLoaderInput {
             raw_tensor: resource.raw_tensor.clone_ref()?,
         })).collect::<Result<Vec<_>, ThoError>>()?;
 
-        Ok(Box::new(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone())))
+        Ok(Box::new(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone(), self.cache_name.clone())))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
@@ -568,7 +575,7 @@ impl WorkerStageInput for SyncMotifLoaderInput {
             slices: resource.slices.clone(),
             raw_tensor: WorkerStageInput::ref_to_tensor(&resource.raw_tensor, all_cuda_tensors, remove)?,
         })).collect::<Result<Vec<_>, ThoError>>()?;
-        Ok(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone()))
+        Ok(Self::new(self.id.clone(), self.motif_id.clone(), self.select_motifs_run_config_id.clone(), self.find_motifs_run_config_id, self.channel, self.window, loaded_resources, self.descr.clone(), self.cache_name.clone()))
     }
 }
 
@@ -735,6 +742,8 @@ where
             ctx.branch(false),
             "motif loader",
         )).await?;
+        // Snapshot before moving the cache into the consuming stage so OOM retries retain its inputs.
+        let loaded_resource_ids = loaded_resources.ids();
         let loaded_resources_key = loaded_resources.cache_key().clone();
         let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
 
@@ -748,7 +757,7 @@ where
             loaded_resources,
             "motif loader wrapper",
         );
-        let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_loaded_resource_ids = loaded_resource_ids.iter().map(|id| id as &dyn CachableIdTr).collect();
         let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
@@ -900,6 +909,8 @@ where
             ctx.branch(false),
             "random loader",
         )).await?;
+        // Snapshot before moving the cache into the consuming stage so OOM retries retain its inputs.
+        let loaded_resource_ids = loaded_resources.ids();
         let loaded_resources_key = loaded_resources.cache_key().clone();
         let sync_motif_loader = SyncMotifLoader::new(ctx.tho_device_idx().into()).await?;
         let sync_input = SyncMotifLoaderInputWrapper::new(
@@ -912,7 +923,7 @@ where
             loaded_resources,
             "random loader",
         );
-        let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_loaded_resource_ids = loaded_resource_ids.iter().map(|id| id as &dyn CachableIdTr).collect();
         let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![

@@ -462,7 +462,12 @@ where
 
             debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
             debug!("SelectMotifsStage::run: 1. find_motifs_run_config={find_motifs_run_config:?}");
-            let required_ids = HashMap::new();
+            // Distance calculation reuses the resource batch, motifs, and motif statistics.
+            let mut required_inputs = HashMap::new();
+            for tensor in &clc_resources_input.batch { tensor.add_required_ids(&mut required_inputs); }
+            motif_data.add_required_ids(&mut required_inputs);
+            motifs_stats.add_required_ids(&mut required_inputs);
+            let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
             let channels = perf_log!(sync_read_lock!(ws))
                 .channels();
 

@@ -1,5 +1,4 @@
 use thoosa_common::tch_error::tch_result;
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{MotifSlices, Spectorgram};
 use cached_derive::Cached;
 use log::debug;
@@ -98,7 +97,10 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Stft::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-        let required_ids: std::collections::HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = std::collections::HashMap::new();
+        // The input can come from different loaders; follow its registered owners.
+        let mut required_inputs = std::collections::HashMap::new();
+        input.add_required_ids(&mut required_inputs);
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, SyncStftSelector> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -109,7 +111,7 @@ where
         let output = track_await!(oom_handler
             .run(
                 &self.sync_stft,
-                input,
+                Arc::clone(&input),
                 ctx.branch(false),
                 WithRunCtxContext::new(
                     MaxParallelAndDumpToCpuAdjustableContex::new(

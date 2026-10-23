@@ -1,6 +1,5 @@
 #![allow(non_camel_case_types)]
 use thoosa_common::tch_error::tch_result;
-use thoosa_common::runner::global_ctx::CacheKey;
 use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
@@ -965,7 +964,10 @@ where
                         sync_bucketing_ctx.branch(false),
                     )).await?;
 
-                let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                // Bucketing retries still need this loaded resource on the device.
+                let mut required_inputs = HashMap::new();
+                loaded.add_required_ids(&mut required_inputs);
+                let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
                 let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
                 let oom_handler: OOMHandler<'_, '_, _, NoStageAdjuster, _, SelectBucketsInputSelector> = OOMHandler::new(
                     vec![
@@ -979,7 +981,7 @@ where
                 match track_await!(oom_handler
                     .run(
                         &sync_stage,
-                        Arc::new(BucketingTensorInput::new(resource.id(), loaded, bucket_window_samples, bucket_step_samples)),
+                        Arc::new(BucketingTensorInput::new(resource.id(), Arc::clone(&loaded), bucket_window_samples, bucket_step_samples)),
                         sync_bucketing_ctx,
                         Contexts::new(
                             SelectBucketsSplitterContext::new(bucket_slice_count),

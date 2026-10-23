@@ -295,8 +295,11 @@ where
                     }
 
                     //Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
-                    let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs));
-                    let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                    // Preserve the actual cache owners when the motif stage returns cached probabilities.
+                    let mut required_inputs = HashMap::new();
+                    motif_probs.add_required_ids(&mut required_inputs);
+                    let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+                    let input = Arc::new(ApplyLabelNetInputWrapper::new(Arc::clone(&motif_probs)));
 
                     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
@@ -344,9 +347,10 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| ThoError::new("ApplyLabelNets::run: missing label output id"))?;
-        let order = label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect();
+        // Keep every label probability resident while the consuming stack stage retries.
+        let required_tmp_cache_ids = label_output_order.iter().map(|id| id as &dyn CachableIdTr).collect();
+        let order = label_output_order.iter().cloned().enumerate().map(|(idx, id)| (id, idx)).collect();
         let stack_input = StackAppliedLabelNetsInputWrapper::new(self.out_id(&input_id), order, Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
-        let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_key, &required_tmp_cache_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
             vec![
@@ -392,14 +396,16 @@ pub struct StackAppliedLabelNetsInput {
     label_output_order: HashMap<SynKey, usize>,
     device_idx: usize,
     label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>,
+    // Preserve the temporary cache identity through local and IPC consume retries.
+    cache_name: String,
 }
 
 impl StackAppliedLabelNetsInput {
-    fn new(id: SynKey, label_output_order: HashMap<SynKey, usize>, mut label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>, device_idx: usize) -> Self {
+    fn new(id: SynKey, label_output_order: HashMap<SynKey, usize>, mut label_outputs: Vec<ThoTensor<Batch<LabelProbability>, SynKey>>, device_idx: usize, cache_name: String) -> Self {
         for t in &mut label_outputs {
             t.no_drop();
         }
-        Self { id, label_output_order, device_idx, label_outputs }
+        Self { id, label_output_order, device_idx, label_outputs, cache_name }
     }
 }
 
@@ -407,12 +413,12 @@ impl WorkerStageInput for StackAppliedLabelNetsInput {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
         // Preserve stack ordering while cloning only worker tensor references.
         let outputs = self.label_outputs.iter().map(ThoTensor::clone_ref).collect::<Result<Vec<_>, _>>()?;
-        Ok(Box::new(Self::new(self.id.clone(), self.label_output_order.clone(), outputs, self.device_idx)))
+        Ok(Box::new(Self::new(self.id.clone(), self.label_output_order.clone(), outputs, self.device_idx, self.cache_name.clone())))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
         let outputs = self.label_outputs.iter().map(|tensor| WorkerStageInput::ref_to_tensor(tensor, all_cuda_tensors, remove)).collect::<Result<Vec<_>, _>>()?;
-        Ok(Self::new(self.id.clone(), self.label_output_order.clone(), outputs, self.device_idx))
+        Ok(Self::new(self.id.clone(), self.label_output_order.clone(), outputs, self.device_idx, self.cache_name.clone()))
     }
 
 }
@@ -477,9 +483,10 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
         async move {
             let StackAppliedLabelNetsInputWrapper { id, label_output_order, tmp_cache } = self;
 
+            let cache_name = tmp_cache.name.clone();
             match track_await!(tmp_cache.take_all_recovering(to_device_idx)).await {
-                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_output_order, label_outputs, to_device_idx), run_ctx),
-                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, label_output_order, err.data, to_device_idx), error: err.error },
+                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_output_order, label_outputs, to_device_idx, cache_name), run_ctx),
+                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, label_output_order, err.data, to_device_idx, cache_name), error: err.error },
             }
         }
     }
@@ -487,10 +494,7 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedLabelNetsInputWrapper::burp"))]
     fn burp(o: Self::O) -> impl Future<Output = Self> + Send {
         async move {
-            let cache = track_await!(TmpCached::new("tmp_stack_applied_label_nets_burp")).await;
-            for label_output in o.label_outputs {
-                cache.insert(label_output);
-            }
+            let cache = TmpCached::restore(o.cache_name, o.label_outputs);
             StackAppliedLabelNetsInputWrapper::new(o.id, o.label_output_order, cache)
         }
     }

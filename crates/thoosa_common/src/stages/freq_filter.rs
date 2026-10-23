@@ -1,5 +1,4 @@
 use thoosa_common::tch_error::tch_result;
-use crate::runner::global_ctx::CacheKey;
 use anyhow::Context as _;
 use crate::debug_plot;
 use async_trait::async_trait;
@@ -861,7 +860,10 @@ where
         let out_id = self.out_id(input.id());
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len].into();
-        let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        // Keep the source tensor resident for filtering and every split retry.
+        let mut required_inputs = HashMap::new();
+        input.add_required_ids(&mut required_inputs);
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
         // The async loader survives resets; resolve its endpoint for the current
         // generation on each invocation rather than retaining a stale proxy.
         let mut init = self.filter_init.clone();
@@ -878,7 +880,7 @@ where
         )
         .run(
             &sync_freq_filter,
-            input,
+            Arc::clone(&input),
             ctx.branch(true),
             Contexts::new(
                 SplitsAdjusterContextImpl::new(input_size, FreqFilterOutputBuilder::new(out_id)),
