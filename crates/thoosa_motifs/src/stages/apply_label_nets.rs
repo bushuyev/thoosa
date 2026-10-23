@@ -304,7 +304,8 @@ where
                     ], None);
                     let result = track_await!(oom_handler.run(
                         &apply_label_net,
-                        input, ctx.branch(false),
+                        input,
+                        ctx.branch(false),
                          WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),)
                     ).await?.into_inner();
 

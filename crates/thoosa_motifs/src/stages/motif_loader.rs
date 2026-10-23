@@ -345,9 +345,9 @@ impl SyncMotifLoaderInputWrapper {
         channel: i64,
         window: u32,
         loaded_resources: TmpCached<LoadedMotifResource>,
-        descr: String,
+        descr: impl Into<String>,
     ) -> Self {
-        Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr }
+        Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr:descr.into() }
     }
 }
 
@@ -746,7 +746,7 @@ where
             channel,
             window,
             loaded_resources,
-            "motif loader wrapper".to_string(),
+            "motif loader wrapper",
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);
@@ -910,7 +910,7 @@ where
             channel,
             find_motifs_run_config.window,
             loaded_resources,
-            "random loader".to_string(),
+            "random loader",
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_key, &required_loaded_resource_ids)]);

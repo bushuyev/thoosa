@@ -41,13 +41,10 @@ pub struct GlobalCtx {
 
     devices: Vec<DeviceExecutionCtx>,
 
-    num_devices: usize,//TODO replace with Vec<ThoDevice>
-
     caches: Arc<CacheRegistry>,
     is_all_on_cpu: Vec<AtomicBool>,
     cache_time: AtomicU64, //for tracking CPU-only lifetime
     purger: Purger,
-    shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
     is_ipc: bool,
     arena_fd:Option<OwnedFd> //TODO needed in IPC mode only
@@ -180,21 +177,21 @@ impl GlobalCtx {
         devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
+
             let recovery = CudaRecoveryCoordinator::with_backend(
                 Arc::clone(&gate),
                 Arc::new(GlobalCtx::cuda_restart),
                 None,
                 Some(Arc::new(GlobalCtx::fail_process))
             );
-            let actor = CudaLocalActorHandle::new(Arc::clone(&gate))?;
+
             devices.push(DeviceExecutionCtx {
                 runner: SyncStageRunner::new_with_recovery(1024, recovery),
-                cuda_actor: Some(Box::new(actor)),
+                cuda_actor: Some(Box::new(CudaLocalActorHandle::new(Arc::clone(&gate))?)),
             });
         }
 
         Ok(Self {
-            num_devices,
             devices,
 
             caches: Arc::new(CacheRegistry::default()),
@@ -204,7 +201,6 @@ impl GlobalCtx {
 
             cache_time: Default::default(),
             purger: Purger::new(),
-            shutting_down: false.into(),
 
             is_ipc: false,
             arena_fd: None,
@@ -214,7 +210,7 @@ impl GlobalCtx {
     async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> anyhow::Result<Self> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
-        assert!(num_devices > 0);//TODO test if it works without GPU
+        assert!(num_devices > 0);
 
         const ARENA_SIZE: usize = 48 * 1024 * 1024 * 1024; //TODO config
 
@@ -244,33 +240,32 @@ impl GlobalCtx {
         devices.push(DeviceExecutionCtx::cpu());
         for tho_device_idx in 1..num_devices {
             let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
+
             let recovery = CudaRecoveryCoordinator::with_backend(
                 Arc::clone(&gate),
                 Arc::new(GlobalCtx::cuda_restart),
                 Some(Arc::new(|device, authority| Box::pin(async move { GlobalCtx::global().cuda_actor(device).retire_backend(authority).await }))),
                 None
             );
-            // Each actor retains its own descriptor so replacement workers can
-            // remap the parent-owned arena independently of other devices.
-            let actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
+
+
             devices.push(DeviceExecutionCtx {
                 runner: SyncStageRunner::new_with_recovery(1024, recovery),
-                cuda_actor: Some(Box::new(actor)),
+                // Each actor retains its own descriptor so replacement workers can
+                // remap the parent-owned arena independently of other devices.
+                cuda_actor: Some(Box::new(CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?)),
             });
         }
 
         Ok(Self {
-            num_devices,
             devices,
 
             caches: Arc::new(CacheRegistry::default()),
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
-
             cache_time: Default::default(),
             purger: Purger::new(),
-            shutting_down: false.into(),
 
             is_ipc: true,
             arena_fd: Some(arena_fd),
@@ -415,7 +410,7 @@ impl GlobalCtx {
     }
 
     pub fn device_count(&self) -> usize {
-        self.num_devices
+        self.devices.len()
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -632,7 +627,7 @@ impl GlobalCtx {
         GLB_SHUTTING_DOWN.load(Relaxed)
     }
 
-    //for tests and temporary fixes - use CudaActors for ipc/no ipc implemenations
+    //for tests and temporary fixes - use CudaActors for ipc/no ipc implementations
     pub fn is_ipc(&self) -> bool {
         self.is_ipc
     }

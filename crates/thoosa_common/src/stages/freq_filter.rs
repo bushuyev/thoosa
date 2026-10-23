@@ -107,8 +107,6 @@ where
 
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<(TypeId, RunConfigId, usize), Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-
-
 impl<C> SyncFreqFilter<C>
 where
     C: RunCtx + 'static,
