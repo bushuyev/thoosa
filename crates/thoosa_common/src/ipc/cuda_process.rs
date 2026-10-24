@@ -229,27 +229,49 @@ struct SpawnedState {
 // Killing is not completion: shared arena allocations remain live until wait()
 // proves the process can no longer access them.
 async fn kill_and_reap(child: &mut Child) -> Result<(), ThoError> {
+    debug!("cuda_process::kill_and_reap: child={child:?}");
+
     if child.try_wait()?.is_none() {
+        debug!("cuda_process::kill_and_reap: start_kill");
+
         child.start_kill().context("terminate CUDA worker")?;
         timeout(WORKER_REAP_TIMEOUT, child.wait()).await.context("timed out reaping CUDA worker")?.context("reap CUDA worker")?;
+
+        debug!("cuda_process::kill_and_reap: start_kill done");
     }
+    debug!("cuda_process::kill_and_reap: done");
     Ok(())
 }
 
 impl SpawnedState {
     async fn stop_io(&mut self) {
+        debug!("SpawnedState::stop_io");
+
         self.cancel.cancel();
+
+        debug!("SpawnedState::stop_io: cancel ok");
+
         self.reader_handle.abort();
         self.writer_handle.abort();
+
         let _ = (&mut self.reader_handle).await;
+        debug!("SpawnedState::stop_io: reader_handle ok");
+
         let _ = (&mut self.writer_handle).await;
+        debug!("SpawnedState::stop_io: writer_handle ok");
     }
 
     async fn retire(mut self, reason: ThoError) -> Result<(), ThoError> {
+        debug!("SpawnedState::retire: reason={reason:?}");
         self.pending.close(reason.clone());
         self.stop_io().await;
+        debug!("SpawnedState::retire: stop_io done");
+
         kill_and_reap(&mut self.child).await?;
         self.pending.exited(reason);
+
+        debug!("SpawnedState::retire: done");
+
         Ok(())
     }
 
@@ -258,19 +280,26 @@ impl SpawnedState {
     }
 
     async fn shutdown_with_timeout(mut self, request_id: u64, deadline: Duration) -> Result<(), ThoError> {
-        self.pending.close(ThoError::new("CUDA worker is shutting down"));
+        // self.pending.close(ThoError::new("CUDA worker is shutting down"));
         // Bound the whole exchange, including a full writer queue and a worker
         // which never acknowledges, rather than only the final child wait.
         let graceful = timeout(deadline, async {
             let reply = send_request(self.tx.clone(), Arc::clone(&self.pending), CudaWorkerMsgIn::new(self.worker_id, request_id, Operation::Shutdown { dummy: "shutdown".into() }), None, true).await?;
+            debug!("shutdown_with_timeout: reply={reply:?}");
             unit_reply(reply)?;
-            let status = self.child.wait().await?;
-            if !status.success() { return Err(ThoError::new(format!("CUDA worker exited with {status}"))); }
+            debug!("shutdown_with_timeout: before start_kill");
+            self.child.start_kill().context("terminate CUDA worker")?;
+            debug!("shutdown_with_timeout: after start_kill");
+            // let status = self.child.wait().await?;
+            let status = self.child.try_wait();
+            debug!("shutdown_with_timeout: status={status:?}");
+
+            // if !status.success() { return Err(ThoError::new(format!("CUDA worker exited with {status}"))); }
             Ok::<_, ThoError>(())
         }).await;
         self.stop_io().await;
-        kill_and_reap(&mut self.child).await?;
-        self.pending.exited(ThoError::new("CUDA worker exited during shutdown"));
+        // kill_and_reap(&mut self.child).await?;
+        // self.pending.exited(ThoError::new("CUDA worker exited during shutdown"));
         graceful.context("CUDA worker shutdown timed out")?
     }
 }
@@ -321,9 +350,11 @@ impl CudaIPCActor {
     }
 
     async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<SpawnedState, ThoError> {
-        info!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
+        info!("CudaIPCActor::spawn_worker_and_loops: cuda_worker_args={cuda_worker_args:?}");
 
         let (child, stream, device_info) = Self::spawn_worker_for_cuda_device(worker_id, cuda_worker_args, arena_fd).await?;
+
+        info!("CudaIPCActor::spawn_worker_and_loops: spawn_worker_for_cuda_device ok");
 
         let (reader, writer) = stream.into_split();
 
@@ -334,7 +365,7 @@ impl CudaIPCActor {
         let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending), cancel.child_token()));
         let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token()));
 
-        info!("CudaIPCActor::spawn_worker_and_loops, ok");
+        info!("CudaIPCActor::spawn_worker_and_loops: ok");
 
         Ok( SpawnedState {
             worker_id,
@@ -352,16 +383,16 @@ impl CudaIPCActor {
         let cuda_device = worker_id.device_idx - 1;
         let exe = std::env::current_exe()?;
 
-        debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device: exe={exe:?}");
 
         let dir = tempfile::tempdir()?;
         let sock_path = dir.path().join(format!("worker_{cuda_device}.sock"));
 
-        debug!("CudaIPCActor::spawn_worker, dir={dir:?} sock_path={sock_path:?}");
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device: dir={dir:?} sock_path={sock_path:?}");
 
         let listener = UnixListener::bind(&sock_path)?;
 
-        debug!("CudaIPCActor::spawn_worker, listener={listener:?}");
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device: listener={listener:?}");
 
         let mut command = &mut Command::new(exe);
 
@@ -369,28 +400,47 @@ impl CudaIPCActor {
             command = command.arg(arg);
         }
 
-        debug!("CudaIPCActor::spawn_worker, command={command:?}");
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device command={command:?}");
+
+        let worker_id_str = serde_json::to_string(&worker_id)?;
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device: worker_id_str={worker_id_str}");
 
         let mut child = command
             // Each child sees its assigned physical GPU as CUDA ordinal zero.
             .env(CUDA_VISIBLE_DEVICES, cuda_device.to_string())
             .kill_on_drop(true)
             .env(IPC_SOCK_ENV, &sock_path)
-            .env(WORKER_ID_ENV, serde_json::to_string(&worker_id)?)
+            .env(WORKER_ID_ENV, worker_id_str)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?;
 
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device: child={child:?}");
+
         let ready = timeout(WORKER_READY_TIMEOUT, async {
-            let (mut stream, _) = listener.accept().await?;
+            debug!("CudaIPCActor::spawn_worker_for_cuda_device: before accept");
+
+            let accept_r = listener.accept().await;
+
+            debug!("CudaIPCActor::spawn_worker_for_cuda_device: accept_r={accept_r:?}");
+
+            let (mut stream, _) = accept_r?;
             // Send the arena first. Readiness is acknowledged only after all
             // stream/copy pools and the shared mapping have been initialized.
+            debug!("CudaIPCActor::spawn_worker_for_cuda_device: before send_fd");
             send_fd(&stream, arena_fd).await?;
             let device_info: DeviceInfo = PostcardToFromBytes::from_bytes(&read_frame(&mut stream, "DeviceInfo/main", MAX_FRAME_LEN).await?)?;
+
+            debug!("CudaIPCActor::spawn_worker_for_cuda_device: device_info={device_info:?}");
+
             device_info.worker_id.check(worker_id)?;
             Ok::<_, ThoError>((stream, device_info))
         }).await;
+
+
+        debug!("CudaIPCActor::spawn_worker_for_cuda_device: ready={ready:?}");
+
         let (stream, device_info) = match ready {
             Ok(Ok(ready)) => ready,
             result => {
@@ -762,7 +812,17 @@ impl CudaIPCActor {
                 let result = async {
                     // Recheck queued authority and drained activity before replacing CUDA state.
                     self.gate.check_recovery_authority(authority, true)?;
-                    self.retire(ThoError::ContextReset).await?;
+                    debug!("CudaIPCActor::control, BackendControl::Restart: check_recovery_authority ok");
+                    let result = match self.spawned_state.take() {
+                        Some(worker) => worker.shutdown(self.next_id.fetch_add(1, Ordering::Relaxed)).await,
+                        None => Ok(()),
+                    };
+                    debug!("CudaIPCActor::control, BackendControl::Restart: worker shutdown ok");
+
+                    // let retire_r = self.retire(ThoError::ContextReset).await;
+                    // debug!("CudaIPCActor::control, BackendControl::Restart: retire reire_r={retire_r:?}");
+                    // let retire_r = retire_r?;
+
                     // A fresh primary context requires the old process to have
                     // exited before its replacement is even spawned.
                     let worker_id = CudaWorkerId { device_idx: self.tho_device_idx, generation: thoosa_shared::CudaDeviceGeneration(self.gate.device_generation().0.checked_add(1).expect("worker generation overflow")) };
@@ -799,10 +859,29 @@ impl CudaIPCActor {
     async fn run(mut actor: CudaIPCActor) -> Result<(), ThoError> {
         loop {
             let failed = actor.spawned_state.as_ref().map(|worker| worker.pending.failed.clone());
+
             tokio::select! {
                 biased;
-                Some(control) = actor.control.recv() => { if actor.control(control).await { return Ok(()); } }
-                _ = async { match failed { Some(failed) => failed.cancelled().await, None => std::future::pending().await } } => {
+                Some(control) = actor.control.recv() => {
+                    debug!("CudaIPCActor::run: control={control:?}");
+
+                    if actor.control(control).await {
+                        return Ok(());
+                    }
+
+                    debug!("CudaIPCActor::run: control not ok");
+                }
+                _v = async {
+                    match failed {
+                        Some(failed) => {
+                            debug!("CudaIPCActor::run: failed={failed:?}");
+                            failed
+                        }.cancelled().await,
+                        None => std::future::pending().await
+                    }
+                } => {
+                    debug!("CudaIPCActor::run: _v={_v:?}");
+
                     let worker = actor.worker();
                     let generation = worker.worker_id.generation;
                     let error = worker.pending.failure();
@@ -819,6 +898,8 @@ impl CudaIPCActor {
                     // requests. Replacing this IPC worker is the last resort,
                     // independent of the original error's CUDA classification.
                     let cause = error.clone().context("CUDA worker transport is unavailable");
+                    debug!("CudaIPCActor::run: cause={cause:?} is_installed={}", GlobalCtx::is_installed());
+
                     if GlobalCtx::is_installed() {
                         let _ = GlobalCtx::global().get_runner(actor.gate.device_idx()).request_cuda_reset_for_generation(generation, cause);
                     } else {
@@ -1236,8 +1317,13 @@ impl CudaActorHandle for CudaIPCActorHandle {
         // Only this gate's current recovery coordinator may replace a worker,
         // and restart requires all ordinary activity to have drained.
         self.gate.check_recovery_authority(authority, true)?;
+        debug!("CudaIPCActorHandle::restart_backend: check_recovery_authority ok");
+
         let (respond_to, recv) = oneshot::channel();
-        self.control.send(BackendControl::Restart { authority, respond_to }).context("CUDA actor control channel closed")?;
+        let r = self.control.send(BackendControl::Restart { authority, respond_to }).context("CUDA actor control channel closed");
+
+        debug!("CudaIPCActorHandle::restart_backend: Restart send r={r:?}");
+
         recv.await.context("CUDA restart response channel closed")?
     }
 
