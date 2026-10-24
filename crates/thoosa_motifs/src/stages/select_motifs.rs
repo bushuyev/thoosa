@@ -263,11 +263,17 @@ where
 
         //gpt Snapshot motif ids for each find_motifs_run_config_id; used later for criteria filtering.
         let mut find_motif_run_config_ids_motif_ids = HashMap::new();
+        let mut has_motifs = false;
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            find_motif_run_config_ids_motif_ids.insert(*find_motifs_run_config_id, track_await!(store.list_motifs(*find_motifs_run_config_id)).await?);
+            let motif_ids = track_await!(store.list_motifs(*find_motifs_run_config_id)).await?;
+            if !has_motifs && !motif_ids.is_empty() {
+                has_motifs = true;
+            }
+            find_motif_run_config_ids_motif_ids.insert(*find_motifs_run_config_id, motif_ids);
         }
 
 
+        info!("SelectMotifsStage::new: find_motif_run_config_ids_motif_ids={find_motif_run_config_ids_motif_ids:?}");
 
         Ok(Self {
             id: SynKey::new([mono_key!(SELECT_MOTIFS, "stage")]),
@@ -430,6 +436,13 @@ where
             async move {
                 let selected_motifs = track_await!(self_for_futs
                     .filter_motifs_by_criteria(&select_motifs_run_config, ctx_for_futs.branch(false))).await?;
+
+                if selected_motifs.is_empty() {
+                    warn!("SelectMotifsStage::run: select_motifs_run_config={select_motifs_run_config:?} is empty");
+                } else {
+                    debug!("SelectMotifsStage::run: selected_motifs.len={}", selected_motifs.len());
+                }
+
 
                 let constraint_metrics = match output_mode {
                     SelectMotifsOutputMode::Standalone => None,

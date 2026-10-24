@@ -11,7 +11,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
-use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter};
+use thoosa_common::transforms::filters::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, SavGolFilter};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -110,7 +110,7 @@ pub(crate) async fn run_all(
 
     let select_motifs_run_config_ids = match all_config.find_and_select {
         FindAndSelect::GridOnly { find_motifs_run_config_range_or_value, fixed_find_motifs_config, extend_motifs_run_config, select_motifs_run_config } => {
-            info!("find and select motifs opt skipped: no opt params in run config, falling back to grid search");
+            info!("run_all: find and select motifs opt skipped: no opt params in run config, falling back to grid search");
 
             //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
             let find_motifs_run_config_ids = track_await!(run_grid::</*Simple,*/ _, _, _, _, _>(
@@ -135,7 +135,7 @@ pub(crate) async fn run_all(
                 "find motifs"
             )).await?;
 
-            info!("find motifs done, find_motif_run_config_ids={find_motifs_run_config_ids:?}");
+            info!("run_all: find motifs done, find_motif_run_config_ids={find_motifs_run_config_ids:?}");
 
             assert!(!find_motifs_run_config_ids.is_empty(), "no find_motifs_run_config_ids");
 
@@ -176,7 +176,7 @@ pub(crate) async fn run_all(
                 };
             }
 
-            info!("select motifs done: find_motifs_run_config_ids={find_motifs_run_config_ids:?} select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
+            info!("run_all: select motifs done: find_motifs_run_config_ids={find_motifs_run_config_ids:?} select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
 
             select_motifs_run_config_ids
         }
@@ -200,7 +200,7 @@ pub(crate) async fn run_all(
                 || root_ctx.branch(true),
             )).await?;
 
-            info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_config_ids={best_find_and_select_result_ids:?}");
+            info!("run_all: opt FindAndSelectMotifsRunConfig done: find_and_select_run_config_ids={best_find_and_select_result_ids:?}");
             assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
 
             let select_motifs_run_config_ids = track_await!(store
@@ -209,12 +209,11 @@ pub(crate) async fn run_all(
                 |opt_select_result_ids| opt_select_result_ids.1
             ).collect::<Vec<_>>();
 
-            info!("opt FindAndSelectMotifsRunConfig done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
+            info!("run_all: opt FindAndSelectMotifsRunConfig done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
 
             select_motifs_run_config_ids
         }
     };
-
 
 
     if run_all_args.with_plots {
@@ -223,7 +222,7 @@ pub(crate) async fn run_all(
         }
     }
 
-    info!("find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
+    debug!("run_all: find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
     assert!(!select_motifs_run_config_ids.is_empty(), "No selected motifs");
 
 
@@ -250,7 +249,7 @@ pub(crate) async fn run_all(
         || root_ctx.branch(true),
     )).await?;
 
-    info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
+    info!("run_all: train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
 
     assert!(!train_motif_nets_run_config_ids.is_empty(), "No trained motif nets");
     
@@ -293,7 +292,7 @@ pub(crate) async fn run_all(
         || root_ctx.branch(true),
     )).await?;
 
-    info!("train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
+    info!("run_all: train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
     assert!(!train_label_nets_run_config_ids.is_empty(), "No trained label nets");
 
     ////////////////////////
@@ -349,9 +348,12 @@ pub struct RunAllSettings {
 
 
 // This alternative test profile is currently not selected.
-pub fn run_all_config_1(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
+pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
-    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
+    //let find_motifs_run_config_range_or_value = run_all_find_motifs_config_grid_0(2, 2, 4);
+    // let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
+    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_no_filters(2);
+
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
     let select_motifs_run_config = run_all_select_motifs_config_1::<SelectMotifsRunConfigFields>();
 
@@ -706,18 +708,27 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         // window: RangeOrValue::Value(200),
         window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
         freq_filter: Some(vec![
-            AverageFilter(AverageFilterParamsRangeOrValue {
-                window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(10),
-            }),
+            // AverageFilter(AverageFilterParamsRangeOrValue {
+            //     window: RangeOrValue::dynamic(median_window),
+            //     step: RangeOrValue::Value(10),
+            // }),
+            BandPassFilter(BandPassFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+                band_hz: RangeOrValue::Value(2.),
+                // kernel_size: RangeOrValue::Value(10),
+                // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
+                kernel_size: RangeOrValue::dynamic(median_window),
+                stride: RangeOrValue::Value(10),
+                padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            })
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
+            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((2, 0)) },
             //     stride: RangeOrValue::Value(10),
             //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
-        min_slices: Some(RangeOrValue::Value(2)),
+        min_slices: Some(RangeOrValue::Value(4)),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
         finder_kind: FinderKindRangeOrValue::CrossLoader(
             CrossLoaderRunConfigRangeOrValue {
@@ -789,38 +800,14 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
     }
 }
 
-
-#[allow(dead_code)]
-fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-    let max_k =2;
-    let min_k =2;
-    let steps =4;
-    let kernel_size = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
-        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
-            None => RangeOrValue::Value(100),
-            Some(value) => {
-                let window = value.val().to_i64(0) as u32;
-                debug!("Window: window={window}");
-                let end = window.saturating_mul(max_k);
-                let start = window / min_k;
-                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
-            }
-        }
-    };
+pub fn run_all_find_motifs_config_no_filters(min_slices: u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
 
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
         window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
-        freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
-            low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
-            band_hz: RangeOrValue::Value(2.),
-            // kernel_size: RangeOrValue::Value(10),
-            // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
-            kernel_size: RangeOrValue::dynamic(kernel_size),
-            stride: RangeOrValue::Value(10),
-            padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-        })]),
+        freq_filter: None,
+
         // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
         //     similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
         //     slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
@@ -840,7 +827,69 @@ fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsR
             }
         ),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
-        min_slices: Some(RangeOrValue::Value(4)),
+        min_slices: Some(RangeOrValue::Value(min_slices)),
+    }
+}
+
+
+
+pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
+    let max_k =2;
+    let min_k =2;
+    let steps =4;
+    let kernel_size = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
+        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+            None => RangeOrValue::Value(100),
+            Some(value) => {
+                let window = value.val().to_i64(0) as u32;
+                debug!("Window: window={window}");
+                let end = window.saturating_mul(max_k);
+                let start = window / min_k;
+                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
+            }
+        }
+    };
+
+    FindMotifsRunConfigRangeOrValue {
+        id: None,
+        step: RangeOrValue::Value(10),
+        window: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((10, 0)) },
+        // freq_filter: None,
+        freq_filter: Some(vec![
+            AverageFilter(AverageFilterParamsRangeOrValue {
+                window: RangeOrValue::dynamic(kernel_size),
+                step: RangeOrValue::Value(2),
+            }),
+        //     // BandPassFilter(BandPassFilterParamsRangeOrValue {
+        //     //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+        //     //     band_hz: RangeOrValue::Value(2.),
+        //     //     // kernel_size: RangeOrValue::Value(10),
+        //     //     // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
+        //     //     kernel_size: RangeOrValue::dynamic(kernel_size),
+        //     //     stride: RangeOrValue::Value(10),
+        //     //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+        //     // })
+        ]),
+        // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+        //     similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+        //     slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+        //         aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.1) }),
+        //         slices: RangeOrValue::Value(200),
+        //     }),
+        // }),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(
+            CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                        q: RangeOrValue::Value(0.5),
+                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                    }),
+                }),
+            }
+        ),
+        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
+        min_slices: Some(RangeOrValue::Value(2)),
     }
 }
 
@@ -851,20 +900,20 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
         motif_criteria: vec![
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
-                min: RangeOrValue::Value(0.8),
+                min: RangeOrValue::Value(0.5),
             },
-            MotifCriterionConstraintRangeOrValue {
-                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1. / 64.),
-                    lag_min: RangeOrValue::Value(1. / 32.),
-                    lag_max: RangeOrValue::Value(0.5),
-                    struct0: RangeOrValue::Value(0.2),
-                    peak_good: RangeOrValue::Value(0.25),
-                    peak_bad: RangeOrValue::Value(0.65),
-                    eps: RangeOrValue::Value(1e-8),
-                }),
-                min: RangeOrValue::Value(0.80),
-            }
+            // MotifCriterionConstraintRangeOrValue {
+            //     metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
+            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
+            //         lag_min: RangeOrValue::Value(1. / 32.),
+            //         lag_max: RangeOrValue::Value(0.5),
+            //         struct0: RangeOrValue::Value(0.2),
+            //         peak_good: RangeOrValue::Value(0.25),
+            //         peak_bad: RangeOrValue::Value(0.65),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     }),
+            //     min: RangeOrValue::Value(0.80),
+            // }
             // MotifCriterionConstraintRangeOrValue {
             //     metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
             //         k: RangeOrValue::Value(3.0),
@@ -886,7 +935,7 @@ fn run_all_select_motifs_config_1<P: FieldName + 'static>() -> SelectMotifsRunCo
 #[cfg(test)]
 mod tests {
     use thoosa_common::tch_error::tch_result;
-    use crate::run_all::{run_all, run_all_config_0, AllConfigs, FindAndSelect, RunAllSettings, run_all_config_1};
+    use crate::run_all::{run_all, run_all_config_0, AllConfigs, FindAndSelect, RunAllSettings, run_all_config_test};
     use futures::executor::block_on;
     use futures::future::BoxFuture;
     use log::LevelFilter::Debug;
@@ -1244,10 +1293,10 @@ mod tests {
 
         let mut ctx = RunCtxImpl::new(1, "test_run_all");
 
-        let run_all_args = RunAllArgs{
+        let run_all_args = RunAllArgs {
             find_resources: format!("group:{}", settings.train_resource_group),
             select_resources: format!("group:{}", settings.valid_resource_group),
-            max_chunk_size: 100000,
+            max_chunk_size: 1000,
             train_resource_group: settings.train_resource_group.to_string(),
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
@@ -1261,7 +1310,7 @@ mod tests {
         };
 
         // let all_configs = run_all_config_0(&run_all_args);
-        let all_configs = run_all_config_1(&run_all_args, &settings);
+        let all_configs = run_all_config_test(&run_all_args, &settings);
 
         let r = panic_to_err_async!({run_all(
             &ws,

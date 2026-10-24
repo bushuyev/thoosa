@@ -21,7 +21,7 @@ use tokio::{
 use tracing::{debug, warn, Instrument};
 
 use thoosa_shared::{CudaActivityGate, CudaActivityPauseTicket, CudaActivityScope, CudaDeviceGeneration, CudaRecoveryState, SyncStageRunnerError, ThoError, LOCK_TIMEOUT};
-use super::cuda_recovery::{CudaRecoveryCoordinator, ResetFn};
+use super::cuda_recovery::{CudaRecoveryCoordinator, RestartFn};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, SyncExecutionWaiter, futures_limits};
 use thoosa_shared::tracked_await::track_await;
 
@@ -480,7 +480,7 @@ impl SyncStageRunner {
     pub fn new_with_reset_hook(
         queue_capacity: usize,
         tho_device_idx: usize,
-        reset_fn: ResetFn,
+        reset_fn: RestartFn,
     ) -> Self {
         Self::new_with_recovery(queue_capacity, CudaRecoveryCoordinator::new(Arc::new(CudaActivityGate::new(tho_device_idx)), reset_fn))
     }
@@ -1077,7 +1077,7 @@ impl SyncStageRunner {
 
         // A continuous stream of submissions/cancellations must not starve
         // completions, admission changes, or other executors on this runtime.
-        for _ in 0..256 {
+        for _ in 0..256 {//TODO 256?
             match cmd_rx.try_recv() {
                 Ok(cmd) => Self::process_command(
                     cmd,
@@ -2637,7 +2637,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), async {
             let (started, mut starts) = mpsc::unbounded_channel();
             let release = [Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new())];
-            let reset: ResetFn = Arc::new({
+            let reset: RestartFn = Arc::new({
                 let release = release.clone();
                 move |device| {
                     let started = started.clone();

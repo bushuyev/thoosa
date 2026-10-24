@@ -74,7 +74,7 @@ where
 }
 
 #[async_trait]
-pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO rename to GPUMemPurger
+pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO rename to CachePurger
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         false
     }
@@ -252,25 +252,65 @@ where
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
 
+        for (key, fut) in items.into_iter() {
+            info!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?}");
 
-        track_await!(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, fut)| async move {
             if fut.invalidate_pending_on(device_idx) {
+                debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} invalidate_pending_on");
+
                 self.remove_if(&key, |_, current| current.ptr_eq(&fut));
             } else if let Some(output) = fut.peek().and_then(|result| result.as_ref().ok()) {
+                debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} is_on_device={}", output.is_on_device(device_idx));
+
                 if output.is_on_device(device_idx) {
-                    output.drop_device(device_idx).await?;
-                    if !output.has_any_data() {
+                    let r= output.drop_device(device_idx).await;
+
+                    debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} r={r:?}");
+
+                    let r = r?;
+                    // if !output.has_any_data() {
                         // Other devices may replace this entry while cleanup awaits.
                         // Remove only the empty future from this snapshot.
-                        self.remove_if(&key, |_, current| current.ptr_eq(&fut));
-                    }
+                        // self.remove_if(&key, |_, current| current.ptr_eq(&fut));
+                        // self.remove_if(&key, |_, current| current.ptr_eq(&fut));
+                    // }
                 }
             }
             // Unresolved futures can belong to healthy devices. Never await or
             // evict them merely because this device is restarting.
             collect_eta_record_completion(dump_eta_guard_id);
-            Ok(())
-        })).await?;
+        }
+
+        // track_await!(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, fut)| async move {
+        //     info!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?}");
+        //
+        //     if fut.invalidate_pending_on(device_idx) {
+        //         debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} invalidate_pending_on");
+        //
+        //         self.remove_if(&key, |_, current| current.ptr_eq(&fut));
+        //     } else if let Some(output) = fut.peek().and_then(|result| result.as_ref().ok()) {
+        //         debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} is_on_device={}", output.is_on_device(device_idx));
+        //
+        //         if output.is_on_device(device_idx) {
+        //             let r= output.drop_device(device_idx).await;
+        //
+        //             debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} r={r:?}");
+        //
+        //             let r = r?;
+        //             if !output.has_any_data() {
+        //                 // Other devices may replace this entry while cleanup awaits.
+        //                 // Remove only the empty future from this snapshot.
+        //                 self.remove_if(&key, |_, current| current.ptr_eq(&fut));
+        //             }
+        //         }
+        //     }
+        //     // Unresolved futures can belong to healthy devices. Never await or
+        //     // evict them merely because this device is restarting.
+        //     collect_eta_record_completion(dump_eta_guard_id);
+        //     Ok(())
+        // })).await?;
+
+        info!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} done");
 
         Ok(())
     }

@@ -63,26 +63,26 @@ where
         match result {
             Ok(value) => values.push(value),
             Err(error) => {
+                warn!("collect_futures_with_progress_with_limit: error={error:?}");
                 // A later fatal completion must not be hidden by an earlier OOM
                 // or ordinary error. Context retains the original typed cause.
                 let replace = failure.as_ref().is_none_or(|original| {
                     (error.is_cuda_recovery_failed() && !original.is_cuda_recovery_failed()) ||
                     (error.needs_cuda_restart() && !original.needs_cuda_restart() && !original.is_cuda_recovery_failed())
                 });
-                if replace { failure = Some(error.context(format!("{descr}: task at input index {idx} failed"))); }
+                if replace {
+                    failure = Some(error.context(format!("{descr}: task at input index {idx} failed")));
+                }
             }
         }
     }
-    //TODO param to ignore failures - usually it's ok to skip few failed cycles in big batches 
-    if ignore_failures && !values.is_empty() {
-        Ok(values)
-    } else if failure.is_some() {
-        warn!("collect_futures_with_progress_with_limit: skipping error: {failure:?}");
+    debug!("collect_futures_with_progress_with_limit: ignore_failures={ignore_failures} values.is_empty={:?}", values.is_empty());
+    if failure.is_some() && !ignore_failures {
+        debug!("collect_futures_with_progress_with_limit: error: {failure:?}");
         Err(failure.unwrap())
     } else {
         Ok(values)
     }
-    // match failure { Some(error) => Err(error), None => Ok(values) }
 }
 
 async fn collect_outcomes<T, F>(
