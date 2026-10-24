@@ -130,10 +130,8 @@ where
 
         main_rt.block_on(async {
             let _ctx = init_ipc_test(module_path).await?;
-            let r = main_f.await;
+            let r = run_ipc_main(main_f, GlobalCtx::global().shutdown()).await;
             info!("main done: r={r:?}");
-
-            GlobalCtx::global().shutdown().await;
 
             info!("main perf:\n{}", format_perf_map(&PERF));
 
@@ -143,6 +141,19 @@ where
     }
 
     Ok(())
+}
+
+async fn run_ipc_main(main_f: impl Future<Output = Result<(), ThoError>>, shutdown: impl Future<Output = ()>) -> Result<(), ThoError> {
+    use futures_util::FutureExt;
+    // Catch panics while polling the main future so unwinding cannot destroy
+    // the runtime in the middle of worker retirement or replacement. Preserve
+    // the original test failure after the actor has finished cleanup.
+    let result = std::panic::AssertUnwindSafe(main_f).catch_unwind().await;
+    shutdown.await;
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 
@@ -275,7 +286,12 @@ mod tests {
         }
 
         fn consume_input(&self, input: &ThoTensor<LoadedTensor, SynKey>) -> Result<ThoTensor<LoadedTensor, SynKey>, ThoError> {
-            if tch_result(input.t_ref().f_double_value(&[0, 0]))? < 0.0 {
+            let value = tch_result(input.t_ref().f_double_value(&[0, 0]))?;
+            // Exercise a fatal worker reply without poisoning the test GPU.
+            if value == -2.0 {
+                return Err(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "injected fatal worker error".into() });
+            }
+            if value < 0.0 {
                 return Err(ThoError::new("consume test failure"));
             }
             ThoTensor::new(self.out_id(input.id()), tch_result(input.t_ref().f_mul_scalar(2.0))?)
@@ -363,6 +379,61 @@ mod tests {
             SYNC_CONSUME_TEST_ENDPOINT.to_string(),
             Box::new(sync_consume_test_endpoint_init) as InitFn,
         )])
+    }
+
+    #[tokio::test]
+    async fn test_ipc_main_panic_waits_for_shutdown() {
+        let mut cleaned_up = false;
+        let result = std::panic::AssertUnwindSafe(super::run_ipc_main(async {
+            // The panic must be caught during polling, including after an await.
+            tokio::task::yield_now().await;
+            panic!("main failed during worker restart");
+        }, async {
+            tokio::task::yield_now().await;
+            cleaned_up = true;
+        })).catch_unwind().await;
+        assert!(cleaned_up, "IPC cleanup must finish before propagating the main panic");
+        assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"main failed during worker restart"));
+    }
+
+    #[test]
+    fn test_fatal_stage_error_restarts_worker_ipc() -> Result<(), ThoError> {
+        run_ipc_test(
+            module_path!(),
+            async {
+                let actor = GlobalCtx::global().cuda_actor(1);
+                let runner = GlobalCtx::global().get_runner(1);
+                let gate = runner.cuda_gate().unwrap();
+                // Repeat the failure to cover retirement of a replacement too.
+                for _ in 0..2 {
+                    let generation = gate.device_generation();
+                    let stage = Arc::new(new_sync_consume_test_stage(1).await?);
+                    let input = ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("restart", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[-2.0f32, 1.0]))?.f_view([1, 2]))?)?;
+                    let result = runner.submit(1, async {
+                        actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "fatal worker reply")).await
+                    }, None).await;
+                    assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset), "a fatal stage reply must request device recovery");
+                    tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("fatal worker restart timed out")??;
+                    assert_eq!(gate.device_generation().0, generation.0 + 1);
+
+                    // A ready handshake alone is insufficient: install and run
+                    // a fresh stage, then copy its result out of the new worker.
+                    let stage = Arc::new(new_sync_consume_test_stage(1).await?);
+                    let input = ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("restarted", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[3.0f32, 4.0]))?.f_view([1, 2]))?)?;
+                    let output = runner.submit(1, async {
+                        actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "restarted worker")).await
+                    }, None).await?;
+                    let output = actor.copy(output.strip_types(), 0usize.into()).await?;
+                    assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 6.0);
+                    assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 1]))?, 8.0);
+                }
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+            },
+        )
     }
 
     #[test]
