@@ -280,26 +280,24 @@ impl SpawnedState {
     }
 
     async fn shutdown_with_timeout(mut self, request_id: u64, deadline: Duration) -> Result<(), ThoError> {
-        // self.pending.close(ThoError::new("CUDA worker is shutting down"));
+        self.pending.close(ThoError::new("CUDA worker is shutting down"));
         // Bound the whole exchange, including a full writer queue and a worker
         // which never acknowledges, rather than only the final child wait.
         let graceful = timeout(deadline, async {
             let reply = send_request(self.tx.clone(), Arc::clone(&self.pending), CudaWorkerMsgIn::new(self.worker_id, request_id, Operation::Shutdown { dummy: "shutdown".into() }), None, true).await?;
             debug!("shutdown_with_timeout: reply={reply:?}");
             unit_reply(reply)?;
-            debug!("shutdown_with_timeout: before start_kill");
-            self.child.start_kill().context("terminate CUDA worker")?;
-            debug!("shutdown_with_timeout: after start_kill");
-            // let status = self.child.wait().await?;
-            let status = self.child.try_wait();
+            // The acknowledgement precedes process exit; keep shared buffers
+            // alive until the worker has actually stopped accessing them.
+            let status = self.child.wait().await?;
             debug!("shutdown_with_timeout: status={status:?}");
-
-            // if !status.success() { return Err(ThoError::new(format!("CUDA worker exited with {status}"))); }
+            if !status.success() { return Err(ThoError::new(format!("CUDA worker exited with {status}"))); }
             Ok::<_, ThoError>(())
         }).await;
         self.stop_io().await;
-        // kill_and_reap(&mut self.child).await?;
-        // self.pending.exited(ThoError::new("CUDA worker exited during shutdown"));
+        // A failed or timed-out graceful shutdown still has to reap the child.
+        kill_and_reap(&mut self.child).await?;
+        self.pending.exited(ThoError::new("CUDA worker exited during shutdown"));
         graceful.context("CUDA worker shutdown timed out")?
     }
 }
@@ -813,15 +811,10 @@ impl CudaIPCActor {
                     // Recheck queued authority and drained activity before replacing CUDA state.
                     self.gate.check_recovery_authority(authority, true)?;
                     debug!("CudaIPCActor::control, BackendControl::Restart: check_recovery_authority ok");
-                    let result = match self.spawned_state.take() {
-                        Some(worker) => worker.shutdown(self.next_id.fetch_add(1, Ordering::Relaxed)).await,
-                        None => Ok(()),
-                    };
-                    debug!("CudaIPCActor::control, BackendControl::Restart: worker shutdown ok");
-
-                    // let retire_r = self.retire(ThoError::ContextReset).await;
-                    // debug!("CudaIPCActor::control, BackendControl::Restart: retire reire_r={retire_r:?}");
-                    // let retire_r = retire_r?;
+                    // Fatal CUDA failures may prevent graceful shutdown. Reap
+                    // the failed worker and propagate retirement errors before
+                    // creating another process for the same device.
+                    self.retire(ThoError::ContextReset).await?;
 
                     // A fresh primary context requires the old process to have
                     // exited before its replacement is even spawned.
