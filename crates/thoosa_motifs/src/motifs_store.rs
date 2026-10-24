@@ -1017,10 +1017,7 @@ impl MotifsStore for SqlStore {
         channels: u32,
         limit: Option<u32>,
     ) -> anyhow::Result<HashMap<RunConfigId, Vec<Vec<(u32, f64)>>>> {
-        assert!(
-            !motif_selection_ids.is_empty(),
-            "motif_selection_ids is empty"
-        );
+        assert!(!motif_selection_ids.is_empty(), "motif_selection_ids is empty");
 
         let placeholders = vec!["?"; motif_selection_ids.len()].join(", ");
 

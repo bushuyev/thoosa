@@ -9,7 +9,7 @@ use thoosa_shared::{CudaActivityGate, CudaActivityPauseTicket, CudaActivityScope
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
-pub(crate) type ResetFn = Arc<dyn Fn(usize) -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>;
+pub(crate) type RestartFn = Arc<dyn Fn(usize) -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>;
 pub(crate) type RetireFn = Arc<dyn Fn(usize, CudaActivityPauseTicket) -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>;
 pub(crate) type ProcessFailureFn = Arc<dyn Fn(ThoError) + Send + Sync>;
 const RECOVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,7 +26,7 @@ struct RecoveryCycle {
 pub(crate) struct CudaRecoveryCoordinator {
     gate: Arc<CudaActivityGate>,
     cycle: Mutex<Option<RecoveryCycle>>,
-    reset: ResetFn,
+    restart_fn: RestartFn,
     retire: Option<RetireFn>,
     process_failure: Option<ProcessFailureFn>,//to tear down main process in local mode.
     drain_timeout: Duration,
@@ -39,12 +39,13 @@ impl std::fmt::Debug for CudaRecoveryCoordinator {
 }
 
 impl CudaRecoveryCoordinator {
-    pub(crate) fn new(gate: Arc<CudaActivityGate>, reset: ResetFn) -> Arc<Self> {
+    #[cfg(any(test, feature = "mock_global_ctx"))]
+    pub(crate) fn new(gate: Arc<CudaActivityGate>, reset: RestartFn) -> Arc<Self> {
         Self::with_backend(gate, reset, None, None)
     }
 
-    pub(crate) fn with_backend(gate: Arc<CudaActivityGate>, reset: ResetFn, retire: Option<RetireFn>, process_failure: Option<ProcessFailureFn>) -> Arc<Self> {
-        Arc::new(Self { gate, cycle: Mutex::new(None), reset, retire, process_failure, drain_timeout: RECOVERY_DRAIN_TIMEOUT })
+    pub(crate) fn with_backend(gate: Arc<CudaActivityGate>, restart_fn: RestartFn, retire: Option<RetireFn>, process_failure: Option<ProcessFailureFn>) -> Arc<Self> {
+        Arc::new(Self { gate, cycle: Mutex::new(None), restart_fn, retire, process_failure, drain_timeout: RECOVERY_DRAIN_TIMEOUT })
     }
 
     pub(crate) fn gate(&self) -> &Arc<CudaActivityGate> {
@@ -123,7 +124,7 @@ impl CudaRecoveryCoordinator {
         let guard = RecoveryGuard { coordinator: Arc::clone(self), ticket };
         let task = runtime.spawn(async move {
             let _guard = guard;
-            if let Err(error) = _guard.coordinator.run(ticket, drained, generation, cause).await {
+            if let Err(error) = _guard.coordinator.run(ticket, drained, generation, cause).await {//<-- calls thoosa_common::runner::global_ctx::GlobalCtx::cuda_restart
                 _guard.coordinator.fail(ticket, error);
             }
         });
@@ -138,6 +139,7 @@ impl CudaRecoveryCoordinator {
     }
 
     async fn run(&self, ticket: CudaActivityPauseTicket, drained: oneshot::Receiver<()>, generation: CudaDeviceGeneration, cause: ThoError) -> Result<(), ThoError> {
+        debug!("CudaRecoveryCoordinator::run: ticket={ticket:?} cause={cause:?}");
         let device = self.gate.device_idx();
         let drain = async {
             drained.await.map_err(|_| ThoError::new("CUDA recovery reporting executor stopped before draining"))?;
@@ -145,9 +147,12 @@ impl CudaRecoveryCoordinator {
             Ok::<_, ThoError>(())
         };
         tokio::pin!(drain);
+        debug!("CudaRecoveryCoordinator::run: drain done");
+
         match tokio::time::timeout(self.drain_timeout, &mut drain).await {
             Ok(result) => result?,
-            Err(_) => {
+            Err(e) => {
+                debug!("CudaRecoveryCoordinator::run: drain_timeout e={e:?}");
                 // A wedged IPC operation holds its lease and shared buffers until
                 // the worker is dead. Retirement uses a separate control channel.
                 let retire = self.retire.as_ref().ok_or_else(|| ThoError::new("CUDA activity did not drain before the recovery deadline"))?;
@@ -155,9 +160,17 @@ impl CudaRecoveryCoordinator {
                 tokio::time::timeout(self.drain_timeout, &mut drain).await.map_err(|_| ThoError::new("CUDA activity did not drain after worker retirement"))??;
             }
         }
+        debug!("CudaRecoveryCoordinator::run: calling restart_fn");
+
         tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, CudaActivityScope::run_reset(&self.gate, ticket, async {
-            (self.reset)(device).await
-        })).await.map_err(|_| ThoError::new("CUDA backend recovery timed out"))?.map_err(|error| error.context(format!("recovering CUDA device {device}, generation {}, after {cause:#}", generation.0)))?;
+            (self.restart_fn)(device).await
+        })).await
+        .map_err(|e| {
+            ThoError::new(format!("CUDA backend recovery timed out: ({e:?})"))
+        })?
+        .map_err(|error| {
+            error.context(format!("recovering CUDA device {device}, generation {}, after {cause:#}", generation.0))
+        })?;
 
         // Generation publication and report deduplication share this lock. No
         // other device participates in this completion or delays its reopening.
@@ -240,7 +253,7 @@ mod tests {
                 Box::pin(async { Ok(()) })
             }
         });
-        let reset: ResetFn = Arc::new({
+        let reset: RestartFn = Arc::new({
             let retired = Arc::clone(&retired);
             move |_| { assert!(retired.load(Ordering::Acquire)); Box::pin(async { Ok(()) }) }
         });
@@ -313,7 +326,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), async {
             let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
             let releases = [Arc::new(Notify::new()), Arc::new(Notify::new())];
-            let reset: ResetFn = Arc::new({
+            let reset: RestartFn = Arc::new({
                 let releases = releases.clone();
                 move |device| {
                     let started = started.clone();

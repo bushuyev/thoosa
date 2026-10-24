@@ -1,6 +1,6 @@
 use thoosa_common::tch_error::tch_result;
 use crate::runner::purge::FuturesRunnerMapPurger;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 #[allow(unused_imports)]
 use mockall::automock;
 use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
@@ -278,13 +278,20 @@ impl GlobalCtx {
             info!("GlobalCtx::cuda_restart: tho_device_idx={tho_device_idx}");
 
             //drop slots belonging to the device being reset and remove cache entries with no other devices' (CPU) data, i.e. if the entry was not copied from or dumped to CPU yet
-            track_await!(GlobalCtx::global()
+            let r = track_await!(GlobalCtx::global()
                 .drop_data_on_device(tho_device_idx, "drop"))
-                .await?;
-            info!("GlobalCtx::cuda_restart: drop_device done");
+                .await;
+
+            info!("GlobalCtx::cuda_restart: drop_device done with result={r:?}");
 
             let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("no CUDA gate");
+
+            info!("GlobalCtx::cuda_restart: gate={gate:?}");
+
             let authority = thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?;
+
+            info!("GlobalCtx::cuda_restart: authority={authority:?}");
+
             GlobalCtx::global()
                 .cuda_actor(tho_device_idx)
                 .restart_backend(authority)
@@ -535,8 +542,15 @@ impl GlobalCtx {
             let type_name = entry.name.as_ref();
             let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
             debug!("GlobalCtx::drop_data_on_device: type_name={type_name}");
-            track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await?;
-            debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
+            match track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await {
+                Ok(_) => {
+                    debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
+                }
+                Err(e) => {
+                    warn!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
+                }
+            }
+
             collect_eta_record_completion(dump_eta_guard.id());
         }
 

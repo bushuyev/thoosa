@@ -74,7 +74,10 @@ where
     FM: Future<Output = Result<(), ThoError>>,
     FW: AsyncFn(OsString) -> anyhow::Result<()>,
 {
-    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+    let ipc_sock_env = std::env::var_os(IPC_SOCK_ENV);
+    debug!("run_ipc_test: ipc_sock_env={ipc_sock_env:?}");
+
+    if let Some(sock_path) = ipc_sock_env {
         init_test_logging();
 
         debug!("run_ipc_test: sock_path={sock_path:?}");

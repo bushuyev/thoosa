@@ -526,14 +526,14 @@ pub enum SyncStageRunnerError {
 #[derive(Debug, Clone)]
 pub enum ThoError {
     Cuda { action: CudaAction, msg: String },
-    CudaRecoveryFailed(Arc<CudaRecoveryFailure>),
+    CudaRecoveryFailed(Arc<CudaRecoveryFailure>),//TODO rename to GpuRestartFailed
     TrainingSessionFailed(Arc<TrainingSessionFailure>),
     AdjusterFailed,
     // Shared futures require Clone; sharing keeps the original source and backtrace intact.
     Anyhow(Arc<anyhow::Error>),
     NotFound(Option<String>),
     SyncStageRunner(SyncStageRunnerError),
-    ContextReset,// TODO it's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
+    ContextReset,// TODO rename to GpuBeingRestarted. It's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
 }
 
 /// Keep both failures typed: terminal recovery must not be classified as another

@@ -150,6 +150,7 @@ where
             }
             frame = frames.recv() => {
                 let request = frame.context("worker frame reader stopped")??;
+                debug!("cuda_wokrer::serve_worker_requests: request={request:?}");
                 if request.worker_id == worker_id && matches!(&request.operation, Operation::Shutdown { .. }) {
                     break request.request_id;
                 }
@@ -177,6 +178,7 @@ where
             }
         }
     };
+    debug!("cuda_wokrer::serve_worker_requests: shutdown_request_id={shutdown_request_id:?}");
     drop(reader_abort);
     // Reap the cancelled reader, rather than leaving even its cleanup detached.
     let _ = reader_task.await;
@@ -194,8 +196,15 @@ where
         }
     }
     reply_tx.send(CudaWorkerMsgOut { worker_id, request_id: shutdown_request_id, status: OpResult::Ok(None) }).await.context("worker response writer is closed")?;
+    debug!("cuda_wokrer::serve_worker_requests: shutdown_request_id={shutdown_request_id:?} reply sent");
     drop(reply_tx);
     writer_task.await.context("worker response writer task failed")??;
+
+    debug!("worker is shutting down");
+    // unsafe {
+    //     libc::_exit(0);
+    // }
+
     Ok(())
 }
 
