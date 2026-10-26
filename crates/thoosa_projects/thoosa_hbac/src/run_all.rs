@@ -222,7 +222,7 @@ pub(crate) async fn run_all(
         }
     }
 
-    debug!("run_all: find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
+    info!("run_all: find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
     assert!(!select_motifs_run_config_ids.is_empty(), "No selected motifs");
 
 
@@ -549,7 +549,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(300),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -592,8 +592,9 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(2),
+            epochs: RangeOrValue::Value(300),
+            // batch_size: RangeOrValue::Value(2),
+            batch_size: RangeOrValue::Range { range: Range { start: 2, end: 10 }, step: None },
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -606,7 +607,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         },
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            mid_features: RangeOrValue::Range { range: Range { start: 20, end: 1000 }, step: None },
+            mid_features: RangeOrValue::Range { range: Range { start: 8, end: 1000 }, step: None },
         },
     };
     AllConfigs{
@@ -708,19 +709,19 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         // window: RangeOrValue::Value(200),
         window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
         freq_filter: Some(vec![
-            // AverageFilter(AverageFilterParamsRangeOrValue {
-            //     window: RangeOrValue::dynamic(median_window),
-            //     step: RangeOrValue::Value(10),
-            // }),
-            BandPassFilter(BandPassFilterParamsRangeOrValue {
-                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
-                band_hz: RangeOrValue::Value(2.),
-                // kernel_size: RangeOrValue::Value(10),
-                // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
-                kernel_size: RangeOrValue::dynamic(median_window),
-                stride: RangeOrValue::Value(10),
-                padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            })
+            AverageFilter(AverageFilterParamsRangeOrValue {
+                window: RangeOrValue::dynamic(median_window),
+                step: RangeOrValue::Value(10),
+            }),
+            // BandPassFilter(BandPassFilterParamsRangeOrValue {
+            //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
+            //     band_hz: RangeOrValue::Value(2.),
+            //     // kernel_size: RangeOrValue::Value(10),
+            //     // kernel_size: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((50, 0)) },
+            //     kernel_size: RangeOrValue::dynamic(median_window),
+            //     stride: RangeOrValue::Value(10),
+            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            // })
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
             //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((2, 0)) },
@@ -735,7 +736,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
                 similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
                 slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.5),
+                        q: RangeOrValue::Value(0.2),
                         // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                     }),
                 }),
@@ -754,7 +755,7 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
                 }),
-                min: RangeOrValue::Value(0.8),
+                min: RangeOrValue::Value(0.85),
             },
             MotifCriterionConstraintRangeOrValue {
                 metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
@@ -1296,7 +1297,7 @@ mod tests {
         let run_all_args = RunAllArgs {
             find_resources: format!("group:{}", settings.train_resource_group),
             select_resources: format!("group:{}", settings.valid_resource_group),
-            max_chunk_size: 1000,
+            max_chunk_size: 100,
             train_resource_group: settings.train_resource_group.to_string(),
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
