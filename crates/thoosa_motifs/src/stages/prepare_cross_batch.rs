@@ -89,11 +89,11 @@ impl<C: RunCtx + 'static> PrepareCrossBatch<C> {
     pub async fn new(params: UnfoldParams, tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<Self>>, ThoError> {
         let id = params.new_id().to_string();
 
-        PREPARE_CROSS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, id.clone(), move || async move {
+        PREPARE_CROSS_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, id.clone(), move || async move {
             Ok(Arc::new(if GlobalCtx::global().is_ipc() {
 
                 DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(PREPARE_CROSS_BATCH_ENDPOINT, Some(id), tho_device_idx, Box::new(params)).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(PREPARE_CROSS_BATCH_ENDPOINT, Some(id), tho_device_idx, Box::new(params)).await?),
                     init: (),
                 }
             } else {

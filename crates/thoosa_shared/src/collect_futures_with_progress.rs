@@ -68,7 +68,8 @@ where
                 // or ordinary error. Context retains the original typed cause.
                 let replace = failure.as_ref().is_none_or(|original| {
                     (error.is_cuda_recovery_failed() && !original.is_cuda_recovery_failed()) ||
-                    (error.needs_cuda_restart() && !original.needs_cuda_restart() && !original.is_cuda_recovery_failed())
+                    (error.is_missing_endpoint() && !original.is_missing_endpoint() && !original.is_cuda_recovery_failed()) ||
+                    (error.needs_cuda_restart() && !original.needs_cuda_restart() && !original.is_cuda_recovery_failed() && !original.is_missing_endpoint())
                 });
                 if replace {
                     failure = Some(error.context(format!("{descr}: task at input index {idx} failed")));
@@ -77,7 +78,10 @@ where
         }
     }
     debug!("collect_futures_with_progress_with_limit: ignore_failures={ignore_failures} values.is_empty={:?}", values.is_empty());
-    if !ignore_failures && let Some(failure) = failure {
+    // Best-effort data filtering must not turn broken execution infrastructure
+    // into a successful partial result after worker recovery.
+    let must_propagate = failure.as_ref().is_some_and(|error| error.is_missing_endpoint() || error.is_cuda_recovery_failed());
+    if (!ignore_failures || must_propagate) && let Some(failure) = failure {
         Err(failure)
     } else {
         if failure.is_some(){
@@ -187,6 +191,18 @@ mod tests {
 
     use super::collect_futures_with_progress_with_limit;
     use crate::{FuturesOrdering, ThoError};
+
+    #[tokio::test]
+    async fn test_best_effort_propagates_missing_endpoint_and_failed_recovery() {
+        for error in [ThoError::MissingEndpoint("stage/1".into()), ThoError::CudaRecoveryFailed(Arc::new(crate::CudaRecoveryFailure { original: ThoError::ContextReset, recovery: None }))] {
+            let missing = error.is_missing_endpoint();
+            let (_, limit) = watch::channel(2);
+            let results = [Err(ThoError::new("incompatible data")), Ok(1), Err(error.context("worker operation"))];
+            let failure = collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 3, Arc::new(limit), FuturesOrdering::Ordered, true, "required endpoints").await.unwrap_err();
+            assert_eq!(failure.is_missing_endpoint(), missing);
+            assert_eq!(failure.is_cuda_recovery_failed(), !missing);
+        }
+    }
 
     async fn wait_for_value(value: &AtomicUsize, expected: usize) {
         tokio::time::timeout(Duration::from_secs(2), async {

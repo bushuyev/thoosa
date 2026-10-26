@@ -532,6 +532,8 @@ pub enum ThoError {
     // Shared futures require Clone; sharing keeps the original source and backtrace intact.
     Anyhow(Arc<anyhow::Error>),
     NotFound(Option<String>),
+    // Missing execution infrastructure cannot be treated as an incompatible data item.
+    MissingEndpoint(String),
     SyncStageRunner(SyncStageRunnerError),
     ContextReset,// TODO rename to GpuBeingRestarted. It's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
 }
@@ -601,6 +603,7 @@ impl Display for ThoError {
             Self::AdjusterFailed => f.write_str("adjuster failed"),
             Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
             Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
+            Self::MissingEndpoint(key) => write!(f, "no initialized endpoint for endpoint_key={key}"),
             Self::SyncStageRunner(error) => Display::fmt(error, f),
             Self::ContextReset => f.write_str("context reset"),
         }
@@ -708,6 +711,15 @@ impl ThoError {
             Self::CudaRecoveryFailed(_) => true,
             Self::TrainingSessionFailed(failure) => failure.original.is_cuda_recovery_failed() || failure.recovery.as_ref().is_some_and(Self::is_cuda_recovery_failed),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_cuda_recovery_failed(),
+            _ => false,
+        }
+    }
+
+    pub fn is_missing_endpoint(&self) -> bool {
+        match self.what() {
+            Self::MissingEndpoint(_) => true,
+            Self::TrainingSessionFailed(failure) => failure.original.is_missing_endpoint() || failure.recovery.as_ref().is_some_and(Self::is_missing_endpoint),
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_missing_endpoint(),
             _ => false,
         }
     }

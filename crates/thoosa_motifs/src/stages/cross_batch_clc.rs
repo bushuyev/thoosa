@@ -537,12 +537,12 @@ where
     pub async fn new_dyn_for_find_motifs(init: crate::stages::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>>, ThoError> {
         let id = init.new_id().to_string();
 
-        CROSS_UNFOLD_CLC_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, id.clone(), move || async move {
+        CROSS_UNFOLD_CLC_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, id.clone(), move || async move {
             if GlobalCtx::global().is_ipc() {
 
                 Ok(
                     Arc::new(DynSyncStageEnum::Proxy {
-                        stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, Some(id), tho_device_idx, Box::new(init)).await?),
+                        stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, Some(id), tho_device_idx, Box::new(init)).await?),
                         init: (),
                     })
                 )

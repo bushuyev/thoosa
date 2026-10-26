@@ -1,5 +1,6 @@
 use thoosa_common::tch_error::tch_result;
 use super::pending::{KeepAlive, PendingRequests};
+use super::endpoints::{EndpointEvent, EndpointKey, EndpointRegistration, EndpointRegistry};
 use crate::copy_ctx::{CudaActorHandle, HandleCtx};
 use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::send_fd;
@@ -65,9 +66,10 @@ where
     StageId:Display
 {
     match stage_id {
-        None => endpoint_name,
+        None => format!("{}:{endpoint_name}:none", endpoint_name.len()),
         Some(stage_id) => {
-            format!("{endpoint_name}{stage_id}")
+            // The endpoint and optional instance id form a pair, not a concatenated name.
+            format!("{}:{endpoint_name}:some:{stage_id}", endpoint_name.len())
         }
     }
 }
@@ -160,6 +162,19 @@ enum CudaIPCActorMessage {
         activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>,
     },
+    RegisterStage {
+        worker_id: CudaWorkerId,
+        key: EndpointKey,
+        init_data: Box<dyn WorkerInput>,
+        activity: thoosa_shared::CudaActivityScope,
+        respond_to: oneshot::Sender<Result<Arc<EndpointRegistration>, ThoError>>,
+    },
+    EnsureStage {
+        worker_id: CudaWorkerId,
+        registration: Arc<EndpointRegistration>,
+        activity: thoosa_shared::CudaActivityScope,
+        respond_to: oneshot::Sender<Result<(), ThoError>>,
+    },
     DiscardStageState {
         worker_id: CudaWorkerId,
         endpoint_name: String,
@@ -205,6 +220,9 @@ pub struct CudaIPCActor {
     receiver: mpsc::Receiver<CudaIPCActorMessage>,
 
     control: mpsc::UnboundedReceiver<BackendControl>,
+    endpoints: EndpointRegistry,
+    endpoint_events: mpsc::UnboundedReceiver<EndpointEvent>,
+    endpoint_events_tx: mpsc::UnboundedSender<EndpointEvent>,
     spawned_state: Option<SpawnedState>,
     retirement_error: Option<ThoError>,
     next_id: Arc<AtomicU64>,
@@ -334,9 +352,13 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::new: worker device_info={:?}", spawned_state.device_info);
 
+        let (endpoint_events_tx, endpoint_events) = mpsc::unbounded_channel();
         Ok(Self {
             gate,
             receiver,
+            endpoints: EndpointRegistry::new(endpoint_events_tx.clone()),
+            endpoint_events,
+            endpoint_events_tx,
             spawned_state: Some(spawned_state),
             retirement_error: None,
             control,
@@ -466,6 +488,8 @@ impl CudaIPCActor {
             CudaIPCActorMessage::PurgeStage { worker_id, activity, .. }
             | CudaIPCActorMessage::InvokeStage { worker_id, activity, .. }
             | CudaIPCActorMessage::InstallStage { worker_id, activity, .. }
+            | CudaIPCActorMessage::RegisterStage { worker_id, activity, .. }
+            | CudaIPCActorMessage::EnsureStage { worker_id, activity, .. }
             | CudaIPCActorMessage::DiscardStageState { worker_id, activity, .. }
             | CudaIPCActorMessage::ResetStageState { worker_id, activity, .. }
             | CudaIPCActorMessage::DropEndpoint { worker_id, activity, .. }
@@ -495,6 +519,42 @@ impl CudaIPCActor {
         }
 
         let (worker_id, operation, activity, respond_to) = match msg {
+            CudaIPCActorMessage::RegisterStage { key, init_data, respond_to, .. } => {
+                let result = self.endpoints.register(self.tho_device_idx, key, init_data);
+                let _ = respond_to.send(result);
+                return Ok(());
+            }
+            CudaIPCActorMessage::EnsureStage { worker_id, registration, activity, respond_to } => {
+                if !self.endpoints.contains(&registration) {
+                    let _ = respond_to.send(Err(ThoError::new("endpoint registration was retired")));
+                    return Ok(());
+                }
+                let tx = self.worker().tx.clone();
+                let pending = Arc::clone(&self.worker().pending);
+                let next_id = Arc::clone(&self.next_id);
+                // Own installation through its acknowledgement, even if its caller
+                // is cancelled. Commit before releasing activity or publishing success.
+                tokio::spawn(activity.run(async move {
+                    let result = async {
+                        let mut installed = registration.slot.lock().await;
+                        if *installed == Some((registration.token, worker_id)) { return Ok(()); }
+                        if let Some((_, previous)) = *installed {
+                            if previous == worker_id {
+                                let operation = Operation::DropStage { endpoint_name: registration.key.endpoint_name.clone(), stage_id: registration.key.stage_id.clone() };
+                                unit_reply(send_request_and_wait_msg(tx.clone(), Arc::clone(&pending), CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), operation)).await?)?;
+                            }
+                            *installed = None;
+                        }
+                        let operation = Operation::InstallStage { endpoint_name: registration.key.endpoint_name.clone(), stage_id: registration.key.stage_id.clone(), init_data: registration.init_data()? };
+                        unit_reply(send_request_and_wait_msg(tx, pending, CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), operation)).await?)?;
+                        *installed = Some((registration.token, worker_id));
+                        registration.installed(worker_id);
+                        Ok::<_, ThoError>(())
+                    }.await;
+                    let _ = respond_to.send(result);
+                }));
+                return Ok(());
+            }
             CudaIPCActorMessage::Copy { src, dst_device, activity, respond_to, dst_key } => {
                 return if src.ref_key().is_some() {
                     // Worker references can only be downloaded; concrete CPU
@@ -773,6 +833,8 @@ impl CudaIPCActor {
     fn reject(msg: CudaIPCActorMessage, error: ThoError) {
         match msg {
             CudaIPCActorMessage::Copy { respond_to, .. } => { let _ = respond_to.send(Err(error)); }
+            CudaIPCActorMessage::RegisterStage { respond_to, .. } => { let _ = respond_to.send(Err(error)); }
+            CudaIPCActorMessage::EnsureStage { respond_to, .. } => { let _ = respond_to.send(Err(error)); }
             CudaIPCActorMessage::InvokeStage { respond_to, .. }
             | CudaIPCActorMessage::InstallStage { respond_to, .. }
             | CudaIPCActorMessage::DiscardStageState { respond_to, .. }
@@ -849,6 +911,41 @@ impl CudaIPCActor {
         false
     }
 
+    fn endpoint_event(&mut self, event: EndpointEvent) {
+        match event {
+            EndpointEvent::Forget { key, token } => self.endpoints.forget(&key, token),
+            EndpointEvent::Release { key, token, slot } => {
+                let worker = self.spawned_state.as_ref().map(|worker| (worker.worker_id, worker.tx.clone(), Arc::clone(&worker.pending)));
+                let next_id = Arc::clone(&self.next_id);
+                let events = self.endpoint_events_tx.clone();
+                // Cleanup has no CUDA admission dependency. A slot lock orders
+                // deletion with reuse of the same logical key without blocking recovery.
+                tokio::spawn(async move {
+                    let result = async {
+                        let mut installed = slot.lock().await;
+                        if let Some((owner, previous)) = *installed {
+                            if owner == token {
+                                if let Some((worker_id, tx, pending)) = worker {
+                                    if previous == worker_id {
+                                        let operation = Operation::DropStage { endpoint_name: key.endpoint_name.clone(), stage_id: key.stage_id.clone() };
+                                        unit_reply(send_request_and_wait_msg(tx, pending, CudaWorkerMsgIn::new(worker_id, next_id.fetch_add(1, Ordering::Relaxed), operation)).await?)?;
+                                    }
+                                }
+                                *installed = None;
+                            }
+                        }
+                        Ok::<_, ThoError>(())
+                    }.await;
+                    if result.is_ok() {
+                        let _ = events.send(EndpointEvent::Forget { key, token });
+                    }
+                    // On transport failure keep the slot until reuse or actor
+                    // shutdown; a new owner must not overtake uncertain deletion.
+                });
+            }
+        }
+    }
+
     async fn run(mut actor: CudaIPCActor) -> Result<(), ThoError> {
         loop {
             let failed = actor.spawned_state.as_ref().map(|worker| worker.pending.failed.clone());
@@ -864,6 +961,7 @@ impl CudaIPCActor {
 
                     debug!("CudaIPCActor::run: control not ok");
                 }
+                Some(event) = actor.endpoint_events.recv() => actor.endpoint_event(event),
                 _v = async {
                     match failed {
                         Some(failed) => {
@@ -1104,6 +1202,18 @@ pub struct CudaIPCActorHandle {
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
+    pub(crate) async fn register_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput>) -> Result<Arc<EndpointRegistration>, ThoError> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender.send(CudaIPCActorMessage::RegisterStage { worker_id, key: EndpointKey { endpoint_name, stage_id }, init_data, activity: self.activity_for(worker_id)?, respond_to }).await.context("CUDA actor channel closed")?;
+        response.await.context("CUDA registration response channel closed")?
+    }
+
+    pub(crate) async fn ensure_stage(&self, registration: Arc<EndpointRegistration>, worker_id: CudaWorkerId) -> Result<(), ThoError> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender.send(CudaIPCActorMessage::EnsureStage { registration, worker_id, activity: self.activity_for(worker_id)?, respond_to }).await.context("CUDA actor channel closed")?;
+        response.await.context("CUDA installation response channel closed")?
+    }
+
     pub fn worker_id(&self) -> Result<CudaWorkerId, ThoError> {
         // Obtain the generation through admission so callers cannot acquire a
         // usable worker identity during failed recovery or without a valid scope.
