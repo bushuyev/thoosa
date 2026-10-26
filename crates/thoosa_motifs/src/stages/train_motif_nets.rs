@@ -1197,19 +1197,23 @@ where
     pd:PhantomData<C>
 }
 
+static SPLIT_MOTIF_INTO_TRAIN_VALID_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl <C> SplitMotifIntoTrainValid<C>
 where
     C: RunCtx  + 'static
 {
-    async fn new(tho_device_idx: usize) -> Result<DynSyncStageEnum<SplitMotifIntoTrainValid<C>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
-            // The typed proxy carries throttling separately from the borrowed tensor payload.
-            Ok(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?), init: () })
-        } else {
-            Ok(DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new_local())))
-        }
+    async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SplitMotifIntoTrainValid<C>>>, ThoError> {
+        SPLIT_MOTIF_INTO_TRAIN_VALID_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+            if GlobalCtx::global().is_ipc() {
+                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
+                let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+                // The typed proxy carries throttling separately from the borrowed tensor payload.
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new_local()))))
+            }
+        }).await
     }
 
     pub fn new_local()->Self {
@@ -1322,7 +1326,7 @@ where
         debug!("MotifsBatch::new: motif={motif:?}");
         let sync_motif_batch = SyncMotifBatch::new(ctx.tho_device_idx()).await?;
         let motif_meta = track_await!(motif.extra()).await?;
-        let split_motif = Arc::new(SplitMotifIntoTrainValid::<C>::new(ctx.tho_device_idx()).await?);
+        let split_motif = SplitMotifIntoTrainValid::<C>::new(ctx.tho_device_idx()).await?;
         let split_input = Arc::new(SplitMotifIntoTrainValidInputWrapper::new(motif));
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
         let split_output = track_await!(oom_handler.run(&split_motif, split_input, ctx.branch(false), NoContexts)).await?;
