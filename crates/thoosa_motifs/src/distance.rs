@@ -16,6 +16,7 @@ use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
 use thoosa_common::debug_plot;
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_norm_dims};
+use thoosa_digest_id_derive::DigestHash;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{ThoError, panic_to_err};
@@ -2303,19 +2304,22 @@ mod distance_tests {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, DigestHash, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+#[digest(tag = "thoosa.EucDistConfig:v1")]
 pub struct EucDistConfig {
     #[in_map]
     #[run_config]
     pub z_normalize: bool,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, DigestHash, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+#[digest(tag = "thoosa.PearsonCorrConfig:v1")]
 pub struct PearsonCorrConfig {
 
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, DigestHash, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+#[digest(tag = "thoosa.DotProductConfig:v1")]
 pub struct DotProductConfig {
     #[in_map]
     #[run_config]
@@ -2323,7 +2327,8 @@ pub struct DotProductConfig {
 }
 
 //TODO change to not/normalized
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, DigestHash, Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[digest(tag = "thoosa.SimilarityMetric:v1")]
 pub enum SimilarityMetric {
     #[run_config_default]
     EucDist(EucDistConfig),

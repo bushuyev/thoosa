@@ -19,6 +19,8 @@ hound-error = ["dep:hound"]
 
 [dependencies]
 cached_derive = {path  = "../thoosa_macros/cached_derive"}
+thoosa_digest_id = {path  = "../thoosa_macros/thoosa_digest_id"}
+thoosa_digest_id_derive = {path  = "../thoosa_macros/thoosa_digest_id_derive"}
 ctor = "0.2.6"
 bytemuck.workspace = true
 regex.workspace = true

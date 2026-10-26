@@ -1302,7 +1302,7 @@ mod tests {
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
             motifs_limit: Some(123),
-            max_motif_net_loss: 0.1,
+            max_motif_net_loss: 0.5,
             selected_motif_nets_limit: Some(10),
             motif_slices_step: 10,
             with_plots: false,

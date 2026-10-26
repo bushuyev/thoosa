@@ -6,8 +6,10 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use thoosa_digest_id_derive::DigestHash;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
 use crate::traits::StageHash;
@@ -19,6 +21,46 @@ pub enum ElvVal {
     Num(usize),
     Bool(bool),
     DigestHash(blake3::Hash)
+}
+
+impl ::thoosa_digest_id::DigestHash for ElvVal
+{
+    fn update_digest(&self, __digest_hasher: &mut ::thoosa_digest_id::blake3::Hasher ) {
+        ::thoosa_digest_id::__private::begin_enum(__digest_hasher, "thoosa.ElvVal:v1" );
+        match self {
+            Self::Path(__digest_field_0) => {
+                ::thoosa_digest_id::__private::variant(__digest_hasher, "Path", 1usize );
+                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
+                );
+                // <&str as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0.as_os_str().as_bytes(), __digest_hasher );
+                __digest_hasher.update(&__digest_field_0.as_os_str().as_bytes());
+            }
+            Self::Str(__digest_field_0) => {
+                ::thoosa_digest_id::__private::variant(__digest_hasher, "Str", 1usize );
+                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
+                );
+                <String as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, __digest_hasher );
+            }
+            Self::Num(__digest_field_0) => {
+                ::thoosa_digest_id::__private::variant(__digest_hasher, "Num", 1usize );
+                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
+                );
+                <usize as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, __digest_hasher );
+            }
+            Self::Bool(__digest_field_0) => {
+                ::thoosa_digest_id::__private::variant(__digest_hasher, "Bool", 1usize );
+                ::thoosa_digest_id::__private::field(__digest_hasher, "0",
+                );
+                <bool as ::thoosa_digest_id::DigestHash>::update_digest(__digest_field_0, __digest_hasher );
+            }
+            Self::DigestHash(__digest_field_0)
+            => {
+                ::thoosa_digest_id::__private::variant(__digest_hasher, "DigestHash", 1usize );
+                ::thoosa_digest_id::__private::field(__digest_hasher, "0" );
+                __digest_hasher.update(&__digest_field_0.as_slice());
+            }
+        }
+    }
 }
 
 impl Display for ElvVal {
@@ -93,7 +135,8 @@ impl From<blake3::Hash> for ElvVal {
 }
 
 
-#[derive(Debug, Clone, Named, Serialize, Deserialize)]
+#[derive(Debug, Clone, DigestHash, Named, Serialize, Deserialize)]
+#[digest(tag = "thoosa.MonoKey:v1")]
 pub struct MonoKey {
     val: ElvVal,
 
@@ -197,7 +240,8 @@ impl Hash for MonoKey {
 
 
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
-#[derive(Eq, PartialEq, Hash, Clone, Named, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Hash, Clone, DigestHash, Named, Serialize, Deserialize)]
+#[digest(tag = "thoosa.SynKey:v1")]
 pub struct SynKey {//σύνθετος
     pub vals: Box<[MonoKey]>,
 }

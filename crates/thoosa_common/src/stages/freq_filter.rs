@@ -132,7 +132,7 @@ where
         // let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
         let id = init.new_id().to_string();
 
-        let stage = SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(init.tho_device_idx, id.clone(), move || async move {
+        SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(init.tho_device_idx, id.clone(), move || async move {
             let stage = if GlobalCtx::global().is_ipc() {
 
                 // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
@@ -154,9 +154,7 @@ where
 
             Ok(stage)
 
-        }).await?;
-
-        Ok(stage)
+        }).await
     }
 
     pub fn new_local(init:SyncFreqFilterIpcInit) ->Result<Self, ThoError>{

@@ -5350,6 +5350,8 @@ dependencies = [
  "serde_json",
  "serde_json5",
  "thoosa_cpu_data_derive",
+ "thoosa_digest_id",
+ "thoosa_digest_id_derive",
  "thoosa_named_derive",
  "time",
  "time_series_generator",
