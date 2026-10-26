@@ -20,10 +20,10 @@ pub struct CudaWorkerId {
 
 impl CudaWorkerId {
     pub fn check(self, expected: Self) -> Result<(), ThoError> {
-        // TODO temporarily disabled to see errors from missing SyncStages after worker restart
-        // if self != expected {
-        //     return Err(ThoError::ContextReset.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
-        // }
+        // Recreated endpoints get a fresh binding; old tensor and request identities never do.
+        if self != expected {
+            return Err(ThoError::ContextReset.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
+        }
         Ok(())
     }
 }
@@ -142,6 +142,7 @@ enum WorkerErrorKind {//TODO remove?
     AdjusterFailed,//TODO it can't happen in Worker
     NotFound,//TODO add what
     ContextReset,
+    MissingEndpoint(String),
     SubmitErrorClosed,
     SubmitErrorCancelled,
     Other,
@@ -169,6 +170,7 @@ impl WorkerErrorKind {
                 Self::NotFound//TODO add what
             },//TODO add
             ThoError::ContextReset => Self::ContextReset,
+            ThoError::MissingEndpoint(key) => Self::MissingEndpoint(key.clone()),
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed) => Self::SubmitErrorClosed,
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled) => Self::SubmitErrorCancelled,
             // Job IDs remain in the diagnostic; the parent needs the underlying recovery action.
@@ -203,6 +205,7 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::AdjusterFailed => Self::AdjusterFailed.context(message),
             WorkerErrorKind::NotFound => Self::NotFound(Some("worker".to_string())).context(message),
             WorkerErrorKind::ContextReset => Self::ContextReset.context(message),
+            WorkerErrorKind::MissingEndpoint(key) => Self::MissingEndpoint(key).context(message),
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
             WorkerErrorKind::Other => Self::new(message),
@@ -243,5 +246,28 @@ impl OpResult {
 impl From<ThoError> for OpResult {
     fn from(e: ThoError) -> Self {
         OpResult::Failed(e.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_missing_endpoint_survives_wire_and_context() -> Result<(), ThoError> {
+        let error: WorkerError = ThoError::MissingEndpoint("stage/1".into()).context("invoke worker generation 2").into();
+        let bytes = serde_json::to_vec(&error)?;
+        let error: ThoError = serde_json::from_slice::<WorkerError>(&bytes)?.into();
+        assert!(error.is_missing_endpoint());
+        assert!(!error.needs_cuda_restart(), "a missing endpoint is not another CUDA failure");
+        Ok(())
+    }
+
+    #[test]
+    fn test_retired_worker_identity_is_rejected() {
+        let old = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) };
+        let replacement = CudaWorkerId { generation: thoosa_shared::CudaDeviceGeneration(1), ..old };
+        assert!(matches!(old.check(replacement).unwrap_err().what(), ThoError::ContextReset));
+        assert!(replacement.check(replacement).is_ok());
     }
 }

@@ -922,10 +922,10 @@ where
     C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsSyncStage<C>>>, ThoError> {
-        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
 
-                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_SYNC_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_recreatable(MOTIF_STATS_SYNC_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
             } else {
                 Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(MotifStatsSyncStage::<C>::new_local()))))
             }
@@ -1081,13 +1081,13 @@ where
     C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsConsumeStage<C>>>, ThoError> {
-        MOTIF_STATS_CONSUME_STAGE_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        MOTIF_STATS_CONSUME_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
                 // Use shared consuming dispatch so tensor references are deleted only after success.
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(MOTIF_STATS_CONSUME_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(MOTIF_STATS_CONSUME_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
                     init: ()
                 }))
             } else {

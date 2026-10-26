@@ -960,12 +960,12 @@ where
     C:RunCtx + 'static
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SyncMotifBatch<C>>>, ThoError> {
-        SYNC_MOTIF_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SYNC_MOTIF_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
                 // Install one typed-wrapper endpoint per proxy so worker tensor ownership stays isolated.
-                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SYNC_MOTIF_BASTCH_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_MOTIF_BASTCH_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
             } else {
                 Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_local()))))
             }
@@ -1204,12 +1204,12 @@ where
     C: RunCtx  + 'static
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SplitMotifIntoTrainValid<C>>>, ThoError> {
-        SPLIT_MOTIF_INTO_TRAIN_VALID_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SPLIT_MOTIF_INTO_TRAIN_VALID_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
                 // The typed proxy carries throttling separately from the borrowed tensor payload.
-                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
+                Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_recreatable(SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
             } else {
                 Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(SplitMotifIntoTrainValid::new_local()))))
             }

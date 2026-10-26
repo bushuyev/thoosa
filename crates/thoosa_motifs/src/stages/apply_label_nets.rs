@@ -525,13 +525,13 @@ where
 {
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<Self>>, ThoError> {
         // The shared cache serializes installation and isolates worker generations and devices.
-        STACK_APPLIED_LABEL_NETS_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), (), move || async move {
+        STACK_APPLIED_LABEL_NETS_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), (), move || async move {
             if GlobalCtx::global().is_ipc() {
                 // Different context-type cache entries must not overwrite one another in the same worker.
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Relaxed);
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(StackAppliedLabelNetsInit)).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(StackAppliedLabelNetsInit)).await?),
                     init: (),
                 }))
             } else {
@@ -745,7 +745,7 @@ where
             // Keep a cloned initializer as proxy metadata because worker installation consumes its serialized copy.
             Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
 
-                stage: Arc::new(ProxyStage::proxy(APPLY_LABEL_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self.clone())).await?),
+                stage: Arc::new(ProxyStage::proxy_recreatable(APPLY_LABEL_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self.clone())).await?),
                 init: self,
             }))
         } else {
@@ -826,7 +826,7 @@ where
         RC: RunCtx + MaxParallelCtx + Adjustable + Send + Sync + 'static,
     {
         let ws = Arc::clone(ws);
-        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(run_context.tho_device_idx(), sync_init.trained_net_id, move || async move {
+        APPLY_LABEL_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(run_context.tho_device_idx(), sync_init.trained_net_id, move || async move {
             // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
             let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(

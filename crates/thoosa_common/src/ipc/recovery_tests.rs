@@ -31,6 +31,8 @@ enum RecoveryAction {
     Poison,
     Hold { started: String },
     DeferredFatal { started: String, release: String },
+    DeferredSuccess { started: String, release: String },
+    OomOnce { marker: String },
 }
 
 // Internally tagged WorkerInput values must have a struct payload for Postcard.
@@ -124,6 +126,18 @@ fn initialize<'a>(tage_id:Option<String>, input: Box<dyn WorkerInput>, _ws: Arc<
                 wait_for_file(&release).await;
                 return Err(fatal());
             }
+            RecoveryAction::DeferredSuccess { started, release } => {
+                // Cross-process barriers make cancellation happen after the
+                // worker accepted installation but before it acknowledged it.
+                std::fs::write(started, "accepted")?;
+                wait_for_file(&release).await;
+            }
+            RecoveryAction::OomOnce { marker } => {
+                if !Path::new(&marker).exists() {
+                    std::fs::write(marker, "retry can initialize")?;
+                    return Err(ThoError::Cuda { action: CudaAction::HandleOOM, msg: "injected initialization OOM".into() });
+                }
+            }
             RecoveryAction::Probe => {},
         }
         Ok(MockRecoveryEndpointBuilder::build())
@@ -149,6 +163,65 @@ async fn submit_worker_request(request: impl std::future::Future<Output = anyhow
             OpResult::Ok(_) => Ok(()),
         }
     }, None).await
+}
+
+#[test]
+fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), ThoError> {
+    super::tests::run_ipc_test(module_path!(), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let global = GlobalCtx::global();
+            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let gate = global.cuda_activity_gate(1).unwrap();
+            let dir = tempfile::tempdir()?;
+            let started = dir.path().join("started").to_str().unwrap().to_owned();
+            let release = dir.path().join("release").to_str().unwrap().to_owned();
+            let worker = actor.worker_id()?;
+            let owner = actor.register_stage(worker, ENDPOINT.into(), Some("cancelled".into()), input(RecoveryAction::DeferredSuccess { started: started.clone(), release: release.clone() })).await?;
+            let caller = tokio::spawn({
+                let actor = actor.clone();
+                let owner = owner.clone();
+                async move { actor.ensure_stage(owner, worker).await }
+            });
+            wait_for_file(&started).await;
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+            drop(owner);
+            assert!(actor.register_stage(worker, ENDPOINT.into(), Some("cancelled".into()), input(RecoveryAction::Probe)).await.is_err(), "accepted installation must retain ownership until acknowledgement");
+            std::fs::write(&release, "finish")?;
+            gate.wait_until_idle().await;
+            // Reuse the same key while its old deletion may still be pending.
+            let owner = actor.register_stage(worker, ENDPOINT.into(), Some("cancelled".into()), input(RecoveryAction::Probe)).await?;
+            actor.ensure_stage(owner.clone(), worker).await?;
+            let response = actor.invoke_stage(worker, ENDPOINT.into(), Some("cancelled".into()), input(RecoveryAction::Probe), false).await?;
+            assert!(matches!(response.status, OpResult::Ok(_)));
+            let marker = dir.path().join("oom").to_str().unwrap().to_owned();
+            std::fs::write(&marker, "initial generation succeeds")?;
+            let retryable = actor.register_stage(worker, ENDPOINT.into(), Some("oom".into()), input(RecoveryAction::OomOnce { marker: marker.clone() })).await?;
+            actor.ensure_stage(retryable.clone(), worker).await?;
+            std::fs::remove_file(marker)?;
+            global.get_runner(1).request_cuda_reset(ThoError::ContextReset)?;
+            assert!(gate.is_paused());
+            drop(owner);
+            gate.wait_if_paused().await?;
+            let worker = actor.worker_id()?;
+            // Failed lazy reconstruction must remain retryable in this same
+            // generation, without publishing an installed endpoint or restarting.
+            assert!(actor.ensure_stage(retryable.clone(), worker).await.unwrap_err().is_oom());
+            assert_ne!(retryable.installed_worker(), Some(worker));
+            actor.ensure_stage(retryable.clone(), worker).await?;
+            assert_eq!(retryable.installed_worker(), Some(worker));
+            let response = actor.invoke_stage(worker, ENDPOINT.into(), Some("cancelled".into()), input(RecoveryAction::Probe), false).await?;
+            let OpResult::Failed(error) = response.status else { panic!("released endpoint was replayed") };
+            assert!(ThoError::from(error).is_missing_endpoint());
+            let owner = actor.register_stage(worker, ENDPOINT.into(), Some("cancelled".into()), input(RecoveryAction::Probe)).await?;
+            actor.ensure_stage(owner, worker).await?;
+            Ok(())
+        }).await?
+    }, async |sock| {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+    })
 }
 
 #[test]

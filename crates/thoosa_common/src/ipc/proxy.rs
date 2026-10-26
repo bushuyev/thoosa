@@ -1,6 +1,7 @@
 use thoosa_common::tch_error::tch_result;
 use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
+use crate::ipc::endpoints::{EndpointRegistration, StageRecovery};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
@@ -136,6 +137,8 @@ where
     // Drop has no run context, so retain the worker index that owns the installed endpoint.
     tho_device_idx: usize,
     worker_id: CudaWorkerId,
+    registration: Option<Arc<EndpointRegistration>>,
+    state_generation: std::sync::atomic::AtomicU64,
     // Generic inputs can supply the concrete typetag conversion that a blanket WorkerStageInput implementation cannot express.
     clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
 
@@ -253,7 +256,23 @@ where
         tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>
     ) -> Result<Self, ThoError> {
-        Self::proxy_inner(endpoint_name, stage_id.clone(), tho_device_idx, init_data, None).await
+        Self::proxy_inner(endpoint_name, stage_id.clone(), tho_device_idx, init_data, None, StageRecovery::OwnerManaged).await
+    }
+
+    /// The initializer must be independent of retired worker tensors and mutable
+    /// progress. Keep model artifacts immutable for the lifetime of this proxy.
+    pub async fn proxy_recreatable(endpoint_name: &'static str, stage_id: Option<String>, tho_device_idx: usize, init_data: Box<dyn WorkerInput>) -> Result<Self, ThoError> {
+        Self::proxy_inner(endpoint_name, stage_id, tho_device_idx, init_data, None, StageRecovery::RecreateFromInit).await
+    }
+
+    pub async fn proxy_with_input_cloner_recreatable(
+        endpoint_name: &'static str,
+        stage_id: Option<String>,
+        tho_device_idx: usize,
+        init_data: Box<dyn WorkerInput>,
+        clone_refs: Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>,
+    ) -> Result<Self, ThoError> {
+        Self::proxy_inner(endpoint_name, stage_id, tho_device_idx, init_data, Some(clone_refs), StageRecovery::RecreateFromInit).await
     }
 
     pub async fn proxy_with_input_cloner(
@@ -264,7 +283,7 @@ where
         clone_refs: Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>,
     ) -> Result<Self, ThoError> {
         // Direct generic inputs such as ThoTensor still need to enter the concrete WorkerInput registry.
-        Self::proxy_inner(endpoint_name, stage_id.clone(), tho_device_idx, init_data, Some(clone_refs)).await
+        Self::proxy_inner(endpoint_name, stage_id.clone(), tho_device_idx, init_data, Some(clone_refs), StageRecovery::OwnerManaged).await
     }
 
     async fn proxy_inner(
@@ -273,41 +292,23 @@ where
         tho_device_idx: usize,
         init_data: Box<dyn WorkerInput>,
         clone_refs: Option<Arc<dyn for<'a> Fn(&<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>>,
+        recovery: StageRecovery,
     ) -> Result<Self, ThoError> {
 
         let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
         let ipc_actor:&CudaIPCActorHandle = actor.downcast_ref().unwrap();
 
         let worker_id = ipc_actor.worker_id()?;
-        let rs = ipc_actor.install_stage(
-            worker_id,
-            endpoint_name.to_string(),
-            stage_id.clone(),
-            init_data,
-        ).await?;
-
-        match rs {
-            CudaWorkerMsgOut { status, .. } => {
-                match status {
-                    OpResult::Ok(_) => {
-                        Ok(Self {
-                            endpoint_name,
-                            stage_id,
-                            tho_device_idx,
-                            worker_id,
-                            pd:PhantomData,
-                            clone_refs,
-                            execution: Default::default(),
-                            state: Default::default(),
-                        })
-
-                    }
-                    OpResult::Failed(error) => {
-                        Err(error.into())
-                    }
-                }
-            }
-        }
+        let registration = if recovery == StageRecovery::RecreateFromInit {
+            let registration = ipc_actor.register_stage(worker_id, endpoint_name.to_string(), stage_id.clone(), init_data).await?;
+            ipc_actor.ensure_stage(Arc::clone(&registration), worker_id).await?;
+            Some(registration)
+        } else {
+            let response = ipc_actor.install_stage(worker_id, endpoint_name.to_string(), stage_id.clone(), init_data).await?;
+            if let OpResult::Failed(error) = response.status { return Err(error.into()); }
+            None
+        };
+        Ok(Self { endpoint_name, stage_id, tho_device_idx, worker_id, registration, state_generation: std::sync::atomic::AtomicU64::new(worker_id.generation.0), pd: PhantomData, clone_refs, execution: Default::default(), state: Default::default() })
     }
 
     fn clone_refs<'a>(&self, input: &<St as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> {
@@ -346,7 +347,10 @@ where
     {
         let actor = GlobalCtx::global().cuda_actor(device);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
-        let activity = actor.activity_for(self.worker_id)?;
+        // Bind a new operation, never an already-admitted old operation, to the
+        // replacement. Tensor references still undergo their own identity checks.
+        let worker_id = if self.registration.is_some() { actor.worker_id()? } else { self.worker_id };
+        let activity = actor.activity_for(worker_id)?;
         // The caller may now cancel at any await. An owned task retains the
         // proxy, activity, and endpoint lease through restoration and reply, so
         // cancellation cannot admit an export while accepted work is still live.
@@ -355,16 +359,29 @@ where
             // parent lock to reply; offload takes it exclusively through CPU commit.
             let _execution = self.execution.read().await;
             let mut state = self.state.lock().await;
-            self.load_gpu_inner(device, &mut state).await?;
+            if let Some(registration) = &self.registration {
+                if self.state_generation.load(Relaxed) != worker_id.generation.0 {
+                    // A freshly reconstructed immutable module supersedes the
+                    // old offload transaction and its generation-bound keys.
+                    *state = None;
+                    self.state_generation.store(worker_id.generation.0, Relaxed);
+                }
+                actor.ensure_stage(Arc::clone(registration), worker_id).await?;
+            }
+            self.load_gpu_inner(device, worker_id, &mut state).await?;
             drop(state);
-            Ok::<_, ThoError>(actor.invoke_stage(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), input, consume).await?)
+            Ok::<_, ThoError>(actor.invoke_stage(worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), input, consume).await?)
         })).await.context("IPC invocation task failed")?
     }
 
     fn is_current_worker(&self) -> bool {
         // Registries can retain unused proxies after reset. The retired worker
         // owns no live GPU state to offload; invocation still checks its identity.
-        GlobalCtx::global().cuda_activity_gate(self.tho_device_idx).is_some_and(|gate| gate.device_generation() == self.worker_id.generation)
+        self.installed_worker().is_some_and(|worker| GlobalCtx::global().cuda_activity_gate(self.tho_device_idx).is_some_and(|gate| gate.device_generation() == worker.generation))
+    }
+
+    fn installed_worker(&self) -> Option<CudaWorkerId> {
+        self.registration.as_ref().map_or(Some(self.worker_id), |registration| registration.installed_worker())
     }
 
     async fn purge_gpu(self: Arc<Self>, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, tho_device_idx: usize, _name: &str) -> Result<(), ThoError>
@@ -373,13 +390,14 @@ where
         if self.tho_device_idx != tho_device_idx || !self.is_current_worker() { return Ok(()); }
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
-        let activity = actor.activity_for(self.worker_id)?;
+        let worker_id = self.installed_worker().ok_or_else(|| ThoError::new("endpoint has not been installed"))?;
+        let activity = actor.activity_for(worker_id)?;
         // Cancellation must not lose a completed D2H dump after the worker drops
         // its storage. Retain both the proxy and its device lease until commit.
-        tokio::spawn(activity.run(async move { self.purge_gpu_inner(tho_device_idx).await })).await?
+        tokio::spawn(activity.run(async move { self.purge_gpu_inner(tho_device_idx, worker_id).await })).await?
     }
 
-    async fn purge_gpu_inner(&self, tho_device_idx: usize) -> Result<(), ThoError> {
+    async fn purge_gpu_inner(&self, tho_device_idx: usize, worker_id: CudaWorkerId) -> Result<(), ThoError> {
         debug!("FuturesRunnerMapPurger>::purge_gpu: stage={:?}  device_idx={tho_device_idx}", self);
 
         if self.tho_device_idx != tho_device_idx {//not our device is being purged
@@ -394,7 +412,7 @@ where
             if state.restore_started {
                 let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                 let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
-                actor.discard_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
+                actor.discard_stage_state(worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
                 state.restore_started = false;
             }
             return Ok(());
@@ -404,7 +422,7 @@ where
         let state_out = actor.purge_stage_state(
             self.stage_id.clone(),
             self.endpoint_name.to_string(),
-            self.worker_id,
+            worker_id,
         ).await?;
         debug!("FuturesRunnerMapPurger>::purge_gpu: state_out={state_out:?}");
 
@@ -425,12 +443,12 @@ where
         Ok(())
     }
 
-    async fn load_gpu_inner(&self, tho_device_idx: usize, guard: &mut Option<Box<StageStateDump>>) -> Result<(), ThoError> {
+    async fn load_gpu_inner(&self, tho_device_idx: usize, worker_id: CudaWorkerId, guard: &mut Option<Box<StageStateDump>>) -> Result<(), ThoError> {
         let actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().expect("no CudaIPCActor");
         if let Some(state) = guard.as_mut() {
             if state.restore_started {
-                actor.discard_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
+                actor.discard_stage_state(worker_id, self.endpoint_name.to_string(), self.stage_id.clone()).await?;
             }
             state.restore_started = true;
             for (key, tensor) in &state.tensors {
@@ -460,6 +478,9 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     fn drop(&mut self) {
+        // Registered endpoints release their logical ownership independently of
+        // admission. Their token also fences delayed deletion after key reuse.
+        if self.registration.is_some() { return; }
         debug!("ProxyStage2::drop: endpoint_name={:?}", self.endpoint_name);
 
         let endpoint_name = self.endpoint_name;

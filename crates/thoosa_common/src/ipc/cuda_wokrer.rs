@@ -283,7 +283,7 @@ type InstalledStages = Arc<DashMap<String, Option<Arc<InstalledEndpoint>>>>;
 
 fn installed_endpoint(stages: &InstalledStages, key: &str) -> Result<Arc<InstalledEndpoint>, ThoError> {
     stages.get(key).and_then(|entry| entry.value().as_ref().map(Arc::clone))
-        .ok_or_else(|| ThoError::new(format!("no initialized endpoint for endpoint_key={key}")))
+        .ok_or_else(|| ThoError::MissingEndpoint(key.to_owned()))
 }
 
 struct WorkerSharedArena {
@@ -1122,7 +1122,7 @@ mod request_tests {
             let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
                 describe_fails: false, purge_result: if commit { Some(Ok(())) } else { None },
             }.build())));
-            stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
+            stages.insert(cuda_process::endpoint_stage_key("stateful".into(), None::<&String>), Some(Arc::clone(&endpoint)));
             let other = InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new()));
             // Begin waits for a previously admitted invocation, including its GPU synchronization.
             let invocation = endpoint.lease.read().await;
@@ -1148,7 +1148,7 @@ mod request_tests {
             let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
                 describe_fails: false, purge_result: Some(Err(ThoError::oom())),
             }.build_with_purge_retry(panics))));
-            stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
+            stages.insert(cuda_process::endpoint_stage_key("stateful".into(), None::<&String>), Some(Arc::clone(&endpoint)));
             stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.unwrap();
             let error = finish_stage_export(&stages, "stateful".into(), None, 7, true, 1usize.into()).await.unwrap_err();
             assert_eq!(error.is_oom(), !panics);
@@ -1191,7 +1191,7 @@ mod request_tests {
         let endpoint = Arc::new(InstalledEndpoint::new(Arc::new(super::mock_request_handler::MockExportEndpointBuilder {
             describe_fails: true, purge_result: None,
         }.build())));
-        stages.insert("stateful".into(), Some(Arc::clone(&endpoint)));
+        stages.insert(cuda_process::endpoint_stage_key("stateful".into(), None::<&String>), Some(Arc::clone(&endpoint)));
         assert!(stage_state_operation(&stages, Operation::BeginStageStatePurge { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 7).await.is_err());
         assert!(endpoint.export.lock().await.is_none());
         assert!(endpoint.lease.try_write().is_ok(), "failed preparation must not strand waiting work");
@@ -1243,8 +1243,8 @@ mod request_tests {
     #[tokio::test]
     async fn test_missing_state_requests_reply_once_and_shutdown_drains_them() {
         let stages: InstalledStages = Arc::new(DashMap::new());
-        stages.insert("stateless".into(), Some(Arc::new(InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new())))));
-        stages.insert("initializing".into(), None);
+        stages.insert(cuda_process::endpoint_stage_key("stateless".into(), None::<&String>), Some(Arc::new(InstalledEndpoint::new(Arc::new(MockStatelessEndpoint::new())))));
+        stages.insert(cuda_process::endpoint_stage_key("initializing".into(), None::<&String>), None);
         let (mut client, server) = tokio::io::duplex(4096);
         let (reader, writer) = tokio::io::split(server);
         let worker = tokio::spawn(serve_worker_requests(reader, writer, worker_id(), move |request| {
