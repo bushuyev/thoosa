@@ -376,6 +376,7 @@ where
             },
             Entry::Vacant(slot) => {
                 let gate = GlobalCtx::global().cuda_activity_gate(device_idx);
+
                 let future = CachedFuture::for_device(Arc::clone(&self).run(input, ctx.branch(false)).boxed().shared(), gate);
                 let cleanup = future.cleanup_registration(device_idx);
                 slot.insert(future.clone());
