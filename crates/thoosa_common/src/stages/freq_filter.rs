@@ -56,6 +56,7 @@ use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use thoosa_shared::ipc_types::{TensorKey};
 use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
 use tokio::sync::{MutexGuard, RwLockReadGuard};
+use crate::instance_cache::InstanceCache;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
@@ -105,7 +106,7 @@ where
 }
 
 static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<(TypeId, RunConfigId, usize), Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
-// static SYNC_FREQ_FILTER_INSTANCES: InstanceCache = InstanceCache::new();
+static SYNC_FREQ_FILTER_INSTANCES: InstanceCache = InstanceCache::new();
 
 impl<C> SyncFreqFilter<C>
 where
@@ -120,37 +121,29 @@ where
         let activity = gate.as_ref().map(thoosa_shared::CudaActivityScope::for_operation).transpose()?;
         let generation = gate.as_ref().and_then(|gate| activity.as_ref().and_then(|scope| scope.generation(gate)));
         let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
-        let mut instances = INSTANCES.lock().await;
-        if let (Some(gate), Some(generation)) = (&gate, generation) { gate.check_generation(generation)?; }
-        let retired_registration = if let Some(cached) = instances.get(&id) {
-            let (cached_generation, stage, registration) = cached.downcast_ref::<(Option<thoosa_shared::CudaDeviceGeneration>, Arc<DynSyncStageWithStateEnum<Self>>, crate::runner::global_ctx::RegisteredCacheHandle)>().ok_or_else(|| ThoError::new("frequency filter cache type mismatch"))?;
-            if *cached_generation == generation { return Ok(Arc::clone(stage)); }
-            Some(registration.clone())
-        } else { None };
 
-        let stage = if GlobalCtx::global().is_ipc() {
+        let stage = SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(init.tho_device_idx, 0, move || async move {
+            if GlobalCtx::global().is_ipc() {
 
-            // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
-            Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy_with_input_cloner(
-                    SYNC_FREQ_FILTER_ENDPOINT,
-                    Some(find_motifs_run_config_id.to_string()),
-                    init.tho_device_idx,
-                    Box::new(init.clone()),
-                    Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
-                ).await?),
-                init: (),
-            })
-        } else {
-            Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
-        };
+                // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
+                Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(
+                        SYNC_FREQ_FILTER_ENDPOINT,
+                        Some(find_motifs_run_config_id.to_string()),
+                        init.tho_device_idx,
+                        Box::new(init.clone()),
+                        Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
+                    ).await?),
+                    init: (),
+                }))
+            } else {
+                Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?))))
+            }
+        }).await?;
 
-        // Replace the old purger only once construction succeeds, so offload
-        // cannot retain a retired proxy and the registry has no duplicate name.
-        if let Some(registration) = retired_registration { GlobalCtx::global().remove_cache(registration.key()); }
+
         let registration = GlobalCtx::global().register_cache((format!("{SYNC_FREQ_FILTER_ENDPOINT}/{}/{find_motifs_run_config_id}", id.2), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
-        instances.insert(id, Box::new((generation, Arc::clone(&stage), registration)));
 
         Ok(stage)
     }
