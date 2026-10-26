@@ -267,13 +267,14 @@ where
 
                     debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?} key={key:?} r={r:?}");
 
-                    let r = r?;
-                    // if !output.has_any_data() {
-                        // Other devices may replace this entry while cleanup awaits.
-                        // Remove only the empty future from this snapshot.
-                        // self.remove_if(&key, |_, current| current.ptr_eq(&fut));
-                        // self.remove_if(&key, |_, current| current.ptr_eq(&fut));
-                    // }
+                    r?;
+                }
+                // A successful future cannot be reused after its last replica
+                // was lost. Another cache may share this wrapper and have
+                // already dropped the slot, so check even without residency.
+                if !output.has_any_data() {
+                    // Cleanup awaits above; preserve any concurrent replacement.
+                    self.remove_if(&key, |_, current| current.ptr_eq(&fut));
                 }
             }
             // Unresolved futures can belong to healthy devices. Never await or
@@ -394,9 +395,13 @@ mod tests {
         let healthy: Wrapped = tensor(2, "healthy");
         let cpu: Wrapped = Arc::new(DevicesWrap::wrap(ThoTensor::new(DummyCachableId("cpu"), tch::Tensor::f_from_slice(&[1f32]).unwrap()).unwrap()));
         let map: DashMap<DummyCachableId, thoosa_common::runner::common::cachable::CachedFuture<Wrapped>> = DashMap::new();
+        let aliases = DashMap::new();
         for (key, output) in [("failed", &failed), ("healthy", &healthy), ("cpu", &cpu)] {
             let future = ready(Ok(Arc::clone(output))).boxed().shared();
             future.clone().await.unwrap();
+            // Loader adapters can cache the same wrapper under another key.
+            // Their entries must be evicted even if the first cache cleared it.
+            aliases.insert(DummyCachableId(key), crate::runner::common::cachable::CachedFuture::from(future.clone()));
             map.insert(DummyCachableId(key), future.into());
         }
         let pending = futures_util::future::pending::<Result<Wrapped, ThoError>>().boxed().shared();
@@ -415,6 +420,10 @@ mod tests {
         assert!(map.get(&DummyCachableId("pending")).unwrap().ptr_eq(&pending.into()));
         assert!(Arc::ptr_eq(&completed.await.unwrap(), &cpu));
         assert!(map.contains_key(&DummyCachableId("completed_on_failed_device")));
+        aliases.drop_gpu(1, "aliased device recovery").await.unwrap();
+        assert!(!aliases.contains_key(&DummyCachableId("failed")));
+        assert!(aliases.contains_key(&DummyCachableId("healthy")));
+        assert!(aliases.contains_key(&DummyCachableId("cpu")));
         gate.finish_pause(ticket);
     }
 
