@@ -1,5 +1,3 @@
-use thoosa_common::tch_error::{tch_error, tch_result};
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
 use crate::motif_tho_tensor::MotifThoTensor;
 use crate::motifs_store::MotifsStore;
@@ -21,7 +19,6 @@ use std::sync::atomic::Ordering::Relaxed;
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::{IndexOp, Tensor};
-use tokio::sync::MutexGuard;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{Batch, Slice};
 use thoosa_common::nets::batches::BatchLengths;
@@ -31,9 +28,13 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::DropIf;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::ConsumeResult;
+use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_common::runner::tmp_cache::TmpCached;
+use thoosa_common::tch_error::{tch_error, tch_result};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
@@ -42,17 +43,17 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::{SynKey, hashmap_as_vec};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_common::runner::sync_stage::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage, WithId};
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DebugId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
+use tokio::sync::MutexGuard;
 
-use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, SyncApplyMotifNet, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput};
-use crate::stages::instance_cache::InstanceCache;
+use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput, SyncApplyMotifNet};
 use crate::stages::load_motif_net::MotifNetMeta;
+use crate::stages::stage_ids::APPLY_LABEL_NET;
 use crate::stages::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
@@ -61,7 +62,6 @@ use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_shared::tracked_await::track_await;
-use crate::stages::stage_ids::APPLY_LABEL_NET;
 
 pub const APPLY_LABEL_NET_ENDPOINT: &str = "APPLY_LABEL_NET_ENDPOINT";
 
@@ -993,7 +993,6 @@ pub fn logit(x: f64) -> Result<f64, ThoError> {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::apply_label_nets::{ApplyLabelNet, ApplyLabelNetInput, ApplyLabelNets, logit, sigmoid};
@@ -1020,13 +1019,14 @@ mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::sync_stage::StageWithState;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, WithId};
-    use thoosa_common::runner::sync_stage::{StageWithState};
     use thoosa_shared::{ThoError, mono_key};
     use thoosa_store::{RunConfigRow, TrainedNet};
 

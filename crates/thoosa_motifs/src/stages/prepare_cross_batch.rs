@@ -10,6 +10,7 @@ use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapper};
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::Output;
@@ -17,9 +18,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError};
-use crate::stages::instance_cache::InstanceCache;
 
 pub(crate) const PREPARE_CROSS_BATCH_ENDPOINT: &str = "PrepareCrossBatch";
 

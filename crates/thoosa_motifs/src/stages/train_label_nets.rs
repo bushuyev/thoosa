@@ -1,5 +1,3 @@
-use thoosa_common::tch_error::tch_result;
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use cached_derive::Cached;
@@ -25,6 +23,8 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::{ChannelsData, Slice};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use thoosa_common::runner::global_ctx::CacheKey;
+use thoosa_common::tch_error::tch_result;
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
@@ -33,11 +33,11 @@ use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 
 use mockall_double::double;
 #[double]
@@ -52,7 +52,8 @@ use clap::Args;
 use rand::rng;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
-use thoosa_common::ipc::worker_msg::{WorkerInput};
+use thoosa_common::instance_cache::InstanceCache;
+use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
@@ -74,16 +75,15 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, panic_to_err, shuffle_and_chunk_with_rng};
-use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tokio::{join, try_join};
-use crate::stages::instance_cache::InstanceCache;
 
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
 pub const TRAIN_LABEL_STEP_ENDPOINT: &str = "TrainLabelStep";
@@ -1126,7 +1126,6 @@ pub fn train_label_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use crate::dims::{LabelProbability, MotifProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
     use crate::stages::apply_motif_nets::{ApplyMotifNets, motif_test_net_};
@@ -1164,6 +1163,7 @@ mod tests {
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils;
     use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, reset_print_options};
