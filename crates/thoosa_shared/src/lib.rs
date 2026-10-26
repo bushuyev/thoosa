@@ -2910,10 +2910,9 @@ pub trait MoveToDevice {
 macro_rules! panic_to_err_async {
     ($expr:expr) => {{
 
-        // let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
-        let x = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {$expr})).await;
+        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {$expr})).await;
 
-        match x {
+        match result {
             //no panic
             Ok(inner_result) => {
                 match inner_result.await {
@@ -2924,7 +2923,7 @@ macro_rules! panic_to_err_async {
                     Err(err) => {
                         log::debug!("panic_to_err_async: err: {err:?}");
                         // Erase backend-specific errors before entering the shared error adapter.
-                        Err(thoosa_shared::ThoError::from(thoosa_shared::anyhow::Error::from(err)))
+                        Err(thoosa_shared::ThoError::from(err))//don't wrap err into extra thoosa_shared::anyhow::Error::from(err) - it hides original stack trace
                     }
                 }
             },
@@ -2932,14 +2931,17 @@ macro_rules! panic_to_err_async {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
-                    let msg1 = msg.as_str();Err(ThoError::new(msg1))
+                    let msg1 = msg.as_str();
+                    Err(ThoError::new(msg1))
 
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
-                    let msg1 = *msg;Err(ThoError::new(msg1))
+                    let msg1 = *msg;
+                    Err(ThoError::new(msg1))
                 } else {
                     log::debug!("panic_to_err_async: unknown: {e:?}");
-                    let msg = format!("{e:?}");Err(ThoError::new(msg))
+                    let msg = format!("{e:?}");
+                    Err(ThoError::new(msg))
                 }
             }
         }
