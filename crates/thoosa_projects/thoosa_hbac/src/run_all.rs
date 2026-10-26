@@ -351,8 +351,8 @@ pub struct RunAllSettings {
 pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
     //let find_motifs_run_config_range_or_value = run_all_find_motifs_config_grid_0(2, 2, 4);
-    // let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
-    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_no_filters(2);
+    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
+    // let find_motifs_run_config_range_or_value = run_all_find_motifs_config_no_filters(2);
 
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
     let select_motifs_run_config = run_all_select_motifs_config_1::<SelectMotifsRunConfigFields>();

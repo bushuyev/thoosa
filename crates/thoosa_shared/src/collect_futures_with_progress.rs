@@ -49,7 +49,7 @@ where
 async fn collect_futures_with_progress_with_limit<T, F>(
     futures: impl Iterator<Item = F>, len: usize, buffer_limit: Arc<watch::Receiver<usize>>,
     buffering: FuturesOrdering,
-    ignore_failures: bool,
+    ignore_failures: bool,//TODO differentiate between errors caused by data incompatibility (an input is shorter than kernel length) which should not cause the app to stop and unrecoverable errors like missing stage. ignore_failures should be true when recoverable errors are expected
     descr: &str,
 ) -> Result<Vec<T>, ThoError>
 where
@@ -77,10 +77,12 @@ where
         }
     }
     debug!("collect_futures_with_progress_with_limit: ignore_failures={ignore_failures} values.is_empty={:?}", values.is_empty());
-    if failure.is_some() && !ignore_failures {
-        debug!("collect_futures_with_progress_with_limit: error: {failure:?}");
-        Err(failure.unwrap())
+    if !ignore_failures && let Some(failure) = failure {
+        Err(failure)
     } else {
+        if failure.is_some(){
+            warn!("collect_futures_with_progress_with_limit: ignored error: {failure:?}");
+        }
         Ok(values)
     }
 }

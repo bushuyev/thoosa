@@ -24,7 +24,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, OutId, Stage, ThoSelector};
+use thoosa_shared::traits::{AsyncStage, OutId, Stage, StageHash, ThoSelector};
 use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
@@ -46,7 +46,7 @@ use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_r
 use thoosa_common::transforms::smoothing::{median, moving_average};
 use thoosa_common::utils::z_norm;
 use thoosa_common::ws::{Workspace, WsConfigs};
-use thoosa_digest_id::DigestHash;
+use thoosa_digest_id::{blake3, DigestHash};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
@@ -83,6 +83,15 @@ impl SyncFreqFilterIpcInit {
     pub fn new(filter_configs: Vec<InputFilter>, num_channels: i64, sample_rate: f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Self {
         Self {  filter_configs, num_channels, sample_rate,find_motifs_run_config_id, tho_device_idx }
     }
+
+
+    fn new_id(&self)->SynKey {//TODO add trait for init types
+        SynKey::new([
+            mono_key!(FREQ_FILTER, "FreqFilter"),
+            mono_key!(self.blake3_hash(), format!("Hash for {:?}", self)),
+        ])
+    }
+
 }
 
 impl WorkerStageInput for SyncFreqFilterIpcInit {
@@ -105,7 +114,7 @@ where
     pd:PhantomData<C>
 }
 
-static INSTANCES: LazyLock<tokio::sync::Mutex<HashMap<(TypeId, RunConfigId, usize), Box<dyn Any + Send + Sync>>>> = LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
 static SYNC_FREQ_FILTER_INSTANCES: InstanceCache = InstanceCache::new();
 
 impl<C> SyncFreqFilter<C>
@@ -120,30 +129,32 @@ where
         let gate = GlobalCtx::global().cuda_activity_gate(init.tho_device_idx);
         let activity = gate.as_ref().map(thoosa_shared::CudaActivityScope::for_operation).transpose()?;
         let generation = gate.as_ref().and_then(|gate| activity.as_ref().and_then(|scope| scope.generation(gate)));
-        let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
+        // let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
+        let id = init.new_id().to_string();
 
-        let stage = SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(init.tho_device_idx, 0, move || async move {
-            if GlobalCtx::global().is_ipc() {
+        let stage = SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(init.tho_device_idx, id.clone(), move || async move {
+            let stage = if GlobalCtx::global().is_ipc() {
 
                 // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
-                Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
+
+                Arc::new(DynSyncStageWithStateEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_with_input_cloner(
                         SYNC_FREQ_FILTER_ENDPOINT,
-                        Some(find_motifs_run_config_id.to_string()),
+                        Some(id),
                         init.tho_device_idx,
                         Box::new(init.clone()),
                         Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
                     ).await?),
                     init: (),
-                }))
+                })
             } else {
-                Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?))))
-            }
+                Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
+            };
+            let registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+
+            Ok(stage)
+
         }).await?;
-
-
-        let registration = GlobalCtx::global().register_cache((format!("{SYNC_FREQ_FILTER_ENDPOINT}/{}/{find_motifs_run_config_id}", id.2), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
-
 
         Ok(stage)
     }
@@ -152,27 +163,8 @@ where
 
         let filters = Self::prepare_filters(&init.filter_configs, init.num_channels, init.sample_rate, init.tho_device_idx)?;
 
-        let filters_have_config = filters.iter().any(|f|{
-            match f {
-                PreparedFilter::ZNorm { .. } => false,
-                _=> true,
-            }
-        });
-        let id = if filters_have_config {
-            SynKey::new([
-                mono_key!(FREQ_FILTER, "FreqFilter"),
-                //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
-                mono_key!(init.find_motifs_run_config_id, format!("find_motifs_run_config_id={}", init.find_motifs_run_config_id)),
-            ])
-        } else {
-            SynKey::new([
-                mono_key!(FREQ_FILTER, "FreqFilter"),
-            ])
-        };
-
-
         Ok(Self {
-            id,
+            id: init.new_id(),
             stage_id: init.find_motifs_run_config_id.to_string(),
             filters: tokio::sync::Mutex::new(filters),
             num_channels:init.num_channels,

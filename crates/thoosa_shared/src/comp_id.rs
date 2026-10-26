@@ -10,13 +10,15 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
+use crate::traits::StageHash;
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ElvVal {
     Path(PathBuf),//for LoadNet - so that it can be loaded by path in CudaWorker avoiding SqlStore there for getting path by net_id
     Str(String),
     Num(usize),
     Bool(bool),
+    DigestHash(blake3::Hash)
 }
 
 impl Display for ElvVal {
@@ -34,6 +36,9 @@ impl Display for ElvVal {
             }
             ElvVal::Path(path) => {
                 write!(f, "{}", path.to_string_lossy())
+            }
+            ElvVal::DigestHash(hash) => {
+                write!(f, "{}", hash)
             }
         }
     }
@@ -81,7 +86,14 @@ impl From<PathBuf> for ElvVal {
     }
 }
 
-#[derive(Debug, Clone, Ord, Named, Serialize, Deserialize)]
+impl From<blake3::Hash> for ElvVal {
+    fn from(v: blake3::Hash) -> Self {
+        ElvVal::DigestHash(v)
+    }
+}
+
+
+#[derive(Debug, Clone, Named, Serialize, Deserialize)]
 pub struct MonoKey {
     val: ElvVal,
 
@@ -105,12 +117,6 @@ impl From<&str> for MonoKey {
             #[cfg(any(debug_assertions, tho_debug))]
             name: Cow::Owned(value.to_owned()),
         }
-    }
-}
-
-impl PartialOrd for MonoKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.val.partial_cmp(&other.val)
     }
 }
 
@@ -191,7 +197,7 @@ impl Hash for MonoKey {
 
 
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
-#[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Hash, Clone, Named, Serialize, Deserialize)]
 pub struct SynKey {//σύνθετος
     pub vals: Box<[MonoKey]>,
 }
@@ -224,7 +230,8 @@ fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ElvVal::Num(value) => write!(f, "{value}"),
         ElvVal::Str(value) => write!(f, "{value}"),
         ElvVal::Bool(value) => write!(f, "{value}"),
-        ElvVal::Path(value) => write!(f, "{}", value.to_string_lossy())
+        ElvVal::Path(value) => write!(f, "{}", value.to_string_lossy()),
+        ElvVal::DigestHash(value) => write!(f, "{value}")
     }
 }
 
@@ -493,13 +500,4 @@ mod tests {
             ]
         );
     }
-
-    #[test]
-    fn test_partial_ord() {
-        let key_0: SynKey = [mono_key!(0, "a"), mono_key!(10, "b")].into();
-        let key_1: SynKey = [mono_key!(1, "a"), mono_key!(1, "b")].into();
-
-        assert!(key_1.gt(&key_0));
-    }
-    
 }

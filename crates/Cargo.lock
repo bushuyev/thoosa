@@ -386,6 +386,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq 0.4.2",
  "cpufeatures 0.3.0",
+ "serde",
 ]
 
 [[package]]
@@ -5312,6 +5313,7 @@ dependencies = [
  "ambassador",
  "anyhow",
  "async-trait",
+ "blake3",
  "bytemuck",
  "cached_derive",
  "chrono",
