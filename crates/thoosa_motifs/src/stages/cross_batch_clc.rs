@@ -37,7 +37,8 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_common::ws::Workspace;
-use thoosa_digest_id_derive::DigestHash;
+use thoosa_digest_id::DigestHash;
+use thoosa_digest_id_derive::DigestHash as DigestHashDerive;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -335,7 +336,7 @@ pub trait CrossClcResultMerge: Debug + Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, DigestHash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, DigestHashDerive)]
 #[digest(tag = "thoosa.UnfoldParams:v1")]
 pub struct UnfoldParams { //TODO use in FindMotifsRunConfig
     dimension: i64,
@@ -363,6 +364,14 @@ impl UnfoldParams {
     pub fn step(&self) -> i64 {
         self.step
     }
+
+    pub fn new_id(&self)->SynKey {//TODO add trait for init types
+        SynKey::new([
+            mono_key!("UnfoldParams", "UnfoldParams"),//TODO id
+            mono_key!(self.blake3_hash(), format!("Hash for {:?}", self)),
+        ])
+    }
+
 }
 
 pub trait CrossBatchFn<R, CUC, C>: Send + Sync {
