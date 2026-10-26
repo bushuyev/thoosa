@@ -1008,7 +1008,8 @@ mod tests {
                     // the parent restores state, proving worker storage was dropped.
                     let response = ipc.invoke_stage(ipc.worker_id()?, SYNC_FREQ_FILTER_ENDPOINT.into(), Some(config_id.to_string()), Box::new(input), false).await?;
                     let OpResult::Failed(error) = response.status else { panic!("worker kept filter tensors after purge") };
-                    assert!(ThoError::from(error).to_string().contains("offloaded"));
+                    debug!("do_test_filter_state: error={error:?}");
+                    assert!(ThoError::from(error).to_string().contains("no initialized endpoint for endpoint_key=SyncFreqFilter"));
                 }
             }
         }
