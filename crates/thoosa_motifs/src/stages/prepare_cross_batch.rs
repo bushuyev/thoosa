@@ -4,6 +4,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, sync::{Arc, atomic::{AtomicU32, Ordering}}};
 use thoosa_common::dims::AnyDims;
+use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
@@ -81,18 +82,25 @@ pub(crate) struct PrepareCrossBatch<C: RunCtx + 'static> {
     ctx: PhantomData<C>,
 }
 
+static PREPARE_CROSS_BATCH_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl<C: RunCtx + 'static> PrepareCrossBatch<C> {
     // One endpoint per discovery configuration, reused across all outer batches.
-    pub async fn new(params: UnfoldParams, device: usize) -> Result<Arc<DynSyncStageEnum<Self>>, ThoError> {
-        Ok(Arc::new(if GlobalCtx::global().is_ipc() {
-            static NEXT_ID: AtomicU32 = AtomicU32::new(0);
-            DynSyncStageEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy(PREPARE_CROSS_BATCH_ENDPOINT, Some(NEXT_ID.fetch_add(1, Ordering::Relaxed).to_string()), device, Box::new(params)).await?),
-                init: (),
-            }
-        } else {
-            DynSyncStageEnum::Local(Arc::new(Self { params, ctx: PhantomData }))
-        }))
+    pub async fn new(params: UnfoldParams, tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<Self>>, ThoError> {
+        let id = params.new_id().to_string();
+
+        PREPARE_CROSS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, id.clone(), move || async move {
+            Ok(Arc::new(if GlobalCtx::global().is_ipc() {
+
+                DynSyncStageEnum::Proxy {
+                    stage: Arc::new(ProxyStage::proxy(PREPARE_CROSS_BATCH_ENDPOINT, Some(id), tho_device_idx, Box::new(params)).await?),
+                    init: (),
+                }
+            } else {
+                DynSyncStageEnum::Local(Arc::new(Self { params, ctx: PhantomData }))
+            }))
+
+        }).await
     }
 }
 
