@@ -58,6 +58,8 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Handle;
 use tokio::task::{JoinError, JoinSet};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum};
+use thoosa_digest_id::DigestHash;
+use thoosa_digest_id_derive::DigestHash as DigestHashDerive;
 use crate::stages::prepare_cross_batch::PrepareCrossBatch;
 
 pub type FilteredLoaderStage<L, C> = PairStage<L, FreqFilter<C>, C>;
@@ -210,7 +212,8 @@ fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, DigestHashDerive)]
+#[digest(tag = "thoosa.FindMotifsCrossUnfoldClcInit:v1")]
 pub struct FindMotifsCrossUnfoldClcInit {
     similarity_metric: crate::distance::SimilarityMetric,
     keep_slice_matches: bool,
@@ -232,9 +235,18 @@ impl FindMotifsCrossUnfoldClcInit {
             unfold_params,
         }
     }
+
+    pub fn new_id(&self)->SynKey {//TODO add trait for init types
+        SynKey::new([
+            mono_key!("FindMotifsCrossUnfoldClc", "FindMotifsCrossUnfoldClcInit"),//TODO id
+            mono_key!(self.blake3_hash(), format!("Hash for {:?}", self)),
+        ])
+    }
+
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, DigestHashDerive)]
+#[digest(tag = "thoosa.FindMotifsMasksCtxInit:v1")]
 pub enum FindMotifsMasksCtxInit {
     AccumulatedMean { k: f32, channels: u32 },
     AccumulatedQuantile { q: f32, channels: u32 },

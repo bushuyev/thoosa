@@ -47,7 +47,7 @@ pub trait AsyncStageDispatch<S: SyncStage>: Sync {
     where S: 'a, S::In<'i>: Send + 'a;
 }
 
-pub trait StageWithState: SyncStage + Sync {
+pub trait StageWithState: SyncStage + Sync {//TODO rename to StatefulStage
     // State is accessed exclusively through a mutex guard, so it need only be Send.
     type S: Debug + Send;//State
 

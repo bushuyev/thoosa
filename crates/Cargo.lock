@@ -386,6 +386,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq 0.4.2",
  "cpufeatures 0.3.0",
+ "serde",
 ]
 
 [[package]]
@@ -5312,6 +5313,7 @@ dependencies = [
  "ambassador",
  "anyhow",
  "async-trait",
+ "blake3",
  "bytemuck",
  "cached_derive",
  "chrono",
@@ -5348,6 +5350,8 @@ dependencies = [
  "serde_json",
  "serde_json5",
  "thoosa_cpu_data_derive",
+ "thoosa_digest_id",
+ "thoosa_digest_id_derive",
  "thoosa_named_derive",
  "time",
  "time_series_generator",

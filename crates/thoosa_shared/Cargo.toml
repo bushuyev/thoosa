@@ -19,6 +19,8 @@ hound-error = ["dep:hound"]
 
 [dependencies]
 cached_derive = {path  = "../thoosa_macros/cached_derive"}
+thoosa_digest_id = {path  = "../thoosa_macros/thoosa_digest_id"}
+thoosa_digest_id_derive = {path  = "../thoosa_macros/thoosa_digest_id_derive"}
 ctor = "0.2.6"
 bytemuck.workspace = true
 regex.workspace = true
@@ -66,6 +68,8 @@ hound = { version = "3.5", optional = true }
 pin-project = "1"
 typetag.workspace = true
 anyhow.workspace = true
+blake3.workspace = true
+
 [dev-dependencies]
 rustfft = "6"
 
