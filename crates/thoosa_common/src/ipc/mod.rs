@@ -11,6 +11,7 @@ mod proxy_tests;
 mod proxy_tests_with_state;
 pub mod worker_msg;
 pub mod proxy;
+pub mod endpoints;
 #[cfg(test)]
 mod perf_test;
 mod pending;

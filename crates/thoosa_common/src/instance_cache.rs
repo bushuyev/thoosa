@@ -9,8 +9,8 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 
 /// Stores stage instances in separate typed buckets for each run-context type.
 ///
-/// Each device generation owns separate entries. Per-entry initialization keeps
-/// duplicate installs serialized without blocking another device during recovery.
+/// Generation-bound instances are rebuilt after reset. Opted-in IPC proxies
+/// retain their Arc and recreate only the worker endpoint, on first use.
 pub struct InstanceCache {
     instances: LazyLock<tokio::sync::Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
 }
@@ -34,7 +34,33 @@ impl InstanceCache {
         self.get_or_create::<C, K, V, F, Fut>(device, gate.as_ref(), key, create).await
     }
 
+    /// Use only with proxies constructed with RecreateFromInit semantics. Local
+    /// instances still belong to one generation; this does not retain CUDA state.
+    pub async fn get_or_try_insert_recreatable_with<C, K, V, F, Fut>(&self, device: usize, key: K, create: F) -> Result<Arc<V>, ThoError>
+    where
+        C: 'static,
+        K: Clone + Eq + Hash + Send + Sync + 'static,
+        V: Send + Sync + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Arc<V>, ThoError>> + Send + 'static,
+    {
+        let global = GlobalCtx::global();
+        let gate = global.cuda_activity_gate(device);
+        self.get_or_create_with_lifetime::<C, K, V, F, Fut>(device, gate.as_ref(), global.is_ipc(), key, create).await
+    }
+
     async fn get_or_create<C, K, V, F, Fut>(&self, device: usize, gate: Option<&Arc<CudaActivityGate>>, key: K, create: F) -> Result<Arc<V>, ThoError>
+    where
+        C: 'static,
+        K: Clone + Eq + Hash + Send + Sync + 'static,
+        V: Send + Sync + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Arc<V>, ThoError>> + Send + 'static,
+    {
+        self.get_or_create_with_lifetime::<C, K, V, F, Fut>(device, gate, false, key, create).await
+    }
+
+    async fn get_or_create_with_lifetime<C, K, V, F, Fut>(&self, device: usize, gate: Option<&Arc<CudaActivityGate>>, recreatable: bool, key: K, create: F) -> Result<Arc<V>, ThoError>
     where
         C: 'static,
         K: Clone + Eq + Hash + Send + Sync + 'static,
@@ -44,7 +70,8 @@ impl InstanceCache {
     {
         let activity = gate.map(CudaActivityScope::for_operation).transpose()?;
         let generation = gate.map(|gate| activity.as_ref().expect("device activity").generation(gate).expect("device generation")).unwrap_or_default();
-        type Entries<K, V> = HashMap<(usize, CudaDeviceGeneration, K), Arc<tokio::sync::OnceCell<Arc<V>>>>;
+        let lifetime = if recreatable { None } else { Some(generation) };
+        type Entries<K, V> = HashMap<(usize, Option<CudaDeviceGeneration>, K), Arc<tokio::sync::OnceCell<Arc<V>>>>;
         let entry = {
             let mut instances = self.instances.lock().await;
             let cache = instances.entry(TypeId::of::<C>()).or_insert_with(|| Box::new(Entries::<K, V>::new()));
@@ -53,8 +80,8 @@ impl InstanceCache {
             })?;
             // Evict only this device's retired instances. Existing users keep
             // their Arc, whose proxy identity still rejects use after restart.
-            cache.retain(|(cached_device, cached_generation, _), _| *cached_device != device || *cached_generation == generation);
-            Arc::clone(cache.entry((device, generation, key)).or_insert_with(|| Arc::new(tokio::sync::OnceCell::new())))
+            cache.retain(|(cached_device, cached_generation, _), _| *cached_device != device || cached_generation.is_none() || *cached_generation == Some(generation));
+            Arc::clone(cache.entry((device, lifetime, key)).or_insert_with(|| Arc::new(tokio::sync::OnceCell::new())))
         };
         // An IPC install cannot be undone by dropping its caller. Keep the
         // per-entry initializer alive until it finishes or its device recovers,
@@ -85,6 +112,20 @@ impl InstanceCache {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_recreatable_instance_survives_two_generations() {
+        let cache = InstanceCache::new();
+        let gate = Arc::new(CudaActivityGate::new(1));
+        let original = cache.get_or_create_with_lifetime::<(), _, _, _, _>(1, Some(&gate), true, 10, || async { Ok(Arc::new(7)) }).await.unwrap();
+        for _ in 0..2 {
+            let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+            gate.wait_until_idle().await;
+            gate.finish_pause(ticket);
+            let cached = cache.get_or_create_with_lifetime::<(), _, _, _, _>(1, Some(&gate), true, 10, || async { panic!("recreated a retained proxy"); #[allow(unreachable_code)] Ok(Arc::new(8)) }).await.unwrap();
+            assert!(Arc::ptr_eq(&original, &cached));
+        }
+    }
 
     #[tokio::test]
     async fn test_cancelled_caller_does_not_restart_pending_initialization() {

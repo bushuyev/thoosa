@@ -283,6 +283,8 @@ impl GlobalCtx {
                 .await;
 
             info!("GlobalCtx::cuda_restart: drop_device done with result={r:?}");
+            // A replacement must not be published while cache invalidation failed.
+            r?;
 
             let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("no CUDA gate");
 
@@ -537,6 +539,7 @@ impl GlobalCtx {
         let maps = self.caches_snapshot("GlobalCtx::drop_data_on_device: timed out waiting for caches read lock");
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
+        let mut failure = None;
 
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
@@ -548,12 +551,16 @@ impl GlobalCtx {
                 }
                 Err(e) => {
                     warn!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
+                    // Finish invalidating the other caches, but do not resume
+                    // work with references whose invalidation failed.
+                    if failure.is_none() { failure = Some(e.context(format!("invalidating device {tho_device_idx} cache {type_name}"))); }
                 }
             }
 
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
+        if let Some(error) = failure { return Err(error); }
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
         info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
 
@@ -1112,6 +1119,44 @@ mod tests {
     use crate::ws::mock_ws_simp;
 
     use thoosa_shared::comp_id::SynKey;
+    use crate::runner::purge::FuturesRunnerMapPurger;
+
+    mockall::mock! {
+        #[derive(Debug)]
+        ResetPurger {}
+        #[async_trait::async_trait]
+        impl FuturesRunnerMapPurger for ResetPurger {
+            async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError>;
+        }
+    }
+
+    struct MockResetPurgerBuilder;
+
+    impl MockResetPurgerBuilder {
+        fn build(fail: bool, completed: Arc<std::sync::atomic::AtomicUsize>) -> MockResetPurger {
+            let mut mock = MockResetPurger::new();
+            mock.expect_drop_gpu().times(1).returning(move |_, _| {
+                completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if fail { Err(ThoError::MissingEndpoint("reset cache".into())) } else { Ok(()) }
+            });
+            mock
+        }
+    }
+
+    #[tokio::test]
+    async fn test_device_invalidation_drains_caches_and_propagates_failure() -> Result<(), ThoError> {
+        // A failed cache must prevent recovery success, after the remaining
+        // caches have also had the chance to discard their retired references.
+        let runtime = GlobalCtx::new(1)?;
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        runtime.register_cache(("failing reset".to_owned(), Arc::new(MockResetPurgerBuilder::build(true, completed.clone()))));
+        runtime.register_cache(("successful reset".to_owned(), Arc::new(MockResetPurgerBuilder::build(false, completed.clone()))));
+        let error = runtime.drop_data_on_device(1, "test invalidation failure").await.unwrap_err();
+        assert!(error.is_missing_endpoint());
+        assert_eq!(completed.load(std::sync::atomic::Ordering::SeqCst), 2);
+        runtime.shutdown().await;
+        Ok(())
+    }
 
     // Exercise the real derive with varying output types and a generic argument
     // that does not change the output. Neither may share a cache accidentally.

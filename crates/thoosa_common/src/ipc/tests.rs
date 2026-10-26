@@ -397,6 +397,70 @@ mod tests {
     }
 
     #[test]
+    fn test_cached_endpoint_survives_fatal_restarts_ipc() -> Result<(), ThoError> {
+        run_ipc_test(
+            module_path!(),
+            async {
+                use crate::instance_cache::InstanceCache;
+                use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+                let cache = InstanceCache::new();
+                let actor = GlobalCtx::global().cuda_actor(1);
+                let runner = GlobalCtx::global().get_runner(1);
+                let gate = runner.cuda_gate().unwrap();
+                let retained = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, "retained", || async {
+                    Ok(Arc::new(DynSyncStageEnum::<SyncConsumeTestStage>::Proxy {
+                        stage: Arc::new(ProxyStage::proxy_with_input_cloner_recreatable(SYNC_CONSUME_TEST_ENDPOINT, Some("retained".into()), 1, Box::new(()), Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>))).await?),
+                        init: (),
+                    }))
+                }).await?;
+                let input = || -> Result<_, ThoError> {
+                    ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("retained", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[3.0f32, 4.0]))?.f_view([1, 2]))?)
+                };
+                for _ in 0..2 {
+                    let old_output = actor.run_stage(retained.clone(), Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "before reset")).await?;
+                    let owner_managed = Arc::new(new_sync_consume_test_stage(1).await?);
+                    let generation = gate.device_generation();
+                    let fatal = ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("fatal", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[-2.0f32, 1.0]))?.f_view([1, 2]))?)?;
+                    let fatal_stage = owner_managed.clone();
+                    let result = runner.submit(1, async move {
+                        actor.run_stage(fatal_stage, Arc::new(DevicesWrap::wrap(fatal)), 1, &RunCtxImpl::new(1, "fatal reply")).await
+                    }, None).await;
+                    assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset));
+                    tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("endpoint recovery timed out")??;
+                    assert_eq!(gate.device_generation().0, generation.0 + 1);
+                    let cached = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, "retained", || async {
+                        Err::<Arc<DynSyncStageEnum<SyncConsumeTestStage>>, _>(ThoError::new("retained cache unexpectedly reconstructed the proxy"))
+                    }).await?;
+                    assert!(Arc::ptr_eq(&cached, &retained));
+                    // Only new invocations of opted-in endpoints can bind to the
+                    // replacement. Old tensor keys and mutable sessions stay stale.
+                    assert!(matches!(actor.copy(old_output.strip_types(), 0usize.into()).await.unwrap_err().what(), ThoError::ContextReset));
+                    assert!(matches!(actor.run_stage(owner_managed, Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "stale owner")).await.unwrap_err().what(), ThoError::ContextReset));
+                    // Concurrent first use must share one install; a duplicate
+                    // would fail with the worker's existing-endpoint check.
+                    let outputs = futures::future::try_join_all((0..8).map(|_| {
+                        let stage = retained.clone();
+                        let input = input();
+                        async move {
+                            let output = actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input?)), 1, &RunCtxImpl::new(1, "after reset")).await?;
+                            actor.copy(output.strip_types(), 0usize.into()).await
+                        }
+                    })).await?;
+                    for output in outputs {
+                        assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 6.0);
+                        assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 1]))?, 8.0);
+                    }
+                }
+                Ok(())
+            },
+            async |sock_path| {
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+            },
+        )
+    }
+
+    #[test]
     fn test_fatal_stage_error_restarts_worker_ipc() -> Result<(), ThoError> {
         run_ipc_test(
             module_path!(),

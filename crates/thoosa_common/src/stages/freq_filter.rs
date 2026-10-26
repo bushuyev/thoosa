@@ -124,21 +124,21 @@ where
 
     pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
         let find_motifs_run_config_id = init.find_motifs_run_config_id;
-        // Filters outlive training trials. Retain reusable configuration, but
-        // never reuse an endpoint installed in a retired worker generation.
+        // Filters outlive training trials. Retain their proxy and configuration;
+        // its endpoint is installed lazily in each replacement worker.
         let gate = GlobalCtx::global().cuda_activity_gate(init.tho_device_idx);
         let activity = gate.as_ref().map(thoosa_shared::CudaActivityScope::for_operation).transpose()?;
         let generation = gate.as_ref().and_then(|gate| activity.as_ref().and_then(|scope| scope.generation(gate)));
         // let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
         let id = init.new_id().to_string();
 
-        SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(init.tho_device_idx, id.clone(), move || async move {
+        SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(init.tho_device_idx, id.clone(), move || async move {
             let stage = if GlobalCtx::global().is_ipc() {
 
                 // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
 
                 Arc::new(DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_with_input_cloner(
+                    stage: Arc::new(ProxyStage::proxy_with_input_cloner_recreatable(
                         SYNC_FREQ_FILTER_ENDPOINT,
                         Some(id),
                         init.tho_device_idx,
@@ -980,7 +980,9 @@ mod tests {
             let config_id = 7100 + case as RunConfigId;
             let reference = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., config_id, 0))?);
             let tensor_count = reference.get_state_info(0).await?.tensors.len();
-            let stage = SyncFreqFilter::<RunCtxImpl>::new(SyncFreqFilterIpcInit::new(configs, 2, 100., config_id, 1)).await?;
+            let init = SyncFreqFilterIpcInit::new(configs, 2, 100., config_id, 1);
+            let endpoint_id = init.new_id().to_string();
+            let stage = SyncFreqFilter::<RunCtxImpl>::new(init).await?;
             let ctx = RunCtxImpl::new(1, "freq_filter_state");
             // Exercise both initial invocation and repeated restore cycles.
             for cycle in 0..3 {
@@ -1006,10 +1008,10 @@ mod tests {
                     let input = state_test_input(1.)?.copy_to_device(1).await?;
                     // Bypass proxy pre_run: a worker invocation must fail until
                     // the parent restores state, proving worker storage was dropped.
-                    let response = ipc.invoke_stage(ipc.worker_id()?, SYNC_FREQ_FILTER_ENDPOINT.into(), Some(config_id.to_string()), Box::new(input), false).await?;
+                    let response = ipc.invoke_stage(ipc.worker_id()?, SYNC_FREQ_FILTER_ENDPOINT.into(), Some(endpoint_id.clone()), Box::new(input), false).await?;
                     let OpResult::Failed(error) = response.status else { panic!("worker kept filter tensors after purge") };
                     debug!("do_test_filter_state: error={error:?}");
-                    assert!(ThoError::from(error).to_string().contains("no initialized endpoint for endpoint_key=SyncFreqFilter"));
+                    assert!(ThoError::from(error).to_string().contains("frequency filter state is offloaded"));
                 }
             }
         }
@@ -1062,8 +1064,11 @@ mod tests {
                         assert!(!unused.has_gpu_data(1).await);
                         unused.purge_gpu(None, 1, "retired filter").await?;
                         global.dump_all_to_cpu(&HashMap::new(), 1, "before filter rebuild").await?;
-                        let error = global.cuda_actor(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retired filter")).await.unwrap_err();
-                        assert!(matches!(error.what(), ThoError::ContextReset), "offload must not make a retired proxy executable");
+                        // Exercise the retained proxy directly: new use must
+                        // rebuild its kernels instead of uploading the old dump.
+                        let output = global.cuda_actor(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retained filter")).await?;
+                        let output = output.copy_to_device(0).await?;
+                        assert!(tch_result(output.as_ref().f_allclose(&expected, 1e-4, 1e-5, false))?, "retained filter changed after reset");
                     }
                     // Keep the async loader alive across replacement, just as
                     // RandomSlicesLoader does between training trial attempts.
@@ -1071,7 +1076,7 @@ mod tests {
                     let output = output.select_ref(0, None::<ChannelsDataSelector>).await?;
                     assert!(tch_result(output.as_ref().as_ref().f_allclose(&expected, 1e-4, 1e-5, false))?, "filter changed after reset {cycle}");
                     let current = SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?;
-                    assert_eq!(Arc::ptr_eq(&previous, &current), cycle == 0, "filter endpoint was not rebuilt for the new generation");
+                    assert!(Arc::ptr_eq(&previous, &current), "recovery replaced the cached proxy instead of its endpoint");
                     assert!(Arc::ptr_eq(&current, &SyncFreqFilter::<RunCtxImpl>::new(init.clone()).await?), "same-generation filter was not shared");
                     previous = current;
                     global.dump_all_to_cpu(&HashMap::new(), 1, "filter reset test").await?;

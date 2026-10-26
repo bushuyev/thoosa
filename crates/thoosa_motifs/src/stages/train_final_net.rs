@@ -389,10 +389,10 @@ where
     C: RunCtx  + 'static
 {
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncLogitsBatch<C>>>, ThoError> {
-        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
+        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
                 if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(SYNC_LOGITS_BATCH_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(())).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LOGITS_BATCH_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(())).await?),
                     init: (),
                 }))
             } else {

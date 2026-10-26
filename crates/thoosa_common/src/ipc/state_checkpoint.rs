@@ -61,7 +61,8 @@ where
         checkpoint_operation(self.tho_device_idx, async move {
             let _execution = self.execution.write().await;
             let mut state = self.state.lock().await;
-            self.load_gpu_inner(self.tho_device_idx, &mut state).await?;
+            // Training checkpoints belong to the owner-managed session, never a replacement endpoint.
+            self.load_gpu_inner(self.tho_device_idx, self.worker_id, &mut state).await?;
             let actor = GlobalCtx::global().cuda_actor(self.tho_device_idx);
             let mut dump = actor.purge_stage_state(self.stage_id.clone(), self.endpoint_name.to_string(), self.worker_id).await?;
             let export = dump.export.take().ok_or_else(|| ThoError::new("checkpoint export lacks acknowledgement"))?;
@@ -81,7 +82,7 @@ where
             // metadata before uploading tensors from the persistent checkpoint.
             actor.reset_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), checkpoint.info()?).await?;
             *state = Some(Box::new(checkpoint.restore_dump()?));
-            self.load_gpu_inner(self.tho_device_idx, &mut state).await
+            self.load_gpu_inner(self.tho_device_idx, self.worker_id, &mut state).await
         }).await
     }
 }
