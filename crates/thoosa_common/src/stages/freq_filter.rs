@@ -1089,6 +1089,45 @@ mod tests {
         })
     }
 
+    #[test]
+    fn test_cached_filter_recomputes_after_worker_reset_ipc() -> Result<(), ThoError> {
+        crate::ipc::tests::run_ipc_test(module_path!(), async {
+            tokio::time::timeout(Duration::from_secs(60), async {
+                use crate::runner::common::cachable::CachedPurgeOutput;
+                let global = GlobalCtx::global();
+                let configs = state_test_filters();
+                let filter = FreqFilter::<RunCtxImpl>::new(&configs, WsConfigs::new(2, 0, 100), 7112, 1).await?;
+                let reference = SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs, 2, 100., 7112, 0))?;
+                let input = state_test_input(1.)?;
+                let expected = state_test_reference(&reference, &input)?;
+                let inputs = crate::runner::tmp_cache::TmpCached::new("cached filter reset input").await;
+                let input_id = input.id().clone();
+                inputs.insert(input);
+                let input = inputs.get(&input_id).unwrap();
+                // Keep this cache area open so cleanup cannot offload the
+                // result to CPU and accidentally hide the lost-replica bug.
+                let mut ctx = RunCtxImpl::new(1, "cached filter reset");
+                let before = Arc::clone(&filter).run_cached(Arc::clone(&input), ctx.branch(false)).await?;
+                assert!(before.is_on_device(1) && !before.is_on_device(0));
+                let hit = Arc::clone(&filter).run_cached(Arc::clone(&input), ctx.branch(false)).await?;
+                assert!(Arc::ptr_eq(&before, &hit), "expected a cached GPU result before reset");
+                global.cuda_actor(1).restart().await?;
+                assert!(!before.has_any_data(), "reset must discard the failed worker's only replica");
+                // The input's CPU source survives. A fresh lookup must rerun
+                // the filter, using its restored endpoint, instead of returning
+                // the successful future whose output now has no replicas.
+                let after = Arc::clone(&filter).run_cached(input, ctx.branch(false)).await?;
+                assert!(!Arc::ptr_eq(&before, &after), "reset left an empty output in the cache");
+                let output = after.select_ref(0, None::<ChannelsDataSelector>).await?;
+                assert!(tch_result(output.as_ref().as_ref().f_allclose(&expected, 1e-4, 1e-5, false))?, "recomputed filter output changed after reset");
+                Ok(())
+            }).await?
+        }, async |sock| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
+        })
+    }
+
     #[tokio::test]
     async fn test_filter_state_restore_requires_all_tensors() -> Result<(), ThoError> {
         let stage = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(state_test_filters(), 2, 100., 7104, 0))?);
