@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retired_ipc_handles_cannot_reach_replacement_worker() -> Result<(), ThoError>{
+    async fn test_retired_handles_cannot_reach_replacement_worker_ipc() -> Result<(), ThoError>{
         use crate::ipc::worker_msg::CudaWorkerId;
         let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
         installed.expect().return_const(false);
@@ -1785,7 +1785,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ipc_reply_identity_is_checked_after_wire_routing() {
+    async fn test_reply_identity_is_checked_after_wire_routing_ipc() {
         use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
         use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation};
         use thoosa_shared::CudaDeviceGeneration;
@@ -1813,7 +1813,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ipc_copy_admission_is_device_local() {
+    async fn test_copy_admission_is_device_local_ipc() {
         let failed_gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let healthy_gate = Arc::new(thoosa_shared::CudaActivityGate::new(2));
         let (failed_tx, mut failed_rx) = tokio::sync::mpsc::channel(1);

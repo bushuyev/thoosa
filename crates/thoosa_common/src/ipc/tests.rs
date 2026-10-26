@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ipc_main_panic_waits_for_shutdown() {
+    async fn test_main_panic_waits_for_shutdown_ipc() {
         let mut cleaned_up = false;
         let result = std::panic::AssertUnwindSafe(super::run_ipc_main(async {
             // The panic must be caught during polling, including after an await.
@@ -1048,7 +1048,7 @@ mod tests {
 
         //IPC version of crates/thoosa_common/src/torch_runner/tests/composite_input/mod.rs:27
         #[test]
-        fn test_ipc_ab_clc() -> Result<(), ThoError> {
+        fn test_ab_clc_ipc() -> Result<(), ThoError> {
             // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
             super::run_ipc_test(
                 module_path!(),
@@ -1072,7 +1072,7 @@ mod tests {
         }
 
         #[test]
-        fn test_ipc_ab_clc_sync_with_selector() -> Result<(), ThoError> {
+        fn test_ab_clc_sync_with_selector_ipc() -> Result<(), ThoError> {
             // Use this test's exact name so the harness starts its worker branch, not the sibling test.
             super::run_ipc_test(
                 module_path!(),
