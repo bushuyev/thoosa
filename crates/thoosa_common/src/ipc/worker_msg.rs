@@ -20,9 +20,10 @@ pub struct CudaWorkerId {
 
 impl CudaWorkerId {
     pub fn check(self, expected: Self) -> Result<(), ThoError> {
-        if self != expected {
-            return Err(ThoError::ContextReset.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
-        }
+        // TODO temporarily disabled to see errors from missing SyncStages after worker restart
+        // if self != expected {
+        //     return Err(ThoError::ContextReset.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
+        // }
         Ok(())
     }
 }

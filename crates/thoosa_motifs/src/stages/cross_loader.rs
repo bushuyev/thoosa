@@ -362,6 +362,8 @@ where
         receiver: Arc<RSV>,
         mut ctx: C,
     ) -> Result<(), ThoError> {
+        debug!("CrossLoader::run_inner_batches: t_0_batch={t_0_batch:?} skip_0_i={skip_0_i}");
+
         let prepared_outer = if let Some(stage) = &self.prepare_outer {
             let prepared_cache = Arc::new(TmpCached::new("discovery_outer_batch").await);
 
@@ -402,8 +404,27 @@ where
             let mut t_1_batch_len = 0;
             let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
-            for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
-                let t_1 = track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await?;
+            'inner: for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
+                info!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?}");
+
+                GlobalCtx::global().cuda_activity_gate(1).expect("no gate").wait_if_paused().await?;
+
+                info!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?} waited");
+
+                let t_1 = match track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let is_resetting = matches!(e,  ThoError::ContextReset);
+                        warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
+
+                        // if is_resetting {
+                        //     GlobalCtx::global().cuda_activity_gate(1).expect("no gate").wait_if_paused().await?;
+                        //     continue 'inner;
+                        // } else {
+                            return Err(e);
+                        // }
+                    }
+                };
                 let t_1_len = t_1.size().dim_1();
 
                 debug!("CrossLoader::run_inner_batches: t_1={t_1:?} loaded, t_1_len={t_1_len}");
