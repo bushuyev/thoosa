@@ -34,3 +34,4 @@ pub mod progress_socket;
 mod version;
 
 pub mod tch_error;
+pub mod instance_cache;

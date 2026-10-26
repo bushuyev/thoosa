@@ -1,9 +1,8 @@
-use thoosa_common::tch_error::tch_result;
 use crate::distance::clc_dist_d2;
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
-use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::prepare_cross_batch::PreparedCrossBatch;
+use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -21,16 +20,19 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tch::kind::FLOAT_CPU;
 use tch::{TchError, Tensor};
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::worker_msg::{WorkerInput};
+use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::runner::sync_stage::SyncStage;
+use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
@@ -38,14 +40,12 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
-use thoosa_shared::ipc_types::WorkerOutput;
-use crate::stages::instance_cache::InstanceCache;
 
 pub const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
@@ -823,14 +823,14 @@ mod tests {
     use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
+    use thoosa_common::runner::sync_stage::SyncStage;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{Stage};
-    use thoosa_common::runner::sync_stage::{SyncStage};
+    use thoosa_shared::traits::Stage;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {

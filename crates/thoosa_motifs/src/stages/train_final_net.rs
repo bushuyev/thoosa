@@ -1,5 +1,3 @@
-use thoosa_common::tch_error::tch_result;
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
 use crate::motifs_store::MotifsStore;
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
@@ -23,15 +21,17 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, Ordering};
 use thoosa_common::dims::{ChannelsData, Slice};
+use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
+use thoosa_common::tch_error::tch_result;
 
-use crate::stages::instance_cache::InstanceCache;
 use crate::stages::stft::SyncStftSelector;
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{Kind, Reduction, Tensor};
 use thoosa_common::dims::{Batch, ThoBatch};
+use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
@@ -42,18 +42,21 @@ use crate::stages::apply_motif_nets::ApplyMotifNets;
 use crate::train_nets::final_net;
 use crate::train_nets::{FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
-use thoosa_common::ipc::worker_msg::{WorkerInput};
+use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
 use thoosa_common::resources::{Logits, NetResources, SavableResult};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{run_ctx_adjuster, Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
@@ -63,20 +66,17 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
-use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_store::Store;
 use tracing::field::debug;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjuster, MAX_PARALLEL, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelAdjustContextImpl};
 
 pub const TRAIN_FINAL_STEP_ENDPOINT: &str = "TrainFinalStep";
 
@@ -774,7 +774,6 @@ pub fn train_final_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::tch_error::tch_result;
     use crate::dims::{ChannelsMotifsData, LabelProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
     use crate::stages::apply_motif_nets::{motif_sum_net_, motif_test_net_};
@@ -804,6 +803,7 @@ mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::reset_print_options;
     use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
