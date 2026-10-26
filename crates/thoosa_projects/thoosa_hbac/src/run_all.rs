@@ -351,8 +351,8 @@ pub struct RunAllSettings {
 pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
     //let find_motifs_run_config_range_or_value = run_all_find_motifs_config_grid_0(2, 2, 4);
-    // let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
-    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_no_filters(2);
+    let find_motifs_run_config_range_or_value = run_all_find_motifs_config_1();
+    // let find_motifs_run_config_range_or_value = run_all_find_motifs_config_no_filters(2);
 
     let fixed_find_motifs_config = FixedFindMotifsConfig::new(run_all_args.max_chunk_size, false);
     let select_motifs_run_config = run_all_select_motifs_config_1::<SelectMotifsRunConfigFields>();
@@ -1302,7 +1302,7 @@ mod tests {
             valid_resource_group: settings.valid_resource_group.to_string(),
             train_motifs_epoch_size: 10,
             motifs_limit: Some(123),
-            max_motif_net_loss: 0.1,
+            max_motif_net_loss: 0.5,
             selected_motif_nets_limit: Some(10),
             motif_slices_step: 10,
             with_plots: false,

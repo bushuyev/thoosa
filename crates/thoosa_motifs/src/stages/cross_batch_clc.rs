@@ -37,6 +37,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_common::ws::Workspace;
+use thoosa_digest_id_derive::DigestHash;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -334,7 +335,8 @@ pub trait CrossClcResultMerge: Debug + Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, DigestHash)]
+#[digest(tag = "thoosa.UnfoldParams:v1")]
 pub struct UnfoldParams { //TODO use in FindMotifsRunConfig
     dimension: i64,
     size: i64,
@@ -517,24 +519,28 @@ where
     }
 }
 
+static CROSS_UNFOLD_CLC_INSTANCES: InstanceCache = InstanceCache::new();
+
 impl<C> CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>
 where
     C: RunCtx + 'static,
 {
     pub async fn new_dyn_for_find_motifs(init: crate::stages::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>>, ThoError> {
-        if GlobalCtx::global().is_ipc() {
-            static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-            let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+        let id = init.new_id().to_string();
 
-            Ok(
-                Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(init)).await?),
-                    init: (),
-                })
-            )
-        } else {
-            Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_for_find_motifs(init)?))))
-        }
+        CROSS_UNFOLD_CLC_INSTANCES.get_or_try_insert_with::<C, _, _, _, _>(tho_device_idx, id.clone(), move || async move {
+            if GlobalCtx::global().is_ipc() {
+
+                Ok(
+                    Arc::new(DynSyncStageEnum::Proxy {
+                        stage: Arc::new(ProxyStage::proxy(SYNC_CROSS_UNFOLD_CLC_ENDPOINT, Some(id), tho_device_idx, Box::new(init)).await?),
+                        init: (),
+                    })
+                )
+            } else {
+                Ok(Arc::new(DynSyncStageEnum::Local(Arc::new(Self::new_for_find_motifs(init)?))))
+            }
+        }).await
     }
 
 }
