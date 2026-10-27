@@ -378,7 +378,7 @@ impl CudaIPCActor {
 
         let (reader, writer) = stream.into_split();
 
-        let (tx, rx): (Sender<CudaWorkerMsgIn>, Receiver<CudaWorkerMsgIn>) = mpsc::channel::<CudaWorkerMsgIn>(1024);
+        let (tx, rx): (Sender<CudaWorkerMsgIn>, Receiver<CudaWorkerMsgIn>) = mpsc::channel::<CudaWorkerMsgIn>(2048);
 
         let pending = Arc::new(PendingRequests::new(worker_id));
         let cancel = CancellationToken::new();
