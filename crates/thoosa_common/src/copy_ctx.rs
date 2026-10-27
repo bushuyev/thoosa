@@ -722,8 +722,8 @@ impl CopyCtx {
         let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs, cuda_mem_for_device(cuda_device).1);
 
         let exec_stream_pool = {
-            let exec_streams = (0..32)
-                .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
+            let exec_streams = (0..buffs)
+                .map(|_| ThoCudaStream::from_pool(cuda_device as i32, true))
                 .collect::<Result<Vec<_>, _>>()?;
 
                 ExecutionStreamPool::new(exec_streams)

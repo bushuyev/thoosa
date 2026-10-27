@@ -9,7 +9,7 @@ use super::serialization::{PostcardToFromBytes, ToFromBytes};
 /// Reconstruction is opt-in: mutable training progress belongs to its async owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageRecovery {
-    OwnerManaged,
+    OwnerManaged,//Async stage which instantiated the sync stage is responsible for re-creating it after restart
     RecreateFromInit,
 }
 
