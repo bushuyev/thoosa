@@ -1034,7 +1034,7 @@ impl Store for SqlStore {
                         row.get::<usize, i64>(2).ok(),
                         row.get::<usize, String>(3).ok(),
                         row.get::<usize, u8>(4).ok().map(|v| if v == 1 { true } else { false }),
-                        row.get::<usize, u8>(4).ok().map(|v| if v == 1 { true } else { false }).unwrap_or(false),
+                        row.get::<usize, u8>(5).ok().map(|v| if v == 1 { true } else { false }).unwrap_or(false),
                     ))
                 })?
                 .map(|v| v.expect(format!("can't get run_config_values for {}", run_config_id).as_str()))
