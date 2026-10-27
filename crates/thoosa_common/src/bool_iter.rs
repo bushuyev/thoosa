@@ -1,5 +1,9 @@
 use log::trace;
-use tch::{Kind, Tensor};
+use crate::tch_error::tch_result;
+use tch::{Device, Kind, Tensor};
+use tch::Device::Cpu;
+use thoosa_shared::ThoError;
+
 
 pub struct BoolTensorIterator<'a> {
     data_ptr: *const u8,
@@ -11,6 +15,9 @@ pub struct BoolTensorIterator<'a> {
 impl<'a> BoolTensorIterator<'a> {
     fn new(tensor: &'a Tensor) -> Self {
         assert_eq!(Kind::Bool, tensor.kind());
+        assert!(tensor.is_contiguous());
+        assert_eq!(tensor.device(), Cpu);
+
         let numel = tensor.numel() as usize;
         let data_ptr = tensor.data_ptr() as *const u8;
         BoolTensorIterator {
@@ -45,4 +52,21 @@ impl<'a> From<&'a Tensor> for BoolTensorIterator<'a> {
     fn from(t: &'a Tensor) -> Self {
         BoolTensorIterator::new(t)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use tch::Tensor;
+    use super::BoolTensorIterator;
+
+    #[test]
+    fn test_bool_tensor_iterator() -> anyhow::Result<()> {
+        let t = Tensor::f_from_slice((0..100).map(|v| v % 2 == 0).collect::<Vec<_>>().as_slice())?;
+
+        for (i, b) in (0..100).zip(BoolTensorIterator::try_from(&t)?) {
+            assert_eq!(i % 2 == 0, b);
+        }
+        Ok(())
+    }
+
 }

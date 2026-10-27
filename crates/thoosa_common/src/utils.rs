@@ -1948,7 +1948,7 @@ pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
 #[cfg(test)]
 #[allow(dead_code, unused_variables, unused_assignments, non_snake_case)]
 pub mod tests {
-    use crate::bool_iter::BoolTensorIterator;
+
     use crate::nets::batches::BatchLengths;
     use std::cmp::max;
 
@@ -2396,7 +2396,7 @@ pub mod tests {
 
         debug!(
             "       grid_to_vals={:?}",
-            opt_sources.grid_run_config_source().grid_to_vals()
+            opt_sources.grid_run_config_source().grid_to_vals().expect("valid test grid")
         );
         assert_eq!(
             (10..100)
@@ -2418,7 +2418,7 @@ pub mod tests {
                     ]
                 }))
                 .collect::<Vec<_>>(),
-            opt_sources.grid_run_config_source().grid_to_vals()
+            opt_sources.grid_run_config_source().grid_to_vals().expect("valid test grid")
         );
 
         debug!("opt_params={:?}", opt_sources.opt_params());
@@ -2535,9 +2535,9 @@ pub mod tests {
             let mut const_vals = Vec::new();
             let mut grid_vals = Vec::new();
             let mut opt_params = Vec::new();
-            run_config_range_or_value.fill_run_configs(|v| v, &mut const_vals, &mut grid_vals, &mut opt_params);
+            run_config_range_or_value.fill_run_configs(|v| v, &mut const_vals, &mut grid_vals, &mut opt_params).expect("valid test config");
 
-            let grid_vals: Vec<NamedVal<TestRunConfigFields>> = grid_vals.into_iter().flat_map(|range| range.into_iter()).collect();
+            let grid_vals: Vec<NamedVal<TestRunConfigFields>> = grid_vals.into_iter().flat_map(|range| range.into_iter()).collect::<anyhow::Result<_>>().expect("valid test ranges");
             let opt_vals: Vec<NamedVal<TestRunConfigFields>> = opt_params.iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
 
             [const_vals.as_slice(), grid_vals.as_slice(), opt_vals.as_slice()].concat().into_iter().into()
@@ -2669,14 +2669,6 @@ pub mod tests {
         assert_eq!(sub_struct_1.field_b, 2);
     }
 
-    #[test]
-    fn test_bool_tensor_iterator() {
-        let t = Tensor::from_slice((0..100).map(|v| v % 2 == 0).collect::<Vec<_>>().as_slice());
-
-        for (i, b) in (0..100).zip::<BoolTensorIterator>((&t).into()) {
-            assert_eq!(i % 2 == 0, b);
-        }
-    }
 
     #[test]
     fn test_hist_1_dim() {
