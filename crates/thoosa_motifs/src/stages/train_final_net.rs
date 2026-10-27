@@ -179,9 +179,8 @@ impl SavableResult for TrainFinalNetOutput {
     type R = Vec<u32>;
 
     async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
-        let _ = track_await!(self.result.save(store, ws, ())).await;
-
-        Ok(vec![0])//TODO
+        // Report success only after persistence completes, using the actual saved run ID.
+        Ok(vec![track_await!(self.result.save(store, ws, ())).await?])
     }
 }
 
@@ -992,7 +991,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
+        let train_final_net = Arc::new(new_train_final_net(vec![label_a_run_config_id, label_b_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
 
         let input = Arc::new(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))));
 
@@ -1017,19 +1016,29 @@ mod tests {
         // Exercise the same checkpoint handoff used by local and IPC training.
         let checkpoint_path = test_dir.join("train_final_checkpoint.safetensors");
         tch_result(VarStore::new(Cpu).save(&checkpoint_path))?;
-        let mut result = TrainFinalNetsRunConfigResult::new(
+        let result = TrainFinalNetsRunConfigResult::new(
             Some(&vec![label_run_config_id_0, label_run_config_id_1]),
             0.125,
             thoosa_shared::tmp_file::TmpFile::new(checkpoint_path),
-            FinalNetParams::new(4, 100, 2, 3),
+            FinalNetParams::new(2, 100, 2, 3),
             TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3, 100)),
         );
 
-        let run_config_id = SavableResult::save(&mut result, &store, &ws, ()).await?;
+        let mut output = TrainFinalNetOutput::new(result);
+        let saved_ids = SavableResult::save(&mut output, &store, &ws, ()).await?;
+        assert_eq!(saved_ids, vec![3]);
+        let run_config_id = saved_ids[0];
         let run_config_values = store.list_run_config_values(run_config_id).await?;
         let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
 
         assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
+        let (_, params_path) = ws.read().final_model(run_config_id)?;
+        assert_eq!(FinalNetParams::from_file(&params_path)?.label_feature_schema()?, &[label_run_config_id_0, label_run_config_id_1]);
+
+        // Losing the checkpoint must propagate through the public output wrapper as an I/O error.
+        output.result.var_store_path = thoosa_shared::tmp_file::TmpFile::new(test_dir.join("missing.safetensors"));
+        let error = SavableResult::save(&mut output, &store, &ws, ()).await.unwrap_err();
+        assert!(error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some()), "{error:#}");
         Ok(())
     }
 
@@ -1076,6 +1085,9 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         p: Self::P<'_>
     ) -> anyhow::Result<u32> {
+        // The constructor uses this exact order for feature positions; persist it with the weights.
+        self.final_node_params.set_label_feature_schema(self.train_label_nets_run_config_ids.clone())?;
+
         let run_config_id = track_await!(store.save_run_config(
             Some(&self.train_label_nets_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),

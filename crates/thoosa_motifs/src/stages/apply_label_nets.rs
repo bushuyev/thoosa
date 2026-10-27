@@ -1,7 +1,7 @@
 use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
 use crate::motif_tho_tensor::MotifThoTensor;
 use crate::motifs_store::MotifsStore;
-use crate::train_nets::{LabelNetParams, MotifNetParams};
+use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams};
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::FutureExt;
@@ -65,6 +65,20 @@ use thoosa_shared::tracked_await::track_await;
 
 pub const APPLY_LABEL_NET_ENDPOINT: &str = "APPLY_LABEL_NET_ENDPOINT";
 
+fn ordered_label_features(discovered: impl IntoIterator<Item = (RunConfigId, String)>, requested: &[RunConfigId]) -> anyhow::Result<Vec<(RunConfigId, String)>> {
+    let mut labels = HashMap::new();
+    for (id, label) in discovered {
+        anyhow::ensure!(labels.insert(id, label).is_none(), "ambiguous label model for run {id}");
+    }
+    let mut seen = HashSet::new();
+    requested.iter().map(|&id| {
+        anyhow::ensure!(seen.insert(id), "duplicate label feature run {id}");
+        let label = labels.remove(&id).ok_or_else(|| anyhow::anyhow!("missing label model for feature run {id}"))?;
+        Ok((id, label))
+    }).collect()
+}
+
+
 pub type MotifNetsOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
 
 #[derive(Debug)]
@@ -99,6 +113,20 @@ impl<C> ApplyLabelNets<C, ApplyMotifNets<C>>
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
+    /// Reconstruct feature positions from the schema stored alongside the final model's weights.
+    pub async fn from_final_net_params<R>(
+        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+        store: &Arc<dyn MotifsStore>,
+        params: &FinalNetParams,
+        stage_ctx: R,
+        motif_slices_step: u32,
+    ) -> Result<Self, ThoError>
+    where
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
+    {
+        Self::new_with_apply_motif_nets(ws, store, params.label_feature_schema()?.to_vec(), stage_ctx, motif_slices_step).await
+    }
+
     pub async fn new_with_apply_motif_nets<R>(
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
@@ -163,44 +191,38 @@ where
         let mut train_label_net_run_config_ids = vec![];
         debug!("ApplyLabelNets::new: all_label_nets={all_label_nets:?}");
 
-        for (label, nets) in all_label_nets {
+        // Requested IDs define feature positions; discovery only resolves their labels.
+        let discovered = all_label_nets.into_iter().flat_map(|(label, nets)| nets.into_iter().map(move |(id, _, _)| (id, label.clone())));
+        for (train_label_net_run_config_id, label) in ordered_label_features(discovered, &train_label_nets_run_config_ids)? {
+            let label_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
 
-            info!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
+            debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
-            for (train_label_net_run_config_id, label_net_params, _net) in nets {
-                let label_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
+            if label_nets.len() != 1 { return Err(ThoError::new(format!("expected one label model for run {train_label_net_run_config_id}, found {}", label_nets.len()))); }
+            let label_net = &label_nets[0];
 
-                debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
+            let motif_net_run_config_ids = track_await!(store.list_input_nets(label_net.id)).await?;
 
-                assert_eq!(label_nets.len(), 1); //for now, there is always a single net for run_config_id
-                let label_net = &label_nets[0];
+            info!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
 
-                let motif_net_run_config_ids = track_await!(store.list_input_nets(label_net.id)).await?;
+            if motif_net_run_config_ids.is_empty() { return Err(ThoError::new(format!("label model run {train_label_net_run_config_id} has no input motif models"))); }
 
-                info!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
+            let motif_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids), None, None)).await?;
 
-                if motif_net_run_config_ids.is_empty() {
-                    warn!("no motifs for train_label_net_run_config_id={train_label_net_run_config_id}");
-                    continue//TODO, change to assert?
-                }
+            debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
-                let motif_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(motif_net_run_config_ids), None, None)).await?;
-
-                debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
-
-                let apply_label_net_init = ApplyLabelNetInit::new(
-                    label_net.id,
-                    label.clone(),
-                    train_label_net_run_config_id,
-                    label_net.net_path.clone(),
-                    false,
-                );
-                train_label_net_run_config_ids.push(train_label_net_run_config_id);
-                apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new(track_await!(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
-                    apply_label_net: track_await!(ApplyLabelNet::new(apply_label_net_init, stage_ctx.branch(true), ws)).await?,
-                });
-            }
+            let apply_label_net_init = ApplyLabelNetInit::new(
+                label_net.id,
+                label.clone(),
+                train_label_net_run_config_id,
+                label_net.net_path.clone(),
+                false,
+            );
+            train_label_net_run_config_ids.push(train_label_net_run_config_id);
+            apply_nets.push(ApplyNets {
+                apply_motif_nets: Arc::new(track_await!(build_motif_nets(stage_ctx.branch(false), motif_nets)).await?),
+                apply_label_net: track_await!(ApplyLabelNet::new(apply_label_net_init, stage_ctx.branch(true), ws)).await?,
+            });
         }
 
 
@@ -993,13 +1015,35 @@ pub fn logit(x: f64) -> Result<f64, ThoError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_label_feature_schema_rejects_missing_duplicate_and_ambiguous_models() -> anyhow::Result<()> {
+        use super::ordered_label_features;
+        let discovered = || vec![(2, "B".to_string()), (1, "A".to_string())];
+        assert_eq!(ordered_label_features(discovered(), &[1, 2])?, vec![(1, "A".into()), (2, "B".into())]);
+        assert_eq!(ordered_label_features(discovered(), &[2, 1])?, discovered());
+        assert!(ordered_label_features(discovered(), &[1, 3]).is_err());
+        assert!(ordered_label_features(discovered(), &[1, 1]).is_err());
+        assert!(ordered_label_features(vec![(1, "A".into()), (1, "B".into())], &[1]).is_err());
+
+        let mut params = crate::train_nets::FinalNetParams::new(2, 1, 1, 1);
+        assert!(params.label_feature_schema().is_err());
+        assert!(params.set_label_feature_schema(vec![1]).is_err());
+        assert!(params.set_label_feature_schema(vec![1, 1]).is_err());
+        params.set_label_feature_schema(vec![2, 1])?;
+        let restored: crate::train_nets::FinalNetParams = serde_json5::from_str(&serde_json5::to_string(&params)?)?;
+        assert_eq!(restored.label_feature_schema()?, &[2, 1]);
+        let legacy: crate::train_nets::FinalNetParams = serde_json5::from_str("{in_features: 2, mid_features: 1, out_features: 1, num_layers: 1}")?;
+        assert!(legacy.label_feature_schema().is_err());
+        Ok(())
+    }
     use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::apply_label_nets::{ApplyLabelNet, ApplyLabelNetInput, ApplyLabelNets, logit, sigmoid};
     use crate::stages::apply_motif_nets::ApplyMotifNets;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::stft::SyncStftSelector;
-    use crate::train_nets::{LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
+    use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
     use log::LevelFilter::{Trace, Warn};
     use log::{debug, set_max_level, trace};
     use parking_lot::RwLock;
@@ -1257,10 +1301,7 @@ mod tests {
         }
     }
 
-    fn sorted_values(mut values: Vec<f32>) -> Vec<f32> {
-        values.sort_by(|a, b| a.partial_cmp(b).expect("test values must be comparable"));
-        values
-    }
+
 
 
     async fn run_apply_label_case(
@@ -1286,7 +1327,7 @@ mod tests {
 
         let mut label_ws_entries: HashMap<String, Vec<_>> = HashMap::new();
         let mut single_label_ws_entries = Vec::new();
-        for label in labels {
+        for label in labels.iter().rev() {
             let motif_nets = motif_nets_for_run_config_ids(motifs, &label.motif_run_config_ids);
             let (params, net) = weighted_label_net(motif_nets.len() as u32, slices_len, label.weights.clone(), device);
             debug!("run_apply_label_case: label.label={:?} label.train_run_config_id={}", label.label, label.train_run_config_id);
@@ -1375,10 +1416,13 @@ mod tests {
                 .build();
 
         debug!("run_apply_label_case: labels={labels:?}");
-        let apply_label_nets = Arc::new(ApplyLabelNets::<mock_run_ctx::MockRunCtx, ApplyMotifNets<mock_run_ctx::MockRunCtx>>::new_with_apply_motif_nets(
+        let mut params = FinalNetParams::new(labels.len() as u32, 1, 1, 1);
+        params.set_label_feature_schema(labels.iter().map(|label| label.train_run_config_id).collect())?;
+        let params: FinalNetParams = serde_json5::from_str(&serde_json5::to_string(&params)?)?;
+        let apply_label_nets = Arc::new(ApplyLabelNets::<mock_run_ctx::MockRunCtx, ApplyMotifNets<mock_run_ctx::MockRunCtx>>::from_final_net_params(
             &ws,
             &store,
-            labels.iter().map(|label| label.train_run_config_id).collect(),
+            &params,
             mock_run_ctx::default(0),
             step,
         ).await?);
@@ -1495,7 +1539,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(vec![4, 1], size);
-        assert_values_close(&sorted_values(values), &sorted_values(expected));
+        assert_values_close(&values, &expected);
 
         Ok(())
     }
