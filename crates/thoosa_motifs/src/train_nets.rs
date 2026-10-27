@@ -994,6 +994,9 @@ pub fn lin_label_node(params: &LabelNetParams) -> anyhow::Result<Node> {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct FinalNetParams {
+    // Array position is the downstream feature index, independent of model discovery order.
+    #[serde(default)]
+    label_feature_schema: Option<Vec<RunConfigId>>,
     in_features: u32,
     mid_features: u32,
     out_features: u32,
@@ -1011,11 +1014,32 @@ impl ToJsonFile for FinalNetParams {
 impl FinalNetParams {
     pub fn new(in_features: u32, mid_features: u32, out_features: u32, num_layers: u32) -> Self {
         Self {
+            label_feature_schema: None,
             in_features,
             mid_features,
             out_features,
             num_layers,
         }
+    }
+
+    pub fn set_label_feature_schema(&mut self, ids: Vec<RunConfigId>) -> anyhow::Result<()> {
+        self.validate_label_feature_schema(&ids)?;
+        self.label_feature_schema = Some(ids);
+        Ok(())
+    }
+
+    pub fn label_feature_schema(&self) -> anyhow::Result<&[RunConfigId]> {
+        // Legacy files can still load weights, but guessing their feature order would silently change predictions.
+        let ids = self.label_feature_schema.as_deref().context("final model has no label feature schema; retrain it or supply its known original feature order")?;
+        self.validate_label_feature_schema(ids)?;
+        Ok(ids)
+    }
+
+    fn validate_label_feature_schema(&self, ids: &[RunConfigId]) -> anyhow::Result<()> {
+        anyhow::ensure!(ids.len() == self.in_features as usize, "label feature schema has {} entries, expected {}", ids.len(), self.in_features);
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        anyhow::ensure!(unique.len() == ids.len(), "label feature schema contains duplicate run IDs");
+        Ok(())
     }
 
     pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
