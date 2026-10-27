@@ -1,6 +1,5 @@
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::{RangeOrValue, round_to_digits};
-use log::warn;
 use num_traits::ToPrimitive;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -466,22 +465,20 @@ impl TryFrom<Val> for f64 {
     }
 }
 
+// Reject truncation and saturation before casting. The exclusive upper bound matters:
+// i64::MAX rounds up to 2^63 in f64, whereas i64::MIN is exactly representable.
+fn real_to_i64(value: f64) -> anyhow::Result<i64> {
+    anyhow::ensure!(value.is_finite() && value.fract() == 0.0, "can't convert {value:?} to an integer: expected a finite whole number");
+    anyhow::ensure!(value >= i64::MIN as f64 && value < -(i64::MIN as f64), "can't convert {value:?} to i64: out of range");
+    Ok(value as i64)
+}
+
 impl TryFrom<Val> for i64 {
     type Error = anyhow::Error;
 
     fn try_from(value: Val) -> anyhow::Result<i64> {
-        match value {
-            Val::Real(v) =>  {
-                if  v - v.trunc() > f64::EPSILON {
-                    warn!("Truncating {v:?} to i64");
-                }
-                Ok(v as i64)
-            },
-            Val::Int(v) => Ok(v.try_into()?),
-            Val::UInt(v) => Ok(v.try_into()?),
-            Val::Str(v) => Ok(v.parse()?),
-            _ => Err(anyhow::anyhow!("TryFrom<Val> for i64: can't convert {value:?}")),
-        }
+        // Ownership must not change validation of numeric configuration values.
+        Self::try_from(&value)
     }
 }
 
@@ -490,12 +487,7 @@ impl TryFrom<&Val> for i64 {
 
     fn try_from(value: &Val) -> anyhow::Result<i64> {
         match value {
-            Val::Real(v) =>  {
-                if  *v - v.trunc() > f64::EPSILON {
-                    warn!("Truncating {v:?} to i64");
-                }
-                Ok(*v as i64)
-            },
+            Val::Real(v) => real_to_i64(*v),
             Val::Int(v) => Ok((*v).try_into()?),
             Val::UInt(v) => Ok((*v).try_into()?),
             Val::Str(v) => Ok(v.parse()?),
@@ -508,13 +500,7 @@ impl TryFrom<Val> for u32 {
     type Error = anyhow::Error;
 
     fn try_from(value: Val) -> anyhow::Result<u32> {
-        match value {
-            Val::Real(v) => Ok(v as u32), //v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
-            Val::Int(v) => Ok(v.try_into()?),
-            Val::UInt(v) => Ok(v.try_into()?),
-            Val::Str(v) => Ok(v.parse()?),
-            _ => Err(anyhow::anyhow!("TryFrom<Val> for u32: can't convert {value:?}")),
-        }
+        Self::try_from(&value)
     }
 }
 
@@ -553,7 +539,7 @@ impl TryFrom<&Val> for u32 {
 
     fn try_from(value: &Val) -> anyhow::Result<u32> {
         match value {
-            Val::Real(v) => Ok(*v as u32), //TODO v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Real(v) => Ok(real_to_i64(*v)?.try_into()?),
             Val::Int(v) => (*v)
                 .to_u32()
                 .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
@@ -569,11 +555,11 @@ impl TryFrom<&Val> for i32 {
 
     fn try_from(value: &Val) -> anyhow::Result<i32> {
         match value {
-            Val::Real(v) => Ok(*v as i32), //TODO v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Real(v) => Ok(real_to_i64(*v)?.try_into()?),
             Val::Int(v) => (*v)
                 .to_i32()
                 .ok_or_else(|| anyhow::anyhow!("can't convert {value:?}")),
-            Val::UInt(v) => Ok(*v as i32),
+            Val::UInt(v) => Ok((*v).try_into()?),
             Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
@@ -610,8 +596,8 @@ impl TryFrom<&Val> for usize {
 
     fn try_from(value: &Val) -> anyhow::Result<usize> {
         match value {
-            Val::Int(v) => Ok(*v as usize),
-            Val::UInt(v) => Ok(*v as usize),
+            Val::Int(v) => Ok((*v).try_into()?),
+            Val::UInt(v) => Ok((*v).try_into()?),
             Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
         }
@@ -622,12 +608,7 @@ impl TryFrom<Val> for usize {
     type Error = anyhow::Error;
 
     fn try_from(value: Val) -> anyhow::Result<usize> {
-        match value {
-            Val::Int(v) => Ok(v as usize),
-            Val::UInt(v) => Ok(v as usize),
-            Val::Str(v) => Ok(v.parse()?),
-            _ => Err(anyhow::anyhow!("can't convert {value:?}")),
-        }
+        Self::try_from(&value)
     }
 }
 
@@ -765,6 +746,82 @@ impl<T: FieldName> TryFrom<&NamedVal<T>> for u32 {
 mod tests {
     use crate::hyperparameter::Hyperparameter;
     use crate::val::{GridValueSet, NamedRange, NamedVal, Val};
+
+    fn assert_owned_and_borrowed<T>(value: Val, expected: Option<T>)
+    where
+        T: TryFrom<Val> + for<'a> TryFrom<&'a Val> + PartialEq + std::fmt::Debug,
+    {
+        assert_eq!(T::try_from(&value).ok(), expected, "borrowed {value:?}");
+        assert_eq!(T::try_from(value.clone()).ok(), expected, "owned {value:?}");
+    }
+
+    #[test]
+    fn test_integer_conversion_rejects_fractional_and_nonfinite_reals() {
+        // Tiny fractions and negative fractions must fail just like visibly fractional positives.
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.5, -1.5, f64::EPSILON, -f64::EPSILON, f64::from_bits(1), -f64::from_bits(1)] {
+            assert_owned_and_borrowed::<i64>(Val::Real(value), None);
+            assert_owned_and_borrowed::<u32>(Val::Real(value), None);
+            assert!(i32::try_from(&Val::Real(value)).is_err(), "accepted {value:?}");
+        }
+        for value in [-0.0, 0.0, 42.0] {
+            assert_owned_and_borrowed(Val::Real(value), Some(value as i64));
+            assert_owned_and_borrowed(Val::Real(value), Some(value as u32));
+            assert_eq!(i32::try_from(&Val::Real(value)).unwrap(), value as i32);
+        }
+    }
+
+    #[test]
+    fn test_i64_conversion_preserves_representable_boundaries() {
+        let lower = i64::MIN as f64;
+        let upper = -(i64::MIN as f64);
+        assert_owned_and_borrowed(Val::Real(lower), Some(i64::MIN));
+        assert_owned_and_borrowed(Val::Real(lower.next_up()), Some(i64::MIN + 1024));
+        assert_owned_and_borrowed(Val::Real(upper.next_down()), Some(i64::MAX - 1023));
+        for value in [lower.next_down(), upper, upper.next_up(), f64::MAX, -f64::MAX] {
+            assert_owned_and_borrowed::<i64>(Val::Real(value), None);
+        }
+        assert_owned_and_borrowed(Val::Int(i64::MAX), Some(i64::MAX));
+        assert_owned_and_borrowed(Val::UInt(u32::MAX), Some(i64::from(u32::MAX)));
+        assert_owned_and_borrowed(Val::Str(i64::MAX.to_string()), Some(i64::MAX));
+    }
+
+    #[test]
+    fn test_narrow_integer_conversion_checks_bounds() -> anyhow::Result<()> {
+        for value in [Val::Real(f64::from(u32::MAX)), Val::Int(i64::from(u32::MAX)), Val::UInt(u32::MAX), Val::Str(u32::MAX.to_string())] {
+            assert_owned_and_borrowed(value, Some(u32::MAX));
+        }
+        for value in [Val::Real(-1.0), Val::Int(-1), Val::Real(f64::from(u32::MAX) + 1.0), Val::Int(i64::from(u32::MAX) + 1), Val::Str("4294967296".into())] {
+            assert_owned_and_borrowed::<u32>(value, None);
+        }
+        for expected in [i32::MIN, 0, i32::MAX] {
+            assert_eq!(i32::try_from(&Val::Real(f64::from(expected)))?, expected);
+            assert_eq!(i32::try_from(&Val::Int(i64::from(expected)))?, expected);
+        }
+        assert_eq!(i32::try_from(&Val::UInt(i32::MAX as u32))?, i32::MAX);
+        for value in [Val::UInt(i32::MAX as u32 + 1), Val::UInt(u32::MAX), Val::Int(i64::from(i32::MIN) - 1), Val::Int(i64::from(i32::MAX) + 1), Val::Real(f64::from(i32::MIN) - 1.0), Val::Real(f64::from(i32::MAX) + 1.0)] {
+            assert!(i32::try_from(&value).is_err(), "accepted {value:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_usize_conversion_checks_sign_and_platform_width() {
+        for value in [Val::Int(-1), Val::Int(i64::MIN), Val::Str("-1".into())] {
+            assert_owned_and_borrowed::<usize>(value, None);
+        }
+        assert_owned_and_borrowed(Val::Int(0), Some(0usize));
+        assert_owned_and_borrowed(Val::UInt(42), Some(42usize));
+        assert_owned_and_borrowed(Val::Str(usize::MAX.to_string()), Some(usize::MAX));
+        assert_owned_and_borrowed::<usize>(Val::Str((usize::MAX as u128 + 1).to_string()), None);
+        // The same signed input fits a 64-bit pointer but must be rejected on narrower targets.
+        if usize::BITS >= i64::BITS {
+            assert_owned_and_borrowed(Val::Int(i64::MAX), Some(i64::MAX as usize));
+        } else {
+            assert_owned_and_borrowed(Val::Int(usize::MAX as i64), Some(usize::MAX));
+            assert_owned_and_borrowed::<usize>(Val::Int(usize::MAX as i64 + 1), None);
+            assert_owned_and_borrowed::<usize>(Val::Int(i64::MAX), None);
+        }
+    }
 
     #[test]
     fn test_string_conversion_rejects_non_strings() -> anyhow::Result<()> {
