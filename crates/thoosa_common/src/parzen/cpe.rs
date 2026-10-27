@@ -160,7 +160,7 @@ impl Distribution for CategoricalGaussian {
             .map(|_| {
                 let dist = WeightedIndex::new(self.indexes.iter().map(|i| self.probs_vec[*i]))
                     .expect("WeightedIndex::new");
-                let pos = dist.sample(opt_rnd());
+                let pos = opt_rnd(|rng| dist.sample(rng));
                 self.indexes[pos]
             })
             .map(|v| (v as i32).into())

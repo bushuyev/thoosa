@@ -1003,7 +1003,7 @@ use crate::tch_error::tch_result;
             .await?;
 
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
-        let grid_runs = run_config.grid_to_vals().len();
+        let grid_runs = run_config.grid_to_vals()?.len();
         let train_iters = epochs_count;
         let valid_iters = (train_iters + 9) / 10;
 

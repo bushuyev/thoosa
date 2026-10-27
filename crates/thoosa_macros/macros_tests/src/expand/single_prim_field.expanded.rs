@@ -332,7 +332,7 @@ impl<P: thoosa_shared::hyperparameter::FieldName + 'static> SingleFieldRangeOrVa
         const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>,
         grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>,
         opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>,
-    ) {
+    ) -> thoosa_shared::anyhow::Result<()> {
         thoosa_shared::add_range_or_value::<
             i32,
             P,
@@ -343,6 +343,7 @@ impl<P: thoosa_shared::hyperparameter::FieldName + 'static> SingleFieldRangeOrVa
             grid_params,
             opt_params,
         );
+        Ok(())
     }
     pub fn fill_run_configs<F>(
         &self,
@@ -350,11 +351,11 @@ impl<P: thoosa_shared::hyperparameter::FieldName + 'static> SingleFieldRangeOrVa
         const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>,
         grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>,
         opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>,
-    )
+    ) -> thoosa_shared::anyhow::Result<()>
     where
         F: Fn(SingleFieldFields) -> P,
     {
-        self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
+        self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params)
     }
 }
 impl thoosa_run_config_args::OptRunConfigSource
@@ -378,23 +379,19 @@ for SingleFieldRangeOrValue<SingleFieldFields> {
             &mut const_params,
             &mut grid_params,
             &mut opt_params,
-        );
-        let has_grid_opt_params = grid_params
+        )?;
+        let grid_value_sets = grid_params
             .iter()
-            .any(|grid_param| {
-                grid_param
-                    .grid_value_sets()
-                    .into_iter()
-                    .any(|value_set| !value_set.opt_params().is_empty())
-            });
-        let has_pending_opt_params = grid_params
+            .map(|grid_param| grid_param.grid_value_sets())
+            .collect::<thoosa_shared::anyhow::Result<Vec<_>>>()?;
+        let has_grid_opt_params = grid_value_sets
             .iter()
-            .any(|grid_param| {
-                grid_param
-                    .grid_value_sets()
-                    .into_iter()
-                    .any(|value_set| !value_set.pending_fields().is_empty())
-            });
+            .flatten()
+            .any(|value_set| !value_set.opt_params().is_empty());
+        let has_pending_opt_params = grid_value_sets
+            .iter()
+            .flatten()
+            .any(|value_set| !value_set.pending_fields().is_empty());
         if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
             return Err(
                 ::anyhow::__private::must_use({

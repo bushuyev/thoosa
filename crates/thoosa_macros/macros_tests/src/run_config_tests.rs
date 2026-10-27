@@ -54,6 +54,21 @@ pub(crate)  struct TestRunConfig {
 }
 
 #[test]
+fn test_nested_invalid_range_returns_error() {
+    use thoosa_run_config_args::OptRunConfigSource;
+    use thoosa_shared::RangeOrValue;
+    // Nested enum alternatives expand ranges inside generated traversal, before optimizer execution.
+    let config = TestRunConfigRangeOrValue {
+        id: None,
+        simple_field: RangeOrValue::Range { range: 0..10, step: None },
+        cat_field: CatEnumRangeOrValue::Vec(vec![CatEnumRangeOrValue::One(OneRangeOrValue {
+            inner_field_one: RangeOrValue::Range { range: 0..3, step: Some((0, 0)) },
+        })]),
+    };
+    assert!(config.opt_run_configs().is_err());
+}
+
+#[test]
 fn test_grid_param() -> Result<(), ThoError> {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::val::NamedVal;
@@ -89,7 +104,7 @@ fn test_grid_param() -> Result<(), ThoError> {
     };
 
     let opt_configs = test_config.opt_run_configs()?;
-    let grid_runs = opt_configs.grid_to_vals_and_opt_params();
+    let grid_runs = opt_configs.grid_to_vals_and_opt_params()?;
 
 
     assert_eq!(grid_runs.len(), 20);
@@ -142,7 +157,7 @@ fn test_dynamic_grid_param() -> Result<(), ThoError> {
     };
 
     let opt_configs = test_config.opt_run_configs()?;
-    let grid_runs = opt_configs.grid_to_vals_and_opt_params();
+    let grid_runs = opt_configs.grid_to_vals_and_opt_params()?;
     assert_eq!(grid_runs.len(), 4);
     assert!(grid_runs.iter().all(|(_, opt_params)| opt_params.is_empty()));
 
@@ -203,7 +218,7 @@ fn test_cat_range() -> Result<(), ThoError>{
 
     let opt_configs = test_config.opt_run_configs()?;
     let const_vals = opt_configs.grid_run_config_source().const_params().clone();
-    let grid_runs = opt_configs.grid_to_vals_and_opt_params();
+    let grid_runs = opt_configs.grid_to_vals_and_opt_params()?;
     debug!("grid_runs={grid_runs:?}");
     assert_eq!(grid_runs.len(), 2);
     let (one_grid_vals, one_opt_params) = &grid_runs[0];

@@ -792,7 +792,7 @@ where
     let last_error = Arc::new(RwLock::new(None::<ThoError>));
     let recovery_error = Arc::new(RwLock::new(None::<ThoError>));
 
-    let grid_runs = run_config_source.grid_to_vals_and_opt_params();
+    let grid_runs = run_config_source.grid_to_vals_and_opt_params()?;
 
     debug!("opt_train: running opt train {descr} grid_runs={grid_runs:?}");
 

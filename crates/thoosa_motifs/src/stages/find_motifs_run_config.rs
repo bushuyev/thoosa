@@ -479,7 +479,7 @@ mod tests {
         let grid = rc.grid_run_configs().expect("FindMotifsRunConfigRangeOrValue::grid_run_configs should not fail");
         // debug!("grid: {grid:?}");
 
-        let run_configs:Vec<FindMotifsRunConfig> = grid.to_run_configs();
+        let run_configs:Vec<FindMotifsRunConfig> = grid.to_run_configs().expect("valid test grid");
         assert_eq!(run_configs.len(), 1);
         assert_eq!(run_configs[0].step, 100);
         assert_eq!(run_configs[0].window, 200);
@@ -580,7 +580,7 @@ mod tests {
             ],
         };
 
-        let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().expect("SelectMotifsRunConfigRangeOrValue::grid_run_configs should not fail").to_run_configs();
+        let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().expect("SelectMotifsRunConfigRangeOrValue::grid_run_configs should not fail").to_run_configs().expect("valid test grid");
         assert_eq!(run_configs.len(), 3);
         assert_eq!(run_configs[0].id, Some(7));
         assert_eq!(run_configs[0].motif_criteria.len(), 2);

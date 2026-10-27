@@ -173,7 +173,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         a.range_or_value_add_calls.push(quote! {
                                             if let Some(vs) = self.#field_ident.as_ref() {
                                                 for (i, v) in vs.iter().enumerate() {
-                                                    v.fill_run_configs(|sub| append(#fields_enum_ident::#camel_field_ident(i, sub)), const_params, grid_params, opt_params);
+                                                    v.fill_run_configs(|sub| append(#fields_enum_ident::#camel_field_ident(i, sub)), const_params, grid_params, opt_params)?;
                                                 }
                                             }
                                         });
@@ -251,7 +251,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                     a.range_or_value_add_calls.push(quote! {
                                         if let Some(v) = self.#field_ident.as_ref(){
-                                            v.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params);
+                                            v.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params)?;
                                         }
                                     });
 
@@ -339,7 +339,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                         a.range_or_value_add_calls.push(quote! {
                                             for (i, v) in self.#field_ident.iter().enumerate() {
-                                                v.fill_run_configs(|sub| append(#fields_enum_ident::#camel_field_ident(i, sub)), const_params, grid_params, opt_params);
+                                                v.fill_run_configs(|sub| append(#fields_enum_ident::#camel_field_ident(i, sub)), const_params, grid_params, opt_params)?;
                                             }
                                         });
 
@@ -410,7 +410,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     a.field_names.push(field_ident.to_string());
 
                                     a.range_or_value_add_calls.push(quote! {
-                                        self.#field_ident.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params);
+                                        self.#field_ident.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params)?;
                                     });
 
                                     let field_type_builder = Ident::new(&format!("{}Builder", field_type.to_token_stream().to_string()), camel_field_ident.span());
@@ -644,7 +644,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     const_params,
                                     grid_params,
                                     opt_params,
-                                );
+                                )?;
                                 // If the inner config produced no params, emit the marker so the builder
                                 // can still infer the selected enum variant.
                                 if !added_any.get() {
@@ -700,30 +700,28 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             });
             token_streams.range_or_value_add_calls.push(quote! {
                 #range_or_value_struct_ident::Vec(variants) => {
-                    let variant_value_sets = variants.iter().flat_map(|variant| {
+                    // Nested range validation must reach the outer configuration Result.
+                    let mut variant_value_sets = Vec::new();
+                    for variant in variants {
                         let mut variant_const_params = Vec::new();
                         let mut variant_grid_params = Vec::new();
                         let mut variant_opt_params = Vec::new();
 
-                        variant.fill_run_configs_dyn(append, &mut variant_const_params, &mut variant_grid_params, &mut variant_opt_params);
-                        thoosa_shared::make_combos(variant_grid_params.iter().map(|gp| gp.grid_value_sets().into_iter()))
-                            .into_iter()
-                            .map(|combo| {
-                                let mut vals = variant_const_params.clone();
-                                let mut opt_params = variant_opt_params.clone();
-                                let mut pending_fields = Vec::new();
-
-                                for value_set in combo {
-                                    let (value_set_values, value_set_opt_params, value_set_pending_fields) = value_set.into_parts_with_pending();
-                                    vals.extend(value_set_values);
-                                    opt_params.extend(value_set_opt_params);
-                                    pending_fields.extend(value_set_pending_fields);
-                                }
-
-                                thoosa_shared::val::GridValueSet::with_pending_fields(vals, opt_params, pending_fields)
-                            })
-                            .collect::<Vec<_>>()
-                    }).collect::<Vec<_>>();
+                        variant.fill_run_configs_dyn(append, &mut variant_const_params, &mut variant_grid_params, &mut variant_opt_params)?;
+                        let grids = variant_grid_params.iter().map(|gp| gp.grid_value_sets()).collect::<thoosa_shared::anyhow::Result<Vec<_>>>()?;
+                        for combo in thoosa_shared::make_combos(grids.into_iter().map(Vec::into_iter)) {
+                            let mut vals = variant_const_params.clone();
+                            let mut opt_params = variant_opt_params.clone();
+                            let mut pending_fields = Vec::new();
+                            for value_set in combo {
+                                let (value_set_values, value_set_opt_params, value_set_pending_fields) = value_set.into_parts_with_pending();
+                                vals.extend(value_set_values);
+                                opt_params.extend(value_set_opt_params);
+                                pending_fields.extend(value_set_pending_fields);
+                            }
+                            variant_value_sets.push(thoosa_shared::val::GridValueSet::with_pending_fields(vals, opt_params, pending_fields));
+                        }
+                    }
 
                     grid_params.push(thoosa_shared::val::NamedRange::from_grid_value_sets(variant_value_sets));
                 }
@@ -829,13 +827,10 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
-                    self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
-                    let has_grid_opt_params = grid_params
-                        .iter()
-                        .any(|grid_param| grid_param.grid_value_sets().into_iter().any(|value_set| !value_set.opt_params().is_empty()));
-                    let has_pending_opt_params = grid_params
-                        .iter()
-                        .any(|grid_param| grid_param.grid_value_sets().into_iter().any(|value_set| !value_set.pending_fields().is_empty()));
+                    self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params)?;
+                    let grid_value_sets = grid_params.iter().map(|grid_param| grid_param.grid_value_sets()).collect::<thoosa_shared::anyhow::Result<Vec<_>>>()?;
+                    let has_grid_opt_params = grid_value_sets.iter().flatten().any(|value_set| !value_set.opt_params().is_empty());
+                    let has_pending_opt_params = grid_value_sets.iter().flatten().any(|value_set| !value_set.pending_fields().is_empty());
                     if opt_params.is_empty() && !has_grid_opt_params && !has_pending_opt_params {
                         return Err(thoosa_shared::anyhow::anyhow!("no opt params in run config"));
                     }
@@ -860,7 +855,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
-                    self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
+                    self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params)?;
                     if !opt_params.is_empty() {
                         return Err(thoosa_shared::anyhow::anyhow!("opt params in grid run config"));
                     }
@@ -1005,14 +1000,15 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         impl thoosa_shared::hyperparameter::FieldName for #fields_enum_ident {}
 
         impl<P: thoosa_shared::hyperparameter::FieldName + 'static> #range_or_value_struct_ident<P> {
-            fn fill_run_configs_dyn(&self, append: &dyn Fn(#fields_enum_ident)->P, const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>) {
+            fn fill_run_configs_dyn(&self, append: &dyn Fn(#fields_enum_ident)->P, const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>) -> thoosa_shared::anyhow::Result<()> {
                 #range_or_value_add_calls
+                Ok(())
             }
 
-            pub fn fill_run_configs<F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>)
+            pub fn fill_run_configs<F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<P>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<P>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<P>>) -> thoosa_shared::anyhow::Result<()>
                 where F:Fn(#fields_enum_ident)->P{
 
-                self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params);
+                self.fill_run_configs_dyn(&append, const_params, grid_params, opt_params)
             }
 
         }
