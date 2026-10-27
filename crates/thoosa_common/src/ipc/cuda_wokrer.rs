@@ -52,8 +52,9 @@ use tokio::task::JoinSet;
 use tracing::field::debug;
 
 
-
+//32 low and 32 high preallocated streams from https://github.com/pytorch/pytorch/blob/main/c10/cuda/CUDAStream.h
 const WORKER_EXEC_STREAMS: usize = 32;
+const WORKER_COPY_STREAMS: usize = 32;
 
 // Metadata requests use the same result/reply contract as execution. Absence
 // is a request error, not a successful operation with no response.
@@ -116,7 +117,7 @@ where
     F: Fn(CudaWorkerMsgIn) -> Fut,
     Fut: std::future::Future<Output = Result<OpResult, ThoError>> + Send + 'static,
 {
-    let (frame_tx, mut frames) = mpsc::channel(32);
+    let (frame_tx, mut frame_rx) = mpsc::channel(2048);
     let reader_task = tokio::spawn(async move {
         let mut reader = reader;
         loop {
@@ -132,7 +133,7 @@ where
         }
     });
     let reader_abort = AbortSocketTask(reader_task.abort_handle());
-    let (reply_tx, reply_rx) = mpsc::channel(1024);
+    let (reply_tx, reply_rx) = mpsc::channel(2048);
     // Aborting on every exceptional exit closes the transport even if request
     // contexts are still unwinding. Never detach a reader or response writer.
     let mut writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
@@ -148,7 +149,7 @@ where
             joined = request_tasks.join_next(), if !request_tasks.is_empty() => {
                 joined.expect("nonempty request tasks").context("worker request task failed")??;
             }
-            frame = frames.recv() => {
+            frame = frame_rx.recv() => {
                 let request = frame.context("worker frame reader stopped")??;
                 debug!("cuda_wokrer::serve_worker_requests: request={request:?}");
                 if request.worker_id == worker_id && matches!(&request.operation, Operation::Shutdown { .. }) {
@@ -481,9 +482,6 @@ impl CudaWorker {
     {
         info!("run_worker: sock_path={sock_path:?} tho_device={tho_device:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
-        // Stateful capability is erased per endpoint so one worker can host unrelated state types.
-        // GlobalCtx::init_devices(2)?;//TODO config
-
         // Identity comes from the parent before requests are accepted, never
         // from a tensor's numeric key or a request supplied by the caller.
         let worker_id: CudaWorkerId = serde_json::from_str(&std::env::var(cuda_process::WORKER_ID_ENV).context("missing CUDA worker identity")?)?;
@@ -520,7 +518,7 @@ impl CudaWorker {
         let shared_arena = Arc::new(WorkerSharedArena::new(arena));
         debug!("run_worker: mapped shared arena len={arena_size}");
 
-        let copy_ctx = Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, 32)?));
+        let copy_ctx = Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, WORKER_COPY_STREAMS)?));
         // Readiness follows all fallible device and arena initialization.
         cuda_process::write_frame(
             &mut writer,
