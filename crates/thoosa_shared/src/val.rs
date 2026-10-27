@@ -196,7 +196,7 @@ impl<T: FieldName + 'static> GridValueSet<T> {
         (self.values, self.opt_params, self.pending_fields)
     }
 
-    pub fn resolve_pending_fields(self) -> Vec<Self> {
+    pub fn resolve_pending_fields(self) -> anyhow::Result<Vec<Self>> {
         let mut pending = vec![self];
         let mut resolved = Vec::new();
 
@@ -217,7 +217,7 @@ impl<T: FieldName + 'static> GridValueSet<T> {
                     pending.push(value_set);
                 }
                 ResolvedOptField::Grid(grid_range) => {
-                    for branch in grid_range.grid_value_sets().into_iter().rev() {
+                    for branch in grid_range.grid_value_sets()?.into_iter().rev() {
                         let (branch_values, branch_opt_params, branch_pending_fields) = branch.into_parts_with_pending();
                         let mut branched_value_set = value_set.clone();
                         branched_value_set.values.extend(branch_values);
@@ -229,7 +229,7 @@ impl<T: FieldName + 'static> GridValueSet<T> {
             }
         }
 
-        resolved
+        Ok(resolved)
     }
 }
 
@@ -277,21 +277,14 @@ impl<T: FieldName + 'static> NamedRange<T> {
         }
     }
 
-    pub fn value_sets(&self) -> Vec<Vec<NamedVal<T>>> {
-        self.grid_value_sets()
-            .into_iter()
-            .map(|value_set| value_set.into_parts().0)
-            .collect()
+    pub fn value_sets(&self) -> anyhow::Result<Vec<Vec<NamedVal<T>>>> {
+        Ok(self.grid_value_sets()?.into_iter().map(|value_set| value_set.into_parts().0).collect())
     }
 
-    pub fn grid_value_sets(&self) -> Vec<GridValueSet<T>> {
+    pub fn grid_value_sets(&self) -> anyhow::Result<Vec<GridValueSet<T>>> {
         match self {
-            Self::Range { .. } => self
-                .clone()
-                .into_iter()
-                .map(|v| GridValueSet::new(vec![v], vec![]))
-                .collect(),
-            Self::ValueSets(value_sets) => value_sets.clone(),
+            Self::Range { .. } => self.clone().into_iter().map(|value| value.map(|v| GridValueSet::new(vec![v], vec![]))).collect(),
+            Self::ValueSets(value_sets) => Ok(value_sets.clone()),
         }
     }
 }
@@ -320,115 +313,68 @@ pub struct NamedRangeIter<T: FieldName> {
     forward: bool,
 }
 
+impl<T: FieldName> NamedRangeIter<T> {
+    fn new(name: T, range: Range<Val>, step: (Val, u32)) -> anyhow::Result<Self> {
+        let (current, start_kind) = val_to_f64_and_kind(&range.start);
+        let (end, end_kind) = val_to_f64_and_kind(&range.end);
+        let (step_value, step_kind) = val_to_f64_and_kind(&step.0);
+        // Validate even directly constructed enum variants, before producing any grid values.
+        anyhow::ensure!(start_kind != IterationKind::Unsupported && end_kind != IterationKind::Unsupported && step_kind != IterationKind::Unsupported, "range {name} requires numeric bounds and step");
+        anyhow::ensure!(current.is_finite() && end.is_finite() && step_value.is_finite(), "range {name} requires finite bounds and step");
+        anyhow::ensure!(step_value != 0.0, "range {name} step must not be zero");
+        anyhow::ensure!(current == end || (end > current) == (step_value > 0.0), "range {name} step must move toward the end");
+        let iteration_kind = if start_kind == IterationKind::Real || end_kind == IterationKind::Real || step_kind == IterationKind::Real { IterationKind::Real } else { start_kind };
+        anyhow::ensure!(iteration_kind != IterationKind::Real || step.1 <= 308, "range {name} precision exceeds finite f64 decimal scaling");
+        Ok(Self { name, current, end, step: step_value, digits: step.1, iteration_kind, done: current == end, forward: current < end })
+    }
+}
+
 impl<T: FieldName> Iterator for NamedRangeIter<T> {
-    type Item = NamedVal<T>;
+    type Item = anyhow::Result<NamedVal<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
         }
-
-        // Check if we've passed beyond the half-open boundary
-        //   * If forward and current >= end => done
-        //   * If backward and current <= end => done
-        let out_of_bounds = if self.forward {
-            self.current >= self.end
-        } else {
-            self.current <= self.end
-        };
-
+        let out_of_bounds = if self.forward { self.current >= self.end } else { self.current <= self.end };
         if out_of_bounds {
             self.done = true;
             return None;
         }
 
-        // Produce the correct variant according to iteration_kind
+        let current = if self.iteration_kind == IterationKind::Real { round_to_digits(self.current, self.digits) } else { self.current };
+        let next = self.current + self.step;
+        let next = if self.iteration_kind == IterationKind::Real { round_to_digits(next, self.digits) } else { next };
+        // Recheck every step: rounding or increasing float magnitude can stop progress after valid earlier steps.
+        let advances = if self.forward { next > self.current } else { next < self.current };
+        if !current.is_finite() || !next.is_finite() || !advances {
+            self.done = true;
+            return Some(Err(anyhow::anyhow!("range {} cannot make finite progress from {} with step {} and precision {}", self.name, self.current, self.step, self.digits)));
+        }
         let val = match self.iteration_kind {
-            IterationKind::Int => Val::Int(self.current as i64),
-            IterationKind::UInt => {
-                // guard against negative or large float => might be out-of-range
-                // but for simplicity, just cast:
-                Val::UInt(self.current as u32)
-            }
-            IterationKind::Real => {
-                let rounded = round_to_digits(self.current, self.digits);
-                Val::Real(rounded)
-            }
-            IterationKind::Bool => Val::Bool(self.current >= 0.5),
-            IterationKind::Unsupported => {
-                return None;
-            }
+            IterationKind::Int => Val::Int(current as i64),
+            IterationKind::UInt => Val::UInt(current as u32),
+            IterationKind::Real => Val::Real(current),
+            IterationKind::Bool => Val::Bool(current >= 0.5),
+            IterationKind::Unsupported => unreachable!("range types were validated at construction"),
         };
-
-        let item = NamedVal {
-            path: self.name.clone(),
-            val,
-        };
-
-        let next_val = self.current + self.step;
-
-        // Round if we are working in Real mode, so error doesn’t accumulate
-        let next_val = if matches!(self.iteration_kind, IterationKind::Real) {
-            round_to_digits(next_val, self.digits)
-        } else {
-            next_val
-        };
-        self.current = next_val;
-
-        Some(item)
+        self.current = next;
+        Some(Ok(NamedVal { path: self.name.clone(), val }))
     }
 }
 
 impl<T: FieldName + 'static> IntoIterator for NamedRange<T> {
-    type Item = NamedVal<T>;
-    type IntoIter = std::vec::IntoIter<NamedVal<T>>;
+    type Item = anyhow::Result<NamedVal<T>>;
+    type IntoIter = Box<dyn Iterator<Item = Self::Item> + Send>;
 
     fn into_iter(self) -> Self::IntoIter {
+        // Keep both branches lazy so callers can take a prefix without allocating the entire range.
         match self {
-            NamedRange::Range { name, range, step } => {
-                let start_val = &range.start;
-                let end_val = &range.end;
-                let (step_val, digits) = &step;
-
-                let (start_f, kind_start) = val_to_f64_and_kind(start_val);
-                let (end_f, kind_end) = val_to_f64_and_kind(end_val);
-                let (step_f, _) = val_to_f64_and_kind(step_val);
-
-                let iteration_kind = if kind_start == IterationKind::Unsupported {
-                    IterationKind::Unsupported
-                } else if kind_end == IterationKind::Unsupported {
-                    IterationKind::Unsupported
-                } else {
-                    match kind_start {
-                        IterationKind::Real => IterationKind::Real,
-                        _ => {
-                            if kind_end == IterationKind::Real || matches!(step_val, Val::Real(_)) {
-                                IterationKind::Real
-                            } else {
-                                kind_start
-                            }
-                        }
-                    }
-                };
-
-                NamedRangeIter {
-                    name,
-                    current: start_f,
-                    end: end_f,
-                    step: step_f,
-                    digits: *digits,
-                    done: false,
-                    forward: start_f < end_f,
-                    iteration_kind,
-                }
-                .collect::<Vec<_>>()
-                .into_iter()
-            }
-            NamedRange::ValueSets(value_sets) => value_sets
-                .into_iter()
-                .flat_map(|value_set| value_set.into_parts().0)
-                .collect::<Vec<_>>()
-                .into_iter(),
+            NamedRange::Range { name, range, step } => match NamedRangeIter::new(name, range, step) {
+                Ok(iter) => Box::new(iter),
+                Err(error) => Box::new(std::iter::once(Err(error))),
+            },
+            NamedRange::ValueSets(value_sets) => Box::new(value_sets.into_iter().flat_map(|value_set| value_set.into_parts().0).map(Ok)),
         }
     }
 }
@@ -462,21 +408,12 @@ impl<T: FieldName + 'static, P: FieldName> TryFrom<(T, &RangeOrValue<f64, P>)> f
     }
 }
 
-impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
-    fn from(value: &NamedRange<String>) -> Self {
-        match value {
-            NamedRange::Range { name, range, step } => {
-                let start: i64 = range.start.to_i64(step.1);
-                let end: i64 = range.end.to_i64(step.1);
-                let step: usize = step.0.to_i64(step.1) as usize;
+impl TryFrom<&NamedRange<String>> for Vec<NamedVal<String>> {
+    type Error = anyhow::Error;
 
-                (start..end)
-                    .step_by(step)
-                    .map(|i| (name.clone(), <Val as Into<Val>>::into(i.into())).into())
-                    .collect::<Vec<NamedVal<String>>>()
-            }
-            NamedRange::ValueSets(value_sets) => value_sets.iter().flat_map(|value_set| value_set.values().clone()).collect(),
-        }
+    fn try_from(value: &NamedRange<String>) -> anyhow::Result<Self> {
+        // Use the same validated iteration as grid expansion, including descending and real ranges.
+        value.clone().into_iter().collect()
     }
 }
 
@@ -662,7 +599,8 @@ impl TryFrom<&Val> for String {
     fn try_from(value: &Val) -> anyhow::Result<String> {
         match value {
             Val::Str(v) => Ok(v.to_string()), // Return a string slice with the correct lifetime
-            v => Ok(v.try_into()?),
+            // Non-string values must fail instead of recursively invoking this conversion.
+            v => Err(anyhow::anyhow!("can't convert {v:?} to String")),
         }
     }
 }
@@ -829,10 +767,84 @@ mod tests {
     use crate::val::{GridValueSet, NamedRange, NamedVal, Val};
 
     #[test]
+    fn test_string_conversion_rejects_non_strings() -> anyhow::Result<()> {
+        assert_eq!(String::try_from(&Val::Str("value".into()))?, "value");
+        for value in [Val::Int(1), Val::UInt(1), Val::Real(1.0), Val::Bool(true)] {
+            assert!(String::try_from(&value).is_err(), "unexpected String conversion for {value:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_named_range_rejects_invalid_parameters() {
+        // These previously looped forever, or overflowed decimal scaling before making progress.
+        for (start, end, step, digits) in [
+            (0.0, 1.0, 0.0, 0),
+            (0.0, 1.0, -1.0, 0),
+            (1.0, 0.0, 1.0, 0),
+            (f64::NAN, 1.0, 1.0, 0),
+            (0.0, f64::NAN, 1.0, 0),
+            (0.0, 1.0, f64::NAN, 0),
+            (0.0, f64::INFINITY, 1.0, 0),
+            (f64::NEG_INFINITY, 0.0, 1.0, 0),
+            (0.0, 1.0, f64::INFINITY, 0),
+            (0.0, 1.0, 0.01, 1),
+            (0.0, 1.0, 0.1, u32::MAX),
+            (10.0, 20.0, 1.0, 308),
+        ] {
+            let mut iter = NamedRange::new("invalid".to_string(), Val::Real(start)..Val::Real(end), (Val::Real(step), digits)).into_iter();
+            assert!(iter.next().unwrap().is_err(), "accepted start={start}, end={end}, step={step}, digits={digits}");
+            assert!(iter.next().is_none());
+        }
+        let invalid = NamedRange::new("string".to_string(), Val::Str("0".into())..Val::Int(2), (Val::Int(1), 0));
+        assert!(invalid.grid_value_sets().is_err());
+    }
+
+    #[test]
+    fn test_named_range_detects_later_precision_stall() {
+        let start = 9_007_199_254_740_991.0;
+        let mut iter = NamedRange::new("precision".to_string(), Val::Real(start)..Val::Real(start + 5.0), (Val::Real(1.0), 0)).into_iter();
+        assert!(iter.next().unwrap().is_ok());
+        assert!(iter.next().unwrap().is_err());
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_named_range_descending_empty_and_borrowed_conversion() -> anyhow::Result<()> {
+        let range = NamedRange::new("descending".to_string(), Val::Int(3)..Val::Int(-2), (Val::Int(-2), 0));
+        let expected = vec![NamedVal::new("descending".to_string(), Val::Int(3)), NamedVal::new("descending".to_string(), Val::Int(1)), NamedVal::new("descending".to_string(), Val::Int(-1))];
+        assert_eq!(Vec::<NamedVal<String>>::try_from(&range)?, expected);
+        assert_eq!(range.into_iter().collect::<anyhow::Result<Vec<_>>>()?, expected);
+        let empty = NamedRange::new("empty".to_string(), Val::Int(2)..Val::Int(2), (Val::Int(1), 0));
+        assert!(empty.into_iter().next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_named_range_large_prefix_is_lazy() -> anyhow::Result<()> {
+        // Collecting the entire range here would allocate billions of NamedVals before take() runs.
+        let range = NamedRange::new("large".to_string(), Val::UInt(0)..Val::UInt(u32::MAX), (Val::UInt(1), 0));
+        let prefix = range.into_iter().take(3).collect::<anyhow::Result<Vec<_>>>()?;
+        assert_eq!(prefix, (0..3).map(|i| NamedVal::new("large".to_string(), Val::UInt(i))).collect::<Vec<_>>());
+        let sets = NamedRange::from_value_sets(vec![prefix[..2].to_vec(), prefix[2..].to_vec()]);
+        assert_eq!(sets.into_iter().collect::<anyhow::Result<Vec<_>>>()?, prefix);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_range_error_reaches_grid_expansion() {
+        use crate::val::PendingOptField;
+        use std::sync::Arc;
+        let pending = PendingOptField::from_range_or_value("dynamic".to_string(), Arc::new(|_| crate::RangeOrValue::Range { range: 0u32..3, step: Some((0, 0)) }));
+        let grid = crate::run_configs::GridRunConfigs::new(crate::run_configs::ConstConfigs::new(vec![]), vec![NamedRange::from_grid_value_sets(vec![GridValueSet::with_pending_fields(vec![], vec![], vec![pending])])]);
+        assert!(grid.grid_to_vals().is_err());
+    }
+
+    #[test]
     fn test_named_range_int_iteration() {
         let named_range = NamedRange::new("SomeName".into(), Val::Int(-1)..Val::Int(3), (Val::Int(1), 0));
 
-        let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
+        let result: Vec<NamedVal<String>> = named_range.into_iter().collect::<anyhow::Result<_>>().unwrap();
 
         let expected = vec![
             NamedVal {
@@ -860,7 +872,7 @@ mod tests {
     fn test_named_range_float_iteration() {
         let named_range = NamedRange::new("FloatRange".into(), Val::Real(0.0)..Val::Real(1.0), (Val::Real(0.3), 1));
 
-        let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
+        let result: Vec<NamedVal<String>> = named_range.into_iter().collect::<anyhow::Result<_>>().unwrap();
 
         let expected = vec![
             NamedVal {
@@ -901,7 +913,7 @@ mod tests {
                     }],
                 ),
             ])
-            .grid_value_sets(),
+            .grid_value_sets().unwrap(),
             vec![
                 GridValueSet::new(vec![NamedVal::new("ChoiceA".to_string(), Val::Int(1))], vec![]),
                 GridValueSet::new(

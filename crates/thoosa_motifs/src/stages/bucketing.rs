@@ -1455,7 +1455,7 @@ mod tests {
         };
 
         let grid = rc.grid_run_configs().expect("BucketRunConfigRangeOrValue::grid_run_configs should not fail");
-        let run_configs: Vec<BucketRunConfig> = grid.to_run_configs();
+        let run_configs: Vec<BucketRunConfig> = grid.to_run_configs().expect("valid test grid");
 
         assert_eq!(1, run_configs.len());
         assert_eq!(256, run_configs[0].bucket_count);

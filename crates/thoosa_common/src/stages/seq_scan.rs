@@ -146,7 +146,7 @@ mod tests {
         };
 
         let grid = rc.grid_run_configs().expect("SeqScanRunConfigRangeOrValue::grid_run_configs should not fail");
-        let run_configs: Vec<SeqScanRunConfig> = grid.to_run_configs();
+        let run_configs: Vec<SeqScanRunConfig> = grid.to_run_configs().expect("valid test grid");
 
         debug!("run_configs {run_configs:?}");
 

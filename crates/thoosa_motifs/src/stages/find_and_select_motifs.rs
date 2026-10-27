@@ -349,7 +349,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
             .context("FindAndSelectMotifsStage::run parse select_resources")?;
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
-        let grid_runs = self.run_configs.grid_to_vals_and_opt_params();
+        let grid_runs = self.run_configs.grid_to_vals_and_opt_params()?;
         let opt_config = self.opt_config.as_ref().clone();
         let opt_max_evals = opt_config.opt_max_evals;
         let mut find_and_select_run_find_ctx = ctx.branch(true);

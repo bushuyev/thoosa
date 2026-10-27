@@ -32,7 +32,7 @@ impl<T: FieldName> Hyperparameter<T> {
                 lower,
                 upper,
             } => {
-                let uniform = (opt_rnd().next_u32() as f64) / (u32::MAX as f64);
+                let uniform = (opt_rnd(|rng| rng.next_u32()) as f64) / (u32::MAX as f64);
                 let sample = lower + uniform * (upper - lower);
                 trace!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Real(sample)
@@ -41,7 +41,7 @@ impl<T: FieldName> Hyperparameter<T> {
                 name: _name,
                 values,
             } => {
-                let uniform = (opt_rnd().next_u32() as f32) / (u32::MAX as f32);
+                let uniform = (opt_rnd(|rng| rng.next_u32()) as f32) / (u32::MAX as f32);
                 let sample = uniform * values.len() as f32;
                 trace!("Categorical={sample:?} values={values:?} ");
                 Val::Int(sample as i64)
@@ -51,7 +51,7 @@ impl<T: FieldName> Hyperparameter<T> {
                 lower,
                 upper,
             } => {
-                let uniform = (opt_rnd().next_u32() as f64) / (u32::MAX as f64);
+                let uniform = (opt_rnd(|rng| rng.next_u32()) as f64) / (u32::MAX as f64);
                 let sample = *lower as f64 + uniform * ((upper - lower) as f64);
                 trace!("UniformInt={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Int(sample as i64)

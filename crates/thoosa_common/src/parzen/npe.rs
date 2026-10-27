@@ -322,7 +322,7 @@ impl NumericalGaussian {
                 let lb = self.lb;
                 let ub = self.ub;
                 let quant_step = self.quant_step;
-                let distr = self.normal_dists.choose(&mut opt_rnd()).expect("distr");
+                let distr = opt_rnd(|rng| self.normal_dists.choose(rng)).expect("distr");
                 let mean = distr.0;
                 let std = distr.1;
 
