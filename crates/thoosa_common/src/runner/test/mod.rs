@@ -849,8 +849,9 @@ mod tests {
     impl OutputBuilder for DMulStageOutputBuilder {
         type O = DMulStageOutput;
 
-        async fn add_partial_output(&mut self, o: Self::O) {
+        async fn add_partial_output(&mut self, o: Self::O) -> Result<(), ThoError> {
             self.partial_output.push(o);
+            Ok(())
         }
 
         async fn build(self) -> Result<Self::O, ThoError> {

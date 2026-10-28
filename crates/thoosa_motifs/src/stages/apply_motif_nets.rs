@@ -196,7 +196,7 @@ impl<'a, C> InputContext<'a, DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, Mot
 where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
-    async fn add_partial_output(&mut self, partial: MotifThoTensor<MotifProbability>) {
+    async fn add_partial_output(&mut self, partial: MotifThoTensor<MotifProbability>) -> Result<(), ThoError> {
         let input_len = self.input_len.dim::<1>();
         let split_start = self.done_to.dim::<1>();
         let split_len = self.split_len.dim::<1>();
@@ -206,17 +206,19 @@ where
         debug!("ApplyMotifNetSplitsContext::add_partial_output: input_len={input_len} split_start={split_start} split_len={split_len} motif_width={} slice_step={} partial_len={partial_len} valid_len={valid_len}", self.motif_width, self.slice_step);
 
         if valid_len > 0 {
-            self.output
-                .narrow(0, self.added_partial_output_len, valid_len)
-                //TODO if fails in IPC mode  where partial is a ref. It's assumed that if it's being split it makes sense to keep partial results on CPU to save GPU mem which might not always be the case if partials are small.
-                //TODO add test verifying that partial is removed from Worker when partial ref is dropped
-                .copy_(&partial.copy_to_device(0).await.unwrap().as_ref().narrow(0, 0, valid_len));
+            // Transfer and assemble before committing either cursor, preserving typed CUDA failures.
+            // Same-device copies are rejected by CopyToDevice; CPU partials are already ready to assemble.
+            let partial = if partial.tho_device_idx() == 0 { partial.into_inner() } else { partial.copy_to_device(0).await? };
+            let source = tch_result(partial.as_ref().f_narrow(0, 0, valid_len))?;
+            // if fails in IPC mode  where partial is a ref. It's assumed that if it's being split it makes sense to keep partial results on CPU to save GPU mem which might not always be the case if partials are small.
+            tch_result(tch_result(self.output.f_narrow(0, self.added_partial_output_len, valid_len))?.f_copy_(&source))?;
             self.added_partial_output_len += valid_len;
         }
 
         self.done_to += self.split_len.clone();
 
         debug!("ApplyMotifNetSplitsContext::add_partial_output: done_to={:?} split_len={:?}", self.done_to, self.split_len);
+        Ok(())
     }
 
     fn all_done(&self) -> bool {
@@ -1539,6 +1541,29 @@ pub mod tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+    #[tokio::test]
+    async fn test_failed_motif_assembly_preserves_both_cursors() -> Result<(), ThoError> {
+        use super::{ApplyMotifNetSplitsContext, MotifNetMeta, SyncApplyMotifNet};
+        use thoosa_common::runner::oom_handler::InputContext;
+        use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
+
+        type Stage = DynSyncStageWithStateEnum<SyncApplyMotifNet<MockRunCtx>, MotifNetMeta>;
+        let mut context = ApplyMotifNetSplitsContext::new([1, 4].into(), mono_key!("test", "output").into(), 4, FLOAT_CPU, 1, 1)?;
+        context.split_len = [1, 2].into();
+        // A short partial fails during narrow, before either output or input progress changes.
+        let short: ThoTensor<MotifProbability, SynKey> = ThoTensor::new(mono_key!("test", "short").into(), tch_result(Tensor::f_ones([1], FLOAT_CPU))?)?;
+        assert!(<ApplyMotifNetSplitsContext as InputContext<'_, Stage>>::add_partial_output(&mut context, short.into()).await.is_err());
+        assert_eq!(context.done_to.dim::<1>(), 0);
+        assert_eq!(context.added_partial_output_len, 0);
+
+        let valid: ThoTensor<MotifProbability, SynKey> = ThoTensor::new(mono_key!("test", "valid").into(), tch_result(Tensor::f_ones([2], FLOAT_CPU))?)?;
+        <ApplyMotifNetSplitsContext as InputContext<'_, Stage>>::add_partial_output(&mut context, valid.into()).await?;
+        assert_eq!(context.done_to.dim::<1>(), 2);
+        assert_eq!(context.added_partial_output_len, 2);
+        assert!(tch_result(context.output.f_equal(&tch_result(Tensor::f_from_slice(&[1., 1., 0., 0.]))?))?);
+        Ok(())
     }
 
     #[test]
