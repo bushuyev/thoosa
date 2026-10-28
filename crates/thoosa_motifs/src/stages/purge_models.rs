@@ -271,7 +271,7 @@ where
             futures,
             entries_len,
             FuturesOrdering::Unordered,
-            false, 
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "PurgeModelsStage::run",
         )).await?;
 

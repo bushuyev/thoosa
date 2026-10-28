@@ -14,7 +14,7 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_store::RunConfigRow;
 
 fn workspace(reject_duplicate_forward: bool) -> Arc<RwLock<Box<dyn MotifsWorkspace>>> {
-    let entries = [(1, 4, 10.), (2, 6, 20.)].into_iter().map(|(motif, width, bias)| {
+    let entries = [(1u32, 4, 10.), (2u32, 6, 20.)].into_iter().map(|(motif, width, bias)| {
         let params: Box<dyn Fn() -> MotifNetParams + Send + Sync> = Box::new(move || MotifNetParams::new_lin(width, 1, 1));
         let module: Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Send + Sync> = Box::new(move || {
             // The same counter survives device moves; a duplicate inference fails in the worker too.

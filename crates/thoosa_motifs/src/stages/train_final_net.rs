@@ -560,7 +560,7 @@ where
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
-                    false,
+                    thoosa_shared::CollectionErrorPolicy::Propagate,
                     "LogitsResourcesBatch::build_batch_stream",
                 )).await?
                 .into_iter()

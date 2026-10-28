@@ -188,7 +188,7 @@ mod tests {
         let is_installed_ctx = MockGlobalCtx::is_installed_context();
         is_installed_ctx.expect().return_const(false);
 
-        let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0, "test").into(), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
+        let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0u32, "test").into(), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
         // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
 
         let cuda_tensor_bytes = serde_json::to_vec(&t_ref).unwrap();

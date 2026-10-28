@@ -150,6 +150,7 @@ enum WorkerErrorKind {//TODO remove?
     CudaRecoveryFailed { original: Box<WorkerError>, recovery: Option<Box<WorkerError>> },
     // Preserve both the OOM cause and the prohibition on replaying a partial update.
     TrainingSessionFailed { original: Box<WorkerError>, recovery: Option<Box<WorkerError>> },
+    Data(thoosa_shared::DataErrorKind),
 }
 
 impl WorkerErrorKind {
@@ -164,6 +165,7 @@ impl WorkerErrorKind {
                 original: Box::new(failure.original.clone().into()),
                 recovery: failure.recovery.clone().map(|error| Box::new(error.into())),
             },
+            ThoError::Data { kind, .. } => Self::Data(*kind),
             ThoError::AdjusterFailed => Self::AdjusterFailed,
             ThoError::NotFound(what) => {
                 warn!("WorkerErrorKind:NotFound: what={what:?}");
@@ -208,6 +210,7 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::MissingEndpoint(key) => Self::MissingEndpoint(key).context(message),
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
+            WorkerErrorKind::Data(kind) => Self::Data { kind, msg: message },
             WorkerErrorKind::Other => Self::new(message),
             WorkerErrorKind::TrainingSessionFailed { original, recovery } => Self::TrainingSessionFailed(std::sync::Arc::new(thoosa_shared::TrainingSessionFailure {
                 original: (*original).into(),
@@ -251,6 +254,21 @@ impl From<ThoError> for OpResult {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_worker_data_error_round_trip_preserves_category() -> anyhow::Result<()> {
+        use thoosa_shared::{DataErrorKind, ThoError};
+        for kind in [DataErrorKind::InputTooShort, DataErrorKind::EmptyTrainingClass] {
+            let error = ThoError::Data { kind, msg: "incompatible input".into() }.context("worker operation");
+            let encoded = postcard::to_allocvec(&super::WorkerError::from(error))?;
+            let restored: super::WorkerError = postcard::from_bytes(&encoded)?;
+            assert!(!restored.requires_worker_exit());
+            let restored = ThoError::from(restored);
+            assert_eq!(restored.data_error_kind(), Some(kind));
+            assert!(restored.to_string().contains("worker operation"));
+        }
+        Ok(())
+    }
+
     use super::*;
 
     #[test]

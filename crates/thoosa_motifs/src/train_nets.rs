@@ -2069,7 +2069,7 @@ mod train_tests {
         }
         vs_0.freeze();
 
-        let module_with_store = ThoModuleWithStore::with_factory(mono_key!(0, "test"), net, vs_0, None);
+        let module_with_store = ThoModuleWithStore::with_factory(mono_key!(0u32, "test"), net, vs_0, None);
 
         for slices in all_slices {
             let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);

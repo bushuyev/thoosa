@@ -38,7 +38,7 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
             tch_result(Tensor::f_vstack(subs.as_slice()))?
         };
 
-        let sub = ThoTensor::new(id + &mono_key!(0, format!("{ranges:?}")), stacked)?;
+        let sub = ThoTensor::new(id + &mono_key!(0u32, format!("{ranges:?}")), stacked)?;
 
         trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 

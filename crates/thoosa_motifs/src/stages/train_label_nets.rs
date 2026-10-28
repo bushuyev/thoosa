@@ -346,7 +346,8 @@ where
         let x_0 = input.x_0.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
 
         if x_1.is_empty() || x_0.is_empty() {
-            return Err(ThoError::new(format!("SyncLabelBatch: empty positive or negative resources for {}", input.label)));
+            // An absent class is a data incompatibility, distinct from failure to load its resources.
+            return Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::EmptyTrainingClass, msg: format!("SyncLabelBatch: empty positive or negative resources for {}", input.label) });
         }
 
         let max_input = x_1.iter()
@@ -767,7 +768,7 @@ where
                 futures,
                 labels_train_and_valid_sets_len,
                 FuturesOrdering::Unordered,
-                true,
+                thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort, thoosa_shared::DataErrorKind::EmptyTrainingClass]),
                 "train labels",
             )).await?;
 
@@ -960,7 +961,7 @@ where
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
-                    false,
+                    thoosa_shared::CollectionErrorPolicy::Propagate,
                     "ResourcesBatch::build_batch_stream",
                 )).await?
                     .into_iter()

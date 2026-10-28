@@ -218,7 +218,7 @@ where
             futures,
             find_motifs_run_configs_len,
             FuturesOrdering::Ordered,
-            false,
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::load_stacked_motifs",
         )).await?;
         Ok(run_configs__stacked_motifs)
@@ -272,7 +272,7 @@ where
             futures,
             motif_ids_len,
             FuturesOrdering::Unordered,
-            false,
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
         )).await?
             .into_iter()
@@ -396,7 +396,7 @@ where
             futures,
             run_configs__stacked_motifs_len,
             FuturesOrdering::Unordered,
-            false,
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::extend_motifs_for_run_config",
         )).await?;
 
@@ -597,7 +597,7 @@ where
                 futures,
                 channel_masks_dists_ids_len,
                 FuturesOrdering::Unordered,
-                false,
+                thoosa_shared::CollectionErrorPolicy::Propagate,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
             )).await?;
 
@@ -663,13 +663,13 @@ where
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
                     for (motif_id, slices) in motif_slices {
                         debug!("ExtendMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
-                        track_await!(self_for_fut.store.add_slices_to_motif(extend_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices)).await?
+                        track_await!(self_for_fut.store.add_slices_to_motif(extend_motifs_run_config_id, motif_id.vals[0].to_data_id()?.0, channel as i64, slices)).await?
                     }
                 }
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await!(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, true, "ExtendMotifsStage::run")).await?;
+        let _ = track_await!(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]), "ExtendMotifsStage::run")).await?;
         Ok(Arc::new(ExtendMotifsSavableResult::new()))
     }
 }
