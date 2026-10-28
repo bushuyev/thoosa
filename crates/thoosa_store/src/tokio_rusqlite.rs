@@ -23,7 +23,10 @@
 )]
 
 
-use crossbeam_channel::{Receiver, Sender};
+use tokio::sync::mpsc::{self, Receiver, Sender};
+
+// Bound queued closures; waiting callers keep ownership until asynchronous admission.
+const REQUEST_QUEUE_CAPACITY: usize = 64;
 use std::{
     any::Any,
     fmt::{self, Debug, Display},
@@ -208,14 +211,14 @@ impl Connection {
         F: FnOnce(&mut rusqlite::Connection) -> R + Send + 'static,
         R: Send + 'static,
     {
+        // Cancellation before reserve completes submits nothing. Once sent, the
+        // worker owns the request and executes it even if the reply is abandoned.
+        let permit = self.sender.reserve().await.map_err(|_| DispatchError::ConnectionClosed)?;
         let (sender, receiver) = oneshot::channel::<std::thread::Result<R>>();
-
-        self.sender
-            .send(Message::Execute(Box::new(move |conn| {
+        permit.send(Message::Execute(Box::new(move |conn| {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| function(conn)));
                 let _ = sender.send(outcome);
-            })))
-            .map_err(|_| DispatchError::ConnectionClosed)?;
+            })));
 
         receiver.await.map_err(|_| DispatchError::WorkerGone)
     }
@@ -265,7 +268,7 @@ impl Connection {
     pub(crate) async fn close(self) -> Result<()> {
         let (sender, receiver) = oneshot::channel::<rusqlite::Result<()>>();
 
-        if self.sender.send(Message::Close(sender)).is_err() {
+        if self.sender.send(Message::Close(sender)).await.is_err() {
             return Ok(());
         }
 
@@ -285,7 +288,7 @@ impl Debug for Connection {
 
 impl From<rusqlite::Connection> for Connection {
     fn from(conn: rusqlite::Connection) -> Self {
-        let (sender, receiver) = crossbeam_channel::unbounded::<Message>();
+        let (sender, receiver) = mpsc::channel::<Message>(REQUEST_QUEUE_CAPACITY);
         thread::spawn(move || event_loop(conn, receiver));
         Self { sender }
     }
@@ -295,7 +298,7 @@ async fn start<F>(open: F) -> rusqlite::Result<Connection>
 where
     F: FnOnce() -> rusqlite::Result<rusqlite::Connection> + Send + 'static,
 {
-    let (sender, receiver) = crossbeam_channel::unbounded::<Message>();
+    let (sender, receiver) = mpsc::channel::<Message>(REQUEST_QUEUE_CAPACITY);
     let (result_sender, result_receiver) = oneshot::channel::<rusqlite::Result<()>>();
 
     thread::spawn(move || {
@@ -318,8 +321,8 @@ where
     Ok(Connection { sender })
 }
 
-fn event_loop(mut conn: rusqlite::Connection, receiver: Receiver<Message>) {
-    while let Ok(message) = receiver.recv() {
+fn event_loop(mut conn: rusqlite::Connection, mut receiver: Receiver<Message>) {
+    while let Some(message) = receiver.blocking_recv() {
         match message {
             Message::Execute(f) => {
                 // User panics are caught inside `dispatch` before they can escape.
@@ -336,5 +339,53 @@ fn event_loop(mut conn: rusqlite::Connection, receiver: Receiver<Message>) {
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_queue_backpressure_and_accepted_request_ownership() -> anyhow::Result<()> {
+        for from_existing in [false, true] {
+            let connection = if from_existing { Connection::from(rusqlite::Connection::open_in_memory()?) } else { Connection::open_in_memory().await? };
+            let (started_tx, started_rx) = oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let worker_connection = connection.clone();
+            let first = tokio::spawn(async move {
+                worker_connection.call_unwrap(move |_| {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                }).await;
+            });
+            tokio::time::timeout(Duration::from_secs(5), started_rx).await??;
+            let completed = Arc::new(AtomicUsize::new(0));
+            let mut queued = Vec::new();
+            for _ in 0..REQUEST_QUEUE_CAPACITY {
+                let completed = Arc::clone(&completed);
+                let mut call = Box::pin(connection.call_unwrap(move |_| { completed.fetch_add(1, Ordering::SeqCst); }));
+                assert!(futures::poll!(call.as_mut()).is_pending());
+                queued.push(call);
+            }
+            assert_eq!(connection.sender.capacity(), 0);
+            let retained = Arc::new(());
+            let weak = Arc::downgrade(&retained);
+            let mut waiting = Box::pin(connection.call_unwrap(move |_| { let _retained = retained; panic!("cancelled admission must never execute"); }));
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            drop(waiting);
+            assert!(weak.upgrade().is_none(), "a caller waiting for capacity still owns its request");
+            // Abandon replies after admission: accepted operations must still finish in FIFO order.
+            drop(queued);
+            release_tx.send(())?;
+            tokio::time::timeout(Duration::from_secs(5), first).await??;
+            tokio::time::timeout(Duration::from_secs(5), connection.call_unwrap(|_| ())).await?;
+            assert_eq!(completed.load(Ordering::SeqCst), REQUEST_QUEUE_CAPACITY);
+            connection.clone().close().await?;
+            assert!(matches!(connection.call(|_| Ok::<_, rusqlite::Error>(())).await, Err(Error::ConnectionClosed)));
+        }
+        Ok(())
     }
 }

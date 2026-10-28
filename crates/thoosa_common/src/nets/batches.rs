@@ -1,7 +1,6 @@
 use crate::dims::{Dims, ThoBatch};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use log::debug;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::future::Future;
@@ -60,21 +59,53 @@ impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch
 
 }
 
-pub fn preload_one<S>(source: S) -> BoxStream<'static, S::Item>
+// The stream owns the producer even before its first poll. Dropping a consumer
+// cancels source work; channel EOF is not success until the producer has joined.
+struct Prefetched<T> {
+    rx: tokio::sync::mpsc::Receiver<Result<T, ThoError>>,
+    producer: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl<T> Drop for Prefetched<T> {
+    fn drop(&mut self) {
+        if let Some(producer) = &self.producer { producer.abort(); }
+    }
+}
+
+impl<T> futures::Stream for Prefetched<T> {
+    type Item = Result<T, ThoError>;
+
+    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match this.rx.poll_recv(cx) {
+            std::task::Poll::Ready(None) => {}
+            other => return other,
+        }
+        let Some(producer) = this.producer.as_mut() else { return std::task::Poll::Ready(None); };
+        match std::pin::Pin::new(producer).poll(cx) {
+            std::task::Poll::Pending => std::task::Poll::Pending,
+            std::task::Poll::Ready(result) => {
+                this.producer.take();
+                std::task::Poll::Ready(result.err().map(|error| Err(ThoError::from(error).context("batch producer failed"))))
+            }
+        }
+    }
+}
+
+pub fn preload_one<S, T>(source: S) -> BoxStream<'static, Result<T, ThoError>>
 where
-    S: futures::stream::Stream + Send + 'static,
-    S::Item: Send + 'static,
+    S: futures::Stream<Item = Result<T, ThoError>> + Send + 'static,
+    T: Send + 'static,
 {
-    debug!("preload_one");
-
-    let (tx, rx) = tokio::sync::mpsc::channel(1); // exactly one ready batch ahead
-
-    tokio::spawn(async move {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let producer = tokio::spawn(async move {
         futures_util::pin_mut!(source);
-
-        while let Some(item) = track_await!(source.next()).await {
-            if track_await!(tx.send(item)).await.is_err() {
-                break;
+        loop {
+            // Reserve before polling the source: capacity includes the batch being produced.
+            let Ok(permit) = track_await!(tx.reserve()).await else { break; };
+            match track_await!(source.next()).await {
+                Some(item) => { permit.send(item); }
+                None => break,
             }
         }
     }.instrument(tracing::info_span!(
@@ -84,15 +115,9 @@ where
         line = line!(),
         task = "preload one batch ahead",
     )));
-
-    futures::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|item| (item, rx))
-    })
-        .boxed()
+    Prefetched { rx, producer: Some(producer) }.boxed()
 }
 
-// Prefetch at most one batch ahead. Reserve channel capacity before starting the next batch
-// so we never build more than one unconsumed batch in the background.
 pub fn prefetch_next_batch_stream<T, F, I>(futures: I) -> BoxStream<'static, Result<T, ThoError>>
 where
     T: Send + 'static,
@@ -100,27 +125,8 @@ where
     I: IntoIterator<Item = F> + Send + 'static,
     I::IntoIter: Send + 'static,
 {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-
-    tokio::spawn(async move {
-        for fut in futures {
-            let permit = match track_await!(tx.reserve()).await {
-                Ok(permit) => permit,
-                Err(_) => break,
-            };
-            permit.send(track_await!(fut).await);
-        }
-    }.instrument(tracing::info_span!(
-        "batches::prefetch_next_batch_stream",
-        kind = "spawn",
-        file = file!(),
-        line = line!(),
-        task = "prefetch next batch",
-    )));
-
-    futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|item| (item, rx))
-    }).boxed()
+    // Both entry points share capacity, cancellation, and producer-error handling.
+    preload_one(futures_util::stream::iter(futures).then(|future| future))
 }
 
 #[cfg(test)]
@@ -132,6 +138,70 @@ mod tests {
     use std::time::Duration;
     use thoosa_shared::ThoError;
     use tokio::sync::Semaphore;
+
+    #[tokio::test]
+    async fn test_prefetch_reports_producer_panic_after_buffered_items() -> Result<(), ThoError> {
+        use super::preload_one;
+        for prefetch in [false, true] {
+            let futures = (0..2).map(|index| async move {
+                if index == 1 { panic!("injected batch failure"); }
+                Ok::<_, ThoError>(index)
+            });
+            let mut stream = if prefetch { prefetch_next_batch_stream(futures) } else { preload_one(futures_util::stream::iter(futures).then(|future| future)) };
+            assert_eq!(stream.next().await.expect("buffered item")?, 0);
+            let error = stream.next().await.expect("producer failure must not look like EOF").unwrap_err();
+            let ThoError::Anyhow(source) = error else { panic!("expected JoinError source") };
+            assert!(source.downcast_ref::<tokio::task::JoinError>().is_some_and(|error| error.is_panic()));
+            assert!(stream.next().await.is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dropping_prefetch_cancels_pending_source_work() -> Result<(), ThoError> {
+        use super::preload_one;
+        for prefetch in [false, true] {
+            let retained = Arc::new(());
+            let weak = Arc::downgrade(&retained);
+            let started = Arc::new(tokio::sync::Notify::new());
+            let notify = Arc::clone(&started);
+            let future = async move {
+                let _retained = retained;
+                notify.notify_one();
+                futures_util::future::pending::<()>().await;
+                Ok::<_, ThoError>(())
+            };
+            let stream = if prefetch { prefetch_next_batch_stream([future]) } else { preload_one(futures_util::stream::once(future)) };
+            tokio::time::timeout(Duration::from_secs(5), started.notified()).await?;
+            // No source item will ever arrive to wake a channel-only cancellation path.
+            drop(stream);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while weak.upgrade().is_some() { tokio::task::yield_now().await; }
+            }).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preload_reserves_capacity_before_polling_source() -> Result<(), ThoError> {
+        use super::preload_one;
+        let started = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&started);
+        let source = futures_util::stream::iter(0..3).map(move |item| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(item)
+        });
+        let mut stream = preload_one(source);
+        // Let the producer fill its slot without consuming the first item.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while started.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
+        }).await?;
+        for _ in 0..10 { tokio::task::yield_now().await; }
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        for expected in 0..3 { assert_eq!(stream.next().await.expect("batch")?, expected); }
+        assert!(stream.next().await.is_none());
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_prefetch_next_batch_stream_prefetches_only_one_batch_ahead() -> Result<(), ThoError> {

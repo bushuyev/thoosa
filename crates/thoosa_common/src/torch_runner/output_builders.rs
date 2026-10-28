@@ -94,7 +94,8 @@ where
             BuildAs::Sum => {
                 debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: self.output.size={:?} partial_size={partial_size:?}", self.output.size());
                 if self.output.tho_device_idx() != partial.tho_device_idx() {
-                    let partial = partial.copy_to_device(0).await?;
+                    // Addition requires both operands on the destination device, including GPU outputs.
+                    let partial = partial.copy_to_device(self.output.tho_device_idx()).await?;
                     self.output.to_mut().add_(&partial)?;
                 } else {
                     let mut t = self.output.to_mut();
@@ -132,6 +133,28 @@ mod tests {
     struct TestDims;
     impl Dims for TestDims {
         type Metrics = AnyMetrics;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_sum_copies_to_destination_device() -> Result<(), ThoError> {
+        use crate::tch_error::tch_result;
+        use crate::runner::global_ctx::GlobalCtx;
+        use tch::Device::{Cpu, Cuda};
+        GlobalCtx::init_devices(2)?;
+        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        // Exercise both directions; CPU-to-GPU previously attempted a CPU-to-CPU copy.
+        for (source, destination) in [(Cpu, Cuda(0)), (Cuda(0), Cpu)] {
+            let mut builder: SingleDimTensorOutputBuilder<DebugId, TestDims> = SingleDimTensorOutputBuilder::new(debug_id!("sum"), 0, &[3], (Float, destination), BuildAs::Sum)?;
+            for _ in 0..2 {
+                let tensor = tch_result(Tensor::f_ones([3], (Float, source)))?;
+                builder.add_partial_output(ThoTensor::new(debug_id!("partial"), tensor)?).await?;
+            }
+            let output = builder.build().await?;
+            assert_eq!(output.t_ref().device(), destination);
+            let cpu = tch_result(output.t_ref().f_to_device(Cpu))?;
+            assert!(tch_result(cpu.f_equal(&tch_result(Tensor::f_from_slice(&[2f32, 2., 2.]))?))?);
+        }
+        Ok(())
     }
 
     #[tokio::test]

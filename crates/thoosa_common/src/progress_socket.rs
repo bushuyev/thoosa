@@ -11,7 +11,7 @@ use thoosa_shims::device_stats::get_device_stats;
 use torch_sys::cuda::atc_cuda_device_count;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
@@ -61,6 +61,8 @@ impl CollectEtaProgressSocketServer {
             .create_tokio()?;
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(async move {
+            // Listener ownership also owns client lifetime, including blocked writes.
+            let mut clients = JoinSet::new();
             loop {
                 tokio::select! {
                     changed = shutdown_rx.changed() => {
@@ -68,11 +70,14 @@ impl CollectEtaProgressSocketServer {
                             break;
                         }
                     }
+                    result = clients.join_next(), if !clients.is_empty() => {
+                        if let Some(Err(error)) = result { warn!("collect ETA socket client task failed: {error}"); }
+                    }
                     accepted = listener.accept() => {
                         match accepted {
                             Ok(stream) => {
                                 let rx = snapshot_rx.clone();
-                                tokio::spawn(async move {
+                                clients.spawn(async move {
                                     if let Err(err) = serve_one_client(stream, rx).instrument(tracing::debug_span!("start_with_name/1", file = file!(), line = line!())).await {
                                         debug!("collect ETA socket client disconnected: {err}");
                                     }
@@ -92,6 +97,10 @@ impl CollectEtaProgressSocketServer {
                     }
                 }
             }
+            // Abort interrupts both snapshot waits and socket writes; joining makes
+            // shutdown completion mean every accepted client has released its stream.
+            clients.abort_all();
+            while clients.join_next().await.is_some() {}
         }.instrument(tracing::info_span!(
             "progress_socket::server",
             kind = "spawn",
@@ -138,10 +147,10 @@ impl CollectEtaProgressSocketServer {
 
     pub async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
-        if let Some(task) = self.task.take() {
+        if let Some(task) = self.task.as_mut() {
             let _ = track_await!(task).await;
         }
-        if let Some(stats_task) = self.stats_task.take() {
+        if let Some(stats_task) = self.stats_task.as_mut() {
             let _ = track_await!(stats_task).await;
         }
     }
@@ -247,6 +256,37 @@ mod tests {
     fn next_test_socket_id() -> String {
         let suffix = NEXT_TEST_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
         format!("thoosa-progress-test-{}-{suffix}", process::id())
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_disconnects_idle_clients_with_live_snapshot_sender() -> SocketResult<()> {
+        let (snapshot_tx, snapshot_rx) = watch::channel(CollectEtaProgressState::default());
+        let server = CollectEtaProgressSocketServer::start_with_socket_id(&next_test_socket_id(), snapshot_rx)?;
+        let stream = Stream::connect(server.name()).await?;
+        let mut lines = BufReader::new(stream).lines();
+        assert!(timeout(Duration::from_secs(2), lines.next_line()).await??.is_some());
+        // Keeping snapshot_tx alive reproduces clients stuck in changed().await.
+        timeout(Duration::from_secs(2), server.shutdown()).await?;
+        assert!(timeout(Duration::from_secs(2), lines.next_line()).await??.is_none());
+        assert_eq!(snapshot_tx.receiver_count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_releases_clients_that_do_not_read() -> SocketResult<()> {
+        let mut snapshot = CollectEtaProgressState::default();
+        snapshot.invocations.push(CollectEtaProgressInvocation { descr: "x".repeat(8 * 1024 * 1024), total: 1, completed: 0 });
+        let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
+        let server = CollectEtaProgressSocketServer::start_with_socket_id(&next_test_socket_id(), snapshot_rx)?;
+        let _stream = Stream::connect(server.name()).await?;
+        timeout(Duration::from_secs(5), async {
+            while snapshot_tx.receiver_count() < 2 { tokio::task::yield_now().await; }
+        }).await?;
+        // A snapshot larger than the socket buffer blocks write_all without a reader.
+        tokio::task::yield_now().await;
+        timeout(Duration::from_secs(5), server.shutdown()).await?;
+        assert_eq!(snapshot_tx.receiver_count(), 0);
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
