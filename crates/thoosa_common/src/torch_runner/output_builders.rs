@@ -29,7 +29,6 @@ where
     add: BuildAs,
     dim: i64,
     partial_output_device_idx: Option<usize>,
-    error: Option<ThoError>,
 }
 
 impl<Id, D: Dims> SingleDimTensorOutputBuilder<Id, D>
@@ -52,7 +51,6 @@ where
             add,
             dim,
             partial_output_device_idx: None,
-            error: None,
         })
     }
 
@@ -69,28 +67,20 @@ where
 {
     type O = ThoTensor<D, Id>;
 
-    async fn add_partial_output(&mut self, partial: Self::O) {
-        if self.error.is_some() {
-            return;
-        }
-
+    async fn add_partial_output(&mut self, partial: Self::O) -> Result<(), ThoError> {
+        // Report transfer failures before the caller commits split progress.
         let partial = if let Some(device_idx) = self.partial_output_device_idx {
             if partial.tho_device_idx() == device_idx {
                 partial
             } else {
-                match partial.copy_to_device(device_idx).await {
-                    Ok(partial) => partial,
-                    Err(error) => {
-                        self.error = Some(error);
-                        return;
-                    }
-                }
+                partial.copy_to_device(device_idx).await?
             }
         } else {
             partial
         };
 
         let partial_size = partial.size();
+        let partial_len = *partial_size.get(self.dim as usize).ok_or_else(|| ThoError::new("partial output dimension is out of bounds"))?;
 
 
         match self.add {
@@ -99,31 +89,27 @@ where
 
                 let mut t = self.output.to_mut();
 
-                t.copy_partial_from_(self.dim, self.added_partial_output_len, partial_size[self.dim as usize], &partial)
+                t.copy_partial_from_(self.dim, self.added_partial_output_len, partial_len, &partial)?;
             }
             BuildAs::Sum => {
                 debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Sum: self.output.size={:?} partial_size={partial_size:?}", self.output.size());
                 if self.output.tho_device_idx() != partial.tho_device_idx() {
-                    let mut t = self.output.to_mut();
-
-                    t.add_(&partial.copy_to_device(0).await.unwrap()).unwrap();
+                    let partial = partial.copy_to_device(0).await?;
+                    self.output.to_mut().add_(&partial)?;
                 } else {
                     let mut t = self.output.to_mut();
-                    t.add_(&partial).unwrap();
+                    t.add_(&partial)?;
                 }
     
             }
         }
 
-        self.added_partial_output_len += partial_size[self.dim as usize];
+        self.added_partial_output_len += partial_len;
+        Ok(())
     }
 
     async fn build(self: Self) -> Result<Self::O, ThoError> {
-        if let Some(error) = self.error {
-            Err(error)
-        } else {
-            Ok(self.output)
-        }
+        Ok(self.output)
     }
 }
 
@@ -149,15 +135,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_failed_append_and_sum_report_errors_before_advancing() -> Result<(), ThoError> {
+        use crate::tch_error::tch_result;
+
+        // Both narrow/copy and addition failures must be observed by append, not build.
+        for mode in [BuildAs::Append, BuildAs::Sum] {
+            let mut builder: SingleDimTensorOutputBuilder<DebugId, TestDims> = SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[2, 2], FLOAT_CPU, mode)?;
+            let invalid = ThoTensor::new(debug_id!("invalid"), tch_result(Tensor::f_ones([2, 3], FLOAT_CPU))?)?;
+            assert!(builder.add_partial_output(invalid).await.is_err());
+            assert_eq!(builder.added_partial_output_len, 0);
+
+            let valid = ThoTensor::new(debug_id!("valid"), tch_result(Tensor::f_ones([2, 2], FLOAT_CPU))?)?;
+            builder.add_partial_output(valid).await?;
+            assert_eq!(builder.added_partial_output_len, 2);
+            let output = builder.build().await?;
+            assert!(tch_result(output.t_ref().f_equal(&tch_result(Tensor::f_ones([2, 2], FLOAT_CPU))?))?);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_append_range_preserves_existing_output() -> Result<(), ThoError> {
+        use crate::tch_error::tch_result;
+
+        let mut builder: SingleDimTensorOutputBuilder<DebugId, TestDims> = SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Append)?;
+        builder.add_partial_output(ThoTensor::new(debug_id!("first"), tch_result(Tensor::f_from_slice(&[1., 2.]))?)?).await?;
+        // A failed append must not skip the remaining slot or corrupt accepted data.
+        let invalid = ThoTensor::new(debug_id!("too long"), tch_result(Tensor::f_from_slice(&[8., 9.]))?)?;
+        assert!(builder.add_partial_output(invalid).await.is_err());
+        assert_eq!(builder.added_partial_output_len, 2);
+        builder.add_partial_output(ThoTensor::new(debug_id!("last"), tch_result(Tensor::f_from_slice(&[3.]))?)?).await?;
+        let output = builder.build().await?;
+        assert!(tch_result(output.t_ref().f_equal(&tch_result(Tensor::f_from_slice(&[1., 2., 3.]))?))?);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_append() -> Result<(), ThoError>{
         let mut builder: Box<SingleDimTensorOutputBuilder<DebugId, TestDims>> = Box::new(
             SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[10], FLOAT_CPU, BuildAs::Append)?,
         );
 
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[9]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await?;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await?;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await?;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[9]))?).await?;
 
         let out = builder.build().await?;
 
@@ -179,9 +201,9 @@ mod tests {
             SingleDimTensorOutputBuilder::new(debug_id!("test"), 0, &[3], FLOAT_CPU, BuildAs::Sum)?,
         );
 
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await;
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await;
-        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[0, 1, 2]))?).await?;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[3, 4, 5]))?).await?;
+        builder.add_partial_output(ThoTensor::new(debug_id!("1"), Tensor::from_slice(&[6, 7, 8]))?).await?;
 
         let out = builder.build().await?;
 

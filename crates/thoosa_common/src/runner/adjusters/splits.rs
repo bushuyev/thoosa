@@ -136,12 +136,14 @@ where
     <<R as Stage>::In<'b> as Data>::Metrics: AddAssign<<<R as Stage>::In<'b> as Data>::Metrics>,
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
-    async fn add_partial_output(&mut self, o: R::Out){
-        track_await!(self.output_builder.add_partial_output(o)).await;
+    async fn add_partial_output(&mut self, o: R::Out) -> Result<(), ThoError> {
+        // Commit split progress only after assembly succeeds.
+        track_await!(self.output_builder.add_partial_output(o)).await?;
 
         self.done_to += self.split_len.clone();
 
         debug!("SplitsAdjusterContextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
+        Ok(())
     }
 
     fn all_done(&self) -> bool {
@@ -207,7 +209,8 @@ where
 #[allow(async_fn_in_trait)]
 pub trait OutputBuilder: Debug + Send + Sync {
     type O;
-    async fn add_partial_output(&mut self, o: Self::O);
+    /// Complete assembly before reporting success; callers commit split progress only on Ok.
+    async fn add_partial_output(&mut self, o: Self::O) -> Result<(), ThoError>;
     async fn build(self) -> Result<Self::O, ThoError>;
 }
 
@@ -324,7 +327,7 @@ mod tests {
 
         impl OutputBuilder for TestOutputBuilder {
             type O = MockTestOutput;
-            async fn add_partial_output(&mut self, o: MockTestOutput);
+            async fn add_partial_output(&mut self, o: MockTestOutput) -> Result<(), ThoError>;
             async fn build(self) -> Result<MockTestOutput, ThoError>;
         }
     }
@@ -342,8 +345,16 @@ mod tests {
             }
         }
         fn with_add_partial_output(mut self) -> Self {
-            self.mock.expect_add_partial_output();
+            self.mock.expect_add_partial_output().returning(|_| Ok(()));
 
+            self
+        }
+
+        fn with_partial_output_results(mut self, results: Vec<Result<(), ThoError>>) -> Self {
+            // Script acceptance failures without involving GPU availability.
+            for result in results {
+                self.mock.expect_add_partial_output().times(1).return_once(move |_| result);
+            }
             self
         }
 
@@ -380,6 +391,47 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_assembly_error_stops_input_adjustment_before_build() {
+        use crate::runner::oom_handler::{InputAdjustment, WithInputContext};
+
+        type Context = SplitsAdjusterContextImpl<'static, MockTestStage, MockTestOutputBuilder>;
+        type Adjustment = Box<dyn Adjuster<Context, A = Range<i64>>>;
+        // No build expectation: the finalizer must never run after a rejected partial.
+        let builder = MockTestOutputBuilderBuilder::build().with_partial_output_results(vec![Err(ThoError::oom())]).finish();
+        let contexts = WithInputContext::new(Context::new(100, builder));
+        let result = <Adjustment as InputAdjustment<'static, MockTestStage, _, Range<i64>>>::handle_success(MockTestOutput::new(), contexts).await;
+        match result {
+            Err(error) => assert!(error.is_retryable_oom()),
+            Ok(_) => panic!("failed assembly must not return successful input adjustment"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_assembly_preserves_cuda_error_and_split_progress() -> Result<(), ThoError> {
+        for (message, oom, reset) in [
+            ("CUDA out of memory", true, false),
+            ("CUDA error: an illegal memory access was encountered", false, true),
+        ] {
+            let error = crate::tch_error::tch_error(tch::TchError::Torch(message.into()));
+            let builder = MockTestOutputBuilderBuilder::build().with_partial_output_results(vec![Err(error), Ok(())]).finish();
+            let mut context: SplitsAdjusterContextImpl<MockTestStage, MockTestOutputBuilder> = SplitsAdjusterContextImpl::new(100, builder);
+            context.split_len = 50;
+
+            let error = context.add_partial_output(MockTestOutput::new()).await.unwrap_err();
+            assert_eq!((error.is_retryable_oom(), error.needs_cuda_restart()), (oom, reset));
+            assert_eq!(context.done_to, 0);
+            assert!(!context.all_done());
+            let ThoError::Anyhow(source) = error else { panic!("expected original tensor error") };
+            assert!(source.chain().any(|cause| cause.downcast_ref::<tch::TchError>().is_some()));
+
+            context.add_partial_output(MockTestOutput::new()).await?;
+            assert_eq!(context.done_to, 50);
+            assert!(!context.all_done());
+        }
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     async fn test_degrade_once() -> anyhow::Result<()>{
         let ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
@@ -406,14 +458,14 @@ mod tests {
             Err(error) => anyhow::bail!("adjust after degrade failed: {error:?}"),
         };
 
-        context_impl.add_partial_output(MockTestOutput::new()).await;
+        context_impl.add_partial_output(MockTestOutput::new()).await?;
 
         let adjusted_selector = match splits_adjuster.adjust(adjusted_selector, &mut context_impl).await {
             Ok(selector) => selector,
             Err(error) => anyhow::bail!("adjust after partial output failed: {error:?}"),
         };
 
-        context_impl.add_partial_output(MockTestOutput::new()).await;
+        context_impl.add_partial_output(MockTestOutput::new()).await?;
 
         assert!(context_impl.all_done());
 

@@ -69,7 +69,6 @@ pub enum CrossUnfoldClcOutputMergeMode {
 pub struct CrossUnfoldClcOutputBuilder<R: Debug> {
     partials: Vec<CrossUnfoldClcOutput<R>>,
     merge_mode: CrossUnfoldClcOutputMergeMode,
-    error: Option<ThoError>,
 }
 
 impl<R: Debug> CrossUnfoldClcOutputBuilder<R> {
@@ -77,7 +76,6 @@ impl<R: Debug> CrossUnfoldClcOutputBuilder<R> {
         Self {
             partials: Vec::new(),
             merge_mode,
-            error: None,
         }
     }
 }
@@ -89,12 +87,8 @@ where
     type O = CrossUnfoldClcOutput<R>;
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossUnfoldClcOutputBuilder::add_partial_output"))]
-    async fn add_partial_output(&mut self, o: Self::O) {
+    async fn add_partial_output(&mut self, o: Self::O) -> Result<(), ThoError> {
         debug!("CrossUnfoldClcOutputBuilder::add_partial_output: o={o:?}");
-        if self.error.is_some() {
-            return;
-        }
-
         match self.merge_mode {
             CrossUnfoldClcOutputMergeMode::GpuMerge => {
                 self.partials.push(o);
@@ -104,25 +98,14 @@ where
                 let iter_1 = o.iter_1();
                 let clc_result = o.clc_result();
                 // Copy packed masks to CPU before any merge to avoid GPU OOM.
-                match track_await!(clc_result.to_cpu()).await {
-                    Ok(clc_result) => {
-                        self.partials
-                            .push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));//TODO key
-                    }
-                    Err(err) => {
-                        warn!("CrossUnfoldClcOutputBuilder::add_partial_output: got error={err:?}");
-                        self.error = Some(err);
-                    }
-                }
+                let clc_result = track_await!(clc_result.to_cpu()).await?;
+                self.partials.push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));//TODO key
             }
         }
+        Ok(())
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
-        if let Some(err) = self.error {
-            return Err(err);
-        }
-
         let mut iter = self.partials.into_iter();
         let first = iter
             .next()
@@ -965,9 +948,10 @@ where
     ST::In<'z>: Data<Metrics = i64>,
 
 {
-    async fn add_partial_output(&mut self, out: ST::Out) {
+    async fn add_partial_output(&mut self, out: ST::Out) -> Result<(), ThoError> {
         debug!("CrossSplitterContext::add_partial_output: out={out:?}");
-        track_await!(self.output_builder.add_partial_output(out)).await;
+        // Do not advance either split cursor until assembly has completed.
+        track_await!(self.output_builder.add_partial_output(out)).await?;
         match self.batch_1_mode {
             Batch1SplitMode::Range => {
                 self.done_to += self.split_len;
@@ -979,6 +963,7 @@ where
                 }
             }
         }
+        Ok(())
     }
 
     fn all_done(&self) -> bool {
@@ -1467,6 +1452,54 @@ mod tests {
         }
     }
 
+    mod mock_transfer_output {
+        use super::*;
+
+        mockall::mock! {
+            #[derive(Debug)]
+            pub TransferOutput {}
+            impl CrossClcResultMerge for TransferOutput {
+                fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>>;
+                fn merge_batch_1(self, other: Self) -> Result<Self, ThoError>;
+            }
+        }
+
+        pub struct MockTransferOutputBuilder {
+            mock: MockTransferOutput,
+        }
+
+        impl MockTransferOutputBuilder {
+            pub fn new() -> Self {
+                Self { mock: MockTransferOutput::new() }
+            }
+
+            pub fn with_transfer_error(mut self, error: ThoError) -> Self {
+                self.mock.expect_to_cpu().times(1).return_once(move || async move { Err(error) }.boxed());
+                self
+            }
+
+            pub fn build(self) -> MockTransferOutput {
+                self.mock
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_output_builder_reports_cpu_transfer_failure_immediately() {
+        use mock_transfer_output::MockTransferOutputBuilder;
+
+        // Copy failures must escape append without retaining an incomplete partial.
+        for cause in [ThoError::oom(), ThoError::ContextReset] {
+            let expected = (cause.is_retryable_oom(), cause.needs_cuda_restart());
+            let result = MockTransferOutputBuilder::new().with_transfer_error(cause).build();
+            let output = CrossUnfoldClcOutput::new(result, SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("test", "output").into());
+            let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::CpuMerge);
+            let error = builder.add_partial_output(output).await.unwrap_err();
+            assert_eq!((error.is_retryable_oom(), error.needs_cuda_restart()), expected);
+            assert!(builder.partials.is_empty());
+        }
+    }
+
     fn slice_sum(base: f32, slice_idx: u32) -> f32 {
         2.0 * base + (2.0 * slice_idx as f32 + 1.0) / 10.0
     }
@@ -1575,7 +1608,7 @@ mod tests {
 
 
         let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
-        context.add_partial_output(dummy_output).await;
+        context.add_partial_output(dummy_output).await?;
 
         selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
             Ok(selector) => selector,
@@ -1649,7 +1682,7 @@ mod tests {
         assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
 
         let dummy_output_0 = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
-        context.add_partial_output(dummy_output_0).await;
+        context.add_partial_output(dummy_output_0).await?;
 
         selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
             Ok(selector) => selector,
@@ -1664,7 +1697,7 @@ mod tests {
 
 
         let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
-        context.add_partial_output(dummy_output_1).await;
+        context.add_partial_output(dummy_output_1).await?;
 
         selector = match cross_loader_adjuster.adjust(selector, &mut context).await {
             Ok(selector) => selector,
@@ -2318,8 +2351,8 @@ mod tests {
         );
 
         let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::CpuMerge);
-        builder.add_partial_output(output_0).await;
-        builder.add_partial_output(output_1).await;
+        builder.add_partial_output(output_0).await?;
+        builder.add_partial_output(output_1).await?;
 
         let _ = builder.build().await?;
 
@@ -2343,8 +2376,8 @@ mod tests {
         );
 
         let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::GpuMerge);
-        builder.add_partial_output(output_0).await;
-        builder.add_partial_output(output_1).await;
+        builder.add_partial_output(output_0).await?;
+        builder.add_partial_output(output_1).await?;
 
         let _ = builder.build().await?;
 

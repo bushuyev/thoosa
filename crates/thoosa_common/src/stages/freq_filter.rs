@@ -542,7 +542,6 @@ where
 struct FreqFilterOutputBuilder {
     output_id: SynKey,
     partials: Vec<ThoTensor<ChannelsData, SynKey>>,
-    error: Option<ThoError>,
 }
 
 impl FreqFilterOutputBuilder {
@@ -550,7 +549,6 @@ impl FreqFilterOutputBuilder {
         Self {
             output_id,
             partials: vec![],
-            error: None,
         }
     }
 }
@@ -558,31 +556,19 @@ impl FreqFilterOutputBuilder {
 impl OutputBuilder for FreqFilterOutputBuilder {
     type O = ThoTensor<ChannelsData, SynKey>;
 
-    async fn add_partial_output(&mut self, partial: Self::O) {
-        if self.error.is_some() {
-            return;
-        }
-
+    async fn add_partial_output(&mut self, partial: Self::O) -> Result<(), ThoError> {
+        // CPU transfer is part of accepting a split, so its failure is immediate.
         let partial = if partial.tho_device_idx() == 0 {
             partial
         } else {
-            match track_await!(partial.copy_to_device(0)).await {
-                Ok(partial) => partial,
-                Err(error) => {
-                    self.error = Some(error);
-                    return;
-                }
-            }
+            track_await!(partial.copy_to_device(0)).await?
         };
 
         self.partials.push(partial);
+        Ok(())
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
-        if let Some(error) = self.error {
-            return Err(error);
-        }
-
         let mut partials = self.partials.into_iter();
         let first = partials.next().ok_or_else(|| ThoError::new("FreqFilterOutputBuilder: no partial outputs"))?;
         let mut tensors = vec![first.t()];

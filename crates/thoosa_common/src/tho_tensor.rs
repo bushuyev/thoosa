@@ -651,8 +651,10 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
         Ok(())
     }
 
-    pub fn copy_partial_from_(&mut self, dim: i64, start: i64, length: i64, rhs: &ThoTensor<D, Id>) {
-        self.t.narrow(dim, start, length).copy_(&rhs.t_ref());
+    pub fn copy_partial_from_(&mut self, dim: i64, start: i64, length: i64, rhs: &ThoTensor<D, Id>) -> Result<(), ThoError> {
+        // Preserve typed CUDA failures at the tensor boundary for split assembly.
+        tch_result(tch_result(self.t.f_narrow(dim, start, length))?.f_copy_(&rhs.t_ref()))?;
+        Ok(())
     }
 
 }

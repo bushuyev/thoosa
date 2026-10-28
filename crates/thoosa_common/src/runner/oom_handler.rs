@@ -57,7 +57,7 @@ pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
 {
-    async fn add_partial_output(&mut self, out: R::Out);
+    async fn add_partial_output(&mut self, out: R::Out) -> Result<(), ThoError>;
     fn all_done(&self) -> bool;
     async fn build_final_output(self) -> Result<R::Out, ThoError>;
 }
@@ -75,7 +75,7 @@ pub mod mock_input_context {
 
         }
         impl super::InputContext<'static, MockRunnable> for InputContext{
-            async fn add_partial_output(&mut self, out: TestOutput);
+            async fn add_partial_output(&mut self, out: TestOutput) -> Result<(), ThoError>;
             fn all_done(&self) -> bool;
             // fn input_len(&self) -> &[usize; 1];
             async fn build_final_output(self) -> Result<TestOutput, ThoError>;
@@ -88,7 +88,7 @@ pub mod mock_input_context {
 
     impl InputContextBuilder {
         pub fn with_partial_output(mut self, inp: TestOutput) -> Self {
-            self.mock.expect_add_partial_output().call(inp);
+            self.mock.expect_add_partial_output().returning(|_| Ok(())).call(inp).expect("mock partial output");
 
             self
         }
@@ -236,8 +236,9 @@ where
     <R as Stage>::Out: Send + Sync,
     R: Stage + 'a,
 {
-    async fn add_partial_output(&mut self, o: R::Out) {
+    async fn add_partial_output(&mut self, o: R::Out) -> Result<(), ThoError> {
         self.0.replace(o);
+        Ok(())
     }
 
     fn all_done(&self) -> bool {
@@ -382,7 +383,8 @@ where
     }
 
     async fn handle_success(out: R::Out, mut contexts: C) -> Result<InputAdjustedRun<C, R::Out>, ThoError> {
-        track_await!(contexts.input_context().add_partial_output(out)).await;
+        // Assembly failures retain their recovery category and must stop this split.
+        track_await!(contexts.input_context().add_partial_output(out)).await?;
 
         let all_done = contexts.input_context().all_done();
 
@@ -1870,8 +1872,9 @@ mod tests {
     }
 
     impl InputContext<'static, AsyncTestStage> for AsyncInputCtx {
-        async fn add_partial_output(&mut self, o: Arc<DevicesWrap<TestOutput>>) {
+        async fn add_partial_output(&mut self, o: Arc<DevicesWrap<TestOutput>>) -> Result<(), ThoError> {
             self.outputs.push(o);
+            Ok(())
         }
 
         fn all_done(&self) -> bool {
