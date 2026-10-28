@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{group_slices_try, TensorIdSliceIdx, ThoError};
@@ -94,7 +95,7 @@ pub fn filter_groups_by_slices_count(
 pub struct SqlMotifTrackerStore {
     run_config_id: RunConfigId,
     channel: u32,
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     path: PathBuf,
 }
 
@@ -133,7 +134,7 @@ impl SqlMotifTrackerStore {
         Ok(Box::new(Self {
             run_config_id,
             channel,
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             path: path.as_ref().to_path_buf(),
         }))
     }
@@ -181,29 +182,21 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         min_slices_counts: Option<u32>,
         max_slices_counts: Option<u32>,
     ) -> anyhow::Result<usize> {
-        let groups = {
-            let guard = self.conn.lock();
-            debug!("set_motifs: run_config_id={:?}, channel={:?}", self.run_config_id, self.channel);
-
+        // SQLite locking, row iteration, and grouping must not occupy a Tokio worker.
+        let conn = Arc::clone(&self.conn);
+        let groups_by_slices_count = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let guard = conn.lock();
             let mut stmt = guard.prepare(
                 "SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches",
             )?;
-
             let groups = group_slices_try(stmt.query_map([], |row| {
-                //TODO move group_slices out, not for store
                 Ok((
                     IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
                     IdSlice(row.get(0)?, row.get(3)?, row.get(4)?),
                 ))
             })?)?;
-
-            debug!("set_motifs: run_config_id={:?}, channel={:?} groups={:?}", self.run_config_id, self.channel, groups);
-
-            drop(stmt);
-            groups
-        };
-
-        let groups_by_slices_count = filter_groups_by_slices_count(Some(2), max_slices_counts, groups);
+            Ok(filter_groups_by_slices_count(Some(2), max_slices_counts, groups))
+        }).await??;
         let groups_len = groups_by_slices_count.len();
         store.save_groups_as_motifs_with_slices_matches(
             self.run_config_id,
