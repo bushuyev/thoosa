@@ -33,20 +33,21 @@ impl RunResult {
 
 impl PartialEq for RunResult {
     fn eq(&self, other: &Self) -> bool {
-        self.loss.eq(&other.loss)
+        self.cmp(other) == Ordering::Equal
     }
 }
 impl Eq for RunResult {}
 
 impl PartialOrd for RunResult {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.loss.partial_cmp(&other.loss)
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for RunResult {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(&other).unwrap()
+        // A total order also keeps Eq consistent for signed zero and every NaN bit pattern.
+        self.loss.total_cmp(&other.loss)
     }
 }
 
@@ -56,6 +57,27 @@ mod run_result_tests {
     use std::collections::BinaryHeap;
 
     use crate::parzen::optimizer::RunResult;
+
+    #[test]
+    fn test_run_result_total_order_handles_nonfinite_and_signed_zero() {
+        let values = [f32::NAN, f32::NEG_INFINITY, -0.0, 0.0, f32::INFINITY, f32::from_bits(0xffc00001)];
+        let mut heap = BinaryHeap::new();
+        for a in values {
+            let left = RunResult::new(a, vec![], None);
+            assert_eq!(left, left);
+            for b in values {
+                let right = RunResult::new(b, vec![], None);
+                assert_eq!(left == right, left.cmp(&right).is_eq());
+                assert_eq!(left.partial_cmp(&right), Some(left.cmp(&right)));
+            }
+            heap.push(Reverse(left));
+        }
+        let mut expected = values;
+        expected.sort_by(f32::total_cmp);
+        for value in expected {
+            assert_eq!(heap.pop().unwrap().0.loss.to_bits(), value.to_bits());
+        }
+    }
 
     #[test]
     fn test_run_result_in_binaryheap() {
@@ -167,6 +189,8 @@ impl TreeStructuredParzenEstimator {
     }
 
     pub fn update_observations(&mut self, loss: f32, eval_config: &Vec<Val>, is_satisfied: Option<bool>) ->anyhow::Result<()>{
+        // Infinity is an existing missing-constraint sentinel; NaN is never a usable observation.
+        anyhow::ensure!(!loss.is_nan(), "optimizer observation loss is NaN");
         self.observations.push(Reverse(RunResult::new(
             loss,
             eval_config.clone(),
@@ -319,6 +343,24 @@ mod tree_structured_parzen_estimator_tests {
     use log::debug;
     use tch::{Kind, Tensor};
         use thoosa_shared::hyperparameter::Hyperparameter;
+
+    #[test]
+    fn test_nan_observation_does_not_mutate_optimizer() -> anyhow::Result<()> {
+        let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat { name: "x".into(), lower: 0.0, upper: 1.0 }]);
+        let mut optimizer = TreeStructuredParzenEstimator::new(&cs);
+        let config = vec![Val::Real(0.5)];
+        assert!(optimizer.update_observations(f32::NAN, &config, None).is_err());
+        assert!(optimizer.observations.is_empty());
+        optimizer.update_observations(1.0, &config, None)?;
+        let percentile = optimizer.percentile;
+        assert!(optimizer.update_observations(f32::NAN, &config, None).is_err());
+        assert_eq!(optimizer.observations.len(), 1);
+        assert_eq!(optimizer.percentile, percentile);
+        // Constraint absence still uses an infinite loss and must remain supported.
+        optimizer.update_observations(f32::INFINITY, &config, None)?;
+        assert_eq!(optimizer.observations.len(), 2);
+        Ok(())
+    }
 
     #[test]
     fn test_percentile() {

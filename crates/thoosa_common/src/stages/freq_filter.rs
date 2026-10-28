@@ -301,7 +301,8 @@ where
                     let weights = weights.ready()?;
                     let t = filtered_t.size()[1];
                     if t < *window_len {
-                        return Err(ThoError::new(format!("time length T={} must be >= window_len={}", t, window_len)));
+                        // This input cannot satisfy this filter; callers may explicitly skip this data category.
+                        return Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::InputTooShort, msg: format!("time length T={} must be >= window_len={}", t, window_len) });
                     }
 
                     let input_t = tch_result(filtered_t.as_ref().f_unsqueeze(0))?;
@@ -922,6 +923,16 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::{StageHash};
     use thoosa_common::runner::sync_stage::{SyncStage};
+
+    #[tokio::test]
+    async fn test_short_filter_input_is_explicit_data_error() -> Result<(), ThoError> {
+        let input = ThoTensor::new(mono_key!("short", "input").into(), tch_result(Tensor::f_ones([1, 3], (tch::Kind::Float, tch::Device::Cpu)))?)?;
+        let filters = vec![InputFilter::SavGolFilter(SavGolFilterParams { window_len: 7, poly_order: 2, stride: 1, padding: Padding::Zero(ZeroPadding {}) })];
+        let stage = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(filters, 1, 100.0, 1, 0))?);
+        let error = stage.do_run(&input, &RunCtxImpl::new(0, "short input")).unwrap_err();
+        assert_eq!(error.data_error_kind(), Some(thoosa_shared::DataErrorKind::InputTooShort));
+        Ok(())
+    }
 
     fn state_test_filters() -> Vec<InputFilter> {
         vec![

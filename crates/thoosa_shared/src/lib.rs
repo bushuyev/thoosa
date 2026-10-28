@@ -72,12 +72,11 @@ pub mod collect_futures_with_progress;
 pub mod futures_limits;
 pub mod ipc_types;
 
-pub use collect_futures_with_progress::{collect_futures_with_progress, collect_futures_best_effort_with_progress};
+pub use collect_futures_with_progress::{collect_futures_with_progress, collect_futures_best_effort_with_progress, CollectionErrorPolicy};
 
 struct GroupSlicesBuilder<T> {
-    pairs_groups: HashMap<T, u16>,
-    last_group: u16,
-    separated_groups: Vec<(u16, u16)>,
+    pairs_groups: HashMap<T, usize>,
+    parents: Vec<usize>,
 }
 
 impl<T> GroupSlicesBuilder<T>
@@ -85,80 +84,48 @@ where
     T: Hash + Eq + Debug,
 {
     fn new() -> Self {
-        Self {
-            pairs_groups: HashMap::new(),
-            last_group: 0u16,
-            separated_groups: vec![],
+        Self { pairs_groups: HashMap::new(), parents: Vec::new() }
+    }
+
+    fn root(&mut self, mut group: usize) -> usize {
+        // Path halving avoids recursive merging and keeps repeated bridges inexpensive.
+        while self.parents[group] != group {
+            self.parents[group] = self.parents[self.parents[group]];
+            group = self.parents[group];
+        }
+        group
+    }
+
+    fn push(&mut self, _ln: usize, pair: (T, T)) {
+        match (self.pairs_groups.get(&pair.0).copied(), self.pairs_groups.get(&pair.1).copied()) {
+            (Some(a), Some(b)) => {
+                let a = self.root(a);
+                let b = self.root(b);
+                self.parents[a.max(b)] = a.min(b);
+            }
+            (Some(group), None) => { self.pairs_groups.insert(pair.1, group); }
+            (None, Some(group)) => { self.pairs_groups.insert(pair.0, group); }
+            (None, None) => {
+                // IDs index allocated storage, so they cannot wrap independently of capacity.
+                let group = self.parents.len();
+                self.parents.push(group);
+                self.pairs_groups.insert(pair.0, group);
+                self.pairs_groups.insert(pair.1, group);
+            }
         }
     }
 
-    fn push(&mut self, ln: usize, pair: (T, T)) {
-        let g_0 = self.pairs_groups.get(&pair.0);
-        let g_1 = self.pairs_groups.get(&pair.1);
-        if let Some(g_0_val) = g_0 {
-            if g_1.is_some() {
-                trace!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
-                if g_0.ne(&g_1) {
-                    self.separated_groups.push((*g_0_val, *g_1.unwrap()));
-                }
-            } else {
-                self.pairs_groups.insert(pair.1, *g_0_val);
-            }
-        } else {
-            if let Some(g_1_val) = g_1 {
-                self.pairs_groups.insert(pair.0, *g_1_val);
-            } else {
-                self.pairs_groups.insert(pair.0, self.last_group);
-                self.pairs_groups.insert(pair.1, self.last_group);
-
-                self.last_group += 1;
-            }
+    fn finish(mut self) -> HashMap<usize, HashSet<T>> {
+        let mut groups: HashMap<usize, HashSet<T>> = HashMap::new();
+        for (value, group) in std::mem::take(&mut self.pairs_groups) {
+            groups.entry(self.root(group)).or_default().insert(value);
         }
-    }
-
-    fn finish(self) -> HashMap<u16, HashSet<T>> {
-        let GroupSlicesBuilder {
-            pairs_groups,
-            separated_groups,
-            last_group: _,
-        } = self;
-
-        trace!("separated_groups={:?}", separated_groups);
-        let separated_groups_map = if !separated_groups.is_empty() {
-            let map = group_slices(separated_groups.into_iter()) //group separated groups same as slices
-                .values()
-                .fold(HashMap::new(), |mut h, v| {
-                    let mut iter = v.iter();
-                    if let Some(head) = iter.next().copied() {
-                        for i in iter {
-                            h.insert(*i, head);
-                        }
-                    }
-                    h
-                });
-            trace!("separated_groups group_motifs={:?}", map);
-            Some(map)
-        } else {
-            None
-        };
-
-        let mut groups: HashMap<u16, HashSet<T>> = HashMap::new();
-        for (val, group) in pairs_groups {
-            let group = separated_groups_map
-                .as_ref()
-                .and_then(|m| m.get(&group))
-                .unwrap_or(&group); //replace separated group pairs with one in pair
-            let gr_vec = groups.entry(*group).or_insert_with(|| HashSet::new());
-            gr_vec.insert(val);
-        }
-
-        trace!("group_motifs groups={:?}", groups);
         groups
     }
 }
 
 //group of similar slices - motif
-pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>> //TODO replace with group_slices_try
+pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<usize, HashSet<T>> //TODO replace with group_slices_try
 where
     T: Hash + Eq + Debug,
 {
@@ -172,7 +139,7 @@ where
 
 pub fn group_slices_try<T, E>(
     pairs: impl Iterator<Item = Result<(T, T), E>>,
-) -> Result<HashMap<u16, HashSet<T>>, E>
+) -> Result<HashMap<usize, HashSet<T>>, E>
 where
     T: Hash + Eq + Debug,
 {
@@ -522,9 +489,17 @@ pub enum SyncStageRunnerError {
     JobError { job_id: u64, inner: Box<ThoError> },
 }
 
+/// Known input incompatibilities that a caller may explicitly allow a collection to skip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DataErrorKind {
+    InputTooShort,
+    EmptyTrainingClass,
+}
+
 // Only failures that affect application control flow have dedicated variants.
 #[derive(Debug, Clone)]
 pub enum ThoError {
+    Data { kind: DataErrorKind, msg: String },
     Cuda { action: CudaAction, msg: String },
     CudaRecoveryFailed(Arc<CudaRecoveryFailure>),//TODO rename to GpuRestartFailed
     TrainingSessionFailed(Arc<TrainingSessionFailure>),
@@ -600,6 +575,7 @@ impl Display for ThoError {
                 if let Some(error) = &failure.recovery { write!(f, "; cleanup error: {error:#}")?; }
                 Ok(())
             }
+            Self::Data { kind, msg } => write!(f, "{kind:?}: {msg}"),
             Self::AdjusterFailed => f.write_str("adjuster failed"),
             Self::Anyhow(error) => Display::fmt(error.as_ref(), f),
             Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
@@ -712,6 +688,15 @@ impl ThoError {
             Self::TrainingSessionFailed(failure) => failure.original.is_cuda_recovery_failed() || failure.recovery.as_ref().is_some_and(Self::is_cuda_recovery_failed),
             Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.is_cuda_recovery_failed(),
             _ => false,
+        }
+    }
+
+    pub fn data_error_kind(&self) -> Option<DataErrorKind> {
+        // Ordinary job/context wrappers retain the classification; failed sessions/recovery never become skippable.
+        match self.what() {
+            Self::Data { kind, .. } => Some(*kind),
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.data_error_kind(),
+            _ => None,
         }
     }
 
@@ -2424,7 +2409,7 @@ mod shared_tests {
                     }),
                     4,
                     FuturesOrdering::Unordered,
-                    false,
+                    thoosa_shared::CollectionErrorPolicy::Propagate,
                     "test_collect_futures_with_progress_runs_during_unrelated_cuda_recovery",
                 )
                     .await
@@ -2459,6 +2444,24 @@ mod shared_tests {
             super::random_saw(2200),
         );
         assert_eq!(2200, v.len());
+    }
+
+    #[test]
+    fn test_group_slices_exceeds_u16_and_merges_bridges() {
+        let count = usize::from(u16::MAX) + 2;
+        let pairs = || (0..count).map(|i| (i * 2, i * 2 + 1));
+        let groups = group_slices(pairs());
+        assert_eq!(groups.len(), count);
+        assert!(groups.values().all(|group| group.len() == 2));
+        // Bridge distant roots after all groups exist, including cycles and repeated pairs.
+        let bridges = [(0, (count - 1) * 2), (2, (count - 1) * 2 + 1), (0, 2), (0, 0)];
+        let merged = group_slices(pairs().chain(bridges));
+        assert_eq!(merged.len(), count - 2);
+        assert_eq!(merged[&0], HashSet::from([0, 1, 2, 3, (count - 1) * 2, (count - 1) * 2 + 1]));
+        assert_eq!(merged.values().map(HashSet::len).sum::<usize>(), count * 2);
+        let fallible = super::group_slices_try(pairs().map(Ok::<_, &'static str>)).unwrap();
+        assert_eq!(fallible, groups);
+        assert_eq!(super::group_slices_try([Ok((0, 1)), Err("read failed")].into_iter()).unwrap_err(), "read failed");
     }
 
     #[test]

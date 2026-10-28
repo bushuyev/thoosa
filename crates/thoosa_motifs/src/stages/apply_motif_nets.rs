@@ -458,7 +458,7 @@ where
             futures,
             apply_motif_nets_len,
             FuturesOrdering::Unordered,
-            false,
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "ApplyMotifNets::run",
         )).await?;
 
@@ -966,7 +966,7 @@ where
     slice_step:u32,
     pd:PhantomData<C>,
     channel:u32,
-    motif_id:MonoKey,
+    motif_id:u32,
     #[cfg(test)]
     fail_if_size_bigger_than:Option<usize>,
 }
@@ -1037,7 +1037,7 @@ where
     fn motif_id(&self) -> u32 {
         match self {
             DynSyncStageWithStateEnum::Local(stage) => {
-                stage.motif_id.to_data_id().0
+                stage.motif_id
             }
             DynSyncStageWithStateEnum::Proxy { init, .. } => {
                 init.motif_id()
@@ -1109,7 +1109,7 @@ where
             slice_step,
             pd: PhantomData,
             channel,
-            motif_id: mono_key!(motif_id, "motif_id"),
+            motif_id,
             #[cfg(test)]
             fail_if_size_bigger_than,
         })

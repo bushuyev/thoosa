@@ -354,7 +354,7 @@ where
             futures,
             self.apply_nets.len(),
             FuturesOrdering::Ordered,
-            false,
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "ApplyLabelNets::run",
         )
         .await?

@@ -773,7 +773,7 @@ where
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "train motif",
         )).await?;
 
@@ -1374,7 +1374,7 @@ where
 
         let random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = track_await!(Arc::clone(&self.random_slices_loader)
             .run(
-                Arc::new(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit)),
+                Arc::new(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id()?, self.random_slices_limit)),
                 ctx.branch(false),
             )).await?;
 
@@ -1532,7 +1532,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_train_motif_nets_ignores_parallel_load_failure() -> Result<(), ThoError> {//collect_futures_with_progress is invoked with ignore_failures=true
+    async fn test_train_motif_nets_propagates_parallel_load_failure() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let ws = Arc::new(RwLock::new(crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, 900).build()));
@@ -1547,7 +1547,8 @@ mod tests {
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
         let stage = Arc::new(TrainMotifNets::new(loader, &ws, &store, cosine_net_run_configs(), 10, None).await?);
         let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![2] }, Arc::new(OptConfig::new(3, 2)), None);
-        assert!(stage.run(input, mock_run_ctx::default(1)).await.is_ok());
+        let error = stage.run(input, mock_run_ctx::default(1)).await.unwrap_err();
+        assert!(matches!(error.what(), ThoError::ContextReset));
         Ok(())
     }
 

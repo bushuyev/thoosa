@@ -156,7 +156,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         self.writer.shutdown()?;
         let mut slice_id = 0;
 
-        let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(ChunkedSlicesReader::new(&self.path)?.flat_map(|slices| {
+        let groups: HashMap<usize, HashSet<IdSlice>> = group_slices(ChunkedSlicesReader::new(&self.path)?.flat_map(|slices| {
             slices.unwrap().into_iter().map(move |slices: SlicesMatch| {
                 slice_id += 1;
                 (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))

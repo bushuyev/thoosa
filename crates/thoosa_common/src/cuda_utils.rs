@@ -422,7 +422,7 @@ async fn copy_d2h_transfers(gate: &Arc<thoosa_shared::CudaActivityGate>, transfe
                         crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
                 }), count, FuturesOrdering::Unordered,
-                                      false, COPY_D2H).await.map(|_| ())
+                                      thoosa_shared::CollectionErrorPolicy::Propagate, COPY_D2H).await.map(|_| ())
     }).await
 }
 
@@ -513,7 +513,7 @@ async fn copy_transfer(
                         crate::copy_ctx::finish_cuda_run(joined_copy_result(result), pool.check())
                     }
                 }), count, FuturesOrdering::Unordered,
-                                      false, label).await.map(|_| ())
+                                      thoosa_shared::CollectionErrorPolicy::Propagate, label).await.map(|_| ())
     }).await
 }
 
@@ -1289,7 +1289,7 @@ mod transfer_lifetime_tests {
             });
         }
         drop(transfer);
-        let parent = tokio::spawn(collect_futures_with_progress(chunks.into_iter(), 2, FuturesOrdering::Unordered, false, "test cancelled copy chunks"));
+        let parent = tokio::spawn(collect_futures_with_progress(chunks.into_iter(), 2, FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "test cancelled copy chunks"));
         for _ in 0..2 { tokio::time::timeout(Duration::from_secs(5), starts.recv()).await?.unwrap(); }
         parent.abort();
         assert!(parent.await.unwrap_err().is_cancelled());

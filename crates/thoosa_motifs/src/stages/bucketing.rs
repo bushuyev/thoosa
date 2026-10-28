@@ -1006,7 +1006,7 @@ where
             futures,
             resources_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "BucketingStage/resources",
         )).await?
         .into_iter()
@@ -1015,7 +1015,7 @@ where
 
         let run_config_id = self.run_config.run_config_id()?;
         let mut motif_ids = Vec::new();
-        let mut groups_by_channel = (0..self.channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
+        let mut groups_by_channel = (0..self.channels).map(|_| HashMap::<usize, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
 
         {
             let mut temp_stores_by_bucket = self.temp_stores_by_bucket.lock();
@@ -1027,7 +1027,7 @@ where
                     if channel >= groups_by_channel.len() {
                         return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={}", self.channels)));
                     }
-                    groups_by_channel[channel].entry(group).or_default().extend(slices);
+                    groups_by_channel[channel].entry(usize::from(group)).or_default().extend(slices);
                 }
                 temp_store.remove()?;
                 collect_eta_record_completion(eta_guard.id());
@@ -1049,7 +1049,7 @@ where
     }
 }
 
-pub fn filter_mel_patch_groups(groups: HashMap<u16, HashSet<IdSlice>>, min_slices: usize, max_slices: usize) -> HashMap<u16, HashSet<IdSlice>> {
+pub fn filter_mel_patch_groups(groups: HashMap<usize, HashSet<IdSlice>>, min_slices: usize, max_slices: usize) -> HashMap<usize, HashSet<IdSlice>> {
     groups
         .into_iter()
         .filter_map(|(group, slices)| {
@@ -1419,10 +1419,10 @@ mod tests {
     #[test]
     fn filter_mel_patch_groups_keeps_only_groups_in_configured_slice_range() {
         let groups = [
-            (1u16, 9usize),
-            (2u16, 10usize),
-            (3u16, 100usize),
-            (4u16, 101usize),
+            (1usize, 9usize),
+            (2usize, 10usize),
+            (3usize, 100usize),
+            (4usize, 101usize),
         ]
             .into_iter()
             .map(|(group, len)| {
@@ -1434,7 +1434,7 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         let filtered = filter_mel_patch_groups(groups, 10, 100);
-        assert_eq!(filtered.keys().copied().collect::<HashSet<_>>(), [2u16, 3u16].into_iter().collect::<HashSet<_>>());
+        assert_eq!(filtered.keys().copied().collect::<HashSet<_>>(), [2usize, 3usize].into_iter().collect::<HashSet<_>>());
     }
 
     #[test]

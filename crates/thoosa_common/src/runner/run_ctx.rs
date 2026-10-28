@@ -76,7 +76,7 @@ impl WithId for RunCtxImpl {
 impl RunCtxImpl {
     pub fn new(tho_device_idx: usize, id: &str,) -> Self {
 
-        Self::with_cache_area(tho_device_idx, mono_key!(0, id).into())
+        Self::with_cache_area(tho_device_idx, mono_key!(0u32, id).into())
     }
 
 

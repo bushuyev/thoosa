@@ -202,7 +202,7 @@ impl LoadAndClcStage {
             id,
             loader: Arc::new(TestTensorLoader::new(dim, kind, 1).await),
             clc_task: Arc::new(SyncClcStage::new(
-                SynKey::new([mono_key!(0, "mul_task_0")]),
+                SynKey::new([mono_key!(0u32, "mul_task_0")]),
                 k,
                 fail_until,
                 dim_1,
@@ -720,7 +720,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
             .await?;
     }
 
-    for i in 0..10 {
+    for i in 0u32..10 {
         let loaded_cache = <TestTensorLoader as Cached>::cache().await?;
         let cached_loaded = loaded_cache
             // .get(&SimpleId::from(format!("loaded_resource_{i}")));
@@ -766,7 +766,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
 
     _global_ctx.dump_all_to_cpu(&required_ids, 1, "test").await?;
 
-    for i in 0..10 {
+    for i in 0u32..10 {
         let loaded_cache = <TestTensorLoader as Cached>::cache().await?;
         let cached_loaded = loaded_cache
             .get(

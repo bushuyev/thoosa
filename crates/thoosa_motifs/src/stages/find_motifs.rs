@@ -534,7 +534,7 @@ where
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "FindMotifsStage::new",
         )).await?
         .into_iter()
@@ -603,7 +603,7 @@ where
             futures,
             run_config_stages_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "FindMotifsStage::run",
         )).await?;
 

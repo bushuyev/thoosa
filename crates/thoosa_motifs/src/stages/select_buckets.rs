@@ -260,7 +260,7 @@ where
             futures,
             motif_ids_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "SelectBucketsStage::preload_bucket_mean_energies",
         )).await?;
         if energies.len() != motif_ids_len {
@@ -541,7 +541,7 @@ where
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "SelectBucketsStage::run",
         )).await?;
         if run_results.len() != run_configs_len {

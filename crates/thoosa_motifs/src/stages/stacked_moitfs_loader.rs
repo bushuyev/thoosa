@@ -241,7 +241,7 @@ where
             futures,
             motif_ids_len,
             FuturesOrdering::Ordered,
-            false,
+            thoosa_shared::CollectionErrorPolicy::Propagate,
             "StackedMotifsLoader::run",
         )).await?;
 
