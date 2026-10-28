@@ -70,8 +70,8 @@ pub(crate) mod mock_motif_tracker_store {
 pub fn filter_groups_by_slices_count(
     min_slices_counts: Option<u32>,
     max_slices_counts: Option<u32>,
-    mut groups: HashMap<u16, HashSet<IdSlice>>,
-) -> HashMap<u16, HashSet<IdSlice>> {
+    mut groups: HashMap<usize, HashSet<IdSlice>>,
+) -> HashMap<usize, HashSet<IdSlice>> {
     if min_slices_counts.is_none() && max_slices_counts.is_none() {
         return groups;
     }

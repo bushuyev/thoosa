@@ -421,7 +421,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
             futures,
             grid_runs_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "FindAndSelectMotifsStage::run",
         )).await?;
 

@@ -8,22 +8,38 @@ use log::warn;
 use tokio::sync::watch;
 use tokio::task::{Id, JoinSet};
 use tracing::{debug, error};
-use crate::{CudaActivityScope, FuturesOrdering, ThoError};
+use crate::{CudaActivityScope, DataErrorKind, FuturesOrdering, ThoError};
 use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard};
 
-/// Required work never succeeds with missing items. Drain every submitted future
+/// Required work propagates every error unless the caller names a known data incompatibility.
+#[derive(Clone, Copy, Debug)]
+pub enum CollectionErrorPolicy {
+    Propagate,
+    SkipData(&'static [DataErrorKind]),
+}
+
+impl CollectionErrorPolicy {
+    fn skips(self, error: &ThoError) -> bool {
+        match self {
+            Self::Propagate => false,
+            Self::SkipData(kinds) => error.data_error_kind().is_some_and(|kind| kinds.contains(&kind)),
+        }
+    }
+}
+
+/// Required work only omits explicitly permitted data incompatibilities. Drain every submitted future
 /// before reporting failure: dropping a JoinSet early can abandon CUDA completion
 /// and request lifetimes owned by its tasks.
 pub async fn collect_futures_with_progress<T, F>(
     futures: impl Iterator<Item = F>, len: usize, buffering: FuturesOrdering,
-    ignore_failures: bool, descr: &str,
+    error_policy: CollectionErrorPolicy, descr: &str,
 ) -> Result<Vec<T>, ThoError>
 where
     T: Debug + Send + 'static,
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
 {
     let registration = crate::futures_limits::futures_limits().register(descr);
-    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, ignore_failures, descr).await
+    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, error_policy, descr).await
 }
 
 /// Explicit opt-in for independent, best-effort operations such as plot export.
@@ -49,7 +65,7 @@ where
 async fn collect_futures_with_progress_with_limit<T, F>(
     futures: impl Iterator<Item = F>, len: usize, buffer_limit: Arc<watch::Receiver<usize>>,
     buffering: FuturesOrdering,
-    ignore_failures: bool,//TODO differentiate between errors caused by data incompatibility (an input is shorter than kernel length) which should not cause the app to stop and unrecoverable errors like missing stage. ignore_failures should be true when recoverable errors are expected
+    error_policy: CollectionErrorPolicy,
     descr: &str,
 ) -> Result<Vec<T>, ThoError>
 where
@@ -62,11 +78,16 @@ where
     for (idx, result) in outcomes {
         match result {
             Ok(value) => values.push(value),
+            Err(error) if error_policy.skips(&error) => {
+                warn!("skipping incompatible data: descr={descr} index={idx} error={error:?}");
+            }
             Err(error) => {
                 warn!("collect_futures_with_progress_with_limit: error={error:?}");
                 // A later fatal completion must not be hidden by an earlier OOM
                 // or ordinary error. Context retains the original typed cause.
                 let replace = failure.as_ref().is_none_or(|original| {
+                    // An outer collector may skip a returned data error; never let it hide an infrastructure failure.
+                    (error.data_error_kind().is_none() && original.data_error_kind().is_some()) ||
                     (error.is_cuda_recovery_failed() && !original.is_cuda_recovery_failed()) ||
                     (error.is_missing_endpoint() && !original.is_missing_endpoint() && !original.is_cuda_recovery_failed()) ||
                     (error.needs_cuda_restart() && !original.needs_cuda_restart() && !original.is_cuda_recovery_failed() && !original.is_missing_endpoint())
@@ -77,17 +98,10 @@ where
             }
         }
     }
-    debug!("collect_futures_with_progress_with_limit: ignore_failures={ignore_failures} values.is_empty={:?}", values.is_empty());
-    // Best-effort data filtering must not turn broken execution infrastructure
-    // into a successful partial result after worker recovery.
-    let must_propagate = failure.as_ref().is_some_and(|error| error.is_missing_endpoint() || error.is_cuda_recovery_failed());
-    if (!ignore_failures || must_propagate) && let Some(failure) = failure {
-        Err(failure)
-    } else {
-        if failure.is_some(){
-            warn!("collect_futures_with_progress_with_limit: ignored error: {failure:?}");
-        }
-        Ok(values)
+    // Every submitted task has drained, including tasks after a skippable data failure.
+    match failure {
+        Some(failure) => Err(failure),
+        None => Ok(values),
     }
 }
 
@@ -193,14 +207,77 @@ mod tests {
     use crate::{FuturesOrdering, ThoError};
 
     #[tokio::test]
-    async fn test_best_effort_propagates_missing_endpoint_and_failed_recovery() {
+    async fn test_data_skipping_propagates_missing_endpoint_and_failed_recovery() {
         for error in [ThoError::MissingEndpoint("stage/1".into()), ThoError::CudaRecoveryFailed(Arc::new(crate::CudaRecoveryFailure { original: ThoError::ContextReset, recovery: None }))] {
             let missing = error.is_missing_endpoint();
             let (_, limit) = watch::channel(2);
             let results = [Err(ThoError::new("incompatible data")), Ok(1), Err(error.context("worker operation"))];
-            let failure = collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 3, Arc::new(limit), FuturesOrdering::Ordered, true, "required endpoints").await.unwrap_err();
+            let failure = collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 3, Arc::new(limit), FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]), "required endpoints").await.unwrap_err();
             assert_eq!(failure.is_missing_endpoint(), missing);
             assert_eq!(failure.is_cuda_recovery_failed(), !missing);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_data_skipping_only_allows_named_categories() {
+        use crate::{CollectionErrorPolicy, DataErrorKind, SyncStageRunnerError};
+        let short = || ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "short input".into() };
+        let empty = || ThoError::Data { kind: DataErrorKind::EmptyTrainingClass, msg: "empty class".into() };
+        for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
+            for (policy, succeeds) in [(CollectionErrorPolicy::Propagate, false), (CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort]), false), (CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort, DataErrorKind::EmptyTrainingClass]), true)] {
+                let (_, limit) = watch::channel(2);
+                let wrapped = ThoError::from(SyncStageRunnerError::JobError { job_id: 1, inner: Box::new(short().context("filter")) }).context("job");
+                let results = [Err(wrapped), Ok(1), Err(empty())];
+                let result = collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 3, Arc::new(limit), ordering, policy, "data policy").await;
+                if succeeds { assert_eq!(result.unwrap(), vec![1]); }
+                else { assert!(result.is_err()); }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_nested_collection_cannot_hide_infrastructure_behind_data_error() {
+        use crate::{CollectionErrorPolicy, DataErrorKind};
+        for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
+            let inner = async move {
+                let (_, limit) = watch::channel(1);
+                let results = [Err::<(), _>(ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "short input".into() }), Err(ThoError::ContextReset)];
+                collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 2, Arc::new(limit), ordering, CollectionErrorPolicy::Propagate, "inner").await
+            };
+            let (_, limit) = watch::channel(1);
+            let error = collect_futures_with_progress_with_limit(std::iter::once(inner), 1, Arc::new(limit), ordering, CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort]), "outer").await.unwrap_err();
+            assert!(matches!(error.what(), ThoError::ContextReset));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_data_skipping_propagates_infrastructure_errors_and_drains() {
+        use crate::{CollectionErrorPolicy, DataErrorKind, SyncStageRunnerError, TrainingSessionFailure};
+        for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
+            let errors = [
+                ThoError::from_source(std::io::Error::other("storage failed")),
+                ThoError::ContextReset,
+                ThoError::oom(),
+                ThoError::from_cuda_error("device lost", 700),
+                ThoError::from(SyncStageRunnerError::SubmitErrorClosed),
+                ThoError::from(SyncStageRunnerError::SubmitErrorCancelled),
+                ThoError::NotFound(Some("model".into())),
+                ThoError::new("unclassified failure"),
+                ThoError::TrainingSessionFailed(Arc::new(TrainingSessionFailure { original: ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "partial training".into() }, recovery: None })),
+            ];
+            for error in errors {
+                let kind = std::mem::discriminant(error.what());
+                let (_, limit) = watch::channel(1);
+                let completed = Arc::new(AtomicUsize::new(0));
+                let results = [Err(ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "skippable input".into() }), Ok(1), Err(error), Ok(2)];
+                let futures = results.into_iter().map(|result| {
+                    let completed = Arc::clone(&completed);
+                    async move { completed.fetch_add(1, Ordering::SeqCst); result }
+                });
+                let error = collect_futures_with_progress_with_limit(futures, 4, Arc::new(limit), ordering, CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort]), "infrastructure policy").await.unwrap_err();
+                assert_eq!(std::mem::discriminant(error.what()), kind);
+                assert_eq!(completed.load(Ordering::SeqCst), 4);
+            }
         }
     }
 
@@ -234,7 +311,7 @@ mod tests {
                     6,
                     Arc::new(limit_rx),
                     buffering,
-                    true,
+                    thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
                     "assert_limit_increase_is_applied",
                 ).await
             })
@@ -287,7 +364,7 @@ mod tests {
                     5,
                     Arc::new(limit_rx),
                     FuturesOrdering::Unordered,
-                    true,
+                    thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
                     "limit_decrease_waits_for_active_futures_before_starting_more",
                 ).await
             })
@@ -332,7 +409,7 @@ mod tests {
                                                 Ok(idx)
                                             }
                                         }), 4, Arc::new(limit_rx), ordering,
-                                                             false, "required pipeline work").await
+                                                             thoosa_shared::CollectionErrorPolicy::Propagate, "required pipeline work").await
                 })
             };
             // The error has freed a slot and another task has started, but the
@@ -360,7 +437,7 @@ mod tests {
                     Ok(idx)
                 }
             });
-            let error = tokio::time::timeout(Duration::from_secs(2), collect_futures_with_progress_with_limit(futures, 5, Arc::new(limit_rx), ordering, false, "panic regression")).await.expect("panic must not stall collection").unwrap_err();
+            let error = tokio::time::timeout(Duration::from_secs(2), collect_futures_with_progress_with_limit(futures, 5, Arc::new(limit_rx), ordering, thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]), "panic regression")).await.expect("panic must not stall collection").unwrap_err();
             assert_eq!(completed.load(Ordering::SeqCst), 4);
             assert!(error.to_string().contains("input index 1"));
             assert!(format!("{error:#}").contains("parallel task panic"));
@@ -373,7 +450,7 @@ mod tests {
             let (_limit_tx, limit_rx) = watch::channel(1);
             let failures = [ThoError::oom(), ThoError::from_cuda_error("fatal completion", 700)];
             let futures = failures.into_iter().map(|error| async move { Err::<(), _>(error) });
-            let error = collect_futures_with_progress_with_limit(futures, 2, Arc::new(limit_rx), ordering, false, "fatal precedence").await.unwrap_err();
+            let error = collect_futures_with_progress_with_limit(futures, 2, Arc::new(limit_rx), ordering, thoosa_shared::CollectionErrorPolicy::Propagate, "fatal precedence").await.unwrap_err();
             assert!(error.needs_cuda_restart());
             assert!(!error.is_oom());
             assert!(error.to_string().contains("input index 1"));
@@ -392,7 +469,7 @@ mod tests {
             ThoError::from_cuda_error("late restart error", 700),
         ];
         let futures = failures.into_iter().map(|error| async move { Err::<(), _>(error) });
-        let error = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Unordered, false, "terminal precedence").await.unwrap_err();
+        let error = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Unordered, thoosa_shared::CollectionErrorPolicy::Propagate, "terminal precedence").await.unwrap_err();
         assert!(error.is_cuda_recovery_failed());
         assert!(error.to_string().contains("input index 1"));
     }
@@ -402,7 +479,7 @@ mod tests {
         let futures = || (0..3).map(|idx| async move {
             if idx == 1 { Err(ThoError::new("ordinary task failure")) } else { Ok(idx) }
         });
-        let error = super::collect_futures_with_progress(futures(), 3, FuturesOrdering::Ordered, false, "strict collection").await.unwrap_err();
+        let error = super::collect_futures_with_progress(futures(), 3, FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::Propagate, "strict collection").await.unwrap_err();
         assert!(format!("{error:#}").contains("ordinary task failure"));
         let values = super::collect_futures_best_effort_with_progress(futures(), 3, FuturesOrdering::Ordered, "best effort collection").await;
         assert_eq!(values, vec![0, 2]);
@@ -420,7 +497,7 @@ mod tests {
                 Ok::<_, ThoError>(idx)
             }
         });
-        let values = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Ordered, true, "ordered success").await.expect("all work succeeds");
+        let values = collect_futures_with_progress_with_limit(futures, 3, Arc::new(limit_rx), FuturesOrdering::Ordered, thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]), "ordered success").await.expect("all work succeeds");
         assert_eq!(values, vec![0, 1, 2]);
     }
 

@@ -58,8 +58,8 @@ pub trait MotifsStore: Store {
     async fn list_labels(&self, only_with_resources: bool) -> anyhow::Result<Vec<String>>;
     async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> anyhow::Result<()>;
     async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> anyhow::Result<()>;
-    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> anyhow::Result<()>;
-    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> anyhow::Result<Vec<u32>>;
+    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<usize, HashSet<IdSlice>>, path: PathBuf) -> anyhow::Result<()>;
+    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<usize, HashSet<IdSlice>>) -> anyhow::Result<Vec<u32>>;
     async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> anyhow::Result<()>;
     async fn list_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<u32>>;
     async fn get_motif_meta(&self, motif_id: u32) -> anyhow::Result<(usize, RunConfigId)>;
@@ -430,7 +430,7 @@ impl MotifsStore for SqlStore {
         &self,
         run_config_id: RunConfigId,
         channel: i64,
-        groups: HashMap<u16, HashSet<IdSlice>>,
+        groups: HashMap<usize, HashSet<IdSlice>>,
     ) -> anyhow::Result<Vec<u32>> {
         self.with_writer_conn("save_groups_as_motifs", move |conn| {
         let t = conn.transaction()?;
@@ -511,7 +511,7 @@ impl MotifsStore for SqlStore {
         &self,
         run_config_id: RunConfigId,
         channel: i64,
-        groups: HashMap<u16, HashSet<IdSlice>>,
+        groups: HashMap<usize, HashSet<IdSlice>>,
         path: PathBuf,
     ) -> anyhow::Result<()> {
         self.with_writer_conn("save_groups_as_motifs_with_slices_matches", move |conn| {
@@ -1220,8 +1220,8 @@ mock! {
         async fn list_labels(&self, only_with_resources: bool) -> anyhow::Result<Vec<String>>;
         async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> anyhow::Result<()>;
         async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> anyhow::Result<()>;
-        async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> anyhow::Result<()>;
-        async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> anyhow::Result<Vec<u32>>;
+        async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<usize, HashSet<IdSlice>>, path: PathBuf) -> anyhow::Result<()>;
+        async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<usize, HashSet<IdSlice>>) -> anyhow::Result<Vec<u32>>;
         async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> anyhow::Result<()>;
         async fn list_motifs(&self, run_config_id: RunConfigId) -> anyhow::Result<Vec<u32>>;
         async fn get_motif_meta(&self, motif_id: u32) -> anyhow::Result<(usize, RunConfigId)>;
@@ -1624,7 +1624,7 @@ impl MockMotifsStoreBuilder {
         self
     }
 
-    pub fn with_save_groups_as_motifs_inputs(mut self, inputs: impl IntoIterator<Item = (RunConfigId, i64, HashMap<u16, HashSet<IdSlice>>, Vec<u32>)> + Debug) -> Self {
+    pub fn with_save_groups_as_motifs_inputs(mut self, inputs: impl IntoIterator<Item = (RunConfigId, i64, HashMap<usize, HashSet<IdSlice>>, Vec<u32>)> + Debug) -> Self {
         for (run_config_id, channel, groups, motif_ids) in inputs {
             self.store.expect_save_groups_as_motifs().with(eq(run_config_id), eq(channel), eq(groups)).times(1).returning(move |_, _, _| Ok(motif_ids.clone()));
         }

@@ -374,7 +374,7 @@ where
             futures,
             motifs_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "filter_motifs_by_criteria",
         )).await?
         .into_iter().filter_map(|v| v).collect::<Vec<SelectedMotifEvaluation>>();
@@ -460,7 +460,7 @@ where
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,
-            true,
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
             "SelectMotifsStage::run",
         )).await?;
 
@@ -625,7 +625,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1u32, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t)),
         ]).finish());
 
         let extend_motifs_stage: Arc<ExtendMotifsStage<_, _, MockRunCtx>> = Arc::new(ExtendMotifsStage::new(
@@ -701,7 +701,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1u32, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t)),
         ]).finish());
 
 
@@ -779,7 +779,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1u32, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t)),
             (MotifLoaderInput::all_slices(DataId(motifs_ids[1])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_1_t.shallow_clone())),
             (MotifLoaderInput::find_motif_slices_only(mono_key!(motifs_ids[1], "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_1_t)),
         ]).finish());

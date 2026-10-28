@@ -712,7 +712,7 @@ where
         let input_id = input.id().clone();
         let (motif_id, select_motifs_run_config_id) = (input.motif_id.clone(), input.select_motifs_run_config_id.clone());
 
-        let motif_id_value = motif_id.vals[0].to_data_id();
+        let motif_id_value = motif_id.vals[0].to_data_id()?;
         let select_motifs_run_config_id_for_key = select_motifs_run_config_id.clone();
         // TODO(perf): cache motif slice lists/resource grouping by motif_id; repeated DB reads dominate MotifLoader elapsed time in traced runs.
         let (channel, find_motifs_run_config_id, slices, resources_map) = track_await!(self

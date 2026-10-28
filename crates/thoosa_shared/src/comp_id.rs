@@ -97,9 +97,12 @@ impl From<usize> for ElvVal {
     }
 }
 
-impl From<i32> for ElvVal {
-    fn from(value: i32) -> Self {
-        ElvVal::Num(value as usize)
+impl TryFrom<i32> for ElvVal {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        // Signed input is accepted only if it preserves the unsigned key's identity.
+        Ok(ElvVal::Num(usize::try_from(value)?))
     }
 }
 
@@ -180,16 +183,11 @@ impl MonoKey {
         self.name.as_ref()
     }
 
-    //TODO add a safer way to get to data_id
-    pub fn to_data_id(&self) -> DataId{
+    pub fn to_data_id(&self) -> anyhow::Result<DataId> {
+        // Database IDs are narrower than cache keys; never alias a large key to a different row.
         match &self.val {
-
-            ElvVal::Num(val) => {
-                DataId(*val as u32)//TODO as
-            }
-            val => {
-                panic!("can't convert {val} to data_id")
-            }
+            ElvVal::Num(val) => Ok(DataId(u32::try_from(*val)?)),
+            val => anyhow::bail!("can't convert {val} to data_id: expected a numeric key"),
         }
     }
 }
@@ -528,9 +526,26 @@ mod tests {
     }
 
     #[test]
+    fn test_identity_conversions_reject_negative_and_narrowing_keys() -> anyhow::Result<()> {
+        use super::ElvVal;
+        assert!(ElvVal::try_from(-1i32).is_err());
+        assert!(ElvVal::try_from(i32::MIN).is_err());
+        assert_eq!(ElvVal::try_from(0i32)?, ElvVal::from(0u32));
+        assert_eq!(ElvVal::try_from(i32::MAX)?, ElvVal::from(i32::MAX as u32));
+        assert_eq!(mono_key!(u32::MAX, "max").to_data_id()?.0, u32::MAX);
+        assert_eq!(mono_key!(0usize, "zero").to_data_id()?.0, 0);
+        assert!(mono_key!("0", "string").to_data_id().is_err());
+        // These two keys previously narrowed to the same database ID on 64-bit platforms.
+        if let Some(large) = (u32::MAX as usize).checked_add(1) {
+            assert!(mono_key!(large, "large").to_data_id().is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_add_1_2() {
-        let key_a: SynKey = [mono_key!(0, "key1")].into();
-        let key_b: SynKey = [mono_key!(1, "key2"), mono_key!(2, "key3")].into();
+        let key_a: SynKey = [mono_key!(0u32, "key1")].into();
+        let key_b: SynKey = [mono_key!(1u32, "key2"), mono_key!(2u32, "key3")].into();
 
         let key_c = &key_a + &key_b;
         debug!("key_c={key_c:?}");
@@ -538,9 +553,9 @@ mod tests {
         assert_eq!(
             key_c.as_slice(),
             &[
-                mono_key!(0, "key1"),
-                mono_key!(1, "key2"),
-                mono_key!(2, "key3"),
+                mono_key!(0u32, "key1"),
+                mono_key!(1u32, "key2"),
+                mono_key!(2u32, "key3"),
             ]
         );
     }

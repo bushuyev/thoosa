@@ -508,13 +508,8 @@ impl TryFrom<Val> for f32 {
     type Error = anyhow::Error;
 
     fn try_from(value: Val) -> anyhow::Result<f32> {
-        match value {
-            Val::Real(v) => Ok(v as f32), //TODO safe
-            Val::Int(v) => Ok(v as f32),
-            Val::UInt(v) => Ok(v as f32),
-            Val::Str(v) => Ok(v.parse()?),
-            _ => Err(anyhow::anyhow!("can't convert {value:?}")),
-        }
+        // Generated configuration parsing borrows values; ownership must not change supported variants.
+        Self::try_from(&value)
     }
 }
 
@@ -572,6 +567,7 @@ impl TryFrom<&Val> for f32 {
     fn try_from(value: &Val) -> anyhow::Result<f32> {
         match value {
             Val::Real(v) => Ok(*v as f32),
+            Val::Int(v) => Ok(*v as f32),
             Val::UInt(v) => Ok(*v as f32),
             Val::Str(v) => Ok(v.parse()?),
             _ => Err(anyhow::anyhow!("can't convert {value:?}")),
@@ -753,6 +749,13 @@ mod tests {
     {
         assert_eq!(T::try_from(&value).ok(), expected, "borrowed {value:?}");
         assert_eq!(T::try_from(value.clone()).ok(), expected, "owned {value:?}");
+    }
+
+    #[test]
+    fn test_f32_conversion_has_owned_and_borrowed_parity() {
+        for (value, expected) in [(Val::Int(-42), Some(-42.0f32)), (Val::UInt(42), Some(42.0)), (Val::Real(1.5), Some(1.5)), (Val::Str("2.5".into()), Some(2.5)), (Val::Str("bad".into()), None), (Val::Bool(true), None)] {
+            assert_owned_and_borrowed(value, expected);
+        }
     }
 
     #[test]
