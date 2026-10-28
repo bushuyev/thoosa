@@ -1,6 +1,7 @@
 use crate::motif_tracker_store::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch};
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
+use anyhow::Context;
 use bytemuck::{AnyBitPattern, Pod};
 use log::{debug, trace};
 use std::collections::{HashMap, HashSet};
@@ -190,7 +191,9 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             });
             let groups = group_slices_try(pairs)?;
             Ok((groups.len(), filter_groups_by_slices_count(min_slices_counts, max_slices_counts, groups)))
-        }).await??;
+        }).await?
+            // Keep the original I/O error available for downcasting while identifying its file.
+            .with_context(|| format!("loading motif slice groups from {}", self.path.display()))?;
         let motif_ids = store.save_groups_as_motifs(self.run_config_id, self.channel as i64, groups).await?;
 
         debug!("MotifTrackerStore::load_slices_into_groups: motif_ids={motif_ids:?}");
@@ -342,20 +345,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_grouping_propagates_corrupt_chunk_without_persisting_or_removing_file() -> anyhow::Result<()> {
-        let (path, file) = TestFile::new()?;
-        path.payload(size_of::<SlicesMatch>() as u64, 1, 4, &[1, 2, 3, 4])?;
-        let mut tracker = FileMotifTrackerStore {
-            run_config_id: 1,
-            channel: 0,
-            writer: Arc::new(Mutex::new(ChunkedWriter::new(file, 1)?)),
-            path: path.0.clone(),
-        };
-        // No save expectation: corrupt input must stop before persistence, with its I/O source intact.
-        let store = crate::motifs_store::MockMotifsStoreBuilder::new().build();
-        let error = tracker.load_slices_into_groups(store.as_ref(), None, None).await.unwrap_err();
-        assert!(error.downcast_ref::<io::Error>().is_some());
-        assert!(path.0.exists());
+    async fn test_grouping_reports_corrupt_and_truncated_chunks_with_path() -> anyhow::Result<()> {
+        for case in ["corrupt payload", "truncated payload", "truncated header"] {
+            let (path, file) = TestFile::new()?;
+            let compressed_len = if case == "truncated payload" { 5 } else { 4 };
+            path.payload(size_of::<SlicesMatch>() as u64, 1, compressed_len, &[1, 2, 3, 4])?;
+            let mut tracker = FileMotifTrackerStore {
+                run_config_id: 1,
+                channel: 0,
+                writer: Arc::new(Mutex::new(ChunkedWriter::new(file, 1)?)),
+                path: path.0.clone(),
+            };
+            if case == "truncated header" { tracker.writer.lock().file.set_len(16 + 8)?; }
+            // No save expectation: malformed input must return its path and original
+            // I/O cause, without persisting partial groups or removing the source file.
+            let store = crate::motifs_store::MockMotifsStoreBuilder::new().build();
+            let error = tracker.load_slices_into_groups(store.as_ref(), None, None).await.unwrap_err();
+            let source = error.downcast_ref::<io::Error>().expect("original I/O error");
+            if case != "corrupt payload" { assert_eq!(source.kind(), io::ErrorKind::UnexpectedEof, "{case}"); }
+            assert!(error.to_string().contains(&path.0.display().to_string()), "missing path for {case}: {error:#}");
+            assert!(path.0.exists(), "source file must be retained for {case}");
+        }
         Ok(())
     }
 
