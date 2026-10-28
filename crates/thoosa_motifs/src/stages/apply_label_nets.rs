@@ -185,15 +185,20 @@ where
     {
         let tho_device_idx = stage_ctx.tho_device_idx();
 
-        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false, false)?;
+        // Discovery reads model files and metadata under a synchronous workspace lock.
+        let discovery_ws = Arc::clone(ws);
+        let requested_ids = train_label_nets_run_config_ids.clone();
+        let features = tokio::task::spawn_blocking(move || -> Result<_, ThoError> {
+            let all_label_nets = perf_log!(sync_read_lock!(discovery_ws)).load_label_nets(Some(requested_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false, false)?;
+            let discovered = all_label_nets.into_iter().flat_map(|(label, nets)| nets.into_iter().map(move |(id, _, _)| (id, label.clone())));
+            Ok(ordered_label_features(discovered, &requested_ids)?)
+        }).await??;
 
         let mut apply_nets = vec![];
         let mut train_label_net_run_config_ids = vec![];
-        debug!("ApplyLabelNets::new: all_label_nets={all_label_nets:?}");
 
         // Requested IDs define feature positions; discovery only resolves their labels.
-        let discovered = all_label_nets.into_iter().flat_map(|(label, nets)| nets.into_iter().map(move |(id, _, _)| (id, label.clone())));
-        for (train_label_net_run_config_id, label) in ordered_label_features(discovered, &train_label_nets_run_config_ids)? {
+        for (train_label_net_run_config_id, label) in features {
             let label_nets = track_await!(store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![train_label_net_run_config_id]), None, None)).await?;
 
             debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
