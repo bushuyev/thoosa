@@ -49,7 +49,6 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::Store;
-use tokio::task::JoinHandle;
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
@@ -795,7 +794,7 @@ impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
 #[derive(Debug)]
 struct SelectMotifsSavableResultBuilder {
     id:StackedMotifsOutputId,
-    output:Vec<JoinHandle<Result<ClcResourcesMotifsDistOutput, ThoError>>>,//TODO TempCache
+    output:Vec<ClcResourcesMotifsDistOutput>,
     channels:u32,
     step:usize
 }
@@ -815,18 +814,18 @@ impl SelectMotifsSavableResultBuilder {
 impl OutputBuilder for SelectMotifsSavableResultBuilder {
     type O = ClcResourcesMotifsDistOutput;
 
-    async fn add_partial_output(&mut self, o: Self::O) {
+    async fn add_partial_output(&mut self, o: Self::O) -> Result<(), ThoError> {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
-        self.output.push (tokio::spawn(async {
-            track_await!(o.to_cpu()).await
-        }.instrument(tracing::info_span!(
+        // Complete the transfer before accepting this split; detached copies hid failures until build.
+        let output = track_await!(o.to_cpu().instrument(tracing::info_span!(
             "extend_motifs::partial_output_to_cpu",
-            kind = "spawn",
             file = file!(),
             line = line!(),
             task = "move partial extended motif output to CPU",
-        ))));
+        ))).await?;
+        self.output.push(output);
+        Ok(())
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
@@ -834,9 +833,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         let mut resource_ids_sizes: Vec<ResourceSlices> = vec![];
 
 
-        let output:Vec<ClcResourcesMotifsDistOutput> = track_await!(futures::future::try_join_all(self.output)).await?
-            .into_iter()
-            .collect::<Result<Vec<_>, ThoError>>()?;
+        let output = self.output;
 
         // partial output contains masks for
         // motif_c0_0, motif_c0_1... motif_c0_m.
@@ -921,8 +918,8 @@ impl SelectMotifsClcOutputBuilder {
 impl OutputBuilder for SelectMotifsClcOutputBuilder {
     type O = ClcResourcesMotifsDistOutput;
 
-    async fn add_partial_output(&mut self, o: Self::O) {
-        track_await!(self.inner.add_partial_output(o)).await;
+    async fn add_partial_output(&mut self, o: Self::O) -> Result<(), ThoError> {
+        track_await!(self.inner.add_partial_output(o)).await
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
@@ -1100,9 +1097,10 @@ where
     ST: Stage<Out=ClcResourcesMotifsDistOutput> + Adjustable + 'a,
     ST::In<'z>: Data<Metrics = i64>,
 {
-    async fn add_partial_output(&mut self, out: ST::Out) {
+    async fn add_partial_output(&mut self, out: ST::Out) -> Result<(), ThoError> {
         debug!("SelectMotifsSplitterContext::add_partial_output: out={out:?}");
-        track_await!(self.output_builder.add_partial_output(out)).await;
+        // Do not advance either split cursor until assembly has completed.
+        track_await!(self.output_builder.add_partial_output(out)).await?;
         match self.batch_1_mode {
             Batch1SplitMode::Range => {
                 self.done_to += self.split_len;
@@ -1114,6 +1112,7 @@ where
                 }
             }
         }
+        Ok(())
     }
 
     fn all_done(&self) -> bool {
@@ -1337,7 +1336,7 @@ mod tests {
                     (1u32, 100)
                 ])
             )
-        ).await;
+        ).await?;
 
         let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
         let expected_mask_1 = tch_result(mask_1.f_to_device(tch::Device::Cpu))?;
@@ -1367,7 +1366,7 @@ mod tests {
                     (1u32, 100)
                 ])
             )
-        ).await;
+        ).await?;
 
         let ClcResourcesMotifsDistOutput {
             channel_masks_dists_ids,

@@ -536,9 +536,10 @@ impl<'a, 'z, ST> InputContext<'a, ST> for SelectBucketsSplitterContext<'z, ST>
 where
     ST: Stage<Out = ()> + Adjustable + 'a,
 {
-    async fn add_partial_output(&mut self, _out: ST::Out) {
+    async fn add_partial_output(&mut self, _out: ST::Out) -> Result<(), ThoError> {
         self.done_to += self.split_len;
         debug!("SelectBucketsSplitterContext::add_partial_output: done_to={} split_len={} input_len={}", self.done_to, self.split_len, self.input_len);
+        Ok(())
     }
 
     fn all_done(&self) -> bool {
