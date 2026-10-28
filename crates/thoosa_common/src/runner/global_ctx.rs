@@ -191,6 +191,8 @@ impl GlobalCtx {
             });
         }
 
+        // Supply the admission gate directly; CPU-only runtimes have no CUDA gate.
+        let purger = Purger::new(devices.get(1).and_then(|device| device.runner.cuda_gate()).cloned());
         Ok(Self {
             devices,
 
@@ -200,7 +202,7 @@ impl GlobalCtx {
 
 
             cache_time: Default::default(),
-            purger: Purger::new(),
+            purger,
 
             is_ipc: false,
             arena_fd: None,
@@ -257,6 +259,8 @@ impl GlobalCtx {
             });
         }
 
+        // Supply the admission gate directly; CPU-only runtimes have no CUDA gate.
+        let purger = Purger::new(devices.get(1).and_then(|device| device.runner.cuda_gate()).cloned());
         Ok(Self {
             devices,
 
@@ -265,7 +269,7 @@ impl GlobalCtx {
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
             cache_time: Default::default(),
-            purger: Purger::new(),
+            purger,
 
             is_ipc: true,
             arena_fd: Some(arena_fd),
@@ -605,6 +609,11 @@ impl GlobalCtx {
 
 
     pub async fn shutdown(&self) {
+        // Drain accepted cleanup while actors are alive and cleanup is still enabled.
+        // A failed purger must not prevent the remaining actors from shutting down.
+        if let Err(error) = self.purger.shutdown().await {
+            error!("Got {error:#} while shutting down purger");
+        }
         GLB_SHUTTING_DOWN.store(true, Relaxed);
 
         for (i, actor) in self.devices.iter().enumerate().filter_map(|(i, device)| device.cuda_actor.as_ref().map(|actor| (i, actor))) {
@@ -1141,6 +1150,27 @@ mod tests {
             });
             mock
         }
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_drains_purger_before_disabling_cleanup() -> Result<(), ThoError> {
+        let runtime = GlobalCtx::new(1)?;
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_completed = Arc::clone(&completed);
+        runtime.run_purge_gpu(vec![Box::new(move || {
+            let completed = Arc::clone(&callback_completed);
+            async move {
+                // Cleanup callbacks skip work after the global shutdown flag is set.
+                assert!(!GlobalCtx::is_shutting_down(), "accepted cleanup must drain before device teardown");
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }.boxed()
+        })])?;
+        tokio::time::timeout(Duration::from_secs(5), runtime.shutdown()).await?;
+        assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(GlobalCtx::is_shutting_down());
+        assert!(runtime.run_purge_gpu(vec![]).is_err());
+        Ok(())
     }
 
     #[tokio::test]
