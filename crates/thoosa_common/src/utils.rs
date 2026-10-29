@@ -2053,7 +2053,7 @@ pub mod tests {
         let w = 1000;
         let t = Tensor::rand(&[1, n as i64], FLOAT_CPU);
         let slices_num = 100;
-        let (step, pad) = clc_step(n, w, slices_num); //(n-w)/(k-1);
+        let (step, pad) = clc_step(n, w, slices_num).unwrap(); //(n-w)/(k-1);
         let u = t
             .pad([0i64, pad as i64], "constant", 0.)
             .unfold(1, w as i64, step as i64);
