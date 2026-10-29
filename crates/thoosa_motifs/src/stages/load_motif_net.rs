@@ -24,6 +24,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key, perf_log, debug_id, sync_read_lock};
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct LoadMotifNetInput {
     id: SynKey,
     net_id: PathBuf,

@@ -394,12 +394,7 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
-    run_configs: Arc<OptRunConfigs<
-        Vec<NamedVal<TrainMotifNetRunConfigFields>>,
-        Vec<NamedRange<TrainMotifNetRunConfigFields>>,
-        Vec<Hyperparameter<TrainMotifNetRunConfigFields>>,
-        TrainMotifNetRunConfigFields,
-    >>,
+    run_configs: Arc<thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields>>,
     motif_loader:Arc<MotifLoader<L,C>>,
     random_slices_loader:Arc<RandomSlicesLoader<L,C>>,
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
@@ -412,7 +407,7 @@ where
 
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct TrainMotifNetInput{
     motifs_by: MotifsBy,
     opt_config:Arc<OptConfig>,
@@ -473,12 +468,7 @@ where
         loader:Arc<L>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
-        run_configs:  OptRunConfigs<
-            Vec<NamedVal<TrainMotifNetRunConfigFields>>,
-            Vec<NamedRange<TrainMotifNetRunConfigFields>>,
-            Vec<Hyperparameter<TrainMotifNetRunConfigFields>>,
-            TrainMotifNetRunConfigFields,
-        >,
+        run_configs:  thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields>,
         epoch_size: u32,
         descr: Option<String>
     ) -> Result<Self, ThoError> {
@@ -960,7 +950,7 @@ where
     C:RunCtx + 'static
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SyncMotifBatch<C>>>, ThoError> {
-        SYNC_MOTIF_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SYNC_MOTIF_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
@@ -1204,7 +1194,7 @@ where
     C: RunCtx  + 'static
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SplitMotifIntoTrainValid<C>>>, ThoError> {
-        SPLIT_MOTIF_INTO_TRAIN_VALID_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SPLIT_MOTIF_INTO_TRAIN_VALID_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
@@ -1720,7 +1710,7 @@ mod tests {
                     sock_path,
                     &ws,
                     train_motif_step_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -1859,14 +1849,14 @@ mod tests {
                     sock_path,
                     &ws,
                     HashMap::from([(TRAIN_TEST_STEP_ENDPOINT.to_string(), Box::new(train_test_step_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>)]),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
     }
 
 
-    fn cos_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
+    fn cos_net_run_configs() -> thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields> {
         thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
@@ -1891,7 +1881,7 @@ mod tests {
         )
     }
 
-    fn cosine_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
+    fn cosine_net_run_configs() -> thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields> {
         thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
@@ -1919,7 +1909,7 @@ mod tests {
 }
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct TrainMotifNetsResult {
     select_motifs_run_config_ids: Vec<RunConfigId>,
     pub train_motif_nets_results:Vec<TrainMotifNetResult>

@@ -1010,14 +1010,15 @@ mod tests {
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
+        let sql_store = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             create_motif_tables
         ]).await?);
+        let store: Arc<dyn MotifsStore> = sql_store.clone();
 
         let _resources = import_resources(
             &ws,
-            &store,
+            sql_store.as_ref(),
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             || super::labeled_resourses(Path::new("test_data/eeg"), "train_10.csv"),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
@@ -1042,7 +1043,7 @@ mod tests {
         Ok(())
     }
 
-    fn _test_cosine_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
+    fn _test_cosine_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
                 ConstConfigs::new(vec![
@@ -1063,7 +1064,7 @@ mod tests {
         )
     }
 
-    fn _test_lin_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
+    fn _test_lin_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
                 ConstConfigs::new(vec![
@@ -1083,7 +1084,7 @@ mod tests {
         )
     }
 
-    fn _test_conv_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
+    fn _test_conv_net_run_configs(kernel: Val, cycles: Val, batch_size: Val) -> thoosa_shared::run_configs::TrainingRunConfigs<TrainMotifNetRunConfigFields> {
         OptRunConfigs::new(
             GridRunConfigs::new(
                 ConstConfigs::new(vec![

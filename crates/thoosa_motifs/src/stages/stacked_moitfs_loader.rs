@@ -33,6 +33,7 @@ use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_wit
 use thoosa_store::Store;
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct StackedMotifsInput {
 
     id: SynKey,

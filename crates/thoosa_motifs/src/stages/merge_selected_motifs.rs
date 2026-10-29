@@ -35,7 +35,7 @@ pub struct MergeSelectedMotifsArgs {
 }
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct MergeSelectedMotifsInput {
     run_config_ids: Vec<RunConfigId>,
 }
@@ -55,7 +55,7 @@ impl MergeSelectedMotifsInput {
 impl Input for MergeSelectedMotifsInput {}
 
 #[derive(Debug, Clone, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct MergeSelectedMotifsOutput {
     id: RunConfigId,
     merged_groups_by_channel: Vec<usize>,

@@ -25,7 +25,7 @@ const RUN_CONFIG_DEFAULT_ATTR: &'static str = "run_config_default";
 /// `opt_run_configs()` / `grid_run_configs()` helpers.
 #[proc_macro_derive(
     ThoosaRunConfig,
-    attributes(run_config, run_config_opt, run_config_grid, run_config_default)
+    attributes(run_config, run_config_opt, run_config_grid, run_config_default, config_scalar)
 )]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
@@ -112,7 +112,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     a.has_vec_indexes = true;
                                     let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
-                                    if is_primitive(&vec_inner_ty) {
+                                    if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                         a.range_or_value_fields.push(quote! {
                                             pub #field_ident: Option<Vec<thoosa_shared::RangeOrValue<#vec_inner_ty, P>>>,
                                         });
@@ -204,7 +204,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                             },
                                         });
                                     }
-                                } else if is_primitive(&inner_ty) {
+                                } else if has_attr(field, "config_scalar") || is_primitive(&inner_ty) {
                                     a.range_or_value_fields.push(quote! {
                                         pub #field_ident: Option<thoosa_shared::RangeOrValue<#inner_ty, P>>,
                                     });
@@ -284,7 +284,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     a.has_vec_indexes = true;
                                     let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
-                                    if is_primitive(&vec_inner_ty) {
+                                    if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                         a.range_or_value_fields.push(quote! {
                                             pub #field_ident: Vec<thoosa_shared::RangeOrValue<#vec_inner_ty, P>>,
                                         });
@@ -367,7 +367,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                             },
                                         });
                                     }
-                                } else if is_primitive(&field_type) {
+                                } else if has_attr(field, "config_scalar") || is_primitive(&field_type) {
                                     a.range_or_value_fields.push(quote! {
                                         pub #field_ident: thoosa_shared::RangeOrValue<#field_type, P>,
                                     });
@@ -822,7 +822,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident<#fields_enum_ident> {
                 type P =  #fields_enum_ident;
 
-                fn opt_run_configs(&self) -> thoosa_shared::anyhow::Result<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<#fields_enum_ident>>, #fields_enum_ident>> {
+                fn opt_run_configs(&self) -> thoosa_shared::anyhow::Result<thoosa_shared::run_configs::TrainingRunConfigs<#fields_enum_ident>> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();

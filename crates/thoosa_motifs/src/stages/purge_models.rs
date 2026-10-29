@@ -132,6 +132,7 @@ impl PurgeModelsArgs {
 }
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct PurgeModelsInput {
 }
 

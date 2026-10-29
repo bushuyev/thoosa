@@ -172,8 +172,6 @@ macro_rules! debug_id {
     }}
 }
 
-unsafe impl Send for DebugId {}
-unsafe impl Sync for DebugId {}
 
 #[cfg(any(debug_assertions, tho_debug))]
 impl From<&'static str> for DebugId {
@@ -206,11 +204,9 @@ impl Display for DebugId {
 
 ///--------------------
 #[derive(Debug, Eq, PartialEq, Hash, Clone, CpuData, Named)]
-#[dummy_data(clone)]
+#[cpu_data(shallow)]
 pub struct DataId(pub u32);//for sql-store based stuff
 
-unsafe impl Send for DataId {}
-unsafe impl Sync for DataId {}
 
 impl WithId for DataId {
     type ID = Self;
@@ -543,6 +539,9 @@ pub trait Data: Debug {
 
     fn tho_device_idx(&self) -> usize;
 
+    /// Payload-byte estimate used for cache accounting, not process RSS. Tensor data
+    /// counts backing storage. CPU derives require an explicit shallow/owned policy;
+    /// callers needing retained heap bytes must use an owned-size implementation.
     fn mem_size(&self) -> u64;
 
 }

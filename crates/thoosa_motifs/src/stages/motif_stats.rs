@@ -922,7 +922,7 @@ where
     C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsSyncStage<C>>>, ThoError> {
-        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        MOTIF_STATS_SYNC_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
 
                 Ok(Arc::new(DynSyncStageEnum::Proxy { stage: Arc::new(ProxyStage::proxy_recreatable(MOTIF_STATS_SYNC_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?), init: () }))
@@ -1081,7 +1081,7 @@ where
     C: RunCtx + 'static,
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsConsumeStage<C>>>, ThoError> {
-        MOTIF_STATS_CONSUME_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        MOTIF_STATS_CONSUME_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 static STAGE_ID: AtomicU32 = AtomicU32::new(0);
                 let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);

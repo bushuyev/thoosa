@@ -335,7 +335,7 @@ async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         false,
     ).await);
 
@@ -422,7 +422,7 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         false,
     ).await);
 
@@ -476,7 +476,7 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         false,
     ).await);
 
@@ -528,7 +528,7 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         true,
     ).await);
 
@@ -593,7 +593,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         true,
     ).await);
 
@@ -652,7 +652,7 @@ async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         false,
     ).await);
 
@@ -704,7 +704,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         false,
     ).await);
 
@@ -840,7 +840,7 @@ pub async fn do_real_oom_dump_and_split() -> Result<(), ThoError> {
             }),
         ),
         Kind::Int64,
-        Cuda(0).into(),
+        thoosa_common::tho_device::ThoDevice::from(1usize),
         true,
     ).await);
 

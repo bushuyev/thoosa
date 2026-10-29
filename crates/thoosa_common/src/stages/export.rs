@@ -49,6 +49,7 @@ pub struct ExportArgs {
 }
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct ExportInput {}
 
 impl ExportInput {

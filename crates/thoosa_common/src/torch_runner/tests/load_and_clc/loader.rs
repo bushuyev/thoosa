@@ -62,6 +62,7 @@ impl<'de> Deserialize<'de> for LoaderInputId {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct LoaderInput {
     id: LoaderInputId,
 }

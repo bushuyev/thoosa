@@ -349,7 +349,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
     #[tokio::test]
     async fn dummy_data_clone_impl_uses_clone() -> Result<(), ThoError> {
         #[derive(Debug, Clone, CpuData)]
-        #[dummy_data(clone)]
+        #[cpu_data(shallow)]
         struct Foo(DebugId);
 
         impl WithId for Foo {

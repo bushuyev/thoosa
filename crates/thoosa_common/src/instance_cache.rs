@@ -4,8 +4,6 @@ use std::future::Future;
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock};
 use thoosa_shared::{CudaActivityGate, CudaActivityScope, CudaDeviceGeneration, ThoError};
-#[mockall_double::double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
 
 /// Stores stage instances in separate typed buckets for each run-context type.
 ///
@@ -22,7 +20,8 @@ impl InstanceCache {
         }
     }
 
-    pub async fn get_or_try_insert_with<C, K, V, F, Fut>(&self, device: usize, key: K, create: F) -> Result<Arc<V>, ThoError>
+    // The stage construction boundary supplies admission; caches need no process singleton.
+    pub async fn get_or_try_insert_with<C, K, V, F, Fut>(&self, device: usize, gate: Option<Arc<CudaActivityGate>>, key: K, create: F) -> Result<Arc<V>, ThoError>
     where
         C: 'static,
         K: Clone + Eq + Hash + Send + Sync + 'static,
@@ -30,13 +29,12 @@ impl InstanceCache {
         F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = Result<Arc<V>, ThoError>> + Send + 'static,
     {
-        let gate = GlobalCtx::global().cuda_activity_gate(device);
         self.get_or_create::<C, K, V, F, Fut>(device, gate.as_ref(), key, create).await
     }
 
     /// Use only with proxies constructed with RecreateFromInit semantics. Local
     /// instances still belong to one generation; this does not retain CUDA state.
-    pub async fn get_or_try_insert_recreatable_with<C, K, V, F, Fut>(&self, device: usize, key: K, create: F) -> Result<Arc<V>, ThoError>
+    pub async fn get_or_try_insert_recreatable_with<C, K, V, F, Fut>(&self, device: usize, gate: Option<Arc<CudaActivityGate>>, is_ipc: bool, key: K, create: F) -> Result<Arc<V>, ThoError>
     where
         C: 'static,
         K: Clone + Eq + Hash + Send + Sync + 'static,
@@ -44,9 +42,7 @@ impl InstanceCache {
         F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = Result<Arc<V>, ThoError>> + Send + 'static,
     {
-        let global = GlobalCtx::global();
-        let gate = global.cuda_activity_gate(device);
-        self.get_or_create_with_lifetime::<C, K, V, F, Fut>(device, gate.as_ref(), global.is_ipc(), key, create).await
+        self.get_or_create_with_lifetime::<C, K, V, F, Fut>(device, gate.as_ref(), is_ipc, key, create).await
     }
 
     async fn get_or_create<C, K, V, F, Fut>(&self, device: usize, gate: Option<&Arc<CudaActivityGate>>, key: K, create: F) -> Result<Arc<V>, ThoError>
@@ -74,7 +70,8 @@ impl InstanceCache {
         type Entries<K, V> = HashMap<(usize, Option<CudaDeviceGeneration>, K), Arc<tokio::sync::OnceCell<Arc<V>>>>;
         let entry = {
             let mut instances = self.instances.lock().await;
-            let cache = instances.entry(TypeId::of::<C>()).or_insert_with(|| Box::new(Entries::<K, V>::new()));
+            // One context may cache several key/value types; each needs its own bucket.
+            let cache = instances.entry(TypeId::of::<(C, K, V)>()).or_insert_with(|| Box::new(Entries::<K, V>::new()));
             let cache = cache.downcast_mut::<Entries<K, V>>().ok_or_else(|| {
                 ThoError::new(format!("Instance cache type mismatch for context={}, key={}, value={}", type_name::<C>(), type_name::<K>(), type_name::<V>()))
             })?;
@@ -112,6 +109,19 @@ impl InstanceCache {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_context_can_cache_distinct_key_and_value_types_without_runtime() {
+        // CPU callers supply no gate and require no global runtime installation.
+        let cache = InstanceCache::new();
+        let integer = cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 1u32, || async { Ok(Arc::new(7u32)) }).await.unwrap();
+        let text = cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 1u32, || async { Ok(Arc::new(String::from("value"))) }).await.unwrap();
+        let other_key = cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, "1", || async { Ok(Arc::new(9u32)) }).await.unwrap();
+        let repeated = cache.get_or_try_insert_with::<(), _, _, _, _>(0, None, 1u32, || async { Ok(Arc::new(99u32)) }).await.unwrap();
+        assert!(Arc::ptr_eq(&integer, &repeated));
+        assert_eq!(*text, "value");
+        assert_eq!(*other_key, 9);
+    }
 
     #[tokio::test]
     async fn test_recreatable_instance_survives_two_generations() {

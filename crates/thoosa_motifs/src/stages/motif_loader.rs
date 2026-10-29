@@ -76,6 +76,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Adjustable;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, CpuData)]
+#[cpu_data(shallow)]
 pub struct MotifLoaderInput {
     pub id:SynKey,
     select_motifs_run_config_id: Option<Vec<RunConfigId>>,
@@ -595,7 +596,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncMotifLoader<C>>>, ThoError> {
-        SYNC_MOTIF_LOADER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
+        SYNC_MOTIF_LOADER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
 
             if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
@@ -808,6 +809,7 @@ where
 }
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct SlicesLoaderInput {
     motif_id:DataId,
     limit:u32
@@ -1144,7 +1146,7 @@ where
     C:RunCtx + 'static
 {
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<SyncLoadMotifResources<C>>>, ThoError>{
-        SYNC_LOAD_MOTIF_RESOURCES_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SYNC_LOAD_MOTIF_RESOURCES_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
 
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
@@ -1412,7 +1414,7 @@ where
     C:RunCtx + 'static
 {
     async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLoadRandomSlices<C>>>, ThoError> {
-        SYNC_LOAD_RANDOM_SLICES_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SYNC_LOAD_RANDOM_SLICES_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LOAD_RANDOM_SLICES_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),

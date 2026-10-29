@@ -366,7 +366,7 @@ where
     }
 
     fn tho_device_idx(&self) -> usize {
-        ThoDevice::from(self.var_store.device()).tho_device_idx()
+        ThoDevice::try_from(self.var_store.device()).expect("CPU/CUDA tensor device").tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -767,7 +767,7 @@ fn opt_param_alt_value<P: FieldName>(hp: &Hyperparameter<P>) -> Option<Val> {
 pub async fn opt_train<P, R, F, N: Debug + Default, A: Debug + Send + Sync + 'static>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
-    run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
+    run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P> >,
     descr: &str,
     reusable_completed_trials: Vec<CompletedTrial>,
 ) -> anyhow::Result<(A, N, R, f32)>
@@ -879,7 +879,8 @@ where
         debug!("opt_train: best_config={:?}", best_config);
 
         debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={}", min_loss.read());
-        trace!("opt_train: done opt, descr={descr} min_var_store={min_var_store:?}");//can cause Internal torch error: CUDA error: device-side assert triggered
+        // Formatting a VarStore can inspect tensors after a failed CUDA operation.
+        trace!("opt_train: done opt, descr={descr}");
         collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)

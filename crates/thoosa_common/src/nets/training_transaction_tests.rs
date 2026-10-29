@@ -27,7 +27,7 @@ fn module(optimizer: u8) -> Result<ThoTrainModule<AnyDims, AnyDims>, ThoError> {
             })?;
         }
         Ok(module)
-    }, 0.01), Cpu.into())?)
+    }, 0.01), thoosa_common::tho_device::ThoDevice::from(0usize))?)
 }
 
 fn variable(module: &ThoTrainModule<AnyDims, AnyDims>, name: &str) -> Result<Tensor, ThoError> {

@@ -1,13 +1,4 @@
 #![feature(iter_array_chunks)]
-#![allow(
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    dead_code,
-    non_snake_case,
-    redundant_semicolons,
-    noop_method_call
-)]
 #![allow(deprecated)]
 extern crate core;
 
@@ -16,7 +7,7 @@ mod tokio_rusqlite;
 use anyhow::Context as _;
 pub use rusqlite;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::array::IntoIter;
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
@@ -136,9 +127,24 @@ impl AsRef<Vec<u32>> for TrainedNetsBy {
     }
 }
 
+/// Explicit SQLite import capability. Ordinary Store consumers use the actor-backed
+/// operations; only schema-aware import code should open a separate writer.
+pub trait ExternalSqlWriter: Debug + Send + Sync {
+    fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
+}
+
+impl ExternalSqlWriter for SqlStore {
+    fn open_external_writer_conn(&self) -> anyhow::Result<Connection> {
+        let mut conn = Connection::open_with_flags(&self.conn_target, self.conn_flags)?;
+        create_tables(&mut conn)?;
+        Self::init_external_writer_conn(&mut conn)?;
+        Ok(conn)
+    }
+
+}
+
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
-    fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
     async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
     async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
     async fn save_run_config<'a, 'b, 'c>(
@@ -195,8 +201,6 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn list_input_nets(&self, net_id: u32) -> anyhow::Result<Vec<u32>>;
 
     async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> anyhow::Result<RunConfigRow>;
-    #[cfg(test)]
-    fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
 
 mock! {
@@ -204,7 +208,6 @@ mock! {
 
     #[async_trait]
     impl Store for Store {
-        fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
         async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
         async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
         async fn save_run_config<'a, 'b, 'c>(
@@ -259,8 +262,6 @@ mock! {
         async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> anyhow::Result<()>;
         async fn list_input_nets(&self, net_id: RunConfigId) -> anyhow::Result<Vec<u32>>;
         async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> anyhow::Result<RunConfigRow>;
-        #[cfg(test)]
-        fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
 
     #[async_trait]
@@ -321,8 +322,6 @@ pub enum LimitBy {
 //TODO move all prepared statements into init
 #[derive(Debug)]
 pub struct SqlStore {
-    #[cfg(test)]
-    conn: Mutex<Connection>,
     writer: tokio_rusqlite::Connection,
     readers: Arc<Vec<tokio_rusqlite::Connection>>,
     conn_target: String,
@@ -583,13 +582,6 @@ impl ResourceStore for SqlStore {
 #[async_trait]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
-    fn open_external_writer_conn(&self) -> anyhow::Result<Connection> {
-        let mut conn = Connection::open_with_flags(&self.conn_target, self.conn_flags)?;
-        create_tables(&mut conn)?;
-        Self::init_external_writer_conn(&mut conn)?;
-        Ok(conn)
-    }
-
     async fn save_import(&self, descr: String) -> anyhow::Result<u32> {
         self.with_writer_conn("save_import", move |conn| {
             let t = conn.transaction()?;
@@ -1241,10 +1233,7 @@ impl Store for SqlStore {
         .await
     }
 
-    #[cfg(test)]
-    fn conn(&self) -> &Mutex<Connection> {
-        &self.conn
-    }
+
 }
 
 fn init_sqlite_writer(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
@@ -1730,8 +1719,6 @@ impl SqlStore {
         };
 
         Ok(Self {
-            #[cfg(test)]
-            conn: Mutex::new(conn),
             writer,
             readers: Arc::new(readers),
             conn_target,
@@ -1758,8 +1745,6 @@ impl SqlStore {
         }
 
         Ok(Self {
-            #[cfg(test)]
-            conn: Mutex::new(Connection::open(&path_buf)?),
             writer: tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_ONLY).await?,
             readers: Arc::new(readers),
             conn_target,
@@ -1805,8 +1790,6 @@ impl SqlStore {
         };
 
         Ok(Self {
-            #[cfg(test)]
-            conn: Mutex::new(conn),
             writer,
             readers: Arc::new(readers),
             conn_target: uri,

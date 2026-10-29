@@ -84,6 +84,6 @@ fn test_label_stack_reuses_stage_ipc() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(MotifsWsMockBuilder::new(None, 1, 100, 16).build()));
         CudaWorker::run_worker(sock, &ws, HashMap::from([
             (STACK_APPLIED_LABEL_NETS_ENDPOINT.into(), Box::new(counted_init) as InitFn<dyn MotifsWorkspace>),
-        ]), Device::Cuda(0).into()).await
+        ]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }

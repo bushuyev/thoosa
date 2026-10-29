@@ -195,7 +195,7 @@ fn test_simp_ipc() -> Result<(), ThoError> {
                 sock_path,
                 &ws,
                 HashMap::from([(SIMP_ENDPOINT.to_string(), Box::new(simp_stage_init) as InitFn)]),
-                ThoDevice::from(Device::Cuda(0)),
+                ThoDevice::from(1usize),
             ).await
         },
     )

@@ -407,7 +407,7 @@ mod tests {
                 let actor = GlobalCtx::global().cuda_actor(1);
                 let runner = GlobalCtx::global().get_runner(1);
                 let gate = runner.cuda_gate().unwrap();
-                let retained = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, "retained", || async {
+                let retained = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, GlobalCtx::global().cuda_activity_gate(1), GlobalCtx::global().is_ipc(), "retained", || async {
                     Ok(Arc::new(DynSyncStageEnum::<SyncConsumeTestStage>::Proxy {
                         stage: Arc::new(ProxyStage::proxy_with_input_cloner_recreatable(SYNC_CONSUME_TEST_ENDPOINT, Some("retained".into()), 1, Box::new(()), Arc::new(|input: &ThoTensor<LoadedTensor, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>))).await?),
                         init: (),
@@ -428,7 +428,7 @@ mod tests {
                     assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset));
                     tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("endpoint recovery timed out")??;
                     assert_eq!(gate.device_generation().0, generation.0 + 1);
-                    let cached = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, "retained", || async {
+                    let cached = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, GlobalCtx::global().cuda_activity_gate(1), GlobalCtx::global().is_ipc(), "retained", || async {
                         Err::<Arc<DynSyncStageEnum<SyncConsumeTestStage>>, _>(ThoError::new("retained cache unexpectedly reconstructed the proxy"))
                     }).await?;
                     assert!(Arc::ptr_eq(&cached, &retained));
@@ -455,7 +455,7 @@ mod tests {
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(1usize)).await
             },
         )
     }
@@ -495,7 +495,7 @@ mod tests {
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(1usize)).await
             },
         )
     }
@@ -556,7 +556,7 @@ mod tests {
             },
             async |sock_path| {
                 let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+                CudaWorker::run_worker(sock_path, &ws, sync_consume_endpoint_inits(), ThoDevice::from(1usize)).await
             },
             tokio::runtime::Builder::new_current_thread().max_blocking_threads(1),
         )
@@ -610,7 +610,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_consume_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -626,7 +626,7 @@ mod tests {
         const MUL_K: f64 = 2.;
         let clc_dim = if use_matmul { size[0] } else { size[1] };
         // All resource stages use the same CLC operation, so share one proxy and its typed worker endpoint identity.
-        let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0u32, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
+        let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0u32, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, thoosa_common::tho_device::ThoDevice::from(1usize), use_matmul).await);
 
         // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
 
@@ -720,7 +720,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -741,7 +741,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -774,7 +774,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -808,7 +808,7 @@ mod tests {
                             ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
                         ),
                         Float,
-                        Device::Cuda(0).into(),
+                        thoosa_common::tho_device::ThoDevice::from(1usize),
                         true,
                     ).await);
 
@@ -836,7 +836,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -873,7 +873,7 @@ mod tests {
                             ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
                         ),
                         Float,
-                        Device::Cuda(0).into(),
+                        thoosa_common::tho_device::ThoDevice::from(1usize),
                         true,
                     ).await);
 
@@ -939,7 +939,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -967,7 +967,7 @@ mod tests {
                             Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
                         ),
                         Float,
-                        Device::Cuda(0).into(),
+                        thoosa_common::tho_device::ThoDevice::from(1usize),
                         false,
                     ).await);
                     run_mul_task_invocations(
@@ -989,7 +989,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -1022,7 +1022,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_model_test_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -1060,7 +1060,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_model_test_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -1081,7 +1081,7 @@ mod tests {
                     sock_path,
                     &ws,
                     sync_clc_endpoint_inits(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -1129,7 +1129,7 @@ mod tests {
                         sock_path,
                         &ws,
                         sync_ab_clc_endpoint_inits(),
-                        ThoDevice::from(Cuda(0)),
+                        ThoDevice::from(1usize),
                     ).await
                 },
             )
@@ -1153,7 +1153,7 @@ mod tests {
                         sock_path,
                         &ws,
                         sync_ab_clc_endpoint_inits(),
-                        ThoDevice::from(Cuda(0)),
+                        ThoDevice::from(1usize),
                     ).await
                 },
             )
@@ -1236,7 +1236,7 @@ mod tests {
                     sock_path,
                     &ws,
                     HashMap::new(),
-                    ThoDevice::from(Device::Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )

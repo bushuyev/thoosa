@@ -459,7 +459,7 @@ impl CudaWorker {
                     sock_path,
                     &ws,
                     init_map,
-                    ThoDevice::from(Device::Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await//TODO Cuda(0)
             })?;
 
@@ -485,7 +485,7 @@ impl CudaWorker {
         // Identity comes from the parent before requests are accepted, never
         // from a tensor's numeric key or a request supplied by the caller.
         let worker_id: CudaWorkerId = serde_json::from_str(&std::env::var(cuda_process::WORKER_ID_ENV).context("missing CUDA worker identity")?)?;
-        let cuda_device = tho_device.gpu_ordinal();
+        let cuda_device = tho_device.gpu_ordinal()?;
 
         let exec_stream_pool = ExecutionStreamPool::new(
             (0..WORKER_EXEC_STREAMS)
@@ -572,7 +572,7 @@ impl CudaWorker {
                 Operation::H2dCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
                     debug!("process_worker_request: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
 
-                    let cuda_device = context.tho_device.gpu_ordinal();
+                    let cuda_device = context.tho_device.gpu_ordinal()?;
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "H2D source")?;
 
                     let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
@@ -610,7 +610,7 @@ impl CudaWorker {
                     debug!("run_worker: Operation::D2hCopy tensor_key={tensor_key:?} kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len} arena_offset={arena_offset}");
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "D2H destination")?;
 
-                    let cuda_device = context.tho_device.gpu_ordinal();
+                    let cuda_device = context.tho_device.gpu_ordinal()?;
                     // Hold the transaction record until the copy synchronizes; a
                     // concurrent finish cannot release/purge its source tensors.
                     let export_endpoint = match &tensor_key {

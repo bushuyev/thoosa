@@ -220,7 +220,7 @@ fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), 
         }).await?
     }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
 
@@ -280,7 +280,7 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
         }).await?
     }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
 
@@ -317,7 +317,7 @@ fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoErro
         }).await?
     }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
 
@@ -388,7 +388,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
         }).await?
     }, async |sock| {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
 
@@ -418,7 +418,7 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
         let worker: super::worker_msg::CudaWorkerId = serde_json::from_str(&std::env::var(super::cuda_process::WORKER_ID_ENV)?)?;
         if worker.generation.0 > 0 { anyhow::bail!("injected failure before replacement readiness"); }
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), Device::Cuda(0).into()).await
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(initialize) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
 

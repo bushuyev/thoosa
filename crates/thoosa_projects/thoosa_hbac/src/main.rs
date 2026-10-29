@@ -66,11 +66,11 @@ pub enum HbacAppCommands {
 
 #[async_trait]
 impl StageCommand for HbacAppCommands {
-    type Store = Arc<dyn MotifsStore>;
+    type Store = Arc<SqlStore>;
     type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, service:&Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
+    async fn run(self, service:&Arc<SqlStore>, ws: &Arc<RwLock<Box<dyn thoosa_motifs::motifs_ws::MotifsWorkspace>>>, ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             HbacAppCommands::CommonCommands(c) => {
                 c.run(&(Arc::clone(&service) as Arc<dyn Store>), ws, ctx).await
@@ -79,7 +79,7 @@ impl StageCommand for HbacAppCommands {
                 c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
             }
             HbacAppCommands::Hbac(c) => {
-                c.run(&(Arc::clone(&service) as Arc<dyn MotifsStore>), ws, ctx).await
+                c.run(service, ws, ctx).await
             }
         }
     }
@@ -104,7 +104,7 @@ const LABELS: [&str; 6] = ["seizure", "lpd", "gpd", "lrda", "grda", "other"];
 
 #[async_trait]
 impl StageCommand for HbacCommands {
-    type Store = Arc<dyn MotifsStore>;
+    type Store = Arc<SqlStore>;
     type Workspace = dyn thoosa_motifs::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
@@ -125,7 +125,7 @@ impl StageCommand for HbacCommands {
                 };
                 track_await!(import_resources(
                     &ws,
-                    store,
+                    store.as_ref(),
                     &LABELS,
                     || data::labeled_resourses(&import_resources_args.source_path, "train.csv"),
 
@@ -154,6 +154,7 @@ impl StageCommand for HbacCommands {
                 Ok(())
             }
             HbacCommands::RunAll(run_all_args) => {
+                let store: &Arc<dyn MotifsStore> = &(store.clone() as Arc<dyn MotifsStore>);
                 let loader = init_loader(ws);
 
                 let all_configs = run_all_config_0(&run_all_args);
@@ -249,7 +250,7 @@ fn main() -> anyhow::Result<()> {
 
         run_common_cli(
             args.common_args.clone(),
-            Arc::clone(&store) as Arc<dyn MotifsStore>,
+            Arc::clone(&store),
             Arc::clone(&ws),
             |source_path, key| {
                 thoosa_motifs::data::parquet_to_tensor_by_path(

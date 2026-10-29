@@ -88,6 +88,9 @@ impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>
     }
 }
 
+/// Standard owned configuration containers used by training orchestration.
+pub type TrainingRunConfigs<F> = OptRunConfigs<Vec<NamedVal<F>>, Vec<NamedRange<F>>, Vec<Hyperparameter<F>>, F>;
+
 #[derive(Debug, Clone)]
 pub struct OptRunConfigs<CP, GP, OP, T> {
     grid_run_config_source: GridRunConfigs<CP, GP>,

@@ -12,9 +12,16 @@ impl Deref for ThoDevice {
     }
 }
 
-impl From<Device> for ThoDevice {
-    fn from(value: Device) -> Self {
-        ThoDevice(value)
+// Only CPU/CUDA devices with a representable application index enter this wrapper.
+impl TryFrom<Device> for ThoDevice {
+    type Error = thoosa_shared::ThoError;
+
+    fn try_from(value: Device) -> Result<Self, Self::Error> {
+        match value {
+            Device::Cpu => Ok(Self(value)),
+            Device::Cuda(ordinal) if ordinal < usize::MAX => Ok(Self(value)),
+            _ => Err(thoosa_shared::ThoError::new(format!("unsupported device: {value:?}"))),
+        }
     }
 }
 
@@ -40,19 +47,19 @@ impl ThoDevice {
             Device::Cpu => 0,
             Device::Cuda(v) => v + 1,
             _ => {
-                unimplemented!()
+                unreachable!("device validated at construction")
             }
         }
     }
 
-    pub fn gpu_ordinal(&self) -> usize {
+    pub fn gpu_ordinal(&self) -> Result<usize, thoosa_shared::ThoError> {
         match &self.0 {
             Device::Cpu => {
-                panic!("not a gpu device")
+                Err(thoosa_shared::ThoError::new("CPU has no GPU ordinal"))
             },
-            Device::Cuda(v) => *v,
+            Device::Cuda(v) => Ok(*v),
             _ => {
-                unimplemented!()
+                unreachable!("device validated at construction")
             }
         }
     }
@@ -60,3 +67,19 @@ impl ThoDevice {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_supported_devices_and_index_boundaries() {
+        assert_eq!(ThoDevice::try_from(Device::Cpu).unwrap().tho_device_idx(), 0);
+        assert_eq!(ThoDevice::try_from(Device::Cuda(2)).unwrap().tho_device_idx(), 3);
+        assert_eq!(Device::from(ThoDevice::from(usize::MAX)), Device::Cuda(usize::MAX - 1));
+        assert!(ThoDevice::try_from(Device::Cuda(usize::MAX)).is_err());
+        assert!(ThoDevice::try_from(Device::Mps).is_err());
+        assert!(ThoDevice::try_from(Device::Vulkan).is_err());
+        assert!(ThoDevice::from(0usize).gpu_ordinal().is_err());
+    }
+}

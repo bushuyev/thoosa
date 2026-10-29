@@ -5,11 +5,11 @@
 #![allow(incomplete_features)]
 #![allow(confusable_idents)]
 #![allow(deprecated)]
-#![allow(unused_imports, unused_variables, unused_mut, dead_code)]
 extern crate core;
 extern crate self as thoosa_common;
 
 pub mod utils;
+pub mod run_config_loader;
 pub mod tho_device;
 
 pub mod bool_iter;

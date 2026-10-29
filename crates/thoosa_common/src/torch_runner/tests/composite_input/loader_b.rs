@@ -22,7 +22,7 @@ use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stag
 use thoosa_shared::{ThoError, mono_key};
 
 #[derive(Debug, Clone, CpuData, Hash, Eq, PartialEq, Named)]
-#[dummy_data(clone)]
+#[cpu_data(shallow)]
 pub(super) struct BStageInput {
     id: MonoKey,
     db_id: u32,

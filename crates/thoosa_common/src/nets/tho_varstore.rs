@@ -160,9 +160,9 @@ where
     fn device(&self) -> ThoDevice {
         match self {
             OptSnapshot::Opt { vs,.. }| OptSnapshot::Snapshot { vs,.. } => {
-                vs.device().into()
+                ThoDevice::try_from(vs.device()).expect("CPU/CUDA model device")
             }
-            OptSnapshot::Offloaded(_) => Cpu.into(),
+            OptSnapshot::Offloaded(_) => thoosa_common::tho_device::ThoDevice::from(0usize),
         }
     }
 }
@@ -307,7 +307,7 @@ where
 
     fn capture_state(&self) -> Result<TrainingState, ThoError> {
         let (vs, snapshot) = match &self.opt_state {
-            OptSnapshot::Opt { opt, vs, .. } => (vs, unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::from(vs.device()).tho_device_idx())? }),
+            OptSnapshot::Opt { opt, vs, .. } => (vs, unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? }),
             _ => return Err(ThoError::new("training state is not ready for IPC export")),
         };
         let mut tensors = StateTensors::default();
@@ -481,7 +481,7 @@ where
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
                 OptSnapshot::Opt { opt, vs, module } => {
-                    (unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::from(vs.device()).tho_device_idx())? }, vs)
+                    (unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? }, vs)
                 }
                 _ => {
                     // var store should be already on cpu
@@ -490,7 +490,7 @@ where
             };
 
             self.opt_state = OptSnapshot::Snapshot {
-                cpu_snap:clone_owned_optimizer_snapshot_to(cuda_snapshot, Cpu.into()).await?,
+                cpu_snap:clone_owned_optimizer_snapshot_to(cuda_snapshot, thoosa_common::tho_device::ThoDevice::from(0usize)).await?,
                 vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
             };
 
@@ -751,7 +751,7 @@ pub async fn clone_var_store_to(
         tho_device.tho_device_idx()
     } else  {
         assert_ne!(src.device(), Cpu);
-        Into::<ThoDevice>::into(src.device()).tho_device_idx()
+        ThoDevice::try_from(src.device())?.tho_device_idx()
     };
 
     /*
@@ -993,7 +993,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
              */
             |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
             LEARNING_RATE,
-        ), Cuda(0).into())?;
+        ), thoosa_common::tho_device::ThoDevice::from(1usize))?;
 
         for epoch in 1..=EPOCHS {
 
@@ -1193,14 +1193,14 @@ mod tests {
         debug!("source variables={:?}",vs_cpu.variables().keys().collect::<Vec<_>>());
 
 
-        let vs_cuda = clone_var_store_to(&vs_cpu, Cuda(0).into()).await?;
+        let vs_cuda = clone_var_store_to(&vs_cpu, thoosa_common::tho_device::ThoDevice::from(1usize)).await?;
 
         let cuda_vars = vs_cuda.variables();
         for (name, tensor) in &cuda_vars {
             debug!("name={name}, device={:?}, shape={:?}, requires_grad={}",tensor.device(),tensor.size(),tensor.requires_grad(),);
         }
 
-        let cpu_vars_1 = clone_var_store_to(&vs_cuda, Cpu.into()).await?;
+        let cpu_vars_1 = clone_var_store_to(&vs_cuda, thoosa_common::tho_device::ThoDevice::from(0usize)).await?;
 
         let cpu_vars_1 = cpu_vars_1.variables();
         assert!(cpu_t_0.allclose(cpu_vars_1.get("my_module.t_0").expect("no cpu t_0"), 0.01, 0.01, false));

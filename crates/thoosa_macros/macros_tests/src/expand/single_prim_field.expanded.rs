@@ -364,12 +364,7 @@ for SingleFieldRangeOrValue<SingleFieldFields> {
     fn opt_run_configs(
         &self,
     ) -> thoosa_shared::anyhow::Result<
-        thoosa_shared::run_configs::OptRunConfigs<
-            Vec<thoosa_shared::val::NamedVal<SingleFieldFields>>,
-            Vec<thoosa_shared::val::NamedRange<SingleFieldFields>>,
-            Vec<thoosa_shared::hyperparameter::Hyperparameter<SingleFieldFields>>,
-            SingleFieldFields,
-        >,
+        thoosa_shared::run_configs::TrainingRunConfigs<SingleFieldFields>,
     > {
         let mut const_params = Vec::new();
         let mut grid_params = Vec::new();
