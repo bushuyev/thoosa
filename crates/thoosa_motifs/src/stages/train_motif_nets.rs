@@ -758,12 +758,13 @@ where
         debug!("TrainMotifNets::run: futures.len={}", futures.len());
 
 
-        // Every selected motif is required; never publish a partial training result.
+        // A motif that cannot fit after OOM recovery must not discard the other trained nets.
+        // Only successful results are saved, so skipped motifs never get downstream net IDs.
         let results = track_await!(collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
             FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
+            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort, thoosa_shared::DataErrorKind::OOMHandlingFailed]),
             "train motif",
         )).await?;
 
@@ -1615,13 +1616,15 @@ mod tests {
                         vec![select_motifs_run_config_id],
                         Ok(
                             HashMap::from([
-                                (select_motifs_run_config_id, vec![vec![(motif_id, 1.0f64)]])
+                                (select_motifs_run_config_id, vec![vec![(motif_id, 1.0f64), (11, 1.0f64)]])
                             ])
                         )
                     )
                 ])
                 .with_list_output_run_config_ids([(select_motifs_run_config_id, Ok(vec![]))])
                 .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_config_id)))])
+                // Inject exhausted recovery alongside a healthy motif to exercise the real collection policy.
+                .with_list_motif_slices(11, Some(vec![select_motifs_run_config_id]), None, None, Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: "oversized motif".into() }.context("load motif")))
 
                 .build();
 
@@ -1687,6 +1690,8 @@ mod tests {
         }
 
         debug!("test_num_layers_opt: result={r:?}");
+        // This is the complete list consumed by save(); the failed motif must not be persisted.
+        assert_eq!(r.train_motif_nets_results.iter().map(|net| net.motif_id).collect::<Vec<_>>(), vec![motif_id]);
         assert!(r.train_motif_nets_results[0].loss < 0.69);
         run_test_net(&r.train_motif_nets_results[0].params, &r.train_motif_nets_results[0].vs)?;
 

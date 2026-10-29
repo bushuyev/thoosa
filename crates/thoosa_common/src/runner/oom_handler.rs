@@ -1359,7 +1359,8 @@ where
             #[cfg(tho_debug)]
             GlobalCtx::global().cuda_actor(device_idx).debug_worker().await?;
 
-            Err(ThoError::new(format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task"))))
+            // Exhausted adjustments may exclude this data item, without making it retryable again.
+            Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task")) })
         }
         Ok(o) => {
             debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());
@@ -2037,6 +2038,22 @@ mod tests {
         started.notified().await;
         drop(run);
         release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(2), super::oom_executor(1).submit(0, async { Ok(()) }, None)).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_exhausted_oom_is_skippable_and_releases_runner() {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let (task, task_calls) = mock_runnable([Err(ThoError::oom()), Err(ThoError::oom())]);
+        let (adjuster, adjust_calls) = mock_context_adjuster(1);
+        let handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![Adjusters::RunContext(run_ctx_adjuster(adjuster))], None);
+        let ctx = crate::runner::common::mock_run_ctx::build().with_id(0).with_device_idx(1).with_max_other_parallel(1).with_branch(1).finish();
+        let error = handler.run(&Arc::new(task), Arc::new(BorrowOnlyInput::new(TestInput::new(1))), ctx, WithRunCtxContext::new(super::MockRunCtxContext::new())).await.unwrap_err().context("motif training");
+        assert_eq!(error.data_error_kind(), Some(thoosa_shared::DataErrorKind::OOMHandlingFailed));
+        assert!(!error.is_retryable_oom());
+        assert_eq!(task_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(adjust_calls.load(Ordering::SeqCst), 1);
+        // Skipping an oversized item must also let the next item's GPU work proceed.
         tokio::time::timeout(std::time::Duration::from_secs(2), super::oom_executor(1).submit(0, async { Ok(()) }, None)).await.unwrap().unwrap();
     }
 
