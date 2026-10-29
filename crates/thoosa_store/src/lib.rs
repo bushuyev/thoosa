@@ -390,8 +390,7 @@ impl ResourceStore for SqlStore {
                         row.get::<usize, u32>(3)?,
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             Ok(resources)
@@ -410,12 +409,11 @@ impl ResourceStore for SqlStore {
 
                 stmt.query_map([group_descr.as_str()], |row| {
                     Ok((
-                        row.get::<usize, usize>(0).expect("row 0 in list_resource_set_group_sets"),
-                        row.get::<usize, String>(1).expect("row 1 in list_resource_set_group_sets"),
+                        row.get::<usize, usize>(0)?,
+                        row.get::<usize, String>(1)?,
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             debug!("list_resource_set_group_sets: group_descr={group_descr:?} group_sets={group_sets:?}");
@@ -438,12 +436,11 @@ impl ResourceStore for SqlStore {
 
                 stmt.query_map([group_descr.as_str()], |row| {
                     Ok((
-                        row.get::<usize, String>(0).expect("row 0 in list_group_labeled_resources_sets"),
-                        row.get::<usize, String>(1).expect("row 1 in list_group_labeled_resources_sets"),
+                        row.get::<usize, String>(0)?,
+                        row.get::<usize, String>(1)?,
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             debug!("list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}");
@@ -481,15 +478,11 @@ impl ResourceStore for SqlStore {
                 let key = row.get::<usize, u32>(0)?;
                 let labels_p = row.get::<usize, String>(3)?;
 
-                let labels_p_vec = labels_p.split(",")
-                    .map(|label_p| {
-                        let mut label_p_v = label_p.split("/");
-                        (label_p_v.next().expect("label").into(), label_p_v.next().expect("p").parse::<f32>().expect("parse"))
-                    })
-                    .fold(HashMap::new(), |mut a: HashMap<String, f32>, v| {
-                        a.insert(v.0, v.1);
-                        a
-                    });
+                let labels_p_vec = labels_p.split(',').map(|entry| {
+                    let (label, probability) = entry.rsplit_once('/').ok_or_else(|| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid label probability"))))?;
+                    let probability = probability.parse::<f32>().map_err(|error| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error)))?;
+                    Ok((label.to_string(), probability))
+                }).collect::<rusqlite::Result<HashMap<String, f32>>>()?;
 
                 trace!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
 
@@ -502,7 +495,7 @@ impl ResourceStore for SqlStore {
                     ),
                     labels.iter().map(|(_label_id, label)| *labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>()
                 ))
-            })?.map(|v| v.unwrap()).collect();
+            })?.collect::<rusqlite::Result<Vec<_>>>()?;
 
             debug!("list_resource_random_in_group: r.len={:?}", r.len());
             Ok(r)
@@ -532,8 +525,7 @@ impl ResourceStore for SqlStore {
                         row.get::<usize, u32>(3)?
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             Ok(group_sets)
@@ -556,8 +548,7 @@ impl ResourceStore for SqlStore {
                         row.get::<usize, u32>(3)?
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             } else {
                 let mut stmt = conn.prepare("SELECT r.id, r.import_id, r.key, r.length FROM resources AS r ORDER BY RANDOM();")?;
                 stmt.query_map([], |row| {
@@ -568,8 +559,7 @@ impl ResourceStore for SqlStore {
                         row.get::<usize, u32>(3)?
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             Ok(resources)
@@ -817,8 +807,7 @@ impl Store for SqlStore {
                         row.get::<usize, u32>(3)?,
                     ))
                 })?
-                .map(|v| v.unwrap())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             Ok(resources)
@@ -1022,26 +1011,26 @@ impl Store for SqlStore {
                 stmt.query_map([run_config_id], |row| {
                     Ok((
                         row.get::<usize, String>(0)?,
-                        row.get::<usize, f64>(1).ok(),
-                        row.get::<usize, i64>(2).ok(),
-                        row.get::<usize, String>(3).ok(),
-                        row.get::<usize, u8>(4).ok().map(|v| if v == 1 { true } else { false }),
-                        row.get::<usize, u8>(5).ok().map(|v| if v == 1 { true } else { false }).unwrap_or(false),
+                        row.get::<usize, Option<f64>>(1)?,
+                        row.get::<usize, Option<i64>>(2)?,
+                        row.get::<usize, Option<String>>(3)?,
+                        row.get::<usize, Option<bool>>(4)?,
+                        row.get::<usize, Option<bool>>(5)?.unwrap_or(false),
                     ))
                 })?
-                .map(|v| v.expect(format!("can't get run_config_values for {}", run_config_id).as_str()))
-                .fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value, bool_value, unsigned)| {
-                    a.insert(
-                        name.clone(),
-                        real_value
-                            .map(|v| v.into())
-                            .or(int_value.map(|v| if unsigned { UInt(v as u32) } else { Val::Int(v) }))
-                            .or(str_value.map(|v| v.into()))
-                            .or(bool_value.map(|v| v.into()))
-                            .expect(format!("no value for {}", name).as_str()),
-                    );
-                    a
+                // NULL is optional data; a typed decoding failure must remain an error.
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .map(|(name, real_value, int_value, str_value, bool_value, unsigned)| {
+                    let value = if let Some(value) = real_value { Val::Real(value) }
+                    else if let Some(value) = int_value {
+                        if unsigned { UInt(u32::try_from(value).with_context(|| format!("invalid unsigned value for {name}"))?) } else { Val::Int(value) }
+                    } else if let Some(value) = str_value { Val::Str(value) }
+                    else if let Some(value) = bool_value { Val::Bool(value) }
+                    else { anyhow::bail!("no value for configuration property {name}"); };
+                    Ok((name, value))
                 })
+                .collect::<anyhow::Result<HashMap<_, _>>>()?
             };
 
             debug!("list_run_config_values: run_config_id={run_config_id} result={result:?}");
@@ -1140,8 +1129,7 @@ impl Store for SqlStore {
                         loss: row.get::<usize, f32>(3)?,
                     })
                 })?
-                .map(|v| v.unwrap())
-                .collect::<Vec<_>>()
+                .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             Ok(trained_nets)
@@ -1572,12 +1560,12 @@ impl SqlStore {
     }
 
     fn save_resources_labels_do_insert(
-        resource_keys_iter: IntoIter<(String, u32, Vec<(String, f32)>), 500>,
+        mut resource_keys_iter: IntoIter<(String, u32, Vec<(String, f32)>), 500>,
         import_id: u32,
         t: &Transaction,
     ) -> anyhow::Result<Vec<ResourceId>> {
         let (mut insert_resources_q, insert_resources_params, insert_labeled_resources_params) =
-            resource_keys_iter.fold(
+            resource_keys_iter.try_fold(
                 (
                     vec!["INSERT INTO resources (key, length, import_id) VALUES"],
                     vec![],
@@ -1598,22 +1586,22 @@ impl SqlStore {
                     let labels_ids = labels
                         .into_iter()
                         .map(|(label, p)| {
-                            (
+                            Ok((
                                 t.query_row("SELECT id FROM labels WHERE label=?", [label.as_str()], |row| row.get(0))
-                                    .expect(format!("label {} not found", label).as_str()),
+                                    .with_context(|| format!("label {label} not found"))?,
                                 p,
-                            )
+                            ))
                         })
-                        .collect::<Vec<(u32, f32)>>();
+                        .collect::<anyhow::Result<Vec<(u32, f32)>>>()?;
                     insert_labeled_resources_params.push(labels_ids);
 
-                    (
+                    Ok::<_, anyhow::Error>((
                         insert_resources_q,
                         insert_resources_params,
                         insert_labeled_resources_params,
-                    )
+                    ))
                 },
-            );
+            )?;
 
         insert_resources_q.pop();
         insert_resources_q.push(" RETURNING id");
@@ -1625,7 +1613,7 @@ impl SqlStore {
 
         let mut resource_ids: Vec<u32> = vec![];
         while let Some(row) = rows.next()? {
-            resource_ids.push(row.get_unwrap(0));
+            resource_ids.push(row.get(0)?);
         }
 
         let mut labels_iter = resource_ids
@@ -1976,8 +1964,7 @@ impl SqlStore {
                     ))
                     // row.get::<usize, u32>(0)
                 })?
-                .map(|v| v.unwrap())
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             vec
         };
@@ -2556,27 +2543,17 @@ impl SqlStore {
     ) -> anyhow::Result<Vec<RunConfigId>> {
         let mut stmt = conn.prepare("SELECT rci.input_run_config_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_config_id WHERE run_config_id=?")?;
 
-        let vec = stmt
-            .query_map([run_config_id], |row| {
-                Ok((row.get::<usize, RunConfigId>(0)?, row.get::<usize, String>(1)?))
-            })?
-            .flat_map(|v| {
-                let (run_config_id, config_type) = v.expect("no run_config_id, config_type");
-
-                if input_type
-                    .map(|input_type| input_type.to_string().ne(&config_type))
-                    .unwrap_or(false)
-                {
-                    Box::new(
-                        Self::get_input_run_config_ids_(conn, run_config_id, input_type)
-                            .unwrap()
-                            .into_iter(),
-                    ) as Box<dyn Iterator<Item =RunConfigId>>
-                } else {
-                    Box::new(std::iter::once(run_config_id)) as Box<dyn Iterator<Item =RunConfigId>>
-                }
-            })
-            .collect::<Vec<RunConfigId>>();
+        let rows = stmt.query_map([run_config_id], |row| {
+            Ok((row.get::<usize, RunConfigId>(0)?, row.get::<usize, String>(1)?))
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut vec = Vec::new();
+        for (id, config_type) in rows {
+            if input_type.is_some_and(|expected| expected != config_type) {
+                vec.extend(Self::get_input_run_config_ids_(conn, id, input_type)?);
+            } else {
+                vec.push(id);
+            }
+        }
 
         Ok(vec)
     }
@@ -3072,6 +3049,35 @@ impl MockStoreBuilder {
 
 #[cfg(test)]
 mod error_tests {
+    #[tokio::test]
+    async fn test_nullable_config_values_preserve_conversion_errors() -> anyhow::Result<()> {
+        let store = super::SqlStore::in_mem_(vec![]).await?;
+        store.with_writer_conn("configuration fixture", |conn| {
+            conn.execute_batch("CREATE TABLE run_config_values (run_config_id, name, real_value, int_value, str_value, bool_value, unsigned); INSERT INTO run_config_values VALUES (1, 'valid', NULL, 7, NULL, NULL, NULL);")?;
+            Ok(())
+        }).await?;
+        assert_eq!(super::Store::list_run_config_values(&store, 1).await?["valid"], thoosa_shared::val::Val::Int(7));
+        store.with_writer_conn("corrupt configuration fixture", |conn| {
+            conn.execute("UPDATE run_config_values SET real_value='not a number'", [])?;
+            Ok(())
+        }).await?;
+        let error = super::Store::list_run_config_values(&store, 1).await.unwrap_err();
+        assert!(error.downcast_ref::<rusqlite::Error>().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bad_resource_row_returns_database_error() -> anyhow::Result<()> {
+        let store = super::SqlStore::in_mem_(vec![]).await?;
+        store.with_writer_conn("resource fixture", |conn| {
+            conn.execute_batch("CREATE TABLE resources (id, import_id, key, length); INSERT INTO resources VALUES ('bad id', 1, 'resource', 10);")?;
+            Ok(())
+        }).await?;
+        let error = thoosa_shared::resource::ResourceStore::list_random_resources(&store, None).await.unwrap_err();
+        assert!(error.downcast_ref::<rusqlite::Error>().is_some());
+        Ok(())
+    }
+
     use super::SqlStore;
 
     #[tokio::test]
