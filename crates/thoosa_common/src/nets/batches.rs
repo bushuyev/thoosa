@@ -49,6 +49,11 @@ pub trait AsyncDataBatch<DX: Dims, DY: Dims, C: RunCtx>: Debug + Send + Sync {
 }
 
 impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch<DX, DY, C> for Arc<B> {
+    // Arc changes ownership, not the batch metadata used for progress.
+    fn num_batches(&self) -> usize {
+        self.as_ref().num_batches()
+    }
+
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<DX>, Option<BatchLengths>, ThoBatch<DY>), ThoError>> {
         self.as_ref().train_batch_stream(ctx)
     }
