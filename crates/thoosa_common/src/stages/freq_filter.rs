@@ -1177,7 +1177,7 @@ mod tests {
         let output_flat = tch_result(output.as_ref().f_view([-1]))?;
         let expected_flat = tch_result(expected.f_view([-1]))?;
 
-        assert_eq!(from::<Vec<f32>>(&output_flat), from::<Vec<f32>>(&expected_flat));
+        assert_eq!(from::<Vec<f32>>(&output_flat)?, from::<Vec<f32>>(&expected_flat)?);
 
         Ok(())
     }

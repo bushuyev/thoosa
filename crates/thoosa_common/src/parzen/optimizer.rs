@@ -1,3 +1,5 @@
+use crate::tch_error::tch_result;
+use anyhow::Context as _;
 use crate::nets::common_nets::OptConfig;
 // use rand_distr::{Uniform, Distribution};
 use crate::parzen::cpe::CategoricalParzenEstimator;
@@ -101,7 +103,7 @@ mod run_result_tests {
     }
 }
 pub trait ParzenEstimator: Send {
-    fn clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
+    fn clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>>;
     fn clc_distr_from_vec(
         &self,
         samples: &mut dyn Iterator<Item = Val>,
@@ -110,8 +112,8 @@ pub trait ParzenEstimator: Send {
 }
 
 pub trait Distribution: Debug + Send {
-    fn sample(&self, n_samples: usize) -> Vec<Val>;
-    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> Tensor;
+    fn sample(&self, n_samples: usize) -> anyhow::Result<Vec<Val>>;
+    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> anyhow::Result<Tensor>;
     fn weights(&self) -> &Tensor;
 }
 
@@ -221,8 +223,8 @@ impl TreeStructuredParzenEstimator {
             },
         )?;
 
-        self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators));
-        self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators));
+        self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators)?);
+        self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators)?);
 
         trace!("TreeStructuredParzenEstimator::update_observations: self.mvpe_lower={:?}", self.mvpe_lower);
         trace!("TreeStructuredParzenEstimator::update_observations: self.self.mvpe_upper={:?}", self.mvpe_upper);
@@ -297,39 +299,20 @@ impl TreeStructuredParzenEstimator {
     }
 
     /// variables/samples
-    fn get_config_candidates(&self, n_samples: usize) -> Vec<Vec<Val>> {
-        self.mvpe_lower
-            .as_ref()
-            .map(|mvpe_lower| {
-                debug!("TPEOptimizer::sample: mvpe_lower sample mvpe_lower={mvpe_lower:?} n_samples={n_samples}");
-
-                let r = mvpe_lower.sample_independent(n_samples);
-                debug!("TPEOptimizer::sample: mvpe_lower sample r={r:?}");
-                r
-            })
-            .unwrap_or(vec![])
+    fn get_config_candidates(&self, n_samples: usize) -> anyhow::Result<Vec<Vec<Val>>> {
+        self.mvpe_lower.as_ref().context("lower density has not been fitted")?.sample_independent(n_samples)
     }
 
-    fn compute_config_loglikelihoods(&self, config_cands: &Vec<Vec<Val>>) -> (Tensor, Tensor) {
-        let config_ll_lower = self
-            .mvpe_lower
-            .as_ref()
-            .expect("mvpe_lower")
-            .log_pdf(config_cands);
-        let config_ll_upper = self
-            .mvpe_upper
-            .as_ref()
-            .expect("mvpe_upper")
-            .log_pdf(config_cands);
-        (config_ll_lower, config_ll_upper)
+    fn compute_config_loglikelihoods(&self, config_cands: &Vec<Vec<Val>>) -> anyhow::Result<(Tensor, Tensor)> {
+        Ok((self.mvpe_lower.as_ref().context("lower density has not been fitted")?.log_pdf(config_cands)?, self.mvpe_upper.as_ref().context("upper density has not been fitted")?.log_pdf(config_cands)?))
     }
 
-    fn compute_probability_improvement(&self, config_cands: &Vec<Vec<Val>>) -> Tensor {
+    fn compute_probability_improvement(&self, config_cands: &Vec<Vec<Val>>) -> anyhow::Result<Tensor> {
         let eps = 1e-12;
-        let (cll_lower, cll_upper) = self.compute_config_loglikelihoods(config_cands);
-        let first_term = (self.percentile + eps).ln();
-        let second_term = (1.0 - self.percentile + eps).ln() + cll_upper - cll_lower;
-        second_term.logaddexp(&first_term.into()).negative()
+        let (lower, upper) = self.compute_config_loglikelihoods(config_cands)?;
+        let first = tch_result(Tensor::f_from_slice(&[(self.percentile + eps).ln()]))?;
+        let second = tch_result(tch_result(upper.f_sub(&lower))?.f_add_scalar((1.0 - self.percentile + eps).ln() as f64))?;
+        Ok(tch_result(tch_result(second.f_logaddexp(&first))?.f_neg())?)
     }
 }
 
@@ -477,7 +460,7 @@ mod tree_structured_parzen_estimator_tests {
                 true,
                 None,
             )
-            .clc_distr(Tensor::from_slice(&samples), None),
+            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
             NumericalParzenEstimator::new(
                 None,
                 -3.0f64,
@@ -486,7 +469,7 @@ mod tree_structured_parzen_estimator_tests {
                 true,
                 None,
             )
-            .clc_distr(Tensor::from_slice(&samples), None),
+            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
             NumericalParzenEstimator::new(
                 None,
                 -3.0f64,
@@ -495,8 +478,8 @@ mod tree_structured_parzen_estimator_tests {
                 true,
                 None,
             )
-            .clc_distr(Tensor::from_slice(&samples), None),
-        ]));
+            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+        ]).unwrap());
         let samples = [-2.0, 0.0, 2.0];
 
         tsp.mvpe_upper = Some(MultiVariateParzenEstimator::new(vec![
@@ -508,7 +491,7 @@ mod tree_structured_parzen_estimator_tests {
                 true,
                 None,
             )
-            .clc_distr(Tensor::from_slice(&samples), None),
+            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
             NumericalParzenEstimator::new(
                 None,
                 -3.0f64,
@@ -517,7 +500,7 @@ mod tree_structured_parzen_estimator_tests {
                 true,
                 None,
             )
-            .clc_distr(Tensor::from_slice(&samples), None),
+            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
             NumericalParzenEstimator::new(
                 None,
                 -3.0f64,
@@ -526,14 +509,14 @@ mod tree_structured_parzen_estimator_tests {
                 true,
                 None,
             )
-            .clc_distr(Tensor::from_slice(&samples), None),
-        ]));
+            .clc_distr(Tensor::from_slice(&samples), None).unwrap(),
+        ]).unwrap());
 
         let pi = tsp.compute_probability_improvement(&vec![
             vec![Val::Real(0.0), Val::Real(1.0), Val::Real(2.0)], //x0
             vec![Val::Real(0.1), Val::Real(1.1), Val::Real(2.1)], //x1
             vec![Val::Real(0.2), Val::Real(1.2), Val::Real(2.2)], //x2
-        ]);
+        ]).unwrap();
 
         debug!("pi={pi}");
         assert!(
@@ -682,7 +665,7 @@ where
                 self.cs.random_sample()
             } else {
                 debug!("AsyncTPEOptimizerImpl::optimize: sample i={i} ");
-                self.sample()
+                self.sample()?
             };
 
             let eval_config_named = eval_config
@@ -744,9 +727,9 @@ where
         Ok(best_config.unwrap_or(vec![]))
     }
 
-    fn sample(&self) -> Vec<Val> {
+    fn sample(&self) -> anyhow::Result<Vec<Val>> {
         let mut candidate_sets = vec![
-            self.tpe_samplers[Self::LOSS_METRIC].get_config_candidates(Self::N_EI_CANDIDATES),
+            self.tpe_samplers[Self::LOSS_METRIC].get_config_candidates(Self::N_EI_CANDIDATES)?,
         ];
         for constraint_name in &self.constraint_keys {
             if self.constraints[constraint_name].is_infinite() {
@@ -754,30 +737,27 @@ where
             }
 
             candidate_sets.push(
-                self.tpe_samplers[constraint_name].get_config_candidates(Self::N_EI_CANDIDATES),
+                self.tpe_samplers[constraint_name].get_config_candidates(Self::N_EI_CANDIDATES)?,
             );
         }
 
         let config_cands = stack_params(candidate_sets);
 
         let mut pi_config = self.tpe_samplers[Self::LOSS_METRIC]
-            .compute_probability_improvement(&config_cands);
+            .compute_probability_improvement(&config_cands)?;
         for constraint_name in &self.constraint_keys {
             if self.constraints[constraint_name].is_infinite() {
                 continue;
             }
 
-            pi_config += self.tpe_samplers[constraint_name].compute_probability_improvement(&config_cands);
+            pi_config = tch_result(pi_config.f_add(&self.tpe_samplers[constraint_name].compute_probability_improvement(&config_cands)?))?;
         }
 
         trace!("AsyncTPEOptimizerImpl::sample: config_cands={config_cands:?}");
-        trace!("AsyncTPEOptimizerImpl::sample: pi_config={pi_config}");
+        trace!("AsyncTPEOptimizerImpl::sample: pi_config.size={:?}", pi_config.size());
 
-        let max_i = pi_config.argmax(0, false).double_value(&[]);
-        config_cands
-            .into_iter()
-            .map(|p| p[max_i as usize].clone())
-            .collect()
+        let max_i = tch_result(tch_result(pi_config.f_argmax(0, false))?.f_int64_value(&[]))?;
+        config_cands.into_iter().map(|p| p.get(max_i as usize).cloned().context("candidate index is out of range")).collect()
     }
 }
 
