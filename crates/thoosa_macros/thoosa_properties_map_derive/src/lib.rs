@@ -42,6 +42,12 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 let field_prefix_fmt = format!("{}{{}}.", field_name_path);
                                 let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
+                                // Indexed entries alone cannot distinguish an absent vector from a present empty one.
+                                let length_key = format!("{}__len", field_name_path);
+                                chains_in_to_properties.push(quote! {
+                                    .chain(self.#field_ident.as_ref().map(|values| (thoosa_shared::conc_str(&prefix, #length_key), thoosa_shared::val::Val::Str(values.len().to_string()))).into_iter())
+                                });
+
                                 if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                     chains_in_to_properties.push(quote! {
                                         .chain(
@@ -74,7 +80,11 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                                     break;
                                                 }
                                             }
-                                            if values.is_empty() { None } else { Some(values) }
+                                            if let Some(length) = properties.get(&thoosa_shared::conc_str(&prefix, #length_key)) {
+                                                let length = usize::try_from(length)?;
+                                                thoosa_shared::anyhow::ensure!(length == values.len(), "invalid vector length for {}{}", prefix, #field_name);
+                                                Some(values)
+                                            } else if values.is_empty() { None } else { Some(values) }
                                         },
                                     });
                                 } else {
@@ -109,7 +119,11 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                                     break;
                                                 }
                                             }
-                                            if values.is_empty() { None } else { Some(values) }
+                                            if let Some(length) = properties.get(&thoosa_shared::conc_str(&prefix, #length_key)) {
+                                                let length = usize::try_from(length)?;
+                                                thoosa_shared::anyhow::ensure!(length == values.len(), "invalid vector length for {}{}", prefix, #field_name);
+                                                Some(values)
+                                            } else if values.is_empty() { None } else { Some(values) }
                                         },
                                     });
                                 }
