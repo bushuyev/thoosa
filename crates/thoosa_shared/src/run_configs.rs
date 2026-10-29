@@ -71,7 +71,7 @@ impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>
 
     pub fn to_run_configs<R>(&self) -> anyhow::Result<Vec<R>>
     where
-        R: From<std::vec::IntoIter<NamedVal<T>>>,
+        R: TryFrom<std::vec::IntoIter<NamedVal<T>>, Error = anyhow::Error>,
     {
         Ok(self.grid_to_vals()?
             .into_iter()
@@ -82,9 +82,9 @@ impl<T: FieldName + 'static> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>
                 ]
                 .concat()
                 .into_iter()
-                .into()
+                .try_into()
             })
-            .collect())
+            .collect::<anyhow::Result<Vec<_>>>()?)
     }
 }
 
@@ -137,7 +137,7 @@ impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>,
 
     pub fn to_run_configs<R>(&self) -> anyhow::Result<Vec<R>>
     where
-        R: From<std::vec::IntoIter<NamedVal<T>>>,
+        R: TryFrom<std::vec::IntoIter<NamedVal<T>>, Error = anyhow::Error>,
     {
         Ok(self.grid_run_config_source
             .grid_to_vals()?
@@ -152,9 +152,9 @@ impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>,
                 ]
                 .concat()
                 .into_iter()
-                .into()
+                .try_into()
             })
-            .collect())
+            .collect::<anyhow::Result<Vec<_>>>()?)
     }
 }
 

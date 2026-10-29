@@ -171,7 +171,7 @@ where
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -194,7 +194,7 @@ where
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -211,7 +211,7 @@ where
     B: AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + WithCommonTrainingRunConfig+ From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + WithCommonTrainingRunConfig+ TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -368,7 +368,7 @@ where
     B:AsyncDataBatch<DX, DY, C>,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + WithCommonTrainingRunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + WithCommonTrainingRunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
@@ -386,7 +386,7 @@ where
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + WithCommonTrainingRunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
+    RC: RunConfig + WithCommonTrainingRunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {

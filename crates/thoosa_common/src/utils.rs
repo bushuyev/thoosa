@@ -2520,7 +2520,7 @@ pub mod tests {
             let grid_vals: Vec<NamedVal<TestRunConfigFields>> = grid_vals.into_iter().flat_map(|range| range.into_iter()).collect::<anyhow::Result<_>>().expect("valid test ranges");
             let opt_vals: Vec<NamedVal<TestRunConfigFields>> = opt_params.iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
 
-            [const_vals.as_slice(), grid_vals.as_slice(), opt_vals.as_slice()].concat().into_iter().into()
+            [const_vals.as_slice(), grid_vals.as_slice(), opt_vals.as_slice()].concat().into_iter().try_into().expect("valid test configuration")
         }
     }
 
@@ -2598,7 +2598,7 @@ pub mod tests {
             ),
         ];
 
-        let some_struct: SomeStruct = path_vals.into_iter().into(); // SomeStructBuilder::add_path_vals(path_vals);
+        let some_struct: SomeStruct = Vec::from(path_vals).into_iter().try_into().expect("valid test configuration"); // SomeStructBuilder::add_path_vals(path_vals);
 
         debug!("some_struct={some_struct:?}");
 
@@ -2638,7 +2638,7 @@ pub mod tests {
             ),
         ];
 
-        let some_struct: SomeStruct = path_vals.into_iter().into(); // SomeStructBuilder_::add_path_vals(path_vals);
+        let some_struct: SomeStruct = Vec::from(path_vals).into_iter().try_into().expect("valid test configuration"); // SomeStructBuilder_::add_path_vals(path_vals);
         assert_eq!(some_struct.field_00, 1);
         assert_eq!(some_struct.field_01, 2.0);
         assert_eq!(some_struct.sub_struct.field_a, 3);

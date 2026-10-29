@@ -137,7 +137,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         let field_ident_str = field_ident.to_string();
                                         a.builder_add_val_match_cases.push(quote! {
                                             #fields_enum_ident::#camel_field_ident(i) => {
-                                                let v:#vec_inner_ty = val.try_into().expect(&format!("can't convert val {:?}:{}[{}] to {}", val, #field_ident_str, i, #vec_inner_ty_str));
+                                                let v:#vec_inner_ty = thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?;
                                                 self.#field_ident.insert(*i, v);
                                             }
                                         });
@@ -149,7 +149,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                                 } else {
                                                     let mut v = Vec::with_capacity(self.#field_ident.len());
                                                     for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
-                                                        assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                        thoosa_shared::anyhow::ensure!(*idx == expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
                                                         v.push(item.clone());
                                                     }
                                                     Some(v)
@@ -184,7 +184,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                         a.builder_add_val_match_cases.push(quote! {
                                             #fields_enum_ident::#camel_field_ident(i, sub_path) => {
-                                                self.#field_ident.entry(*i).or_default().add_val(sub_path, val);
+                                                self.#field_ident.entry(*i).or_default().add_val(sub_path, val)?;
                                             }
                                         });
 
@@ -196,8 +196,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                                 } else {
                                                     let mut v = Vec::with_capacity(self.#field_ident.len());
                                                     for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
-                                                        assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
-                                                        v.push(item.build());
+                                                        thoosa_shared::anyhow::ensure!(*idx == expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                        v.push(item.build()?);
                                                     }
                                                     Some(v)
                                                 }
@@ -228,7 +228,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     let field_ident_str = field_ident.to_string();
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident => {
-                                            self.#field_ident = Some(val.try_into().expect(&format!("{} field value {val:?} is not valid", #field_ident_str)));
+                                            self.#field_ident = Some(thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?);
                                         }
                                     });
 
@@ -263,12 +263,12 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident(sub_path) => {
                                             if let Some(builder) = self.#field_ident.as_mut() {
-                                                builder.add_val(sub_path, val);
+                                                builder.add_val(sub_path, val)?;
 
                                             } else {
 
                                                 let mut builder = #field_type_builder::default();
-                                                builder.add_val(sub_path, val);
+                                                builder.add_val(sub_path, val)?;
                                                 self.#field_ident = Some(builder);
                                             }
 
@@ -276,7 +276,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     });
 
                                     a.builder_assignments.push(quote!{
-                                        #field_ident: self.#field_ident.as_ref().map(|b|b.build()),
+                                        #field_ident: self.#field_ident.as_ref().map(|b|b.build()).transpose()?,
                                     });
                                 }
                             } else {
@@ -306,7 +306,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         let field_ident_str = field_ident.to_string();
                                         a.builder_add_val_match_cases.push(quote! {
                                             #fields_enum_ident::#camel_field_ident(i) => {
-                                                let v:#vec_inner_ty = val.try_into().expect(&format!("can't convert val {:?}:{}[{}] to {}", val, #field_ident_str, i, #vec_inner_ty_str));
+                                                let v:#vec_inner_ty = thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?;
                                                 self.#field_ident.insert(*i, v);
                                             }
                                         });
@@ -317,7 +317,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                                 // assert!(!self.#field_ident.is_empty(), #expect_msg); - tmp fix for empty SelectMotifsRunConfig motif_criteria in bird_clef
                                                 let mut v = Vec::with_capacity(self.#field_ident.len());
                                                 for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
-                                                    assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                    thoosa_shared::anyhow::ensure!(*idx == expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
                                                     v.push(item.clone());
                                                 }
                                                 v
@@ -349,7 +349,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                         a.builder_add_val_match_cases.push(quote! {
                                             #fields_enum_ident::#camel_field_ident(i, sub_path) => {
-                                                self.#field_ident.entry(*i).or_default().add_val(sub_path, val);
+                                                self.#field_ident.entry(*i).or_default().add_val(sub_path, val)?;
                                             }
                                         });
 
@@ -360,8 +360,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                                 // assert!(!self.#field_ident.is_empty(), #expect_msg); - tmp fix for empty SelectMotifsRunConfig motif_criteria in bird_clef
                                                 let mut v = Vec::with_capacity(self.#field_ident.len());
                                                 for (expected_idx, (idx, item)) in self.#field_ident.iter().enumerate() {
-                                                    assert_eq!(*idx, expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
-                                                    v.push(item.build());
+                                                    thoosa_shared::anyhow::ensure!(*idx == expected_idx, "sparse vec for {}: expected index {} got {}", #field_ident_str, expected_idx, idx);
+                                                    v.push(item.build()?);
                                                 }
                                                 v
                                             },
@@ -387,13 +387,13 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     let field_ident_str = field_ident.to_string();
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident => {
-                                            self.#field_ident = Some(val.try_into().expect(&format!("{} field value {val:?} is not valid", #field_ident_str)));
+                                            self.#field_ident = Some(thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?);
                                         }
                                     });
                                     let expect_msg = format!("no {}", field_ident);
 
                                     a.builder_assignments.push(quote!{
-                                        #field_ident: self.#field_ident.expect(#expect_msg),
+                                        #field_ident: thoosa_shared::anyhow::Context::context(self.#field_ident, #expect_msg)?,
                                     });
 
                                 } else {
@@ -420,12 +420,12 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident(sub_path) => {
-                                            self.#field_ident.add_val(sub_path, val);
+                                            self.#field_ident.add_val(sub_path, val)?;
                                         }
                                     });
 
                                     a.builder_assignments.push(quote!{
-                                        #field_ident: self.#field_ident.build(),
+                                        #field_ident: self.#field_ident.build()?,
                                     });
                                 }
 
@@ -458,7 +458,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                 let field_ident_str = field_ident.to_string();
                                 a.builder_add_val_match_cases.push(quote! {
                                     #fields_enum_ident::#camel_field_ident => {
-                                        let v:#inner_ty = val.try_into().expect(&format!("can't convert val {:?}:{} to {}", val, #field_ident_str, #field_type_str));
+                                        let v:#inner_ty = thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?;
                                         self.#field_ident = Some(v);
                                     }
                                 });
@@ -481,7 +481,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                 let field_ident_str = field_ident.to_string();
                                 a.builder_add_val_match_cases.push(quote! {
                                     #fields_enum_ident::#camel_field_ident => {
-                                        let v:#field_type = val.try_into().expect(&format!("can't convert val {:?}:{} to {}", val, #field_ident_str, #field_type_str));
+                                        let v:#field_type = thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?;
                                         self.#field_ident = Some(v.clone());
                                     }
                                 });
@@ -489,7 +489,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                 let expect_msg = format!("no {}", field_ident);
 
                                 a.builder_assignments.push(quote!{
-                                    #field_ident: self.#field_ident.clone().expect(#expect_msg),
+                                    #field_ident: thoosa_shared::anyhow::Context::context(self.#field_ident.clone(), #expect_msg)?,
                                 });
                             }
 
@@ -672,22 +672,22 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                         token_streams.builder_assignments.push(quote!{
                             Some(#builder_enum_ident::#variant_ident) => {
-                                #target_struct_ident::#variant_ident(self.#field_ident.build())
+                                #target_struct_ident::#variant_ident(self.#field_ident.build()?)
                             }
                         });
 
                         token_streams.builder_add_val_match_cases.push(quote!{
                             #fields_enum_ident::#variant_ident(sub_path) => {
                                 let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
-                                assert!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
+                                thoosa_shared::anyhow::ensure!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
 
-                                self.#field_ident.add_val(sub_path, val);
+                                self.#field_ident.add_val(sub_path, val)?;
                             }
                         });
                         token_streams.builder_add_val_match_cases.push(quote!{
                             #fields_enum_ident::#marker_ident => {
                                 let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
-                                assert!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
+                                thoosa_shared::anyhow::ensure!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
                                 let _ = val;
                             }
                         });
@@ -785,7 +785,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     quote! {
                         match self.#builder_enum_field.as_ref() {
                             #(#builder_assignments)*
-                            None => { panic!(#expect_msg) }
+                            None => { thoosa_shared::anyhow::bail!(#expect_msg) }
                         }
                     }
                 },
@@ -874,12 +874,14 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
     let (into_impl, set_id, get_id) = if has_run_config_opt || has_run_config_grid {
         (
             quote! {
-                impl <I:IntoIterator<Item=thoosa_shared::val::NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
-                    fn from(value: I) -> Self {
+                // Stored values are untrusted; conversion must remain fallible through builders.
+                impl TryFrom<std::vec::IntoIter<thoosa_shared::val::NamedVal<#fields_enum_ident>>> for #target_struct_ident {
+                    type Error = thoosa_shared::anyhow::Error;
+                    fn try_from(value: std::vec::IntoIter<thoosa_shared::val::NamedVal<#fields_enum_ident>>) -> Result<Self, Self::Error> {
                         let mut builder = #builder_ident::default();
 
                         for path_val in value {
-                            builder.add_val(path_val.path(), path_val.val());
+                            builder.add_val(path_val.path(), path_val.val())?;
                         }
 
                         builder.build()
@@ -1022,13 +1024,14 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
         impl #builder_ident {
 
-            pub fn add_val(&mut self, path: &#fields_enum_ident, val: &thoosa_shared::val::Val) {
+            pub fn add_val(&mut self, path: &#fields_enum_ident, val: &thoosa_shared::val::Val) -> thoosa_shared::anyhow::Result<()> {
                 #builder_add_val_match_cases
+                Ok(())
             }
 
-            pub fn build(&self) -> #target_struct_ident {
+            pub fn build(&self) -> thoosa_shared::anyhow::Result<#target_struct_ident> {
 
-                #builder_assignments
+                Ok(#builder_assignments)
             }
         }
 

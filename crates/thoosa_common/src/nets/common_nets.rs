@@ -695,43 +695,43 @@ impl TrainListener for PlotVecf32 {
     }
 }
 
-fn opt_param_property_keys<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], cs: &ConfigurationSpace<P>) -> Vec<String>
+fn opt_param_property_keys<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], cs: &ConfigurationSpace<P>) -> anyhow::Result<Vec<String>>
 where
     P: FieldName + 'static,
-    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+    R: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + ToHashmap,
 {
     let base_opt_vals = cs
         .into_iter()
         .map(|hp| NamedVal::new(hp.name().clone(), opt_param_base_value(hp)))
         .collect::<Vec<_>>();
-    let base_map = run_config_property_map::<P, R>(const_vals, grid_vals, &base_opt_vals);
+    let base_map = run_config_property_map::<P, R>(const_vals, grid_vals, &base_opt_vals)?;
 
     cs.into_iter()
         .enumerate()
         .map(|(idx, hp)| {
             let fallback = hp.name().to_string();
             let Some(alt_value) = opt_param_alt_value(hp) else {
-                return fallback;
+                return Ok(fallback);
             };
 
             let mut alt_opt_vals = base_opt_vals.clone();
             alt_opt_vals[idx] = NamedVal::new(hp.name().clone(), alt_value);
-            let alt_map = run_config_property_map::<P, R>(const_vals, grid_vals, &alt_opt_vals);
-            changed_property_key(&base_map, &alt_map).unwrap_or_else(|| {
+            let alt_map = run_config_property_map::<P, R>(const_vals, grid_vals, &alt_opt_vals)?;
+            Ok(changed_property_key(&base_map, &alt_map).unwrap_or_else(|| {
                 debug!("opt_param_property_keys: could not resolve property key for hp={hp:?}; falling back to display key {fallback}");
                 fallback
-            })
+            }))
         })
         .collect()
 }
 
-fn run_config_property_map<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], opt_vals: &[NamedVal<P>]) -> HashMap<String, Val>
+fn run_config_property_map<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], opt_vals: &[NamedVal<P>]) -> anyhow::Result<HashMap<String, Val>>
 where
     P: FieldName + 'static,
-    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+    R: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + ToHashmap,
 {
-    let run_config: R = [const_vals, grid_vals, opt_vals].concat().into_iter().into();
-    run_config.to_properties_iter(None).collect()
+    let run_config: R = [const_vals, grid_vals, opt_vals].concat().into_iter().try_into()?;
+    Ok(run_config.to_properties_iter(None).collect())
 }
 
 fn changed_property_key(base_map: &HashMap<String, Val>, alt_map: &HashMap<String, Val>) -> Option<String> {
@@ -773,7 +773,7 @@ pub async fn opt_train<P, R, F, N: Debug + Default, A: Debug + Send + Sync + 'st
 ) -> anyhow::Result<(A, N, R, f32)>
 where
     P: FieldName + 'static,
-    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+    R: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<P>>, Error = anyhow::Error> + Clone + ToHashmap,
     F: for<'a, 'b> AsyncFnMut(
             R,
             &'a mut (dyn TrainListener + 'b),
@@ -809,7 +809,7 @@ where
         let reusable_configs = if reusable_completed_trials.is_empty() {
             vec![]
         } else {
-            let reusable_param_keys = opt_param_property_keys::<P, R>(const_vals.as_slice(), grid_vals.as_slice(), &config_space);
+            let reusable_param_keys = opt_param_property_keys::<P, R>(const_vals.as_slice(), grid_vals.as_slice(), &config_space)?;
             config_space.reusable_configs_from_completed_trials_with_param_keys(
                 reusable_completed_trials.iter().cloned(),
                 StudyDirection::Minimize,
@@ -823,10 +823,13 @@ where
                 if recovery_error_moved.read().is_some() { return MAX_LOSS; }
                 debug!("opt_train: opt_vals={opt_vals:?}  ");
 
-                let run_config: R = [const_vals.as_slice(), grid_vals.as_slice(), opt_vals]
-                    .concat()
-                    .into_iter()
-                    .into();
+                let run_config: R = match [const_vals.as_slice(), grid_vals.as_slice(), opt_vals].concat().into_iter().try_into() {
+                    Ok(config) => config,
+                    Err(error) => {
+                        *recovery_error_moved.write() = Some(ThoError::from(error));
+                        return MAX_LOSS;
+                    }
+                };
 
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),//get_id - it's not set 
