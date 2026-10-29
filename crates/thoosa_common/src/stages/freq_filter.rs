@@ -1029,7 +1029,7 @@ mod tests {
         crate::ipc::tests::run_ipc_test(module_path!(), async {
             tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await?
         }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
     }
@@ -1081,7 +1081,7 @@ mod tests {
                 Ok(())
             }).await?
         }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
     }
@@ -1120,7 +1120,7 @@ mod tests {
                 Ok(())
             }).await?
         }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
     }

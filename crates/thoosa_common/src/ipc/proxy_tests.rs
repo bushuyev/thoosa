@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_simp_tensor_ipc() -> Result<(), ThoError> {
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
 
         run_ipc_test(
             module_path!(),
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn test_oom_error_ipc() -> Result<(), ThoError> {
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
 
         run_ipc_test(
             module_path!(),

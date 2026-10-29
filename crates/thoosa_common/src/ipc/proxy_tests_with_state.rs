@@ -470,7 +470,7 @@ use crate::tch_error::tch_result;
     #[test]
     fn test_with_state_ipc() -> Result<(), ThoError> {
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
 
         run_ipc_test(
             module_path!(),
@@ -547,7 +547,7 @@ use crate::tch_error::tch_result;
                 Ok::<_, ThoError>(())
             }).await?
         }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(1usize)).await
         })
     }
@@ -568,7 +568,7 @@ use crate::tch_error::tch_result;
             assert!(tch_result(tch_result(Tensor::f_full([1, 3], 5., FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?);
             Ok(())
         }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(1usize)).await
         })
     }
@@ -606,7 +606,7 @@ use crate::tch_error::tch_result;
                 Ok::<_, ThoError>(())
             }).await.map_err(|_| ThoError::new("concurrent endpoint export timed out"))?
         }, async |sock| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(1usize)).await
         })
     }
@@ -614,7 +614,7 @@ use crate::tch_error::tch_result;
     #[test]
     fn test_distinct_stateful_endpoints_ipc() -> Result<(), ThoError> {
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
 
         run_ipc_test(
             module_path!(),

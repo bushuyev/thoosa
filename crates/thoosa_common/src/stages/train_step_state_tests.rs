@@ -201,7 +201,7 @@ fn test_prepared_batches_ipc() -> Result<(), ThoError> {
     crate::ipc::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(std::time::Duration::from_secs(30), prepared_batch_round_trips()).await?
     }, async |sock| {
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
@@ -255,7 +255,7 @@ fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> 
             Ok(())
         }).await?
     }, async |sock| {
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }
@@ -410,7 +410,7 @@ fn test_train_state_ipc() -> Result<(), ThoError> {
     crate::ipc::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(std::time::Duration::from_secs(90), round_trips()).await?
     }, async |sock| {
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
         CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }

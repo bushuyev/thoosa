@@ -1,3 +1,5 @@
+use anyhow::Context as _;
+use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use parking_lot::{Mutex, RwLock};
 use std::fmt::{Debug, Display};
@@ -133,10 +135,9 @@ where
 pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<dyn MotifsStore>,
-) -> Vec<(Resource, Vec<f32>)> {
-    track_await!(store
-        .list_resource_random_in_group(group)).await
-        .expect("list_resource_random_in_group")
+) -> anyhow::Result<Vec<(Resource, Vec<f32>)>> {
+    Ok(track_await!(store
+        .list_resource_random_in_group(group)).await.with_context(|| format!("loading resources in group {group}"))?
         .into_iter()
         .map(move |(resource_id, labels_p)| {
             debug!(
@@ -148,7 +149,7 @@ pub async fn load_to_logits_tensors(
                 labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
             )
         })
-        .collect()
+        .collect())
 }
 
 pub fn parquet_to_tensor_by_path(
@@ -160,7 +161,7 @@ pub fn parquet_to_tensor_by_path(
     let tensor = Tensor::f_vstack(
         &df.columns()
             .into_iter()
-            .map(|s| series_to_tensor(s.as_series().unwrap()))
+            .map(|s| series_to_tensor(s.as_series().context("Parquet column is not a materialized series")?))
             .collect::<anyhow::Result<Vec<Tensor>>>()?,
     )?;
     Ok(tensor.f_set_requires_grad(false)?.f_to_device(device)?)
@@ -171,68 +172,44 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> anyhow::Result<DataFrame> {
 
     let df = LazyFrame::scan_parquet(
         //TODO read_parallel?
-        PlRefPath::try_from_path(path.as_ref()).unwrap(), scan_conf,
+        PlRefPath::try_from_path(path.as_ref())?, scan_conf,
     )?;
 
-    Ok(df.collect()?)
+    df.collect().with_context(|| format!("reading Parquet file {}", path.as_ref().display()))
 }
 
 pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> anyhow::Result<usize> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
-    Ok(resource_ids
-        .iter()
-        .map(|resource_id| {
-            //TODO config path
-            let df = LazyFrame::scan_parquet(
-                PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_dir, resource_id)),
-                scan_conf.clone(),
-            )
-            .unwrap()
-            .collect()
-            .unwrap();
-
-            debug!("eeg_id={:?} eeg_df.shape()={:?}", resource_id, df.shape());
-
-            df.shape().0
-        })
-        .sum())
+    resource_ids.iter().try_fold(0usize, |count, resource_id| {
+        let path = format!("{base_dir}/train_eegs/{resource_id}.parquet");
+        let df = LazyFrame::scan_parquet(PlRefPath::new(&path), scan_conf.clone())?.collect().with_context(|| format!("reading resource {path}"))?;
+        count.checked_add(df.height()).context("resource record count overflow")
+    })
 }
 
-pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
-    assert_eq!(t.size().len(), 2);
-    assert_eq!(t.size()[0] as usize, ids.len());
-    assert_eq!(t.size()[1] as usize, columns.len() - 1);
-
-    let mut df = DataFrame::new(
-        ids.len(),
-        [
-            vec![Series::new(columns[0].into(), ids).into()],
-            columns
-                .iter()
-                .skip(1)
-                .enumerate()
-                .map(|(i, c)| {
-                    let col_tensor = t.i((.., i as i64));
-                    let col_data: Vec<f32> = from::<Vec<f32>>(&col_tensor);
-                    Series::new((*c).into(), col_data).into()
-                })
-                .collect(),
-        ]
-        .concat(),
-    )
-    .unwrap();
-
-    let mut file = std::fs::File::create(path).unwrap();
-    CsvWriter::new(&mut file).finish(&mut df).unwrap();
+pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) -> anyhow::Result<()> {
+    // Validate the export shape before indexing names or creating a partial file.
+    anyhow::ensure!(!columns.is_empty() && t.size().len() == 2, "CSV export requires column names and a matrix");
+    anyhow::ensure!(t.size()[0] as usize == ids.len() && t.size()[1] as usize == columns.len() - 1, "CSV export dimensions do not match IDs and column names");
+    let mut data = vec![Series::new(columns[0].into(), ids).into()];
+    for (index, name) in columns.iter().skip(1).enumerate() {
+        let tensor = tch_result(t.f_select(1, index as i64))?;
+        let values = tch_result(Vec::<f32>::try_from(&tensor))?;
+        data.push(Series::new((*name).into(), values).into());
+    }
+    let mut df = DataFrame::new(t.size()[0] as usize, data)?;
+    let mut file = std::fs::File::create(path).with_context(|| format!("creating CSV export {path}"))?;
+    CsvWriter::new(&mut file).finish(&mut df).with_context(|| format!("writing CSV export {path}"))?;
+    Ok(())
 }
 
 pub async fn labeled_tensors_by_descr<'a>(
     label: &String,
     resource_set_descr: &String,
     store: Arc<dyn MotifsStore>,
-) -> Vec<(i64, Vec<Resource>)> {
+) -> anyhow::Result<Vec<(i64, Vec<Resource>)>> {
     debug!(
         "labeled_tensors_by_descr: label={:?} resource_set_descr={:?}",
         label, resource_set_descr
@@ -240,22 +217,22 @@ pub async fn labeled_tensors_by_descr<'a>(
 
     let store_lock = store;
 
-    vec![
+    Ok(vec![
         (
             1,
             store_lock
                 .list_resource_set_resources_by_descr(resource_set_descr)
                 .instrument(tracing::debug_span!("labeled_tensors_by_descr/1", file = file!(), line = line!())).await
-                .expect("list_resource_set_resources_by_descr"),
+                .with_context(|| format!("loading resource set {resource_set_descr}"))?,
         ),
         (
             0,
             store_lock
                 .list_resource_random_not_labeled(label.as_str(), 100)
                 .instrument(tracing::debug_span!("labeled_tensors_by_descr/2", file = file!(), line = line!())).await
-                .expect("list_resource_random_not_label"),
+                .with_context(|| format!("loading resources without label {label}"))?,
         ),
-    ]
+    ])
 }
 
 #[cfg(test)]
@@ -315,6 +292,23 @@ mod data_tests {
     }
 
     #[test]
+    fn test_data_io_failures_are_returned() -> anyhow::Result<()> {
+        // A file used as a parent guarantees failure without relying on permissions.
+        let dir = std::path::Path::new("/tmp").join(thoosa_shared::cdt_for_dir());
+        std::fs::create_dir_all(&dir)?;
+        let blocker = dir.join("file");
+        std::fs::write(&blocker, b"not a directory")?;
+        let path = blocker.join("data.csv");
+        let tensor = Tensor::f_zeros([1, 1], (Float, Cpu))?;
+        let error = super::save_tensor(&["id", "value"], vec!["a".into()], &tensor, path.to_str().unwrap()).unwrap_err();
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(super::read_parquet_to_df(&blocker).is_err());
+        assert!(super::clc_records(&vec!["missing".into()], dir.to_str().unwrap()).is_err());
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn test_save_tensor() -> anyhow::Result<()> {
         let t = Tensor::randn([3, 6], (Float, Cpu));
 
@@ -333,7 +327,7 @@ mod data_tests {
             ids.clone(),
             &t,
             path,
-        );
+        )?;
 
         let lf = LazyCsvReader::new(path.into()).finish().unwrap().collect()?;
         let mut checked = 0;

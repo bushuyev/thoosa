@@ -367,10 +367,10 @@ pub fn mock_ws_simp(
     channels: u32,
     sample_rate: u32,
     max_input: u32,
-) -> Box<dyn Workspace> {
-    let ws_mock = _mock_simp(path, channels, sample_rate, max_input);
+) -> anyhow::Result<Box<dyn Workspace>> {
+    let ws_mock = _mock_simp(path, channels, sample_rate, max_input)?;
 
-    Box::new(ws_mock)
+    Ok(Box::new(ws_mock))
 }
 
 fn _mock_simp(
@@ -378,12 +378,10 @@ fn _mock_simp(
     channels: u32,
     sample_rate: u32,
     max_input: u32,
-) -> MockWorkspace {
-    let base = path.map(|v| v.clone()).unwrap_or_else(|| {
-        let p = Path::new("/tmp").join(cdt_for_dir());
-        fs::create_dir_all(&p).expect("can't create tmp dir");
-        p
-    });
+) -> anyhow::Result<MockWorkspace> {
+    let base = path.cloned().unwrap_or_else(|| Path::new("/tmp").join(cdt_for_dir()));
+    // Fixture creation is fallible too; callers choose how to report setup failure.
+    if path.is_none() { fs::create_dir_all(&base)?; }
 
     let mut ws_mock = MockWorkspace::new();
 
@@ -395,7 +393,7 @@ fn _mock_simp(
     ws_mock.expect_channels().return_const(channels);
     ws_mock.expect_max_input().return_const(max_input);
     ws_mock.expect_import_tensor().returning(|_, _, _|Ok(ResourceStats::new(vec![20, 100])));
-    ws_mock
+    Ok(ws_mock)
 }
 
 /// Builds a common workspace mock;
@@ -404,8 +402,8 @@ pub struct WsMockBuilder {
 }
 
 impl WsMockBuilder {
-    pub fn new(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> Self {
-        Self { mock: _mock_simp(path, channels, sample_rate, max_input) }
+    pub fn new(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> anyhow::Result<Self> {
+        Ok(Self { mock: _mock_simp(path, channels, sample_rate, max_input)? })
     }
 
     pub fn build(self) -> Box<dyn Workspace> {
