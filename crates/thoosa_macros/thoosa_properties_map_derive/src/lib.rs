@@ -69,6 +69,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                     fields_in_from_properties.push(quote! {
                                         #field_ident: {
+                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
                                             let mut values = Vec::new();
                                             let mut idx: usize = 0;
                                             loop {
@@ -108,6 +109,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                     fields_in_from_properties.push(quote! {
                                         #field_ident: {
+                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
                                             let mut values = Vec::new();
                                             let mut idx: usize = 0;
                                             loop {
@@ -184,6 +186,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                     fields_in_from_properties.push(quote! {
                                         #field_ident: {
+                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
                                             let mut values = Vec::new();
                                             let mut idx: usize = 0;
                                             loop {
@@ -212,6 +215,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                     fields_in_from_properties.push(quote! {
                                         #field_ident: {
+                                            thoosa_properties_map::validate_indices(properties, &thoosa_shared::conc_str(&prefix, #field_name_path))?;
                                             let mut values = Vec::new();
                                             let mut idx: usize = 0;
                                             loop {
