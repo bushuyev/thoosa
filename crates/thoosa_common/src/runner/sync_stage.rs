@@ -25,7 +25,8 @@ pub trait SyncStage: Stage + Debug {
     }
 
     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
-        unimplemented!()
+        // Borrowing and consuming are separate optional dispatch capabilities.
+        Err(ThoError::new("stage does not support borrowed synchronous execution"))
     }
 
     fn consume<'f>(
@@ -33,7 +34,7 @@ pub trait SyncStage: Stage + Debug {
         _input: Self::In<'f>,
         _ctx: Self::Ctx,
     ) -> ConsumeResult<Self::In<'f>, Self::Out> {
-        unimplemented!()
+        ConsumeResult::Failed { input: _input, error: ThoError::new("stage does not support consuming execution") }
     }
 }
 
@@ -66,13 +67,13 @@ pub trait StageWithState: SyncStage + Sync {//TODO rename to StatefulStage
 
     fn get_state_tensor(&self, tho_device: usize, tensor_id:String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
-            todo!()
+            Err(ThoError::new("stage does not support checkpoint tensor export"))
         }.boxed()
     }
 
     fn set_state_tensor(&self, tho_device: usize, tensor_id:String, t:Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async {
-            todo!()
+            Err(ThoError::new("stage does not support checkpoint tensor import"))
         }.boxed()
     }
 
@@ -80,7 +81,7 @@ pub trait StageWithState: SyncStage + Sync {//TODO rename to StatefulStage
     // The execution wrapper owns the guard until GPU synchronization completes;
     // stage implementations may borrow the state but must not release its lock.
     fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        unimplemented!()
+        Err(ThoError::new("stage does not support stateful execution"))
     }
 }
 

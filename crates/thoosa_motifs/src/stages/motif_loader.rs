@@ -1706,6 +1706,7 @@ pub mod mock_motif_loader {
 
 
         impl AsyncStage for MotifLoader {
+            fn run(self: Arc<Self>, input: <MockMotifLoader as Stage>::In<'static>, ctx: <MockMotifLoader as Stage>::Ctx) -> impl std::future::Future<Output = Result<<MockMotifLoader as Stage>::Out, ThoError>> + Send;
         }
 
         #[async_trait]

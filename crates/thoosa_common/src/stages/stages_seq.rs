@@ -143,7 +143,8 @@ where
         Self: Sized,
         Self::Out: WithId + Sync + Send,
     {
-        unimplemented!()
+        // This adapter selects another stage's cache through run_cached.
+        Err(ThoError::new("stage adapter has no independent cache; use run_cached"))
     }
 
     async fn run_cached(
@@ -281,7 +282,8 @@ where
         Self: Sized,
         Self::Out: Sync + Send
     {
-        unimplemented!()
+        // This adapter selects another stage's cache through run_cached.
+        Err(ThoError::new("stage adapter has no independent cache; use run_cached"))
     }
 
     async fn run_cached(
