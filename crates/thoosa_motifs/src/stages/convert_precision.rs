@@ -143,7 +143,7 @@ mod tests {
         let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
-        let (_, loaded_module) = ws.read().load_final_net(&net_id, &Device::Cpu, false)?;
+        let (_, loaded_module) = ws.read().load_final_net(&net_id, &Device::Cpu)?;
         let variables = loaded_module.var_store().variables();
         assert!(!variables.is_empty());
         for tensor in variables.values() {
