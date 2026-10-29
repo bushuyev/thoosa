@@ -156,7 +156,7 @@ async fn worker(sock: std::ffi::OsString, reject_duplicate_forward: bool) -> any
         (APPLY_MOTIF_NET_ENDPOINT.into(), Box::new(apply_motif_net_endpoint_init) as InitFn<dyn MotifsWorkspace>),
         (STACK_APPLIED_MOTIF_NETS_ENDPOINT.into(), Box::new(stack_applied_motif_nets_init) as InitFn<dyn MotifsWorkspace>),
         (SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(filter_init) as InitFn<dyn MotifsWorkspace>),
-    ]), Device::Cuda(0).into()).await
+    ]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

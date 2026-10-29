@@ -470,7 +470,7 @@ pub fn init_loader(ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>)
                 ))))?,
             )
         },
-        ThoDevice::from(Cpu), //it's always cpu
+        ThoDevice::from(0usize), //it's always cpu
     ))
 }
 
@@ -904,7 +904,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="hbac/import_resources"))]
 pub async fn import_resources<F, R, S>(
     ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-    store: &Arc<dyn MotifsStore>,
+    store: &dyn thoosa_store::ExternalSqlWriter,
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
@@ -1648,7 +1648,7 @@ where
     let run_config_id = motif.extra().find_motifs_run_config_id;
     let channel = motif.extra().channel;
 
-    let all_slices = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(Cuda(0)).copy(motif.data().shallow_clone::<AnyDims>().strip_types(), 0.into()).await?.t();
+    let all_slices = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(1usize).copy(motif.data().shallow_clone::<AnyDims>().strip_types(), 0.into()).await?.t();
 
     let result = (move || {
 
@@ -1791,12 +1791,7 @@ pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     ctx_f: CtxF,
 ) -> anyhow::Result<Vec<RunConfigId>>
 where
-    F: AsyncFnOnce(OptRunConfigs<
-        Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
-        Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>,
-        Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
-        <RCRV as OptRunConfigSource>::P,
-    >) -> anyhow::Result<Arc<ST>>,
+    F: AsyncFnOnce(thoosa_shared::run_configs::TrainingRunConfigs<<RCRV as OptRunConfigSource>::P>) -> anyhow::Result<Arc<ST>>,
     ST: Stage + AsyncStage + Send + Sync, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
@@ -1822,7 +1817,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> anyhow::Result<()>{
     async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> anyhow::Result<u128> {
         let mut tensors = Vec::with_capacity(num_tensors);
 
-        let ctx = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(Cuda(0));
+        let ctx = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(1usize);
 
         let t_0 = Instant::now();
         for i in 0..num_tensors {
@@ -2231,16 +2226,17 @@ mod cli_tests {
         )?));
 
         // Import persists labels through MotifsStore, so the test database needs both schemas.
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
+        let sql_store = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             crate::motifs_store::create_motif_tables,
         ]).await?);
+        let store: Arc<dyn MotifsStore> = sql_store.clone();
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(SqlStore::from_path("/tmp/test_main_db.db3")?);
 
         let imported_ids = import_resources(
             &ws,
-            &store,
+            sql_store.as_ref(),
             &["label_0", "label_1"],
             || {
                 Ok(HashMap::from([
@@ -2282,10 +2278,11 @@ mod cli_tests {
                            32000)
         )?));
         // Import persists labels through MotifsStore, so the test database needs both schemas.
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![
+        let sql_store = Arc::new(SqlStore::in_mem_(vec![
             thoosa_store::create_tables,
             crate::motifs_store::create_motif_tables,
         ]).await?);
+        let store: Arc<dyn MotifsStore> = sql_store.clone();
 
         let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(
             vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })],
@@ -2297,7 +2294,7 @@ mod cli_tests {
 
         let imported_ids = import_resources(
             &ws,
-            &store,
+            sql_store.as_ref(),
             &["label_0"],
             || Ok(HashMap::from([("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)])])),
             |_: String| Ok(Tensor::from_slice(&[0., 100., 0.]).view((1, -1))),

@@ -110,8 +110,6 @@ pub struct AnyMetrics;
 
 impl Metrics for AnyMetrics {}
 
-unsafe impl Sync for AnyMetrics {}
-unsafe impl Send for AnyMetrics {}
 impl From<Vec<i64>> for AnyMetrics {
     fn from(_value: Vec<i64>) -> Self {
         AnyMetrics
@@ -181,7 +179,7 @@ mod tests {
             ThoTensor::new(1, tch_result(tch_result(Tensor::f_arange(48, (tch::Kind::Int64, tch::Device::Cpu)))?.f_reshape([12, 4]))?)
         };
         let local = make()?;
-        let remote = make()?.worker_tensor_to_ref(&tensors, &ThoDevice::from(tch::Device::Cpu))?;
+        let remote = make()?.worker_tensor_to_ref(&tensors, &ThoDevice::from(0usize))?;
         let selector = |start, end| RangeSelector([start]..[end]);
         let local_view = local.subview(selector(2, 10))?.subview(selector(3, 6))?.subview(selector(1, 2))?;
         let remote_view = remote.subview(selector(2, 10))?.subview(selector(3, 6))?.subview(selector(1, 2))?;
@@ -205,7 +203,7 @@ mod tests {
         };
         let select_channels = |start: [i64; 2], end: [i64; 2]| ChannelsDataSelector(start.into()..end.into());
         let local_channels = make_channels()?.subview(select_channels([1, 2], [5, 9]))?.subview(select_channels([1, 3], [3, 5]))?;
-        let remote_channels = make_channels()?.worker_tensor_to_ref(&tensors, &ThoDevice::from(tch::Device::Cpu))?.subview(select_channels([1, 2], [5, 9]))?.subview(select_channels([1, 3], [3, 5]))?;
+        let remote_channels = make_channels()?.worker_tensor_to_ref(&tensors, &ThoDevice::from(0usize))?.subview(select_channels([1, 2], [5, 9]))?.subview(select_channels([1, 3], [3, 5]))?;
         let wire = postcard::to_allocvec(&remote_channels)?;
         let restored: ThoTensor<ChannelsData, SynKey> = postcard::from_bytes(&wire)?;
         let actual = restored.ref_to_tensor(&tensors, false)?;

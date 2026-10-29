@@ -453,7 +453,7 @@ impl CudaLocalActor {
         let mut copy_ctx = timeout(Duration::from_secs(30), copy_ctx.write_owned()).await?;
         tokio::task::spawn_blocking(move || {
             // CUDA context binding is thread-local; do not hold it across await.
-            let mut cu_ctx = ThoCudaContext::new(device.gpu_ordinal() as i32)?;
+            let mut cu_ctx = ThoCudaContext::new(i32::try_from(device.gpu_ordinal()?)?)?;
             cu_ctx.restart()?;
             copy_ctx.restart()
         }).await?

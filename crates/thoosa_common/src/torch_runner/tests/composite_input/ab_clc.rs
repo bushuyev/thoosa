@@ -75,6 +75,7 @@ impl WithId for ABClcStageInput {
 impl Input for ABClcStageInput {}
 
 #[derive(Debug, Named, Clone, CpuData, Serialize, Deserialize)]
+#[cpu_data(shallow)]
 pub struct ABClcStageOutput {
     id:SynKey,
     pub(super) value:f32

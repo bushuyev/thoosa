@@ -6,7 +6,7 @@ use thoosa_macros_utils::{get_option_inner_ty, get_vec_inner_ty, has_attr, is_pr
 
 const IN_MAP_ATTR: &'static str = "in_map";
 
-#[proc_macro_derive(ThoosaPropertiesMap, attributes(in_map))]
+#[proc_macro_derive(ThoosaPropertiesMap, attributes(in_map, config_scalar))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
@@ -41,7 +41,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 let field_prefix_fmt = format!("{}{{}}.", field_name_path);
                                 let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
-                                if is_primitive(&vec_inner_ty) {
+                                if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                     chains_in_to_properties.push(quote! {
                                         .chain(
                                             {
@@ -112,7 +112,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                         },
                                     });
                                 }
-                            } else if is_primitive(&inner_ty) {
+                            } else if has_attr(field, "config_scalar") || is_primitive(&inner_ty) {
                                 fields_in_to_properties.push(quote! {
                                     (thoosa_shared::conc_str(&prefix, #field_name), self.#field_ident.map(|v| v.into())),
 
@@ -158,7 +158,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 let field_prefix_fmt = format!("{}{{}}.", field_name_path);
                                 let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
-                                if is_primitive(&vec_inner_ty) {
+                                if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                     chains_in_to_properties.push(quote! {
                                         .chain({
                                             let entries: Vec<(String, thoosa_shared::val::Val)> = self.#field_ident
@@ -215,7 +215,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                         },
                                     });
                                 }
-                            } else if is_primitive(&field.ty) {
+                            } else if has_attr(field, "config_scalar") || is_primitive(&field.ty) {
                                 fields_in_to_properties.push(quote! {
                                     (thoosa_shared::conc_str(&prefix, #field_name), Some(self.#field_ident.into())),
 

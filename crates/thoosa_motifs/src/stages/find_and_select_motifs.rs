@@ -44,6 +44,7 @@ use thoosa_store::Store;
 #[run_config_opt]
 pub struct FindAndSelectMotifsRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]
@@ -56,7 +57,7 @@ pub struct FindAndSelectMotifsRunConfig {
 }
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct FindAndSelectMotifsInput {
     pub find_resources: String,
     pub select_resources: String,
@@ -74,7 +75,7 @@ impl FindAndSelectMotifsInput {
 impl Input for FindAndSelectMotifsInput {}
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct FindAndSelectMotifsResult {
     best_configs: Vec<FindAndSelectMotifsRunConfig>,
 }
@@ -139,12 +140,7 @@ pub struct FindAndSelectMotifsStage {
     store: Arc<dyn MotifsStore>,
     loader: Arc<RawTensorLoader<RunCtxImpl>>,
     run_configs: Arc<
-        OptRunConfigs<
-            Vec<NamedVal<FindAndSelectMotifsRunConfigFields>>,
-            Vec<NamedRange<FindAndSelectMotifsRunConfigFields>>,
-            Vec<Hyperparameter<FindAndSelectMotifsRunConfigFields>>,
-            FindAndSelectMotifsRunConfigFields,
-        >,
+        thoosa_shared::run_configs::TrainingRunConfigs<FindAndSelectMotifsRunConfigFields>,
     >,
     fixed_find_motifs_config: FixedFindMotifsConfig,
     opt_config: Arc<OptConfig>,
@@ -156,12 +152,7 @@ impl FindAndSelectMotifsStage {
         loader: Arc<RawTensorLoader<RunCtxImpl>>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
-        run_configs: OptRunConfigs<
-            Vec<NamedVal<FindAndSelectMotifsRunConfigFields>>,
-            Vec<NamedRange<FindAndSelectMotifsRunConfigFields>>,
-            Vec<Hyperparameter<FindAndSelectMotifsRunConfigFields>>,
-            FindAndSelectMotifsRunConfigFields,
-        >,
+        run_configs: thoosa_shared::run_configs::TrainingRunConfigs<FindAndSelectMotifsRunConfigFields>,
         fixed_find_motifs_config: FixedFindMotifsConfig,
         opt_config: Arc<OptConfig>,
         max_chunk_size: i64,

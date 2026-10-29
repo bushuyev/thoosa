@@ -41,6 +41,7 @@ use thoosa_store::Store;
 
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 #[allow(non_camel_case_types)]
 pub enum SelectionMode {
     Filter(FilterSelectionMode),
@@ -61,6 +62,7 @@ impl SelectionMode {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct FilterSelectionMode {
     #[in_map]
     #[run_config]
@@ -68,6 +70,7 @@ pub struct FilterSelectionMode {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct BestSelectionMode {
     #[in_map]
     #[run_config]
@@ -75,9 +78,11 @@ pub struct BestSelectionMode {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 #[run_config_grid]
 pub struct SelectBucketsRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]

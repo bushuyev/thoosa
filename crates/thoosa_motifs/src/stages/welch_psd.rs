@@ -88,7 +88,7 @@ impl LocalSelect<SynKey, WelchChannelsSelector> for ThoTensor<WelchInputChannels
 impl Adjustable for WelchChannelsSelector {}
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct FrequenciesStatsInput<RC>
 where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,

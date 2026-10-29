@@ -52,7 +52,7 @@ use thoosa_store::Store;
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct ExtendMotifsInput {
     resources_input: ResourcesConfigInput<Simple>,
 }
@@ -75,7 +75,7 @@ impl ExtendMotifsInput {
 impl Input for ExtendMotifsInput {}
 
 #[derive(Debug, Clone, CpuData)]
-#[dummy_data(clone)]
+#[cpu_data(shallow)]
 pub struct ExtendMotifsSavableResult {
 }
 

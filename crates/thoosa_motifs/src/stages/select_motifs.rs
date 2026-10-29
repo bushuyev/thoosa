@@ -100,7 +100,7 @@ pub enum SelectMotifsOutputMode {
 }
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct SelectMotifsInput {
     resources_input: ResourcesConfigInput<Simple>,
     output_mode: SelectMotifsOutputMode,

@@ -1148,14 +1148,14 @@ mod tests {
         GlobalCtx::init_devices(2)?;
 
         // try CPU; switch to Device::Cuda(0) if you want to test on GPU
-        let dev = ThoDevice::from(Device::Cpu);
+        let dev = ThoDevice::from(0usize);
 
         let n = 12_345; //0_003i64;
         let channels = 20;
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
         let packed_mask = pack_bits_bool(&mask)?;
-        let packed = GlobalCtx::global().cuda_actor(Cuda(0)).copy(packed_mask.into(), 0.into()).await?.t();
+        let packed = GlobalCtx::global().cuda_actor(1usize).copy(packed_mask.into(), 0.into()).await?.t();
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();

@@ -19,6 +19,7 @@ use tokio::sync::Notify;
 type NoRetry = OOMHandler<'static, 'static, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>;
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 struct Block(usize);
 impl Input for Block {}
 impl Output for Block {}
@@ -121,7 +122,7 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
         let len = if resource.id() == 2 { 1 } else { 7 };
         let values: Vec<f32> = (0..len).map(|i| (i * i + resource.id()) as f32).collect();
         ThoTensor::new(format!("prepared_resource_{}", resource.id()).into(), tch_result(tch_result(Tensor::f_from_slice(&values))?.f_view([1, len as i64]))?)
-    }, ThoDevice::from(Device::Cpu)));
+    }, ThoDevice::from(0usize)));
     let resources: Vec<Arc<Resource>> = (1..=5).map(|i| Arc::new((i, 1, format!("prepared_{i}").as_str(), 7).into())).collect();
     let mut tensors = Vec::new();
     for resource in &resources { tensors.push(loader.clone().run_cached(resource.clone(), ctx.branch(false)).await?); }
@@ -166,6 +167,6 @@ async fn test_prepared_discovery_outer_local() -> Result<(), ThoError> {
 fn test_prepared_discovery_outer_ipc() -> Result<(), ThoError> {
     run_ipc_test(module_path!(), check_prepared_outer(), async |socket| {
         let ws = Arc::new(parking_lot::RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
-        CudaWorker::run_worker(socket, &ws, crate::cli::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await
+        CudaWorker::run_worker(socket, &ws, crate::cli::cuda_worker_endpoint_inits(), ThoDevice::from(1usize)).await
     })
 }

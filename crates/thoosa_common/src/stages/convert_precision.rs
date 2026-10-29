@@ -132,6 +132,7 @@ where
 }
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct ConvertPrecisionInput {}
 
 impl ConvertPrecisionInput {
@@ -151,6 +152,7 @@ pub struct ConvertedNet<N> {
 }
 
 #[derive(Debug, Clone, CpuData)]
+#[cpu_data(shallow)]
 pub struct ConvertPrecisionOutput<N>
 where
     N: Debug,

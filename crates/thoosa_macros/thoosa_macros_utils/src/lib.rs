@@ -1,69 +1,40 @@
-use syn::{Field, GenericArgument, Ident, Lit, PathArguments, Type, TypePath};
+use syn::{Field, GenericArgument, Lit, PathArguments, Type};
 
+/// Recognize documented Rust scalar syntax. Aliases/newtypes use #[config_scalar]
+/// on their field; the generated Into<Val>/TryFrom<&Val> calls check the contract.
 pub fn is_primitive(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(ident) = type_path.path.get_ident() {
-            return _is_primitive(ident);
-        }
-    }
-    false
-}
-
-fn _is_primitive(ident: &Ident) -> bool {
-    match ident.to_string().as_str() {
-        "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
-        | "isize" | "f32" | "f64" | "bool" | "char" | "str" | "String" | "RunConfigId" | "RunId" => true,
-        _ => false,
-    }
+    let Type::Path(ty) = ty else { return false; };
+    if ty.qself.is_some() { return false; }
+    let parts: Vec<_> = ty.path.segments.iter().map(|segment| segment.ident.to_string()).collect();
+    let Some(name) = parts.last() else { return false; };
+    let prefix: Vec<_> = parts[..parts.len()-1].iter().map(String::as_str).collect();
+    let scalar = matches!(name.as_str(), "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "isize" | "f32" | "f64" | "bool" | "char" | "str");
+    (scalar && (prefix.is_empty() || prefix == ["std", "primitive"] || prefix == ["core", "primitive"]))
+        || (name == "String" && (prefix.is_empty() || prefix == ["std", "string"] || prefix == ["alloc", "string"]))
 }
 
 pub fn is_option_primitive(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(first_segment) = path.segments.first() {
-            if first_segment.ident == "Option" {
-                if let PathArguments::AngleBracketed(ref args) = first_segment.arguments {
-                    if let Some(GenericArgument::Type(Type::Path(inner_type_path))) =
-                        args.args.first()
-                    {
-                        if let Some(inner_ident) = inner_type_path.path.get_ident() {
-                            return _is_primitive(inner_ident);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    false
+    get_option_inner_ty(ty).is_some_and(|inner| is_primitive(&inner))
+}
+
+fn container_inner(ty: &Type, name: &str, module: &str, alternate_root: &str) -> Option<Type> {
+    let Type::Path(ty) = ty else { return None; };
+    if ty.qself.is_some() { return None; }
+    let parts: Vec<_> = ty.path.segments.iter().map(|segment| segment.ident.to_string()).collect();
+    let prefix: Vec<_> = parts[..parts.len().checked_sub(1)?].iter().map(String::as_str).collect();
+    let segment = ty.path.segments.last()?;
+    if segment.ident != name || !(prefix.is_empty() || prefix == ["std", module] || prefix == [alternate_root, module]) { return None; }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else { return None; };
+    if args.args.len() != 1 { return None; }
+    match args.args.first()? { GenericArgument::Type(inner) => Some(inner.clone()), _ => None }
 }
 
 pub fn get_option_inner_ty(ty: &Type) -> Option<Type> {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(first_segment) = path.segments.first() {
-            if first_segment.ident == "Option" {
-                if let PathArguments::AngleBracketed(ref args) = first_segment.arguments {
-                    if let Some(GenericArgument::Type(inner_type)) = args.args.first() {
-                        return Some(inner_type.clone());
-                    }
-                }
-            }
-        }
-    }
-    None
+    container_inner(ty, "Option", "option", "core")
 }
 
 pub fn get_vec_inner_ty(ty: &Type) -> Option<Type> {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(first_segment) = path.segments.first() {
-            if first_segment.ident == "Vec" {
-                if let PathArguments::AngleBracketed(ref args) = first_segment.arguments {
-                    if let Some(GenericArgument::Type(inner_type)) = args.args.first() {
-                        return Some(inner_type.clone());
-                    }
-                }
-            }
-        }
-    }
-    None
+    container_inner(ty, "Vec", "vec", "alloc")
 }
 
 pub fn comment(field: &&Field, field_name: &String) -> String {
@@ -91,6 +62,22 @@ mod tests {
     use thoosa_shared::RangeOrValue;
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
+
+    #[test]
+    fn test_qualified_containers_and_scalar_syntax() {
+        use super::*;
+        for name in ["Option<u32>", "std::option::Option<u32>", "::core::option::Option<u32>"] {
+            assert!(get_option_inner_ty(&syn::parse_str(name).unwrap()).is_some());
+        }
+        for name in ["Vec<u32>", "std::vec::Vec<u32>", "::alloc::vec::Vec<u32>"] {
+            assert!(get_vec_inner_ty(&syn::parse_str(name).unwrap()).is_some());
+        }
+        assert!(is_primitive(&syn::parse_quote!(::core::primitive::u32)));
+        assert!(is_primitive(&syn::parse_quote!(std::string::String)));
+        assert!(!is_primitive(&syn::parse_quote!(RunId)));
+        assert!(get_option_inner_ty(&syn::parse_quote!(other::Option<u32>)).is_none());
+        assert!(get_vec_inner_ty(&syn::parse_quote!(Vec<u32, Allocator>)).is_none());
+    }
 
     #[ctor::ctor]
     fn init() {

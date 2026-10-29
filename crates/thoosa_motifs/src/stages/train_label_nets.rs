@@ -290,7 +290,7 @@ where
     C: RunCtx + 'static
 {
     pub async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLabelBatch<C>>>, ThoError> {
-        SYNC_LABEL_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, 0, move || async move {
+        SYNC_LABEL_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 let stage_id = 0;
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
@@ -402,12 +402,7 @@ where
 {
     train_motif_nets_run_config_ids: Vec<RunConfigId>,
     motif_nets_ids: Vec<RunConfigId>,
-    run_configs: Arc<OptRunConfigs<
-        Vec<NamedVal<TrainLabelNetRunConfigFields>>,
-        Vec<NamedRange<TrainLabelNetRunConfigFields>>,
-        Vec<Hyperparameter<TrainLabelNetRunConfigFields>>,
-        TrainLabelNetRunConfigFields,
-    >>,
+    run_configs: Arc<thoosa_shared::run_configs::TrainingRunConfigs<TrainLabelNetRunConfigFields>>,
     pd: PhantomData<L>,
     applied_motif_loader: Arc<LM>,
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
@@ -445,7 +440,7 @@ pub async fn new_train_label_nets<L, AMN, C>(
     train_motif_net_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
     apply_motif_nets: Arc<AMN>,
-    run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
+    run_configs: thoosa_shared::run_configs::TrainingRunConfigs<TrainLabelNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     opt_config:Arc<OptConfig>,
@@ -497,7 +492,7 @@ where
         motif_nets_ids: Vec<u32>,
         applied_motif_loader: Arc<LM>,
         num_nets:u32,
-        run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
+        run_configs: thoosa_shared::run_configs::TrainingRunConfigs<TrainLabelNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         opt_config:Arc<OptConfig>,
@@ -534,7 +529,7 @@ where
 }
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct TrainLabelNetsOutput {
     train_motif_nets_run_config_ids: Vec<RunConfigId>,
     motif_nets_ids:Vec<u32>,
@@ -1752,6 +1747,7 @@ impl TrainLabelNetsArgs {
 #[run_config_opt]
 pub struct TrainLabelNetRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]

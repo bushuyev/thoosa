@@ -32,7 +32,7 @@ use file_rotate::{
     ContentLimit,
     FileRotate,
 };
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::Mutex;
 use tracing_appender::non_blocking;
 use tracing_subscriber::fmt::MakeWriter;
 use thoosa_shared::os_thread_id;
@@ -296,7 +296,8 @@ pub struct SyncWriterGuard<'a, W>
 where
     W:Write
 {
-    guard: MutexGuard<'a, W>,
+    writer: &'a Mutex<W>,
+    buffer: Vec<u8>,
 }
 
 impl<'a, W> Write for SyncWriterGuard<'a, W>
@@ -304,11 +305,14 @@ where
     W:Write
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.guard.write(buf)
+        self.buffer.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.guard.flush()
+        let mut writer = self.writer.lock();
+        writer.write_all(&self.buffer)?;
+        self.buffer.clear();
+        writer.flush()
     }
 }
 
@@ -317,7 +321,9 @@ where
     W:Write
 {
     fn drop(&mut self) {
-        let _ = self.guard.flush();
+        // File writes are unbuffered; per-event flush adds synchronization without
+        // durability. Keep one lock only for committing the formatted record.
+        let _ = self.writer.lock().write_all(&self.buffer);
     }
 }
 
@@ -329,7 +335,8 @@ where
 
     fn make_writer(&'a self) -> Self::Writer {
         SyncWriterGuard {
-            guard: self.inner.lock(),
+            writer: &self.inner,
+            buffer: Vec::new(),
         }
     }
 }
@@ -709,6 +716,22 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_record_formatting_does_not_lock_the_shared_writer() {
+        use tracing_subscriber::fmt::MakeWriter;
+        use std::io::Write;
+        let writer = super::SyncMakeWriter::new(Vec::<u8>::new());
+        let mut first = writer.make_writer();
+        first.write_all(b"first").unwrap();
+        assert!(writer.inner.try_lock().is_some());
+        let mut second = writer.make_writer();
+        second.write_all(b"second").unwrap();
+        drop(second);
+        first.write_all(b" record").unwrap();
+        drop(first);
+        assert_eq!(&*writer.inner.lock(), b"secondfirst record");
+    }
+
     use std::io::Write;
     use std::path::Path;
     use std::sync::Arc;

@@ -1,17 +1,5 @@
 #![feature(unboxed_closures)]
 #![feature(iter_array_chunks)]
-#![allow(
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    dead_code,
-    non_snake_case,
-    non_camel_case_types,
-    redundant_semicolons,
-    noop_method_call,
-    unused_parens,
-    deprecated
-)]
 extern crate core;
 
 pub mod distance;

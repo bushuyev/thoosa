@@ -271,3 +271,26 @@ fn test_cat_range() -> Result<(), ThoError>{
 
     Ok(())
 }
+
+// Qualified standard containers and explicitly marked aliases use the same Val
+// conversion contract as unqualified scalars, independent of their spelling.
+type ScalarAlias = u32;
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug, Clone, PartialEq)]
+struct QualifiedConfig {
+    #[in_map]
+    #[run_config]
+    values: ::std::option::Option<::std::vec::Vec<u32>>,
+    #[in_map]
+    #[run_config]
+    #[config_scalar]
+    alias: ScalarAlias,
+}
+
+#[test]
+fn test_qualified_containers_and_explicit_alias_round_trip() -> thoosa_shared::anyhow::Result<()> {
+    use thoosa_properties_map::{FromHashmap, ToHashmap};
+    let config = QualifiedConfig { values: Some(vec![1, 2, 3]), alias: 17 };
+    let map = config.to_properties_iter(None).collect();
+    assert_eq!(QualifiedConfig::from_properties_map(None, &map)?, config);
+    Ok(())
+}

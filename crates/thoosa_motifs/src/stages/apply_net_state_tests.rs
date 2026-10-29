@@ -169,6 +169,6 @@ fn test_apply_nets_state_ipc() -> Result<(), ThoError> {
         CudaWorker::run_worker(sock, &ws, HashMap::from([
             (APPLY_MOTIF_NET_ENDPOINT.into(), Box::new(apply_motif_net_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>),
             (APPLY_LABEL_NET_ENDPOINT.into(), Box::new(apply_label_net_endpoint_init) as InitFn<dyn crate::motifs_ws::MotifsWorkspace>),
-        ]), Device::Cuda(0).into()).await
+        ]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
     })
 }

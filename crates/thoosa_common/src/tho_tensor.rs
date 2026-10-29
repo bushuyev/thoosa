@@ -343,7 +343,7 @@ where
     fn tho_device_idx(&self) -> usize {
 
         match &self.inner {
-            ThoTensorInner::Val { t } => ThoDevice::from(t.lock().device()).tho_device_idx(),
+            ThoTensorInner::Val { t } => ThoDevice::try_from(t.lock().device()).expect("CPU/CUDA tensor device").tho_device_idx(),
             ThoTensorInner::Ref { key, .. } => key.worker_id.device_idx,
         }
     }
@@ -531,14 +531,14 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
     pub fn tho_device_idx(&self) -> usize {
         match &self.inner {
-            ThoTensorInner::Val { t } => ThoDevice::from(self.t_ref().device()).tho_device_idx(),
+            ThoTensorInner::Val { t } => ThoDevice::try_from(self.t_ref().device()).expect("CPU/CUDA tensor device").tho_device_idx(),
             ThoTensorInner::Ref { key, .. } => key.worker_id.device_idx,
         }
     }
 
     pub fn tho_device(&self) -> ThoDevice {
         match &self.inner {
-            ThoTensorInner::Val { t } => ThoDevice::from(t.lock().device()),
+            ThoTensorInner::Val { t } => ThoDevice::try_from(t.lock().device()).expect("CPU/CUDA tensor device"),
             ThoTensorInner::Ref { key, .. } => <usize as Into<ThoDevice>>::into(key.worker_id.device_idx),
         }
     }

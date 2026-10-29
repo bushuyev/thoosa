@@ -57,8 +57,8 @@ pub trait ResourceStore {
 }
 
 #[derive(Debug, Clone, CpuData, Named)]
+#[cpu_data(mem_size = ::core::mem::size_of_val(self) as u64 + self.file_stem.capacity() as u64)]
 #[name = "n/a"]
-#[dummy_data(clone)]
 pub struct Resource {
     id: ResourceId,
     import_id: u32,
@@ -343,4 +343,26 @@ mod tests {
 
     }
 
+}
+
+#[cfg(test)]
+mod cpu_size_tests {
+    use super::*;
+    use crate::traits::Data;
+
+    #[test]
+    fn test_non_clone_cpu_data_can_account_for_owned_storage() {
+        #[derive(Debug, CpuData)]
+        #[cpu_data(mem_size = std::mem::size_of_val(self) as u64 + self.0.capacity() as u64)]
+        struct OwnedBytes(Vec<u8>);
+        let bytes = OwnedBytes(Vec::with_capacity(2048));
+        assert!(bytes.mem_size() >= (std::mem::size_of::<OwnedBytes>() + 2048) as u64);
+    }
+
+    #[test]
+    fn test_resource_size_includes_owned_string_capacity() {
+        let name = String::with_capacity(4096);
+        let resource = Resource::new(1, 1, name, 0);
+        assert!(resource.mem_size() >= (std::mem::size_of::<Resource>() + 4096) as u64);
+    }
 }
