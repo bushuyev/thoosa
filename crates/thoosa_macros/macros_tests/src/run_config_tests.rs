@@ -308,3 +308,14 @@ fn test_bad_config_conversions_return_field_errors() {
     assert!(error.to_string().contains("InnerFieldOne"));
     assert!(builder.build().is_err());
 }
+
+#[test]
+fn test_optional_vectors_preserve_empty_and_absent() -> thoosa_shared::anyhow::Result<()> {
+    use thoosa_properties_map::{FromHashmap, ToHashmap};
+    for values in [None, Some(vec![]), Some(vec![3])] {
+        let config = QualifiedConfig { values, alias: 1 };
+        let map = config.to_properties_iter(None).collect();
+        assert_eq!(QualifiedConfig::from_properties_map(None, &map)?, config);
+    }
+    Ok(())
+}
