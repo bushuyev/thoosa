@@ -433,37 +433,42 @@ impl ::core::default::Default for SingleFieldBuilder {
     }
 }
 impl SingleFieldBuilder {
-    pub fn add_val(&mut self, path: &SingleFieldFields, val: &thoosa_shared::val::Val) {
+    pub fn add_val(
+        &mut self,
+        path: &SingleFieldFields,
+        val: &thoosa_shared::val::Val,
+    ) -> thoosa_shared::anyhow::Result<()> {
         match path {
             SingleFieldFields::Val => {
                 self.val = Some(
-                    val
-                        .try_into()
-                        .expect(
-                            &::alloc::__export::must_use({
-                                ::alloc::fmt::format(
-                                    format_args!(
-                                        "{0} field value {1:?} is not valid", "val", val,
-                                    ),
-                                )
-                            }),
-                        ),
+                    thoosa_shared::anyhow::Context::with_context(
+                        val.try_into(),
+                        || ::alloc::__export::must_use({
+                            ::alloc::fmt::format(
+                                format_args!("invalid configuration field {0:?}", path),
+                            )
+                        }),
+                    )?,
                 );
             }
         }
+        Ok(())
     }
-    pub fn build(&self) -> SingleField {
-        SingleField {
-            val: self.val.expect("no val"),
-        }
+    pub fn build(&self) -> thoosa_shared::anyhow::Result<SingleField> {
+        Ok(SingleField {
+            val: thoosa_shared::anyhow::Context::context(self.val, "no val")?,
+        })
     }
 }
-impl<I: IntoIterator<Item = thoosa_shared::val::NamedVal<SingleFieldFields>>> From<I>
+impl TryFrom<std::vec::IntoIter<thoosa_shared::val::NamedVal<SingleFieldFields>>>
 for SingleField {
-    fn from(value: I) -> Self {
+    type Error = thoosa_shared::anyhow::Error;
+    fn try_from(
+        value: std::vec::IntoIter<thoosa_shared::val::NamedVal<SingleFieldFields>>,
+    ) -> Result<Self, Self::Error> {
         let mut builder = SingleFieldBuilder::default();
         for path_val in value {
-            builder.add_val(path_val.path(), path_val.val());
+            builder.add_val(path_val.path(), path_val.val())?;
         }
         builder.build()
     }

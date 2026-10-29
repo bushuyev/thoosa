@@ -1745,7 +1745,7 @@ where
     F: AsyncFnOnce(Vec<RC>) -> anyhow::Result<Arc<ST>>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, Arc<dyn MotifsStore>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
-        + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
+        + TryFrom<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>, Error = anyhow::Error>
         + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource + Debug,
     for<'c> <ST as Stage>::In<'c>: Send + Sync,
@@ -1799,7 +1799,7 @@ where
     F: AsyncFnOnce(thoosa_shared::run_configs::TrainingRunConfigs<<RCRV as OptRunConfigSource>::P>) -> anyhow::Result<Arc<ST>>,
     ST: Stage + AsyncStage + Send + Sync, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     RC: RunConfig
-    + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
+    + TryFrom<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>, Error = anyhow::Error>
     + ToHashmap,
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Send + Sync,
@@ -1891,7 +1891,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> anyhow::Result<()>{
 fn check_opt_run_config<RCRV, RC>(find_and_select_run_config: &RCRV) -> anyhow::Result<()>
 where
     RCRV: OptRunConfigSource,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
+    RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>, Error = anyhow::Error> + ToHashmap,
     <RCRV as OptRunConfigSource>::P: 'static,
 {
     let opt_run_config = find_and_select_run_config.opt_run_configs()?;
@@ -1902,7 +1902,7 @@ where
         let opt_vals = opt_hps.iter().map(|hp| NamedVal::new(hp.name().clone(), hp.random_sample())).collect::<Vec<_>>();
 
         for i in 0..100 {
-            let mut run_config: RC = [const_vals.as_slice(), grid_vals.as_slice(), &opt_vals].concat().into_iter().into();
+            let mut run_config: RC = [const_vals.as_slice(), grid_vals.as_slice(), &opt_vals].concat().into_iter().try_into()?;
 
             debug!("run_config={run_config:?}");
         }

@@ -10,6 +10,7 @@ const IN_MAP_ATTR: &'static str = "in_map";
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
+    // Generated deserialization must preserve conversion errors and their field paths.
     let target_ident = &ast.ident;
     let target_ident_prefix = format!("{}::", ast.ident);
 
@@ -67,7 +68,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                             loop {
                                                 let key = thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, idx));
                                                 if let Some(v) = properties.get(&key) {
-                                                    values.push(v.try_into().expect(&format!("can't convert {}[{}]: value={v:?} to {}", #field_name, idx, #vec_inner_ty_str)));
+                                                    values.push(thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {key}"))?);
                                                     idx += 1;
                                                 } else {
                                                     break;
@@ -120,7 +121,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                 fields_in_from_properties.push(quote! {
                                       #field_ident: properties.get(&thoosa_shared::conc_str(&prefix, #field_name))
-                                                .map(|v|v.try_into().expect(&format!("can't convert {}: value={v:?}", #field_name))),
+                                                .map(|v| thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {}", thoosa_shared::conc_str(&prefix, #field_name)))).transpose()?,
 
 
                                 });
@@ -141,10 +142,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     #field_ident: {
                                         let child_prefix = thoosa_shared::conc_str(&prefix, #field_name_path);
                                         if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
-                                            match #field_type::from_properties_map(Some(child_prefix), properties) {
-                                                Ok(value) => Some(value),
-                                                Err(_) => None,
-                                            }
+                                            Some(#field_type::from_properties_map(Some(child_prefix), properties)?)
                                         } else {
                                             None
                                         }
@@ -177,7 +175,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                             loop {
                                                 let key = thoosa_shared::conc_str(&prefix, &format!(#field_idx_fmt, idx));
                                                 if let Some(v) = properties.get(&key) {
-                                                    values.push(v.try_into().expect(&format!("can't convert {}[{}]: value={v:?} to {}", #field_name, idx, #vec_inner_ty_str)));
+                                                    values.push(thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {key}"))?);
                                                     idx += 1;
                                                 } else {
                                                     break;
@@ -223,7 +221,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                 fields_in_from_properties.push(quote! {
                                     #field_ident: properties.get(&thoosa_shared::conc_str(&prefix, #field_name))
-                                        .map(|v|v.try_into().expect(&format!("can't convert {}: value={v:?}", #field_name)))
+                                        .map(|v| thoosa_shared::anyhow::Context::with_context(v.try_into(), || format!("invalid property {}", thoosa_shared::conc_str(&prefix, #field_name)))).transpose()?
                                         .ok_or_else(||thoosa_shared::anyhow::anyhow!(format!("no {} in properties", thoosa_shared::conc_str(&prefix, #field_name))))?,
 
                                 });
