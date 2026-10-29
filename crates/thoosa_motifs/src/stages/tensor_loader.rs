@@ -289,7 +289,7 @@ mod tests {
     //                 Tensor::from_slice(&data_0).view((-1, 1)),
     //             )?)
     //         },
-    //         ThoDevice::from(Device::Cpu),
+    //         ThoDevice::from(0usize),
     //     ));
     //
     //     let ctx = Arc::new(parking_lot::RwLock::new(RunCtxImpl::new(0, "test_load")));

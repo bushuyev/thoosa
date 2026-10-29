@@ -102,6 +102,7 @@ pub struct TrainMotifsNetsArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, CpuData)]
+#[cpu_data(shallow)]
 pub enum MotifsBy {
     SelectMotifsRunIds { select_motifs_run_config_ids: Vec<RunConfigId> },
     MotifId {
@@ -280,6 +281,7 @@ impl Default for MotifNetTypeArgs {
 #[run_config_opt]
 pub struct TrainMotifNetRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]
@@ -1129,6 +1131,7 @@ impl TrainFinalNetArgs {
 #[run_config_opt]
 pub struct TrainFinalNetRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]

@@ -1236,8 +1236,13 @@ mock! {
     }
 
     #[async_trait]
+    impl thoosa_store::ExternalSqlWriter for MotifsStore {
+        fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
+    }
+
+    #[async_trait]
     impl Store for MotifsStore{
-      fn open_external_writer_conn(&self) -> anyhow::Result<Connection>;
+
         async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
         async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
         async fn save_run_config<'a, 'b, 'c>(
@@ -1646,6 +1651,8 @@ impl MockMotifsStoreBuilder {
 
 #[cfg(test)]
 mod store_tests {
+    use thoosa_store::ExternalSqlWriter;
+    use thoosa_shared::resource::ResourceStore;
     use std::collections::HashMap;
     use std::fmt::{Display, Formatter};
     use std::fs;
@@ -1667,11 +1674,11 @@ mod store_tests {
     use std::path::PathBuf;
 
     // These legacy database tests now exercise the motif extension trait and schema explicitly.
-    async fn test_store() -> anyhow::Result<Arc<dyn MotifsStore>> {
+    async fn test_store() -> anyhow::Result<Arc<SqlStore>> {
         Ok(Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, create_motif_tables]).await?))
     }
 
-    pub(crate) async fn test_store_from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Arc<dyn MotifsStore>> {
+    pub(crate) async fn test_store_from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Arc<SqlStore>> {
         Ok(Arc::new(SqlStore::from_path_with_tables(path, vec![thoosa_store::create_tables, create_motif_tables]).await?))
     }
 
@@ -2587,7 +2594,7 @@ mod store_tests {
 
     //TODO merge with init_test_store in cli::main_tests
     pub async fn init_test_store(
-        store: &Arc<dyn MotifsStore>,
+        store: &Arc<SqlStore>,
     ) -> anyhow::Result<Vec<ResourceId>> {
         let store_guard = store;
         let import_id = store_guard.save_import("test".to_string()).await?;
@@ -3197,7 +3204,7 @@ mod store_tests {
         Ok(())
     }
 
-    async fn create_resources(store: &Arc<dyn MotifsStore>, specs: &[(&str, u32)]) -> anyhow::Result<()> {
+    async fn create_resources(store: &Arc<SqlStore>, specs: &[(&str, u32)]) -> anyhow::Result<()> {
         let import_id = store.save_import("test resources".into()).await?;
 
         let resources = specs.iter().fold(
@@ -3216,7 +3223,7 @@ mod store_tests {
         Ok(())
     }
 
-    fn fetch_resource_id(store: &Arc<dyn MotifsStore>, key: &str) -> anyhow::Result<ResourceId> {
+    fn fetch_resource_id(store: &Arc<SqlStore>, key: &str) -> anyhow::Result<ResourceId> {
         let guard = store.open_external_writer_conn()?;
         let id = guard.query_row("SELECT id FROM resources WHERE key=?", [key], |row| {
             row.get::<usize, ResourceId>(0)
@@ -3225,7 +3232,7 @@ mod store_tests {
     }
 
     fn insert_motif_with_slices(
-        store: &Arc<dyn MotifsStore>,
+        store: &Arc<SqlStore>,
         run_config_id: RunConfigId,
         channel_id: i64,
         group_ord: i64,

@@ -120,7 +120,7 @@ impl FixedFindMotifsConfig {
 
 
 #[derive(Debug, Clone, CpuData)]
-#[dummy_data(clone)]
+#[cpu_data(shallow)]
 pub struct FindMotifsSavableResult {
 }
 

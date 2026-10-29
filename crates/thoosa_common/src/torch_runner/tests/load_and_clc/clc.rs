@@ -161,10 +161,10 @@ impl SyncClcStage {
         // Integer tensors require an integer scalar; using the postcard f64 value would make LibTorch reject an in-place Float-to-Long multiplication.
         match kind {
             Kind::Int | Kind::Int64 => Ok(SyncClcStage::new_local(
-                id, k_i64.ok_or_else(|| ThoError::new("SyncClcStageInit integer multiplier cannot convert to i64"))?, fail_until, dim, kind, Cuda(0).into(), use_matmul
+                id, k_i64.ok_or_else(|| ThoError::new("SyncClcStageInit integer multiplier cannot convert to i64"))?, fail_until, dim, kind, thoosa_common::tho_device::ThoDevice::from(1usize), use_matmul
             )),
             _ => Ok(SyncClcStage::new_local(
-                id, k, fail_until, dim, kind, Cuda(0).into(), use_matmul
+                id, k, fail_until, dim, kind, thoosa_common::tho_device::ThoDevice::from(1usize), use_matmul
             )),
         }
     }

@@ -132,7 +132,7 @@ where
         // let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
         let id = init.new_id().to_string();
 
-        SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(init.tho_device_idx, id.clone(), move || async move {
+        SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(init.tho_device_idx, GlobalCtx::global().cuda_activity_gate(init.tho_device_idx), GlobalCtx::global().is_ipc(), id.clone(), move || async move {
             let stage = if GlobalCtx::global().is_ipc() {
 
                 // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
@@ -1030,7 +1030,7 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(60), do_test_filter_state()).await?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
     }
 
@@ -1082,7 +1082,7 @@ mod tests {
             }).await?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
     }
 
@@ -1121,7 +1121,7 @@ mod tests {
             }).await?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), Device::Cuda(0).into()).await
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(SYNC_FREQ_FILTER_ENDPOINT.into(), Box::new(state_test_init) as InitFn)]), thoosa_common::tho_device::ThoDevice::from(1usize)).await
         })
     }
 

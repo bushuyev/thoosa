@@ -482,7 +482,7 @@ where
 
 //TODO move to lib
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clone> {
     resources_config: RC,
 }
@@ -1400,6 +1400,7 @@ mod tests {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, CpuData)]
+    #[cpu_data(shallow)]
     struct TestBatchOutput {
         call_index: usize,
     }
@@ -1800,7 +1801,7 @@ mod tests {
                     Tensor::from_slice(v.as_slice()).view((1, tensor_len as i64)),
                 )?)
             },
-            ThoDevice::from(Device::Cpu),
+            ThoDevice::from(0usize),
         ));
 
 

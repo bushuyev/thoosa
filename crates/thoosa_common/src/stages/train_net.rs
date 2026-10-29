@@ -55,7 +55,7 @@ use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct TrainNetInput{
 }
 
@@ -71,7 +71,7 @@ impl Input for TrainNetInput {
 
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct TrainNetOutput<N, R>
 where
     N:Debug + Send + Sync + 'static,
@@ -178,7 +178,7 @@ where
     batch:BF,
     train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
     opt_config:Arc<OptConfig>,
-    run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
+    run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P> >,
     epochs:FC,
     validation_step: u32,
     descr:String,
@@ -219,7 +219,7 @@ where
         batch: BF,
         train_step_factory: Arc<dyn TrainStepFactory<DX, DY, C, NP, RC>>,
         opt_config: Arc<OptConfig>,
-        run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>,
+        run_config_source: Arc<thoosa_shared::run_configs::TrainingRunConfigs<P>>,
         epochs: FC,
         validation_step: u32,
         descr: String
@@ -527,6 +527,7 @@ use crate::tch_error::tch_result;
     #[run_config_opt]
     struct DummyRunConfig {
         #[in_map]
+        #[config_scalar]
         pub id: Option<RunConfigId>,
 
         #[in_map]
@@ -661,7 +662,7 @@ use crate::tch_error::tch_result;
         stream::iter([input]).boxed()
     }
 
-    fn recovery_run_configs() -> Arc<thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<DummyRunConfigFields>>, Vec<thoosa_shared::val::NamedRange<DummyRunConfigFields>>, Vec<thoosa_shared::hyperparameter::Hyperparameter<DummyRunConfigFields>>, DummyRunConfigFields>> {
+    fn recovery_run_configs() -> Arc<thoosa_shared::run_configs::TrainingRunConfigs<DummyRunConfigFields>> {
         Arc::new(DummyRunConfigRangeOrValue {
             id: None,
             num_layers: RangeOrValue::Value(1),

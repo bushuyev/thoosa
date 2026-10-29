@@ -533,7 +533,7 @@ impl DistsMask {
                 } else {
                     tch_result(t.f_contiguous())?
                 };
-                let device = ThoDevice::from(t.device());
+                let device = ThoDevice::try_from(t.device())?;
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying local tensor device={device:?}");
                 Ok(track_await!(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
             }
@@ -649,10 +649,10 @@ impl DistsMask {
 
         match self.mask_type {
             DistsMaskType::AsIs => {
-                assert!(self.mask.tho_device().eq(&Cpu.into()), "DistsMask::to_cpu: AsIs expects CPU mask");
+                assert!(self.mask.tho_device().eq(&thoosa_common::tho_device::ThoDevice::from(0usize)), "DistsMask::to_cpu: AsIs expects CPU mask");
 
                 if let Some(dists) = self.dists.as_ref() {
-                    assert!(dists.tho_device().eq(&Cpu.into()), "DistsMask::to_cpu: AsIs expects CPU dists");
+                    assert!(dists.tho_device().eq(&thoosa_common::tho_device::ThoDevice::from(0usize)), "DistsMask::to_cpu: AsIs expects CPU dists");
                 }
                 Ok(Self {
                     mask: self.mask,

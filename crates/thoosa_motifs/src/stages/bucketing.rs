@@ -1214,6 +1214,7 @@ impl Default for BucketingConfig {
 #[run_config_grid]
 pub struct BucketRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[run_config]
@@ -1488,7 +1489,8 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         debug!("test_dir={test_dir:?}");
         // let store = Arc::new(SqlStore::in_mem().await?);
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
+        let sql_store = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
+        let store: Arc<dyn MotifsStore> = sql_store.clone();
 
         let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(
             test_dir,
@@ -1500,7 +1502,7 @@ mod tests {
 
         let imported_ids = import_resources(
             &ws,
-            &store,
+            sql_store.as_ref(),
             &["label_0", "label_1"],
             || {
                 Ok(HashMap::from_iter([
@@ -1551,7 +1553,7 @@ mod tests {
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
-            ThoDevice::from(Device::Cpu),
+            ThoDevice::from(0usize),
         ));
 
         let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
@@ -1737,7 +1739,8 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
         debug!("test_dir={test_dir:?}");
         // let store = Arc::new(SqlStore::in_mem().await?);
-        let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
+        let sql_store = Arc::new(SqlStore::from_path_(test_dir.join(&"main_db.db3")).await?);
+        let store: Arc<dyn MotifsStore> = sql_store.clone();
 
         let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(
             test_dir,
@@ -1750,7 +1753,7 @@ mod tests {
 
         let imported_ids = import_resources(
             &ws,
-            &store,
+            sql_store.as_ref(),
             &["label_0", "label_1"],
             || {
                 Ok(HashMap::from_iter([
@@ -1805,7 +1808,7 @@ mod tests {
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
-            ThoDevice::from(Device::Cpu),
+            ThoDevice::from(0usize),
         ));
 
         let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");

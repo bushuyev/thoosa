@@ -88,7 +88,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     train_label_nets_run_config_ids: Vec<RunConfigId>,
-    run_configs: Arc<OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>>,
+    run_configs: Arc<thoosa_shared::run_configs::TrainingRunConfigs<TrainFinalNetRunConfigFields>>,
     pd: PhantomData<L>,
     label_loader: Arc<LL>,
     num_label_nets: u32,
@@ -101,7 +101,7 @@ where
 pub async fn new_train_final_net<L, C, R>(
     train_label_nets_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
-    run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
+    run_configs: thoosa_shared::run_configs::TrainingRunConfigs<TrainFinalNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: &Arc<dyn MotifsStore>,
     stage_ctx: R,
@@ -136,7 +136,7 @@ where
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         label_loader: Arc<LL>,
         num_label_nets: u32,
-        run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
+        run_configs: thoosa_shared::run_configs::TrainingRunConfigs<TrainFinalNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
         store: &Arc<dyn MotifsStore>,
         opt_config: Arc<OptConfig>,
@@ -157,7 +157,7 @@ where
 }
 
 #[derive(Debug, CpuData)]
-#[dummy_data(no_clone)]
+#[cpu_data(shallow)]
 pub struct TrainFinalNetOutput {
     result: TrainFinalNetsRunConfigResult,
 }
@@ -388,7 +388,7 @@ where
     C: RunCtx  + 'static
 {
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<SyncLogitsBatch<C>>>, ThoError> {
-        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
+        SYNC_LOGITS_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
                 if GlobalCtx::global().is_ipc() {
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
                     stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LOGITS_BATCH_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(())).await?),

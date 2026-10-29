@@ -1242,11 +1242,11 @@ impl CudaIPCActorHandle {
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
         match &dst_device.into() {
             Cpu => {
-                assert_ne!(src.tho_device(), Cpu.into(), "src device should not be CPU when copying to CPU");
+                assert_ne!(src.tho_device(), thoosa_common::tho_device::ThoDevice::from(0usize), "src device should not be CPU when copying to CPU");
                 assert!(src.is_ref(), "In IPC mode, src must be a reference when copying to CPU.")
             }
             Cuda(_)=>{
-                assert_eq!(src.tho_device(), Cpu.into(), "src device should be CPU when copying to GPU");
+                assert_eq!(src.tho_device(), thoosa_common::tho_device::ThoDevice::from(0usize), "src device should be CPU when copying to GPU");
                 assert!(!src.is_ref(), "IPC mode, src must be value when copying to GPU")
             }
             _ => {
@@ -1256,7 +1256,7 @@ impl CudaIPCActorHandle {
         Ok(activity)
     }
 
-    fn is_current_worker(&self, worker_id: CudaWorkerId) -> bool {
+    pub(crate) fn is_current_worker(&self, worker_id: CudaWorkerId) -> bool {
         // Cleanup targets belong to one device and generation. This snapshot is
         // only an early filter; the actor checks again after receiving the work.
         worker_id.device_idx == self.tho_device_idx && worker_id.generation == self.gate.device_generation()
@@ -1953,7 +1953,7 @@ mod tests {
         // A CPU tensor exercises real copy admission and message ownership
         // without starting a CUDA worker or allocating GPU storage.
         let src = ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
-        let mut copy = Box::pin(handle.copy(src, Device::Cuda(0).into()));
+        let mut copy = Box::pin(handle.copy(src, thoosa_common::tho_device::ThoDevice::from(1usize)));
         assert!(futures::poll!(copy.as_mut()).is_pending());
         let request = receiver.recv().await.unwrap();
         drop(copy);
@@ -2087,7 +2087,7 @@ mod tests {
                     sock_path,
                     &ws,
                     HashMap::new(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -2116,7 +2116,7 @@ mod tests {
                     sock_path,
                     &ws,
                     HashMap::new(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -2184,7 +2184,7 @@ mod tests {
                     sock_path,
                     &ws,
                     HashMap::new(),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )

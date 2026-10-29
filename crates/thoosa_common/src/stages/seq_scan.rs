@@ -18,6 +18,7 @@ use thoosa_shared::val::Val;
 #[run_config_grid]
 pub struct SeqScanRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[run_config]

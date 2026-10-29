@@ -326,7 +326,7 @@ mod tests {
                                 Box::new(test_simp_init) as InitFn,
                             ),
                         ]),
-                        ThoDevice::from(Cuda(0)),
+                        ThoDevice::from(1usize),
                     ).await;
 
                     info!("test_simp_ipc: r={r:?}");
@@ -415,7 +415,7 @@ mod tests {
                             Box::new(test_simp_init) as InitFn,
                         ),
                     ]),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )

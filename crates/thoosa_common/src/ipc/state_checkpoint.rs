@@ -42,7 +42,7 @@ pub(crate) async fn checkpoint_operation<T: Send + 'static>(device: usize, futur
 }
 
 pub(crate) async fn copy_state_tensor(tensor: Tensor, device: usize) -> Result<Tensor, ThoError> {
-    let source = crate::tho_device::ThoDevice::from(tensor.device()).tho_device_idx();
+    let source = crate::tho_device::ThoDevice::try_from(tensor.device())?.tho_device_idx();
     if source == device {
         // CPU training must not mutate the saved CPU allocation through an alias.
         return Ok(tch_result(tensor.f_to_device_(tensor.device(), tensor.kind(), false, true))?);

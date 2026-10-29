@@ -603,7 +603,7 @@ where
 {
     // The singleton has no output identity: every caller supplies its own aggregate key.
     pub async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<StackAppliedMotifNets<C>>>, ThoError> {
-        STACK_APPLIED_MOTIF_NETS_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), 0, move || async move {
+        STACK_APPLIED_MOTIF_NETS_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 // Reuse the stage input as an initializer carrier to avoid a second wire-only type.
                 let init = StackAppliedMotifNetsInput { id: SynKey::new(vec![]), device_idx: device.tho_device_idx(), motif_nets_applied: Vec::new() };
@@ -1067,7 +1067,7 @@ where
         // Different sampling/quantization settings require independently configured sync instances.
         let key = (trained_net_id, sync_init.slice_step, sync_init.quantize);
         let device_idx = run_context.tho_device_idx();
-        APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, key, move || async move {
+        APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, GlobalCtx::global().cuda_activity_gate(device_idx), GlobalCtx::global().is_ipc(), key, move || async move {
             // Construction loads model state and has no cached tensor inputs to retain.
             let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(

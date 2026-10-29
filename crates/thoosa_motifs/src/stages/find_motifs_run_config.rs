@@ -39,6 +39,7 @@ use thoosa_store::Store;
 #[run_config_grid]
 pub struct FindMotifsRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[run_config]
@@ -1260,6 +1261,7 @@ impl Default for PeriodicityAcfRunConfig {
 
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct EucDistMetric {
     #[in_map]
     #[run_config]
@@ -1277,6 +1279,7 @@ impl Default for EucDistMetric {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct PearsonCorrMetric {
     #[in_map]
     #[run_config]
@@ -1294,6 +1297,7 @@ impl Default for PearsonCorrMetric {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct DotProductMetric {
     #[in_map]
     #[run_config]
@@ -1307,9 +1311,11 @@ impl Default for DotProductMetric {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData, Default)]
+#[cpu_data(shallow)]
 pub struct EnergyMetric {}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct CommonStatsMetric {
     #[in_map]
     #[run_config]
@@ -1335,6 +1341,7 @@ impl Default for CommonStatsMetric {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub enum Metrics {
     EucDist(EucDistMetric),
     PearsonCorr(PearsonCorrMetric),
@@ -1464,6 +1471,7 @@ impl Metrics {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
+#[cpu_data(shallow)]
 pub struct MotifCriterionConstraint {
     #[in_map]
     #[run_config]
@@ -1486,6 +1494,7 @@ impl MotifCriterionConstraint {
 #[run_config_grid]
 pub struct ExtendMotifsRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]
@@ -1507,6 +1516,7 @@ impl ExtendMotifsRunConfig {
 #[run_config_grid]
 pub struct SelectMotifsRunConfig {
     #[in_map]
+    #[config_scalar]
     pub id: Option<RunConfigId>,
 
     #[in_map]
@@ -1526,7 +1536,7 @@ impl SelectMotifsRunConfig {
 }
 
 #[derive(Debug, Clone, CpuData)]
-#[dummy_data(clone)]
+#[cpu_data(shallow)]
 pub struct SelectMotifsRunResult {
     pub run_config: SelectMotifsRunConfig,
     pub selected_motif_ids_scores: Vec<(u32, f64)>,
@@ -1550,7 +1560,7 @@ impl SelectMotifsRunResult {
 impl Output for SelectMotifsRunResult {}
 
 #[derive(Debug, Clone, CpuData)]
-#[dummy_data(clone)]
+#[cpu_data(shallow)]
 pub struct SelectMotifsSavableResult {
     run_results: Vec<SelectMotifsRunResult>,
 }

@@ -469,7 +469,7 @@ mod tests {
     #[tokio::test]
     async fn test_stateless_worker_synchronizes_errors_and_panics() {
         let tensors = AllTensors::new(CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) });
-        let device: ThoDevice = tch::Device::Cuda(0).into();
+        let device: ThoDevice = thoosa_common::tho_device::ThoDevice::from(1usize);
         let ctx = WokerRunCtx::new(1);
         for consume in [false, true] {
             for outcome in 0..3 {
@@ -495,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn test_worker_state_guard_survives_synchronization_on_success_error_and_panic() {
         let tensors = AllTensors::new(CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) });
-        let device: ThoDevice = tch::Device::Cuda(0).into();
+        let device: ThoDevice = thoosa_common::tho_device::ThoDevice::from(1usize);
         let input: Box<dyn WorkerInput> = Box::new(());
         let ctx = WokerRunCtx::new(1);
         for outcome in 0..3 {

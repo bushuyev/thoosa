@@ -491,7 +491,7 @@ use crate::tch_error::tch_result;
                             Box::new(with_state_init) as InitFn,
                         ),
                     ]),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )
@@ -548,7 +548,7 @@ use crate::tch_error::tch_result;
             }).await?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(1usize)).await
         })
     }
 
@@ -569,7 +569,7 @@ use crate::tch_error::tch_result;
             Ok(())
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(1usize)).await
         })
     }
 
@@ -607,7 +607,7 @@ use crate::tch_error::tch_result;
             }).await.map_err(|_| ThoError::new("concurrent endpoint export timed out"))?
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(Cuda(0))).await
+            CudaWorker::run_worker(sock, &ws, HashMap::from([(TEST_ENDPOINT.to_owned(), Box::new(with_state_init) as InitFn)]), ThoDevice::from(1usize)).await
         })
     }
 
@@ -635,7 +635,7 @@ use crate::tch_error::tch_result;
                             Box::new(with_state_init) as InitFn,
                         ),
                     ]),
-                    ThoDevice::from(Cuda(0)),
+                    ThoDevice::from(1usize),
                 ).await
             },
         )

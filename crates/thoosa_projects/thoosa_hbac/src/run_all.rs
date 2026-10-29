@@ -483,7 +483,7 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
     let find_and_select =  FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(4, 4, 8),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
         extend_motifs_run_config: Some(run_all_extend_motifs_config_grid_0::<SelectMotifsRunConfigFields>()),
         select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
@@ -707,7 +707,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 50, end: 1000 }, step: Some((50, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: Some((100, 0)) },
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
@@ -736,7 +736,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
                 similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
                 slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                        q: RangeOrValue::Value(0.2),
+                        q: RangeOrValue::Value(0.5),
                         // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
                     }),
                 }),
@@ -1155,7 +1155,7 @@ mod tests {
                         sock_path,
                         &ws,
                         crate::cuda_worker_endpoint_inits(),
-                        ThoDevice::from(Device::Cuda(0)),
+                        ThoDevice::from(1usize),
                     ).await;
 
                     info!("heavy_test_run_all_ipc: r={r:?}");
@@ -1249,16 +1249,17 @@ mod tests {
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
-        let mut store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![
+        let sql_store = Arc::new(SqlStore::from_path_with_tables(ws.read().store_path(), vec![
             create_tables,
             create_motif_tables
         ]).await?);
+        let mut store: Arc<dyn MotifsStore> = sql_store.clone();
 
         debug!("heavy_test_run_all: import_hash={import_hash:?}");
 
         let imported_ids = import_resources(
             &ws,
-            &store,
+            sql_store.as_ref(),
             &["label_0", "label_1", "label_2"],
             move || {
                 Ok(import_hash.clone())
@@ -1289,7 +1290,7 @@ mod tests {
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
                 Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
             },
-            ThoDevice::from(Device::Cpu),
+            ThoDevice::from(0usize),
         ));
 
         let mut ctx = RunCtxImpl::new(1, "test_run_all");
