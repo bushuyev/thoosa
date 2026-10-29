@@ -344,7 +344,8 @@ where
                 )).await?;
 
             let loaded = BorrowRef::borrow_ref(&loaded, 0).await?;
-            let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())?;
+            // The async stage owns independent CPU storage, not an alias of a cache borrow.
+            let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), tch_result(loaded.t_ref().f_detach_copy())?)?;
 
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 
@@ -378,7 +379,8 @@ where
                 ),
             )).await?;
 
-            let resource_psd_t = resource_psd.t_ref().shallow_clone();
+            // The result is owned here, so transfer its storage into the accumulator.
+            let resource_psd_t = resource_psd.t();
 
             psd_sum = Some(match psd_sum {
                 None => resource_psd_t,
