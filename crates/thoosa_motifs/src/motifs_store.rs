@@ -283,7 +283,7 @@ impl MotifsStore for SqlStore {
                     row.get::<usize, String>(2)?,
                     row.get::<usize, u32>(3)?,
                 ))
-            })?.map(|v| v.unwrap()).collect();
+            })?.collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(r)
         })
@@ -1100,7 +1100,7 @@ impl MotifsStore for SqlStore {
                 format!("{label}%")
             ], |row| {
                 Ok(row.get::<usize, u32>(0)?)
-            })?.map(|v| v.unwrap()).collect();
+            })?.collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(r)
         })
