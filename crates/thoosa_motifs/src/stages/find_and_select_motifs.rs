@@ -392,12 +392,16 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         &format!("find_and_select_{}", grid_idx),
                     );
 
-                    // The shared best result below remains authoritative if optimization fails.
-                    let _ = track_await!(opt.optimize()).await;
+                    let optimization = track_await!(opt.optimize()).await;
 
                     let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
 
                     let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
+                    if let Err(error) = optimization {
+                        if best_config.is_none() { return Err(error.into()); }
+                        // Partial progress is useful, but must be reported as an interrupted run.
+                        warn!("FindAndSelectMotifsStage: partial success for grid {grid_idx}; optimization stopped early: {error:#}; retaining best_loss={best_loss}");
+                    }
 
                     if let Some(best_config) = best_config {
                         info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
