@@ -1110,9 +1110,6 @@ pub struct TrainFinalNetArgs {
     #[arg(long)]
     pub run_config_cnt: String, //TrainLabelNetRunConfig
 
-    #[arg(long)]
-    pub selected_motif_nets_limit: Option<usize>,
-
     #[arg(long, default_value_t = 10)]
     pub motif_slices_step: u32,
 }
