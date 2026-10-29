@@ -298,10 +298,11 @@ pub trait SyncStageIpcWrapper: Send + Sync + Debug {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
     fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
-        unimplemented!()
+        // A wrapper may support only one dispatch capability.
+        Err(ThoError::new("worker wrapper does not support borrowed execution"))
     }
     fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
-        unimplemented!()
+        Err(ThoError::new("worker wrapper does not support consuming execution"))
     }
     
     fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>//move to SyncStageIpcWrapperWithState

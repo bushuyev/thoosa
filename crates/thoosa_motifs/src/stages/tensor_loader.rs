@@ -204,6 +204,7 @@ pub(crate) mod mock_tensor_loader {
 
 
         impl AsyncStage for TensorLoader {
+            fn run(self: Arc<Self>, input: <MockTensorLoader as Stage>::In<'static>, ctx: <MockTensorLoader as Stage>::Ctx) -> impl std::future::Future<Output = Result<<MockTensorLoader as Stage>::Out, ThoError>> + Send;
         }
 
         #[async_trait]
