@@ -128,10 +128,7 @@ where
         match self.config {
             OOMRunnerConfig::MaxParallel { max, step } => {
                 let run_ctx = ctx.branch(false);
-                let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
-                    max,
-                    step,
-                )))];
+                let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(step)))];
                 OOMHandler::<NoInputAdjuster, NoStageAdjuster, _, S>::new(
                     adjusters,
                     None,
@@ -169,10 +166,7 @@ where
             } => {
                 let run_ctx = ctx.branch(false);
                 let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
-                        MAX_PARALLEL,
-                        *MaxParallelStep::MID,
-                    ))),
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::MID))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                         min_split_len,
                     ))),
@@ -195,10 +189,7 @@ where
             OOMRunnerConfig::DumpedToCpu => {
                 let run_ctx = ctx.branch(false);
                 let adjusters: Vec<Adjusters<_, NoStageAdjuster, _>> = vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
-                        MAX_PARALLEL,
-                        *MaxParallelStep::FAST,
-                    ))),
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
                     Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                         min_split_len,

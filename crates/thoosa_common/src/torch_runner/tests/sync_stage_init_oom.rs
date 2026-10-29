@@ -75,7 +75,7 @@ async fn test_sync_stage_constructor_retries_after_run_context_adjustment() -> R
     let calls = Arc::new(AtomicUsize::new(0));
     let sync_init = ConstructorInit { calls: Arc::clone(&calls) };
     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
-        vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST)))],
+        vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST)))],
         None,
     );
 

@@ -41,7 +41,6 @@ pub struct MaxParallelAdjuster<C>
 where
     C: Adjustable + RunCtx,
 {
-    pub max: MaxParallel,
     pub step: MaxParallel,
     pd: PhantomData<C>,
 }
@@ -52,7 +51,6 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PermitsAdjuster")
-            .field("max", &self.max)
             .field("step", &self.step)
             .finish()
     }
@@ -62,12 +60,8 @@ impl<C> MaxParallelAdjuster<C>
 where
     C: Adjustable + RunCtx,
 {
-    pub fn new(
-        max: MaxParallel,
-        step: MaxParallel,
-    ) -> Self {
+    pub fn new(step: MaxParallel) -> Self {
         Self {
-            max,
             step,
             pd: Default::default(),
         }
@@ -180,7 +174,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let adjustable = RunCtxImpl::new(0, "permits_adjust_dummy");
-        let adjuster = MaxParallelAdjuster::<RunCtxImpl>::new(100, 10);
+        let adjuster = MaxParallelAdjuster::<RunCtxImpl>::new(10);
         let mut ac = ctx("test", 10);
 
         let res = adjuster.adjust(adjustable, &mut ac).await.unwrap();
@@ -195,7 +189,7 @@ mod tests {
 
         let mut adjustable = RunCtxImpl::new(0, "permits_adjust_noop");
         adjustable.set_max_other_parallel(10);
-        let adjuster = MaxParallelAdjuster::<RunCtxImpl>::new(100, 10);
+        let adjuster = MaxParallelAdjuster::<RunCtxImpl>::new(10);
         let mut ac = ctx("test", 10);
 
         let res = adjuster.adjust(adjustable, &mut ac).await.unwrap();

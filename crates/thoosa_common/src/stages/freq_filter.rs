@@ -843,7 +843,7 @@ where
 
         let filtered = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, ChannelsDataSelector>::new(
             vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::MID))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::MID))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("freq_filter"))),
                 Adjusters::Input(input_adjuster(FreqFilterSplitsAdjuster::new(min_split_len, self.effective_output_stride))),
             ],

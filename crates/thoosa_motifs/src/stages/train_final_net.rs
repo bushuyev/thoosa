@@ -581,7 +581,7 @@ where
                 let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
                 ], None);
                 let output = track_await!(oom_handler.run(

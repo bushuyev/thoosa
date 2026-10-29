@@ -972,7 +972,7 @@ where
                 let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
                 let oom_handler: OOMHandler<'_, '_, _, NoStageAdjuster, _, SelectBucketsInputSelector> = OOMHandler::new(
                     vec![
-                        Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                        Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                         Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("bucketing"))),
                         Adjusters::Input(input_adjuster(SelectBucketsAdjuster::new())),
                     ],
