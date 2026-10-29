@@ -17,6 +17,23 @@ pub trait StageCommand {
 }
 
 
+/// The runtime currently supports CPU-only execution or CPU plus the first visible GPU.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum ExecutionDevice { Auto, Cpu, Cuda0 }
+
+impl ExecutionDevice {
+    pub fn resolve(self, ipc: bool, cuda_available: bool) -> anyhow::Result<usize> {
+        let device = match self {
+            Self::Auto => usize::from(ipc || cuda_available),
+            Self::Cpu => 0,
+            Self::Cuda0 => { anyhow::ensure!(ipc || cuda_available, "CUDA device 0 is not available"); 1 },
+        };
+        // The IPC parent hides CUDA; only its worker can validate GPU availability.
+        anyhow::ensure!(!ipc || device == 1, "IPC execution requires --execution-device cuda0 or auto");
+        Ok(device)
+    }
+}
+
 #[derive(Args, Clone, Debug)]
 pub struct CommonArgs<C>
 where
@@ -52,6 +69,24 @@ where
     #[arg(long)]
     pub ipc:bool,
 
+    #[arg(long, value_enum, default_value = "auto")]
+    pub execution_device: ExecutionDevice,
+
     #[command(subcommand)]
     pub command: Option<C>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExecutionDevice::*;
+
+    #[test]
+    fn test_execution_device_selection_is_explicit_and_cpu_safe() {
+        assert_eq!(Auto.resolve(false, false).unwrap(), 0);
+        assert_eq!(Auto.resolve(false, true).unwrap(), 1);
+        assert_eq!(Cpu.resolve(false, true).unwrap(), 0);
+        assert_eq!(Auto.resolve(true, false).unwrap(), 1);
+        assert!(Cuda0.resolve(false, false).is_err());
+        assert!(Cpu.resolve(true, false).is_err());
+    }
 }
