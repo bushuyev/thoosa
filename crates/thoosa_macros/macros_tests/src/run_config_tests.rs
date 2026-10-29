@@ -319,3 +319,18 @@ fn test_optional_vectors_preserve_empty_and_absent() -> thoosa_shared::anyhow::R
     }
     Ok(())
 }
+
+#[test]
+fn test_sparse_properties_are_rejected() {
+    use thoosa_properties_map::FromHashmap;
+    use thoosa_shared::val::Val;
+    // Legacy maps have no length metadata, so enumerate all keys before reading.
+    for tail in ["2", "01", "bad"] {
+        let map = std::collections::HashMap::from([
+            ("QualifiedConfig::alias".into(), Val::UInt(1)),
+            ("QualifiedConfig::values.0".into(), Val::UInt(3)),
+            (format!("QualifiedConfig::values.{tail}"), Val::UInt(4)),
+        ]);
+        assert!(QualifiedConfig::from_properties_map(None, &map).is_err());
+    }
+}
