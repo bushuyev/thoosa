@@ -369,7 +369,7 @@ mod motif_find_tests {
     fn test_z_norm()  -> anyhow::Result<()>{
         assert_eq!(
             vec![-1.2247449, 0.0, 1.2247449],
-            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)
+            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)?
         );
 
         Ok(())
@@ -380,7 +380,7 @@ mod motif_find_tests {
         let t = Tensor::from_slice(&[1., 2., 3.]);
         let norm = norm(&t, &[-1]);
 
-        assert_eq!(1.0, to_vec_f32(&norm.dot(&norm))[0]);
+        assert_eq!(1.0, to_vec_f32(&norm.dot(&norm))?[0]);
 
         let t = Tensor::vstack(&[
             Tensor::from_slice(&[1., 2., 3.]),

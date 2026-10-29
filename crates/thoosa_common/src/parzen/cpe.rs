@@ -1,10 +1,8 @@
+use crate::tch_error::tch_result;
 use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
-use crate::utils::from;
-use log::{debug, trace};
 use rand::distr::Distribution as RandDistribution;
 use rand::distr::weighted::WeightedIndex;
-use tch::IndexOp;
 use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Tensor;
@@ -35,98 +33,47 @@ impl CategoricalParzenEstimator {
         }
     }
 
-    fn _clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> CategoricalGaussian {
-        let weights = weights.unwrap_or(uniform_weight(
-            samples.size()[0] + if self.prior { 1 } else { 0 },
-            samples.device()
-        ));
-        debug!("CategoricalParzenEstimator::_clc_distr: samples={samples}");
-        trace!("CategoricalParzenEstimator::_clc_distr: weights={weights} self.uniform={}", self.uniform);
-
+    fn _clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> anyhow::Result<CategoricalGaussian> {
+        anyhow::ensure!(self.n_choices > 0 && samples.dim() == 1, "categorical distribution requires choices and vector samples");
+        let count = samples.size()[0];
+        let weights = match weights { Some(weights) => weights, None => uniform_weight(count + i64::from(self.prior), samples.device())? };
         let mut probs = if self.prior {
-            Tensor::full(
-                self.n_choices as i64,
-                self.uniform as f64 * weights.i(weights.size()[0] - 1).double_value(&[]),
-                FLOAT_CPU,
-            ) //TODO last weight?
-        } else {
-            Tensor::zeros(self.n_choices as i64, FLOAT_CPU)
-        }
-        .view(-1);
-
-        let weights = if self.prior {
-            weights.i(0..weights.size()[0] - 1)
-        } else {
-            weights
-        };
-        trace!("CategoricalParzenEstimator::_clc_distr: weights={weights}");
-
-        debug!("CategoricalParzenEstimator::_clc_distr: probs={probs} dim={:?}", probs.dim());
-
-        let masks = Tensor::arange(self.n_choices as i64, INT64_CPU)
-            .view((-1, 1))
-            .eq_tensor(&samples);
-
-
-        let slicer = Tensor::arange(self.n_choices as i64, INT64_CPU); //0..self.n_choices; //
-
+            let prior = tch_result(weights.f_double_value(&[count]))?;
+            tch_result(Tensor::f_full([self.n_choices as i64], self.uniform as f64 * prior, FLOAT_CPU))?
+        } else { tch_result(Tensor::f_zeros([self.n_choices as i64], FLOAT_CPU))? };
+        let weights = if self.prior { tch_result(weights.f_narrow(0, 0, count))? } else { weights };
+        let slicer = tch_result(Tensor::f_arange(self.n_choices as i64, INT64_CPU))?;
+        let masks = tch_result(tch_result(slicer.f_view([-1, 1]))?.f_eq_tensor(&samples))?;
         for c in 0..self.n_choices {
-            let mask = masks.i(c as i64);
-            let weight = weights.masked_select(&mask).sum(None).totype(Float);//TODO f_
-
-            let c_t = Tensor::from_slice(&[c as i64]);
-            let mask_not_c = slicer.ne_tensor(&c_t);
-            let mask_is_c = slicer.eq_tensor(&c_t);
-            // Use the masks to index and update the probs tensor
-            probs = probs + mask_not_c.to_kind(Float) * &weight.multiply_scalar(self.bottom as f64);
-            probs = probs + mask_is_c.to_kind(Float) * &weight.multiply_scalar(self.top as f64);
+            let mask = tch_result(masks.f_select(0, c as i64))?;
+            let weight = tch_result(tch_result(weights.f_masked_select(&mask))?.f_sum(None))?;
+            let weight = tch_result(weight.f_to_kind(Float))?;
+            let not_c = tch_result(tch_result(slicer.f_ne(c as i64))?.f_to_kind(Float))?;
+            let is_c = tch_result(tch_result(slicer.f_eq(c as i64))?.f_to_kind(Float))?;
+            let other = tch_result(not_c.f_mul(&tch_result(weight.f_mul_scalar(self.bottom as f64))?))?;
+            let selected = tch_result(is_c.f_mul(&tch_result(weight.f_mul_scalar(self.top as f64))?))?;
+            probs = tch_result(tch_result(probs.f_add(&other))?.f_add(&selected))?;
         }
-
-        let likelihood_choices = Tensor::full(
-            [self.n_choices as i64, self.n_choices as i64],
-            self.bottom as f64,
-            FLOAT_CPU,
-        )
-        .fill_diagonal_(self.top as f64, false);
-
-        debug!("CategoricalParzenEstimator::_clc_distr: likelihood_choices={likelihood_choices}");
-
+        let mut choices = tch_result(Tensor::f_full([self.n_choices as i64, self.n_choices as i64], self.bottom as f64, FLOAT_CPU))?;
+        let _ = tch_result(choices.f_fill_diagonal_(self.top as f64, false))?;
+        let likelihood = tch_result(choices.f_index_select(0, &samples))?;
         let blls = if self.prior {
-            Tensor::vstack(&[
-                likelihood_choices.index(&[Some(samples)]),
-                Tensor::full(self.n_choices as i64, self.uniform as f64, FLOAT_CPU),
-            ])
-        } else {
-            likelihood_choices.index(&[Some(samples)])
-        };
-        let blls = blls.clamp_min(1e-12);
-
-        CategoricalGaussian::new(probs, blls.log(), weights)
+            let prior = tch_result(Tensor::f_full([self.n_choices as i64], self.uniform as f64, FLOAT_CPU))?;
+            tch_result(Tensor::f_vstack(&[likelihood, prior]))?
+        } else { likelihood };
+        let log_blls = tch_result(tch_result(blls.f_clamp_min(1e-12))?.f_log())?;
+        CategoricalGaussian::new(probs, log_blls, weights)
     }
 }
 
 impl ParzenEstimator for CategoricalParzenEstimator {
-    fn clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution> {
-        Box::new(self._clc_distr(samples, weights))
+    fn clc_distr(&self, samples: Tensor, weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>> {
+        Ok(Box::new(self._clc_distr(samples, weights)?))
     }
 
-    fn clc_distr_from_vec(
-        &self,
-        samples: &mut dyn Iterator<Item = Val>,
-        weights: Option<Tensor>,
-    ) -> anyhow::Result<Box<dyn Distribution>> {
-        Ok(Box::new(
-            self._clc_distr(
-                Tensor::f_from_slice(
-                    samples
-                        .map(|p| p.try_into().unwrap())
-                        .collect::<Vec<i64>>()
-                        .as_slice(),
-                )?
-                .totype(tch::Kind::Int64),
-                weights,
-            ),
-        ))
+    fn clc_distr_from_vec(&self, samples: &mut dyn Iterator<Item = Val>, weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>> {
+        let samples = samples.map(i64::try_from).collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Box::new(self._clc_distr(tch_result(Tensor::f_from_slice(&samples))?, weights)?))
     }
 }
 
@@ -141,42 +88,29 @@ struct CategoricalGaussian {
 }
 
 impl CategoricalGaussian {
-    pub fn new(probs: Tensor, log_blls: Tensor, weights: Tensor) -> Self {
-        let probs_vec = from::<Vec<f32>>(&probs);
+    pub fn new(probs: Tensor, log_blls: Tensor, weights: Tensor) -> anyhow::Result<Self> {
+        let probs_vec = tch_result(Vec::<f32>::try_from(&probs))?;
         let probs_len = probs_vec.len();
-        Self {
+        Ok(Self {
             probs_vec,
             probs, //TODO use it?
             indexes: (0..probs_len).collect(),
             log_blls,
             weights,
-        }
+        })
     }
 }
 
 impl Distribution for CategoricalGaussian {
-    fn sample(&self, n_samples: usize) -> Vec<Val> {
-        (0..n_samples)
-            .map(|_| {
-                let dist = WeightedIndex::new(self.indexes.iter().map(|i| self.probs_vec[*i]))
-                    .expect("WeightedIndex::new");
-                let pos = opt_rnd(|rng| dist.sample(rng));
-                self.indexes[pos]
-            })
-            .map(|v| (v as i32).into())
-            .collect()
+    fn sample(&self, n_samples: usize) -> anyhow::Result<Vec<Val>> {
+        // Construct once and return invalid probability errors instead of panicking.
+        let dist = WeightedIndex::new(self.probs_vec.iter().copied())?;
+        Ok((0..n_samples).map(|_| Val::Int(opt_rnd(|rng| dist.sample(rng)) as i64)).collect())
     }
 
-    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> Tensor {
-        // debug!("basis_loglikelihood: x={x}");
-        self.log_blls.index_select(
-            1,
-            &Tensor::from_slice(
-                x.map(|v| v.try_into().unwrap())
-                    .collect::<Vec<i64>>()
-                    .as_slice(),
-            ),
-        )
+    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> anyhow::Result<Tensor> {
+        let values = x.map(i64::try_from).collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(tch_result(self.log_blls.f_index_select(1, &tch_result(Tensor::f_from_slice(&values))?))?)
     }
 
     fn weights(&self) -> &Tensor {
@@ -204,7 +138,7 @@ mod categorical_parzen_estimator_tests {
         let distr = cpe._clc_distr(
             Tensor::from_slice(&[0, 1, 2]),
             Some(Tensor::from_slice(&[0.3, 0.3, 0.3, 0.1])),
-        );
+        ).unwrap();
         assert!(
             Tensor::from_slice(&[0.3333, 0.3333, 0.3333])
                 .totype(Float)
@@ -219,7 +153,7 @@ mod categorical_parzen_estimator_tests {
                     &cpe._clc_distr(
                         Tensor::from_slice(&[0]),
                         Some(Tensor::from_slice(&[0.5, 0.5]))
-                    )
+                    ).unwrap()
                     .probs,
                     0.01,
                     0.01,
@@ -230,13 +164,13 @@ mod categorical_parzen_estimator_tests {
         let distr = cpe._clc_distr(
             Tensor::from_slice(&[0, 0, 0, 0]),
             Some(Tensor::from_slice(&[0.2, 0.2, 0.2, 0.2, 0.2])),
-        );
+        ).unwrap();
         assert!(
             Tensor::from_slice(&[0.86666667, 0.06666667, 0.06666667])
                 .totype(Float)
                 .allclose(&distr.probs, 0.01, 0.01, false)
         );
-        let samples = distr.sample(1000);
+        let samples = distr.sample(1000).unwrap();
         let p_0 = samples.iter().filter(|i| *i == &Val::Int(0)).count() as f32 / 1000.;
         let p_1 = samples.iter().filter(|i| *i == &Val::Int(1)).count() as f32 / 1000.;
         let p_2 = samples.iter().filter(|i| *i == &Val::Int(2)).count() as f32 / 1000.;
@@ -249,7 +183,7 @@ mod categorical_parzen_estimator_tests {
 
         let bll = distr.basis_loglikelihood(
             &mut vec![&Val::Int(0), &Val::Int(1), &Val::Int(2), &Val::Int(0)].into_iter(),
-        );
+        ).unwrap();
         assert_eq!(
             Tensor::from_slice(&[
                 0.,

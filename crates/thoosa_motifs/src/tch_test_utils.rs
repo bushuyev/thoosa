@@ -43,7 +43,7 @@ pub fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[V
             if end > resource_len {
                 return Err(anyhow::anyhow!("motif placement exceeds resource length"));
             }
-            let values = to_vec_f32(pattern);
+            let values = to_vec_f32(pattern)?;
             for (offset, value) in values.iter().enumerate() {
                 signal[current + offset] = *value;
             }

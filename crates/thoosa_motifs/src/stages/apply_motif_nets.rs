@@ -2056,8 +2056,8 @@ pub mod tests {
 
         plot_series_with_lanes(
             vec![
-                (format!("Tensor"), BLACK, to_vec_f32(&resource_a_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
-                (format!("Motif_0"), BLUE, to_vec_f32(&motif_t.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
+                (format!("Tensor"), BLACK, to_vec_f32(&resource_a_t.i((0, ..)))?.into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
+                (format!("Motif_0"), BLUE, to_vec_f32(&motif_t.i((0, ..)))?.into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
                 // (format!("Results"), RED, vec_f32_from(&out.transpose(1,2).upsample_linear1d(&[1000], false, None)).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
             ],
             format!("sig").as_str(),
@@ -2070,7 +2070,7 @@ pub mod tests {
 
         plot_series_with_lanes(
              vec![
-                 (format!("Results"), RED, to_vec_f32(&out.i((0, ..))).into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
+                 (format!("Results"), RED, to_vec_f32(&out.i((0, ..)))?.into_iter().enumerate().map(|(i, v)| (i as f32, v)).collect::<Vec<(f32, f32)>>()),
              ],
              format!("sig").as_str(),
              (2000, 1000),

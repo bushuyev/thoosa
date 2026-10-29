@@ -1290,7 +1290,7 @@ mod tests {
 
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);
 
-        let values = to_vec_f32(&motifs_stats_t);
+        let values = to_vec_f32(&motifs_stats_t)?;
         assert!((values[0] - 3.0).abs() < 1e-6);
         assert!((values[1] - 3.0).abs() < 1e-6);
         assert!((values[2] - 4.0).abs() < 1e-6);
