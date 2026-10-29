@@ -2042,59 +2042,44 @@ pub fn parse_resources(s: &str) -> anyhow::Result<ResourceType> {
 /**
 calculates indexes for sliding  windows of size {motif_width} and step {step} in input of length {input_n} and splits them in N batches of  {batch_size} and reminder M
 */
-pub fn batch_windows(
-    input_n: usize,
-    motif_width: usize,
-    step: usize,
-    batch_size: usize,
-) -> (Vec<Vec<usize>>, Vec<usize>) {
-    // (batches, reminder)
-    debug!(
-        "slice_windows: input_n={input_n}, motif_width={motif_width}, step={step} batch_size={batch_size}"
-    );
-
-    (0..=input_n - motif_width)
-        .step_by(step)
-        .fold((vec![], vec![]), |mut a, v| {
-            a.1.push(v);
-            if a.1.len() == batch_size {
-                a.0.push(a.1);
-                a.1 = vec![];
-            }
-            a
-        })
+pub fn batch_windows(input_n: usize, motif_width: usize, step: usize, batch_size: usize) -> anyhow::Result<(Vec<Vec<usize>>, Vec<usize>)> {
+    anyhow::ensure!(batch_size > 0, "batch size must be positive");
+    let count = sliding_window_count(input_n, motif_width, step)?;
+    // Counting first handles a short input without unsigned subtraction.
+    Ok((0..count).map(|index| index * step).fold((vec![], vec![]), |mut batches, position| {
+        batches.1.push(position);
+        if batches.1.len() == batch_size {
+            batches.0.push(std::mem::take(&mut batches.1));
+        }
+        batches
+    }))
 }
 
-pub const fn clc_num_batches(
-    input_n: usize,
-    motif_width: usize,
-    step: usize,
-    batch_size: usize,
-) -> usize {
-    let positions = sliding_window_count(input_n, motif_width, step);
-    positions.div_ceil(batch_size)
+pub fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, batch_size: usize) -> anyhow::Result<usize> {
+    anyhow::ensure!(batch_size > 0, "batch size must be positive");
+    Ok(sliding_window_count(input_n, motif_width, step)?.div_ceil(batch_size))
 }
 
-pub const fn slices_len(input_n: u32, motif_width: u32, step: u32) -> u32 {
-    sliding_window_count(input_n as usize, motif_width as usize, step as usize) as u32
+pub fn slices_len(input_n: u32, motif_width: u32, step: u32) -> anyhow::Result<u32> {
+    Ok(u32::try_from(sliding_window_count(input_n as usize, motif_width as usize, step as usize)?)?)
 }
 
-// Both APIs count the first complete window, including an exact-width input.
-const fn sliding_window_count(input_n: usize, motif_width: usize, step: usize) -> usize {
-    (input_n - motif_width) / step + 1
+fn sliding_window_count(input_n: usize, motif_width: usize, step: usize) -> anyhow::Result<usize> {
+    anyhow::ensure!(motif_width > 0 && step > 0, "window width and step must be positive");
+    Ok(if input_n < motif_width { 0 } else { (input_n - motif_width) / step + 1 })
 }
 
-pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> (u32, u32) {
-    let v = input_n - motif_width;
-    let div = slices_num - 1;
-
-    let r = v % div;
-
-    let pad = if r == 0 { 0 } else { div - r };
-
-    let step = (v + pad) / div;
-
-    (step, pad)
+pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> anyhow::Result<(u32, u32)> {
+    anyhow::ensure!(motif_width > 0 && input_n >= motif_width, "input must contain a complete nonempty window");
+    anyhow::ensure!(slices_num > 0, "requested window count must be positive");
+    let span = u64::from(input_n - motif_width);
+    // A single window needs a step beyond the remaining span, with no padding.
+    if slices_num == 1 { return Ok((u32::try_from(span + 1)?, 0)); }
+    let intervals = u64::from(slices_num - 1);
+    let step = span.div_ceil(intervals).max(1);
+    let pad = u32::try_from(step * intervals - span)?;
+    anyhow::ensure!(input_n.checked_add(pad).is_some(), "padded input length overflows u32");
+    Ok((u32::try_from(step)?, pad))
 }
 
 
@@ -2286,10 +2271,25 @@ impl From<f64> for F64BitsKey {
 mod shared_tests {
     #![allow(unused_imports, redundant_semicolons, dead_code)]
     #[test]
+    fn test_window_helpers_reject_invalid_arithmetic_and_define_empty_inputs() {
+        assert_eq!(super::slices_len(4, 5, 1).unwrap(), 0);
+        assert_eq!(super::batch_windows(4, 5, 1, 2).unwrap(), (vec![], vec![]));
+        assert!(super::slices_len(10, 5, 0).is_err());
+        assert!(super::clc_num_batches(10, 5, 1, 0).is_err());
+        assert!(super::batch_windows(10, 0, 1, 2).is_err());
+        assert!(super::clc_step(10, 5, 0).is_err());
+        assert!(super::clc_step(4, 5, 1).is_err());
+        assert_eq!(super::clc_step(10, 5, 1).unwrap(), (6, 0));
+        assert_eq!(super::clc_step(5, 5, 3).unwrap(), (1, 2));
+        assert_eq!(super::clc_num_batches(usize::MAX, 1, 1, usize::MAX).unwrap(), 1);
+        assert!(super::clc_step(u32::MAX, 2, 3).is_err());
+    }
+
+    #[test]
     fn test_batch_count_includes_the_first_window() {
-        assert_eq!(super::clc_num_batches(10, 10, 2, 4), 1);
-        assert_eq!(super::clc_num_batches(18, 10, 2, 4), 2);
-        assert_eq!(super::slices_len(18, 10, 2), 5);
+        assert_eq!(super::clc_num_batches(10, 10, 2, 4).unwrap(), 1);
+        assert_eq!(super::clc_num_batches(18, 10, 2, 4).unwrap(), 2);
+        assert_eq!(super::slices_len(18, 10, 2).unwrap(), 5);
     }
 
     use anyhow::Context as _;
@@ -2461,7 +2461,7 @@ mod shared_tests {
         let motif_width = 100;
         let step = 100;
 
-        let batches = batch_windows(input_n, motif_width, step, 10);
+        let batches = batch_windows(input_n, motif_width, step, 10).unwrap();
 
         assert_eq!(
             vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
@@ -2478,7 +2478,7 @@ mod shared_tests {
         let motif_width = 100;
         let step = 100;
 
-        let batches = batch_windows(input_n, motif_width, step, 10);
+        let batches = batch_windows(input_n, motif_width, step, 10).unwrap();
 
         assert_eq!(
             vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
@@ -2497,13 +2497,13 @@ mod shared_tests {
 
     #[test]
     fn test_clc_num_batches() {
-        assert_eq!(clc_num_batches(1000, 100, 10, 1000), 1);
+        assert_eq!(clc_num_batches(1000, 100, 10, 1000).unwrap(), 1);
 
-        assert_eq!(clc_num_batches(1000, 100, 10, 90), 2);
+        assert_eq!(clc_num_batches(1000, 100, 10, 90).unwrap(), 2);
 
-        assert_eq!(clc_num_batches(1000, 100, 10, 50), 2);
+        assert_eq!(clc_num_batches(1000, 100, 10, 50).unwrap(), 2);
 
-        assert_eq!(clc_num_batches(1000, 100, 10, 30), 4);
+        assert_eq!(clc_num_batches(1000, 100, 10, 30).unwrap(), 4);
     }
 
     #[test]
