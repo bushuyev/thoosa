@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_worker_data_error_round_trip_preserves_category() -> anyhow::Result<()> {
         use thoosa_shared::{DataErrorKind, ThoError};
-        for kind in [DataErrorKind::InputTooShort, DataErrorKind::EmptyTrainingClass] {
+        for kind in [DataErrorKind::InputTooShort, DataErrorKind::EmptyTrainingClass, DataErrorKind::OOMHandlingFailed] {
             let error = ThoError::Data { kind, msg: "incompatible input".into() }.context("worker operation");
             let encoded = postcard::to_allocvec(&super::WorkerError::from(error))?;
             let restored: super::WorkerError = postcard::from_bytes(&encoded)?;

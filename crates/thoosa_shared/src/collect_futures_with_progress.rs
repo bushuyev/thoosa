@@ -236,6 +236,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_exhausted_oom_requires_explicit_skip_policy() {
+        use crate::{CollectionErrorPolicy, DataErrorKind, SyncStageRunnerError};
+        // Context and runner wrappers must retain the category, but unrelated collectors still fail.
+        for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
+            for (policy, skips) in [(CollectionErrorPolicy::Propagate, false), (CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort]), false), (CollectionErrorPolicy::SkipData(&[DataErrorKind::OOMHandlingFailed]), true)] {
+                let (_, limit) = watch::channel(2);
+                let exhausted = ThoError::Data { kind: DataErrorKind::OOMHandlingFailed, msg: "all adjustments exhausted".into() };
+                let wrapped = ThoError::from(SyncStageRunnerError::JobError { job_id: 1, inner: Box::new(exhausted) }).context("motif training");
+                let results = [Ok(10), Err(wrapped), Ok(12)];
+                let result = collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 3, Arc::new(limit), ordering, policy, "OOM policy").await;
+                if skips {
+                    let mut ids = result.unwrap();
+                    ids.sort_unstable();
+                    assert_eq!(ids, vec![10, 12]);
+                } else {
+                    assert_eq!(result.unwrap_err().data_error_kind(), Some(DataErrorKind::OOMHandlingFailed));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_nested_collection_cannot_hide_infrastructure_behind_data_error() {
         use crate::{CollectionErrorPolicy, DataErrorKind};
         for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
@@ -264,6 +286,8 @@ mod tests {
                 ThoError::NotFound(Some("model".into())),
                 ThoError::new("unclassified failure"),
                 ThoError::TrainingSessionFailed(Arc::new(TrainingSessionFailure { original: ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "partial training".into() }, recovery: None })),
+                // Even an allowed data category cannot make an invalidated training session skippable.
+                ThoError::TrainingSessionFailed(Arc::new(TrainingSessionFailure { original: ThoError::Data { kind: DataErrorKind::OOMHandlingFailed, msg: "partial training".into() }, recovery: None })),
             ];
             for error in errors {
                 let kind = std::mem::discriminant(error.what());
@@ -274,7 +298,7 @@ mod tests {
                     let completed = Arc::clone(&completed);
                     async move { completed.fetch_add(1, Ordering::SeqCst); result }
                 });
-                let error = collect_futures_with_progress_with_limit(futures, 4, Arc::new(limit), ordering, CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort]), "infrastructure policy").await.unwrap_err();
+                let error = collect_futures_with_progress_with_limit(futures, 4, Arc::new(limit), ordering, CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort, DataErrorKind::OOMHandlingFailed]), "infrastructure policy").await.unwrap_err();
                 assert_eq!(std::mem::discriminant(error.what()), kind);
                 assert_eq!(completed.load(Ordering::SeqCst), 4);
             }

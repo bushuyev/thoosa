@@ -419,6 +419,8 @@ pub enum SyncStageRunnerError {
 pub enum DataErrorKind {
     InputTooShort,
     EmptyTrainingClass,
+    // The item still does not fit after all OOM adjustments; callers must opt in to skipping it.
+    OOMHandlingFailed,
 }
 
 // Only failures that affect application control flow have dedicated variants.
