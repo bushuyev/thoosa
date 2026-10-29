@@ -338,10 +338,6 @@ where
         Self::cache_key()
     }
 
-    fn run_input_id(input: &Self::In<'static>) -> &'static <Self::In<'static> as WithId>::ID {
-        unimplemented!()
-    }
-
     async fn cache() -> Result<Arc<StageCache<Self>>, ThoError>
     where
         Self: Sized,

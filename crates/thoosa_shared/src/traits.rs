@@ -748,11 +748,7 @@ where
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
     //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
     // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
-    fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send
+    // Every asynchronous stage must supply its execution contract.
+    fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send;
 
-    {
-        async {
-            unimplemented!()
-        }
-    }
 }

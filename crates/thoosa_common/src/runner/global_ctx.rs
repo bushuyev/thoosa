@@ -1199,7 +1199,10 @@ mod tests {
         type Out = Arc<DevicesWrap<ThoTensor<D, SynKey>>>;
     }
 
-    impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::AsyncStage for GenericCacheStage<D, TAG> {}
+    impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::AsyncStage for GenericCacheStage<D, TAG> {
+        // This cache-identity fixture is an identity stage when executed.
+        async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> { Ok(input) }
+    }
 
     impl<D: crate::dims::Dims + 'static, const TAG: u8> thoosa_shared::traits::OutId for GenericCacheStage<D, TAG> {
         fn out_id<'a>(&self, input_id: &SynKey) -> SynKey { input_id.clone() }

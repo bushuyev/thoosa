@@ -822,13 +822,12 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
 
     //for cloning on the main-process-side ThoTensor/ThoModule  containing references to the data kept on  worker side
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {//on main side
-        error!("clone_refs: self={self:?}");
-        unimplemented!()
+        // Some inputs use a typed adapter instead of reference cloning.
+        Err(ThoError::new("input requires a typed worker adapter for reference cloning"))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {//on worker side
-        error!("WorkerStageInput::ref_to_tensor: self={self:?}");
-        unimplemented!()
+        Err(ThoError::new("input does not support worker tensor materialization"))
     }
 
 }
