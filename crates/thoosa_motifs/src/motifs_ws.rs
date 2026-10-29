@@ -58,7 +58,7 @@ pub fn net_path_to_run_config_id(model_path: &Path) -> RunConfigId {
 }
 
 pub fn parse_motif_path(net_id: &Path) -> anyhow::Result<(u32, u32)> {
-    let base_dir = if matches!(net_id.file_name().and_then(|v| v.to_str()), Some(NET_WEIGHTS_FILE | NET_PARAMS_FILE)) {
+    let base_dir = if generation_weights(net_id) || matches!(net_id.file_name().and_then(|v| v.to_str()), Some(NET_WEIGHTS_FILE | NET_PARAMS_FILE)) {
         net_id.parent().ok_or_else(|| anyhow::anyhow!("parse_motif_path: no parent for {net_id:?}"))?
     } else {
         net_id
@@ -69,8 +69,65 @@ pub fn parse_motif_path(net_id: &Path) -> anyhow::Result<(u32, u32)> {
     Ok((channel, motif_id))
 }
 
-fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
-    match base_path.file_name().and_then(|v| v.to_str()) {
+// Each manifest names an immutable generation. Readers resolve it once so an
+// overwrite cannot pair weights from one save with metadata from another.
+const NET_MANIFEST: &str = "current.json";
+fn generation_weights(path: &Path) -> bool {
+    path.file_name().and_then(|v| v.to_str()).is_some_and(|v| v.starts_with("weights-") && v.ends_with(".safetensors"))
+}
+fn nested_weights(path: &Path) -> bool {
+    generation_weights(path) || path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE)
+}
+fn published_generation(base: &Path) -> anyhow::Result<Option<(PathBuf, PathBuf)>> {
+    let text = match fs::read_to_string(base.join(NET_MANIFEST)) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let generation: String = serde_json::from_str(&text)?;
+    anyhow::ensure!(!generation.is_empty() && generation.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'), "invalid model generation at {}", base.display());
+    Ok(Some((base.join(format!("weights-{generation}.safetensors")), base.join(format!("weights-{generation}.json")))))
+}
+fn publish_net(base: &Path, params: &str, write_weights: impl FnOnce(&Path) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    fs::create_dir_all(base)?;
+    static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let generation = format!("{}-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos(), NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let weights = base.join(format!("weights-{generation}.safetensors"));
+    let metadata = base.join(format!("weights-{generation}.json"));
+    let manifest = base.join(format!(".current-{generation}.tmp"));
+    let result = (|| {
+        write_weights(&weights)?;
+        fs::write(&metadata, params)?;
+        fs::write(&manifest, serde_json::to_string(&generation)?)?;
+        // Rename is the single publication point. Old generations remain valid
+        // for readers that already resolved their paths before this overwrite.
+        fs::rename(&manifest, base.join(NET_MANIFEST))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        for path in [&weights, &metadata, &manifest] { let _ = fs::remove_file(path); }
+    }
+    result
+}
+fn discover_nets(root: &Path) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
+    let paths = recurse_files(root, &|path| path.file_name().is_some_and(|v| v == NET_MANIFEST) || path.extension().is_some_and(|v| v == "safetensors"))?;
+    let mut models = Vec::new();
+    for path in paths {
+        if path.file_name().is_some_and(|v| v == NET_MANIFEST) {
+            if let Some(pair) = published_generation(path.parent().context("model manifest has no parent")?)? { models.push(pair); }
+        } else if !generation_weights(&path) {
+            // A manifest supersedes a legacy pair in the same model directory.
+            if !path.parent().context("model has no parent")?.join(NET_MANIFEST).exists() { models.push(net_files_from_base(&path)?); }
+        }
+    }
+    Ok(models)
+}
+
+fn net_files_from_base(base_path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
+    if base_path.is_dir() {
+        if let Some(pair) = published_generation(base_path)? { return Ok(pair); }
+    }
+    Ok(match base_path.file_name().and_then(|v| v.to_str()) {
         Some(NET_WEIGHTS_FILE) => (base_path.to_path_buf(), base_path.parent().unwrap_or(base_path).join(NET_PARAMS_FILE)),
         Some(NET_PARAMS_FILE) => (base_path.parent().unwrap_or(base_path).join(NET_WEIGHTS_FILE), base_path.to_path_buf()),
         _ => match base_path.extension().and_then(|ext| ext.to_str()) {
@@ -86,7 +143,7 @@ fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
             }
             _ => (base_path.join(NET_WEIGHTS_FILE), base_path.join(NET_PARAMS_FILE)),
         },
-    }
+    })
 }
 
 fn resolve_net_base_path(root: &Path, net_path: &Path) -> PathBuf {
@@ -103,9 +160,7 @@ impl MotifsWorkspace for FsWorkspace {
         debug!("FsWorkspace::save_final_net: run_config_id={run_config_id} params={params:?} final_models_path={final_models_path:?}");
         let net_id = PathBuf::from(format!("{run_config_id}"));
         let base_path = final_models_path.join(&net_id);
-        fs::create_dir_all(&base_path)?;
-        panic_to_err!(vs_or_path.save(&base_path.join(NET_WEIGHTS_FILE)))?;
-        fs::write(base_path.join(NET_PARAMS_FILE), serde_json5::to_string(params)?)?;
+        publish_net(&base_path, &serde_json5::to_string(params)?, |path| vs_or_path.save(&path.to_path_buf()))?;
         Ok(net_id)
     }
 
@@ -119,14 +174,13 @@ impl MotifsWorkspace for FsWorkspace {
         fs::create_dir_all(&base_path)?;
         let vs_path = base_path.join(NET_WEIGHTS_FILE);
         debug!("FsWorkspace::save_motif_net: motif_id={motif_id} motif_model_run_config_id={train_motif_net_run_config_id} saved to {vs_path:?}");
-        panic_to_err!(vs_or_path.save(&vs_path))?;
-        fs::write(base_path.join(NET_PARAMS_FILE), serde_json5::to_string(params)?)?;
+        publish_net(&base_path, &serde_json5::to_string(params)?, |path| vs_or_path.save(&path.to_path_buf()))?;
         Ok(net_id)
     }
 
     fn load_motif_net(&self, net_path: &Path, device: &Device, quantize: bool, load_net: bool) -> anyhow::Result<(MotifNetParams, Option<ThoModuleWithStore<Batch<Slice>, MotifProbability>>)> {
         let base_path = resolve_net_base_path(&self.motifs_nets_path()?, net_path);
-        let (model_path, params_path) = net_files_from_base(&base_path);
+        let (model_path, params_path) = net_files_from_base(&base_path)?;
         let params = MotifNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
         let module = load_net
@@ -140,8 +194,8 @@ impl MotifsWorkspace for FsWorkspace {
 
     fn load_label_net(&self, net_path: &Path, device: &Device, quantize: bool, load_net: bool) -> anyhow::Result<(RunConfigId, LabelNetParams, Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>)> {
         let base_path = resolve_net_base_path(&self.labels_nets_path()?, net_path);
-        let (model_path, params_path) = net_files_from_base(&base_path);
-        let label = if model_path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) { model_path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|s| s.to_str()) } else { model_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) }.ok_or_else(|| anyhow::anyhow!("load_label_net: can't parse label from {base_path:?}"))?;
+        let (model_path, params_path) = net_files_from_base(&base_path)?;
+        let label = if nested_weights(&model_path) { model_path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|s| s.to_str()) } else { model_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) }.ok_or_else(|| anyhow::anyhow!("load_label_net: can't parse label from {base_path:?}"))?;
         let run_config_id = net_path_to_run_config_id(&model_path);
         let params = LabelNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
@@ -151,7 +205,7 @@ impl MotifsWorkspace for FsWorkspace {
 
     fn load_final_net(&self, net_path: &Path, device: &Device) -> anyhow::Result<(FinalNetParams, ThoModuleWithStore<Batch<LabelProbability>, Batch<LabelsProbabilities>>)> {
         let base_path = resolve_net_base_path(&self.final_nets_path()?, net_path);
-        let (model_path, params_path) = net_files_from_base(&base_path);
+        let (model_path, params_path) = net_files_from_base(&base_path)?;
         let run_config_id = net_path_to_run_config_id(&model_path);
         let params = FinalNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
@@ -190,16 +244,11 @@ impl MotifsWorkspace for FsWorkspace {
 
     fn motif_models(&self, channel: u32, motif_id: u32) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
         let motif_prefix = format!("{motif_id}_");
-        recurse_files(&self.motifs_nets_path()?.join(channel.to_string()), &|path| {
-            if !path.extension().is_some_and(|v| v == "safetensors") { return false; }
-            if path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) {
-                return path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix));
-            }
-            path.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix))
-        })?.into_iter().map(|weights_path| {
-            let params_path = if weights_path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) { weights_path.parent().expect("parent").join(NET_PARAMS_FILE) } else { thoosa_shared::replace_extension(&weights_path, "json").1 };
-            Ok((weights_path, params_path))
-        }).collect()
+        Ok(discover_nets(&self.motifs_nets_path()?.join(channel.to_string()))?.into_iter().filter(|(path, _)| {
+            if nested_weights(path) {
+                path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix))
+            } else { path.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.starts_with(&motif_prefix)) }
+        }).collect())
     }
 
     fn save_label_net<'a>(&self, label_node_run_config_id: u32, label: &dyn Display, vs_or_path: VarStoreOrPath<'a>, params: &LabelNetParams) -> anyhow::Result<PathBuf> {
@@ -212,20 +261,14 @@ impl MotifsWorkspace for FsWorkspace {
         fs::create_dir_all(&base_path)?;
         let vs_path = base_path.join(NET_WEIGHTS_FILE);
         info!("save_label_net: run_config_id={label_node_run_config_id} label={label} saved to {vs_path:?}");
-        panic_to_err!(vs_or_path.save(&vs_path))?;
-        fs::write(base_path.join(NET_PARAMS_FILE), serde_json5::to_string(params)?)?;
+        publish_net(&base_path, &serde_json5::to_string(params)?, |path| vs_or_path.save(&path.to_path_buf()))?;
         Ok(net_id)
     }
 
     fn label_models(&self) -> anyhow::Result<HashMap<String, Vec<(PathBuf, PathBuf)>>> {
-        recurse_files(&self.labels_nets_path()?, &|path| path.extension().is_some_and(|v| v == "safetensors"))?.into_iter().try_fold(HashMap::new(), |mut models, weights_path| {
-            let (label_dir, params_path) = if weights_path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) {
-                let run_dir = weights_path.parent().expect("parent");
-                (run_dir.parent().expect("label"), run_dir.join(NET_PARAMS_FILE))
-            } else {
-                let parent = weights_path.parent().expect("parent");
-                (parent, parent.join(format!("{}.json", weights_path.file_stem().expect("file_stem").to_str().expect("to_str"))))
-            };
+        discover_nets(&self.labels_nets_path()?)?.into_iter().try_fold(HashMap::new(), |mut models, (weights_path, params_path)| {
+            let parent = weights_path.parent().context("model has no parent")?;
+            let label_dir = if nested_weights(&weights_path) { parent.parent().context("model has no label")? } else { parent };
             // Labels are directory names, not filenames with removable extensions.
             let label = label_dir.file_name().and_then(|name| name.to_str()).with_context(|| format!("invalid UTF-8 label directory: {}", label_dir.display()))?;
             models.entry(label.to_string()).or_insert_with(Vec::new).push((weights_path, params_path));
@@ -236,6 +279,7 @@ impl MotifsWorkspace for FsWorkspace {
     fn final_model(&self, id: RunConfigId) -> anyhow::Result<(PathBuf, PathBuf)> {
         let final_models_path = self.final_nets_path()?;
         let base_path = final_models_path.join(format!("{id}"));
+        if let Some(pair) = published_generation(&base_path)? { return Ok(pair); }
         let nested = (base_path.join(NET_WEIGHTS_FILE), base_path.join(NET_PARAMS_FILE));
         if nested.0.exists() || nested.1.exists() { return Ok(nested); }
         Ok((final_models_path.join(format!("{id}.safetensors")), final_models_path.join(format!("{id}.json"))))
@@ -388,6 +432,28 @@ mod tests {
 
     fn test_workspace(channels: u32) -> anyhow::Result<Box<dyn MotifsWorkspace>> {
         new_motifs_workspace(Path::new("/tmp").join(cdt_for_dir()), WsConfigs::new(channels, 684400, 32000))
+    }
+
+    #[test]
+    fn test_model_publication_keeps_complete_generations() -> anyhow::Result<()> {
+        let ws = test_workspace(1)?;
+        let root = ws.final_nets_path()?;
+        let base = root.join("1");
+        assert!(publish_net(&base, "new", |path| { fs::write(path, b"partial")?; anyhow::bail!("injected failure") }).is_err());
+        assert!(discover_nets(&root)?.is_empty());
+        publish_net(&base, "old", |path| Ok(fs::write(path, b"old")?))?;
+        let old = net_files_from_base(&base)?;
+        assert!(publish_net(&base, "new", |path| { fs::write(path, b"partial")?; anyhow::bail!("injected failure") }).is_err());
+        assert_eq!(net_files_from_base(&base)?, old);
+        publish_net(&base, "new", |path| Ok(fs::write(path, b"new")?))?;
+        let new = net_files_from_base(&base)?;
+        assert_ne!(old, new);
+        assert_eq!(fs::read_to_string(old.0)?, "old");
+        assert_eq!(fs::read_to_string(old.1)?, "old");
+        assert_eq!(fs::read_to_string(&new.0)?, "new");
+        assert_eq!(fs::read_to_string(&new.1)?, "new");
+        assert_eq!(discover_nets(&root)?, vec![new]);
+        Ok(())
     }
 
     #[test]
