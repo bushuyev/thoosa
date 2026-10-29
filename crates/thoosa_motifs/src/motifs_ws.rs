@@ -226,7 +226,9 @@ impl MotifsWorkspace for FsWorkspace {
                 let parent = weights_path.parent().expect("parent");
                 (parent, parent.join(format!("{}.json", weights_path.file_stem().expect("file_stem").to_str().expect("to_str"))))
             };
-            models.entry(label_dir.file_stem().expect("label").to_str().expect("label").to_string()).or_insert_with(Vec::new).push((weights_path, params_path));
+            // Labels are directory names, not filenames with removable extensions.
+            let label = label_dir.file_name().and_then(|name| name.to_str()).with_context(|| format!("invalid UTF-8 label directory: {}", label_dir.display()))?;
+            models.entry(label.to_string()).or_insert_with(Vec::new).push((weights_path, params_path));
             Ok(models)
         })
     }
@@ -428,6 +430,20 @@ mod tests {
         assert_eq!(models.len(), 2);
         assert_eq!(models.get("label_0").expect("label_0").len(), 2);
         assert_eq!(models.get("label_1").expect("label_1").len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dotted_labels_remain_distinct_during_discovery() -> anyhow::Result<()> {
+        let ws = test_workspace(2)?;
+        let params = LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)));
+        for label in ["class.a", "class.b"] {
+            ws.save_label_net(1, &label, (&VarStore::new(Cpu)).into(), &params)?;
+        }
+        let models = ws.label_models()?;
+        assert!(models.contains_key("class.a"));
+        assert!(models.contains_key("class.b"));
+        assert!(!models.contains_key("class"));
         Ok(())
     }
 
