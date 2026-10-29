@@ -330,7 +330,8 @@ impl SynKey {
     }
 
     pub fn parent(&self) -> SynKey {
-        SynKey::new(&self.vals[..self.vals.len()])
+        // The empty key is the root and remains its own parent.
+        SynKey::new(&self.vals[..self.vals.len().saturating_sub(1)])
     }
 }
 
@@ -517,6 +518,16 @@ pub mod hashmap_as_vec {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_parent_removes_exactly_one_component_and_root_is_stable() {
+        let key = super::SynKey::new([crate::mono_key!(1u32, "one"), crate::mono_key!(2u32, "two")]);
+        assert_eq!(key.parent().as_slice(), &key.as_slice()[..1]);
+        let root = key.parent().parent();
+        assert_eq!(root.len(), 0);
+        assert_eq!(root.parent(), root);
+        assert_eq!(key.len(), 2);
+    }
+
     use log::debug;
     use crate::comp_id::SynKey;
 
