@@ -401,7 +401,6 @@ impl StageCommand for MotifCommands {
                             init_ctx,
                             opt_config,
                             train_final_net_args.motif_slices_step,
-                            train_final_net_args.selected_motif_nets_limit,
                         )).await?))
 
                     },

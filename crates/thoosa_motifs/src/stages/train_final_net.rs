@@ -107,7 +107,6 @@ pub async fn new_train_final_net<L, C, R>(
     stage_ctx: R,
     opt_config: Arc<OptConfig>,
     slices_step: u32,
-    selected_motif_nets_limit: Option<usize>,
 ) -> Result<TrainFinalNet<L, PairStage<L, ApplyLabelNets<C, ApplyMotifNets<C>>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
@@ -115,6 +114,8 @@ where
     R: RunCtx + MaxParallelCtx + Adjustable + 'static,
 
 {
+    // Final training consumes the complete ordered label-feature schema; limiting
+    // motif models belongs to label training rather than this constructor.
     //Build a final-net application stage that wraps the raw loader with motif+label inference.
     let apply_label_nets = Arc::new(track_await!(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step)).await?);
 
@@ -991,7 +992,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net(vec![label_a_run_config_id, label_b_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
+        let train_final_net = Arc::new(new_train_final_net(vec![label_a_run_config_id, label_b_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step).await?);
 
         let input = Arc::new(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))));
 

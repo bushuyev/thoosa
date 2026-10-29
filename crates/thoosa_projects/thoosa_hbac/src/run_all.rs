@@ -321,7 +321,6 @@ pub(crate) async fn run_all(
                 init_ctx_in_train_final,
                 Arc::clone(&all_config.train_final_opt_config),
                 10, //TODO
-                run_all_args.selected_motif_nets_limit,
             )).await?))
         },
         || root_ctx.branch(true),
