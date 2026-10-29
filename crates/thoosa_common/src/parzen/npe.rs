@@ -24,9 +24,7 @@ where
 //TODO Sheather and Jones method sheather91_kernel_density.pdf
 #[allow(dead_code)]
 pub enum BandwidthFn {
-    Optuna,
-    Hyperopt,
-    Compress,
+    // Only expose bandwidth estimators implemented by this backend.
     Simp,
 }
 
@@ -34,15 +32,6 @@ impl BandwidthFn {
     ///returns means, bandwidth
     pub fn clc(&self, samples: Tensor) -> (Tensor, Tensor) {
         match self {
-            BandwidthFn::Optuna => {
-                todo!()
-            }
-            BandwidthFn::Hyperopt => {
-                todo!()
-            }
-            BandwidthFn::Compress => {
-                todo!()
-            }
             BandwidthFn::Simp => {
                 // std = means.std(ddof=int(means.size > 1))
                 // IQR = np.subtract.reduce(np.percentile(means, [75, 25]))

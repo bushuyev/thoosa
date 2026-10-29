@@ -653,8 +653,9 @@ impl EEGs {
                                 .collect::<Vec<f32>>(),
                         );
                     }
-                    _ => {
-                        todo!()
+                    dtype => {
+                        // Input file schemas are runtime data, not programmer invariants.
+                        anyhow::bail!("unsupported EEG column dtype {dtype:?}");
                     }
                 }
             }
