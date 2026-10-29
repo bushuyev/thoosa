@@ -21,15 +21,9 @@ impl MultiVariateParzenEstimator {
         self.parzen_estimators.len()
     }
 
-    pub fn sample(&self, dim_independent: bool, n_samples: usize) -> Vec<Vec<Val>> {
-        if dim_independent {
-            self.parzen_estimators
-                .iter()
-                .map(|pe| pe.sample(n_samples))
-                .collect()
-        } else {
-            todo!()
-        }
+    /// Draw independent dimensions; correlated sampling is not implemented.
+    pub fn sample_independent(&self, n_samples: usize) -> Vec<Vec<Val>> {
+        self.parzen_estimators.iter().map(|pe| pe.sample(n_samples)).collect()
     }
 
     pub fn log_pdf(&self, configs: &Vec<Vec<Val>>) -> Tensor {

@@ -303,7 +303,7 @@ impl TreeStructuredParzenEstimator {
             .map(|mvpe_lower| {
                 debug!("TPEOptimizer::sample: mvpe_lower sample mvpe_lower={mvpe_lower:?} n_samples={n_samples}");
 
-                let r = mvpe_lower.sample(true, n_samples);
+                let r = mvpe_lower.sample_independent(n_samples);
                 debug!("TPEOptimizer::sample: mvpe_lower sample r={r:?}");
                 r
             })
