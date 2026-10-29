@@ -123,8 +123,9 @@ where
         info!("Running in IPC mode");
 
         if !std::env::var(CUDA_VISIBLE_DEVICES).map(|v|v.eq("-1")).unwrap_or(false) {
-            println!("Run with CUDA_VISIBLE_DEVICES=-1 in IPC mode");
-            std::process::exit(0);
+            // Startup failures must reach the CLI result so automation sees failure
+            // and stack-owned resources are cleaned up normally.
+            anyhow::bail!("IPC mode requires CUDA_VISIBLE_DEVICES=-1");
         }
 
         GlobalCtx::init_devices_ipc(2, vec![
