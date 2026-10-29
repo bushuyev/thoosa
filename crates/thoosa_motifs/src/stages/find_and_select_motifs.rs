@@ -281,7 +281,13 @@ impl FindAndSelectMotifsStage {
         grid_idx: usize,
         ctx: &mut C,
     ) -> (FindAndSelectEvalMetrics, f32) {
-        let mut run_config: FindAndSelectMotifsRunConfig = [const_vals, grid_vals, opt_vals].concat().into_iter().into();
+        let mut run_config: FindAndSelectMotifsRunConfig = match [const_vals, grid_vals, opt_vals].concat().into_iter().try_into() {
+            Ok(config) => config,
+            Err(error) => {
+                warn!("FindAndSelectMotifsStage: invalid trial configuration: {error:#}");
+                return (FindAndSelectEvalMetrics::failed(), f32::MAX);
+            }
+        };
 
         let ws = Arc::clone(ws);
         let store = Arc::clone(store);

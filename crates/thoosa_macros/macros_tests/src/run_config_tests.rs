@@ -249,7 +249,7 @@ fn test_cat_range() -> Result<(), ThoError>{
     ]
     .concat()
     .into_iter()
-    .into();
+    .try_into()?;
     assert_eq!(one_run_config.id, Some(1));
     assert_eq!(one_run_config.simple_field, 7);
     assert_eq!(one_run_config.cat_field, CatEnum::One(One { inner_field_one: 2 }));
@@ -264,7 +264,7 @@ fn test_cat_range() -> Result<(), ThoError>{
     ]
     .concat()
     .into_iter()
-    .into();
+    .try_into()?;
     assert_eq!(two_run_config.id, Some(1));
     assert_eq!(two_run_config.simple_field, 5);
     assert_eq!(two_run_config.cat_field, CatEnum::Two(Two { inner_field_two: 1 }));
@@ -293,4 +293,18 @@ fn test_qualified_containers_and_explicit_alias_round_trip() -> thoosa_shared::a
     let map = config.to_properties_iter(None).collect();
     assert_eq!(QualifiedConfig::from_properties_map(None, &map)?, config);
     Ok(())
+}
+
+#[test]
+fn test_bad_config_conversions_return_field_errors() {
+    use thoosa_properties_map::FromHashmap;
+    use thoosa_shared::val::Val;
+    // Both the map and builder boundary must reject invalid stored values without panicking.
+    let map = std::collections::HashMap::from([("One::inner_field_one".into(), Val::Int(-1))]);
+    let error = One::from_properties_map(None, &map).unwrap_err();
+    assert!(error.to_string().contains("One::inner_field_one"));
+    let mut builder = OneBuilder::default();
+    let error = builder.add_val(&OneFields::InnerFieldOne, &Val::Int(-1)).unwrap_err();
+    assert!(error.to_string().contains("InnerFieldOne"));
+    assert!(builder.build().is_err());
 }
