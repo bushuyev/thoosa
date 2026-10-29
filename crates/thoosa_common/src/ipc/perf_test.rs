@@ -180,7 +180,7 @@ async fn test_simp_local() -> Result<(), ThoError> {
 
 #[test]
 fn test_simp_ipc() -> Result<(), ThoError> {
-    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
 
     run_ipc_test(
         module_path!(),
