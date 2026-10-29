@@ -2071,11 +2071,16 @@ pub const fn clc_num_batches(
     step: usize,
     batch_size: usize,
 ) -> usize {
-    let positions = (input_n - motif_width) / step;
-    (positions + batch_size - 1) / batch_size
+    let positions = sliding_window_count(input_n, motif_width, step);
+    positions.div_ceil(batch_size)
 }
 
 pub const fn slices_len(input_n: u32, motif_width: u32, step: u32) -> u32 {
+    sliding_window_count(input_n as usize, motif_width as usize, step as usize) as u32
+}
+
+// Both APIs count the first complete window, including an exact-width input.
+const fn sliding_window_count(input_n: usize, motif_width: usize, step: usize) -> usize {
     (input_n - motif_width) / step + 1
 }
 
@@ -2280,6 +2285,13 @@ impl From<f64> for F64BitsKey {
 #[cfg(test)]
 mod shared_tests {
     #![allow(unused_imports, redundant_semicolons, dead_code)]
+    #[test]
+    fn test_batch_count_includes_the_first_window() {
+        assert_eq!(super::clc_num_batches(10, 10, 2, 4), 1);
+        assert_eq!(super::clc_num_batches(18, 10, 2, 4), 2);
+        assert_eq!(super::slices_len(18, 10, 2), 5);
+    }
+
     use anyhow::Context as _;
     /*
        a - b
@@ -2487,11 +2499,11 @@ mod shared_tests {
     fn test_clc_num_batches() {
         assert_eq!(clc_num_batches(1000, 100, 10, 1000), 1);
 
-        assert_eq!(clc_num_batches(1000, 100, 10, 90), 1);
+        assert_eq!(clc_num_batches(1000, 100, 10, 90), 2);
 
         assert_eq!(clc_num_batches(1000, 100, 10, 50), 2);
 
-        assert_eq!(clc_num_batches(1000, 100, 10, 30), 3);
+        assert_eq!(clc_num_batches(1000, 100, 10, 30), 4);
     }
 
     #[test]
