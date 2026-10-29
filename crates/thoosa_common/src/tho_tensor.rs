@@ -95,7 +95,7 @@ where
     pub fn to_kind(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
         Ok(ThoTensor {
             id: self.id.clone(),
-            inner: ThoTensorInner::Val { t: ReentrantMutex::new(tch_result(self.t_ref().f_to_kind(k))?) }, //TODO ref
+            inner: ThoTensorInner::Val { t: ReentrantMutex::new(tch_result(self.try_t_ref()?.f_to_kind(k))?) }, //TODO ref
             pd: PhantomData,
         })
     }
@@ -110,7 +110,7 @@ where
     pub fn clone_ref(&self) -> Result<Self, ThoError> {
         match &self.inner {
             ThoTensorInner::Val { .. } => {
-                panic!("can't clone val")
+                Err(ThoError::new("cloning worker references requires a remote tensor"))
             }
             ThoTensorInner::Ref { key, size, kind, selector } => {
                 Ok(
@@ -498,6 +498,29 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         ThoTensor { id, inner, pd }
     }
 
+    /// Explicit local-storage capability for paths that may receive IPC references.
+    /// Keep the returned guard within synchronous code, before the next await.
+    pub fn try_t_ref(&self) -> Result<TensorRef<'_>, ThoError> {
+        match &self.inner {
+            ThoTensorInner::Val { t } => Ok(TensorRef(t.lock())),
+            ThoTensorInner::Ref { .. } => Err(ThoError::new("local tensor access requires materializing the worker reference")),
+        }
+    }
+
+    pub fn try_t_mut(&mut self) -> Result<&mut Tensor, ThoError> {
+        match &mut self.inner {
+            ThoTensorInner::Val { t } => Ok(t.get_mut()),
+            ThoTensorInner::Ref { .. } => Err(ThoError::new("local mutation requires materializing the worker reference")),
+        }
+    }
+
+    pub fn try_into_tensor(self) -> Result<Tensor, ThoError> {
+        match self.inner {
+            ThoTensorInner::Val { t } => Ok(t.into_inner()),
+            ThoTensorInner::Ref { .. } => Err(ThoError::new("local ownership requires materializing the worker reference")),
+        }
+    }
+
     /// Locks this local Tensor handle. Keep the guard within synchronous code and
     /// avoid holding guards for multiple tensors in inconsistent orders.
     pub fn t_ref(&self) -> TensorRef<'_> {
@@ -674,6 +697,21 @@ impl WorkerInput for ThoTensor<ChannelsData, SynKey> {}
 mod generation_tests {
     use super::*;
     use thoosa_shared::CudaDeviceGeneration;
+
+    #[test]
+    fn test_storage_capabilities_return_errors_for_the_wrong_variant() -> Result<(), ThoError> {
+        let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
+        installed.expect().return_const(false);
+        let local: ThoTensor = tch_result(Tensor::f_from_slice(&[1f32]))?.into();
+        assert!(local.clone_ref().is_err());
+        assert!(local.try_t_ref().is_ok());
+        let mut remote = ThoTensor::<AnyDims, ()>::new_ref((), 999, vec![1], Kind::Float, None, CudaWorkerId { device_idx: 1, generation: CudaDeviceGeneration(0) });
+        assert!(remote.to_kind(Kind::Double).is_err());
+        assert!(remote.try_t_ref().is_err());
+        assert!(remote.try_t_mut().is_err());
+        assert!(remote.try_into_tensor().is_err());
+        Ok(())
+    }
 
     #[test]
     fn test_reference_ownership_is_scoped_to_device_and_generation() {
