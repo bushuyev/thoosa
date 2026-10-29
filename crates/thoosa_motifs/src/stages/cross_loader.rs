@@ -273,7 +273,6 @@ where
         match track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
-                    MAX_PARALLEL,
                     *MaxParallelStep::FAST,
                 ))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("cross_unfold_clc"))),
@@ -360,7 +359,7 @@ where
             for tensor in &t_0_batch { tensor.add_required_ids(&mut required_inputs); }
             let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
             let result = OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![
-                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("prepare_outer_batch"))),
             ], None).run(stage, input, ctx.branch(false), thoosa_common::runner::oom_handler::WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
