@@ -105,6 +105,9 @@ where
     }).expect("can't set run_id");
 
     let devices = list_devices();
+    let execution_device = args.execution_device.resolve(args.ipc, devices.iter().any(|device| matches!(device, tch::Device::Cuda(0))))?;
+    // Device count, root context, and the runtime-owned purger gate share this selection.
+    let num_devices = execution_device + 1;
 
     let cpu_num = std::thread::available_parallelism()?;
 
@@ -128,14 +131,14 @@ where
             anyhow::bail!("IPC mode requires CUDA_VISIBLE_DEVICES=-1");
         }
 
-        GlobalCtx::init_devices_ipc(2, vec![
+        GlobalCtx::init_devices_ipc(num_devices, vec![
             format!("--ws-path={}", args.ws_path),
             format!("--term-logger-level={}", args.term_logger_level),
             format!("--write-logger-level={}", args.write_logger_level)
         ]).await?;
     } else {
         // kick_register_cuda_hooks();
-        GlobalCtx::init_devices(2)?;
+        GlobalCtx::init_devices(num_devices)?;
     }
 
 
@@ -211,7 +214,7 @@ where
     )));
 
     let command_result = if let Some(command ) = args.command{
-        let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
+        let mut root_ctx = RunCtxImpl::new(execution_device, "root_ctx");
         debug!("run_common_cli: command={command:?}");
         // A local CUDA failure can originate in detached copy work even if the
         // command no longer awaits that request. Still terminate the application.
