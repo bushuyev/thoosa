@@ -729,7 +729,8 @@ where
     Self: serde::de::DeserializeOwned,
 {
     fn clone_refs(&self) -> Result<Box<dyn WorkerInput>, ThoError> {
-        todo!()
+        // Generic training inputs need the registered adapter supplied by TrainNet.
+        Err(ThoError::new("TrainStepInput requires its typed worker input adapter; use clone_refs_for_worker"))
     }
 
     fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {
