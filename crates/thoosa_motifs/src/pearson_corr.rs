@@ -112,7 +112,7 @@ mod tests {
     use thoosa_common::utils::to_vec_f32;
 
     #[test]
-    fn pairwise_matrix_gives_expected_values() -> Result<(), TchError> {
+    fn pairwise_matrix_gives_expected_values() -> anyhow::Result<()> {
         // C=1, Sa=2, Sb=2, W=3
         //
         // slice0 = [1,2,3]
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(d.size(), vec![1, 2, 2]);
 
         // flatten order: [C=0][i][j] row-major => i=0,j=0 ; i=0,j=1 ; i=1,j=0 ; i=1,j=1
-        let out = to_vec_f32(&d);
+        let out = to_vec_f32(&d)?;
 
         // a0 vs b0 => r=1 => d=0
         assert!((out[0] - 0.0).abs() < 1e-5, "a0-b0 got {}", out[0]);
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn single_motif_pairwise_matrix_basic() -> Result<(), TchError> {
+    fn single_motif_pairwise_matrix_basic() -> anyhow::Result<()> {
         // Sa=2, W=3
         // slice0=[1,2,3], slice1=[3,2,1] => perfectly negative corr => dist=2 off-diagonal
         let x = Tensor::from_slice(&[
@@ -158,7 +158,7 @@ mod tests {
         let d = pearson_corr_distance_matrix_0_2_single(&x, 1e-12)?;
         assert_eq!(d.size(), vec![2, 2]);
 
-        let out = to_vec_f32(&d);
+        let out = to_vec_f32(&d)?;
         // row-major: [0,0],[0,1],[1,0],[1,1]
         assert!((out[0] - 0.0).abs() < 1e-5, "d00 got {}", out[0]);
         assert!((out[3] - 0.0).abs() < 1e-5, "d11 got {}", out[3]);
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn constant_slice_gives_about_one_against_anything() -> Result<(), TchError> {
+    fn constant_slice_gives_about_one_against_anything() -> anyhow::Result<()> {
         // slice0 varies, slice1 is constant => centered slice1 is zeros => r≈0 => d≈1
         let x = Tensor::from_slice(&[
             1f32, 2., 3.,
@@ -180,7 +180,7 @@ mod tests {
         let d = pearson_corr_distance_matrix_0_2_single(&x, 1e-6)?;
         let maan_corr = d.mean_dim(&[0,1][..], false, Float);
         debug!("maan_corr={:?}", maan_corr.double_value(&[]));
-        let out = to_vec_f32(&d);
+        let out = to_vec_f32(&d)?;
 
         // diagonal for constant slice: undefined correlation, but with eps our formula yields d=1 on diag too.
         // We mainly check the cross terms are ~1.

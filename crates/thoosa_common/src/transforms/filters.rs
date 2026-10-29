@@ -216,7 +216,7 @@ pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) 
 
     let ranked = absolutes.f_argsort(0, true)?;
 
-    let mut i: Box<dyn Iterator<Item = f32>> = Box::new(from::<Vec<f32>>(&ranked).into_iter());
+    let mut i: Box<dyn Iterator<Item = f32>> = Box::new(from::<Vec<f32>>(&ranked)?.into_iter());
     if take > 0 {
         i = Box::new(i.take(take));
     }

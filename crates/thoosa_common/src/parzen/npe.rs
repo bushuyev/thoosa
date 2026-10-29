@@ -1,12 +1,13 @@
+use crate::tch_error::tch_result;
 use std::fmt::{Debug, Formatter};
 
 use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
-use log::{debug, trace};
+use log::trace;
 use num_traits::*;
 use rand::RngExt;
 use rand::seq::IndexedRandom;
-use tch::{IndexOp, Kind, Tensor};
+use tch::{Kind, Tensor};
 use thoosa_shared::opt_rng::opt_rnd;
 use thoosa_shared::val::Val;
 
@@ -30,26 +31,18 @@ pub enum BandwidthFn {
 
 impl BandwidthFn {
     ///returns means, bandwidth
-    pub fn clc(&self, samples: Tensor) -> (Tensor, Tensor) {
-        match self {
-            BandwidthFn::Simp => {
-                // std = means.std(ddof=int(means.size > 1))
-                // IQR = np.subtract.reduce(np.percentile(means, [75, 25]))
-                // bandwidth = np.full_like(means, 1.059 * min(IQR / 1.34, std) * means.size ** (-0.2))
-                let size = samples.size()[0];
-                let std = samples.std(size > 1);
-                // debug!("std={}", std);
-                let q = samples.quantile(&Tensor::from_slice(&[0.75, 0.25]), 0, true, "linear");
-                // debug!("q={}", q);
-                let iqr = q.i((0, 0)) - q.i((1, 0));
-                // debug!("IQR={}", iqr);
-                let min = Tensor::cat(&[std.view(1), iqr.view(1) / 1.34], 0).min();
-                // debug!("min={}", min);
-                let b = 1.059 * min * (size as f64).powf(-0.2);
-                // debug!("b={}", b);
-                (samples, b)
-            }
-        }
+    pub fn clc(&self, samples: Tensor) -> anyhow::Result<(Tensor, Tensor)> {
+        // Keep density estimation failures on the ordinary typed tensor error path.
+        anyhow::ensure!(samples.dim() == 1 && samples.size()[0] > 0, "bandwidth requires a nonempty sample vector");
+        let size = samples.size()[0];
+        let std = tch_result(samples.f_std(size > 1))?;
+        let q = tch_result(Tensor::f_from_slice(&[0.75, 0.25]))?;
+        let q = tch_result(samples.f_quantile(&q, 0, true, "linear"))?;
+        let iqr = tch_result(tch_result(q.f_select(0, 0))?.f_sub(&tch_result(q.f_select(0, 1))?))?;
+        let scaled_iqr = tch_result(iqr.f_div_scalar(1.34))?;
+        let min = tch_result(Tensor::f_cat(&[tch_result(std.f_view([1]))?, tch_result(scaled_iqr.f_view([1]))?], 0))?;
+        let bandwidth = tch_result(tch_result(min.f_min())?.f_mul_scalar(1.059 * (size as f64).powf(-0.2)))?;
+        Ok((samples, bandwidth))
     }
 }
 
@@ -125,23 +118,13 @@ where
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    fn clc_distr(&self, samples: Tensor, _weights: Option<Tensor>) -> Box<dyn Distribution> {
-        Box::new(self.clc_distr(samples))
+    fn clc_distr(&self, samples: Tensor, _weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>> {
+        Ok(Box::new(self.clc_distr(samples)?))
     }
 
-    fn clc_distr_from_vec(
-        &self,
-        samples: &mut dyn Iterator<Item = Val>,
-        _weights: Option<Tensor>,
-    ) -> anyhow::Result<Box<dyn Distribution>> {
-        Ok(Box::new(
-            self.clc_distr(Tensor::f_from_slice(
-                samples
-                    .map(|p| p.try_into().unwrap())
-                    .collect::<Vec<f32>>()
-                    .as_slice(),
-            )?),
-        ))
+    fn clc_distr_from_vec(&self, samples: &mut dyn Iterator<Item = Val>, _weights: Option<Tensor>) -> anyhow::Result<Box<dyn Distribution>> {
+        let samples = samples.map(f32::try_from).collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Box::new(self.clc_distr(tch_result(Tensor::f_from_slice(&samples))?)?))
     }
 }
 
@@ -175,66 +158,37 @@ where
         i
     }
 
-    fn clc_distr(&self, samples: Tensor) -> NumericalGaussian {
-        trace!("NumericalParzenEstimator::clc_distr: samples={samples} kind={:?} ", samples.kind());
+    fn clc_distr(&self, samples: Tensor) -> anyhow::Result<NumericalGaussian> {
+        anyhow::ensure!(samples.dim() == 1, "numerical samples must be a vector");
         let device = samples.device();
         let samples = if self.prior {
-            //prior adds midpoint to 'stabilize the density estimation process' (gpt)
-            Tensor::cat(
-                &[
-                    samples,
-                    Tensor::from(0.5.into() * (self.lb + self.ub)).view(1),
-                ],
-                0,
-            )
-        } else {
-            samples
-        };
-
+            let midpoint: f64 = (<f64 as From<N>>::from(self.lb) + <f64 as From<N>>::from(self.ub)) * 0.5;
+            let prior = tch_result(Tensor::f_from_slice(&[midpoint]))?;
+            let prior = tch_result(prior.f_to_device(device))?;
+            tch_result(Tensor::f_cat(&[samples, prior], 0))?
+        } else { samples };
         let size = samples.size()[0];
-
-        let (means, bandwidth) = self.bandwidth.clc(samples);
+        let (means, bandwidth) = self.bandwidth.clc(samples)?;
         let domain_range = self.ub - self.lb;
-
         let min_bandwidth = self.bandwidth_clip.value(size) * domain_range;
-
-        let clipped_bandwidth = bandwidth
-            .clip(min_bandwidth, 0.5.into() * domain_range)
-            .view(1)
-            .repeat(size);
-
-        trace!("NumericalParzenEstimator::clc_distr: clipped_bandwidth={}", clipped_bandwidth);
-        if self.prior {
-            clipped_bandwidth
-                .i(size - 1)
-                .copy_(&Tensor::from(<f64>::into(domain_range.into())));
-        }
-
-        trace!("NumericalParzenEstimator::clc_distr: means={} clipped_bandwidth={}", means, clipped_bandwidth);
-        let (norm_consts, logpdf_consts) =
-            Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped_bandwidth);
-
-        let weights = uniform_weight(size, device);
-
-        NumericalGaussian::new(
-            means,
-            clipped_bandwidth,
-            norm_consts,
-            logpdf_consts,
-            weights,
-            self.lb.into(),
-            self.ub.into(),
-            self.quant_step.clone(),
-        )
+        let clipped = tch_result(bandwidth.f_clamp(min_bandwidth, 0.5.into() * domain_range))?;
+        let clipped = tch_result(tch_result(clipped.f_view([1]))?.f_repeat([size]))?;
+        if self.prior { let _ = tch_result(tch_result(clipped.f_select(0, size - 1))?.f_fill_(domain_range))?; }
+        let (norm_consts, logpdf_consts) = Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped)?;
+        let weights = uniform_weight(size, device)?;
+        NumericalGaussian::new(means, clipped, norm_consts, logpdf_consts, weights, self.lb.into(), self.ub.into(), self.quant_step)
     }
 
-    fn calculate_norm_consts(lb: &N, ub: &N, means: &Tensor, stds: &Tensor) -> (Tensor, Tensor) {
-        let std_sqrt_2 = std::f64::consts::SQRT_2 * stds;
-        let zl = (means.negative() + *lb) / &std_sqrt_2;
-        let zu = (means.negative() + *ub) / &std_sqrt_2;
-        let norm_consts = (zu.erf() - zl.erf()).reciprocal() * 2;
-        let logpdf_consts = (&norm_consts / (SQR2PI * stds)).log();
-        (norm_consts, logpdf_consts)
+    fn calculate_norm_consts(lb: &N, ub: &N, means: &Tensor, stds: &Tensor) -> anyhow::Result<(Tensor, Tensor)> {
+        let std_sqrt_2 = tch_result(stds.f_mul_scalar(std::f64::consts::SQRT_2))?;
+        let negative = tch_result(means.f_neg())?;
+        let zl = tch_result(tch_result(negative.f_add_scalar(*lb))?.f_div(&std_sqrt_2))?;
+        let zu = tch_result(tch_result(negative.f_add_scalar(*ub))?.f_div(&std_sqrt_2))?;
+        let diff = tch_result(tch_result(zu.f_erf())?.f_sub(&tch_result(zl.f_erf())?))?;
+        let norm_consts = tch_result(tch_result(diff.f_reciprocal())?.f_mul_scalar(2))?;
+        let scale = tch_result(stds.f_mul_scalar(SQR2PI))?;
+        let logpdf_consts = tch_result(tch_result(norm_consts.f_div(&scale))?.f_log())?;
+        Ok((norm_consts, logpdf_consts))
     }
 }
 
@@ -261,17 +215,12 @@ impl NumericalGaussian {
         lb: f64,
         ub: f64,
         quant_step: Option<usize>,
-    ) -> Self {
-        Self {
-            normal_dists: means
-                .iter::<f64>()
-                .unwrap()
-                .zip(stds.iter::<f64>().unwrap())
-                .map(|(mean, std)| {
-                    debug!("NumericalGaussian::new: mean={mean:} std={std}");
-                    (mean, std)
-                })
-                .collect::<Vec<_>>(),
+    ) -> anyhow::Result<Self> {
+        let means_vec = tch_result(Vec::<f64>::try_from(&means))?;
+        let stds_vec = tch_result(Vec::<f64>::try_from(&stds))?;
+        anyhow::ensure!(!means_vec.is_empty() && means_vec.len() == stds_vec.len(), "Gaussian means and deviations must be nonempty and aligned");
+        Ok(Self {
+            normal_dists: means_vec.into_iter().zip(stds_vec).collect(),
 
             means,
             stds,
@@ -281,30 +230,28 @@ impl NumericalGaussian {
             lb,
             ub,
             quant_step,
-        }
+        })
     }
 
-    pub fn pdf(&self, x: &Tensor) -> Tensor {
-        let norm_consts = &self.norm_consts / (SQR2PI * &self.stds);
-        let mahalanobis = ((x.view((-1, 1)).repeat([1, self.means.size()[0]])
-            - &self.means.view((1, -1)))
-            / &self.stds)
-            .pow_tensor_scalar(2);
-        self.weights
-            .multiply(&norm_consts)
-            .multiply(&mahalanobis.multiply_scalar(-0.5).exp())
-            .sum_dim_intlist(1, false, None)
+    pub fn pdf(&self, x: &Tensor) -> anyhow::Result<Tensor> {
+        let norm = tch_result(self.norm_consts.f_div(&tch_result(self.stds.f_mul_scalar(SQR2PI))?))?;
+        let x = tch_result(tch_result(x.f_view([-1, 1]))?.f_repeat([1, self.means.size()[0]]))?;
+        let delta = tch_result(x.f_sub(&tch_result(self.means.f_view([1, -1]))?))?;
+        let mahalanobis = tch_result(tch_result(delta.f_div(&self.stds))?.f_pow_tensor_scalar(2))?;
+        let exponential = tch_result(tch_result(mahalanobis.f_mul_scalar(-0.5))?.f_exp())?;
+        let weighted = tch_result(tch_result(self.weights.f_mul(&norm))?.f_mul(&exponential))?;
+        Ok(tch_result(weighted.f_sum_dim_intlist(1, false, None))?)
     }
 
-    fn basis_loglikelihood(&self, x: &Tensor) -> Tensor {
-        let mahalanobis =
-            ((x - self.means.view((-1, 1))) / self.stds.view((-1, 1))).pow_tensor_scalar(2);
-
-        self.logpdf_consts.view((-1, 1)) - 0.5 * mahalanobis
+    fn basis_loglikelihood(&self, x: &Tensor) -> anyhow::Result<Tensor> {
+        let delta = tch_result(x.f_sub(&tch_result(self.means.f_view([-1, 1]))?))?;
+        let ratio = tch_result(delta.f_div(&tch_result(self.stds.f_view([-1, 1]))?))?;
+        let mahalanobis = tch_result(tch_result(ratio.f_pow_tensor_scalar(2))?.f_mul_scalar(0.5))?;
+        Ok(tch_result(tch_result(self.logpdf_consts.f_view([-1, 1]))?.f_sub(&mahalanobis))?)
     }
 
     fn _sample(&self, n_samples: usize) -> Vec<f64> {
-        trace!("NumericalGaussian::new: self.means={:?} self.stds={:?}", self.means, self.stds);
+        trace!("NumericalGaussian::sample: components={}", self.normal_dists.len());
 
         (0..n_samples)
             .map(|_i| {
@@ -333,7 +280,7 @@ impl NumericalGaussian {
                         }
                         let q_val_f = q_val as f64;
                         let snapped =
-                            (((clamped - lb) / q_val_f).round() as usize * q_val) as f64 + lb;
+                            ((clamped - lb) / q_val_f).round() * q_val_f + lb;
                         snapped.clamp(lb, ub)
                     } else {
                         clamped
@@ -370,21 +317,16 @@ impl NumericalGaussian {
 }
 
 impl Distribution for NumericalGaussian {
-    fn sample(&self, n_samples: usize) -> Vec<Val> {
-        self._sample(n_samples)
+    fn sample(&self, n_samples: usize) -> anyhow::Result<Vec<Val>> {
+        Ok(self._sample(n_samples)
             .into_iter()
             .map(|v| v.into())
-            .collect()
+            .collect())
     }
 
-    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> Tensor {
-        NumericalGaussian::basis_loglikelihood(
-            self,
-            &Tensor::from_slice(
-            x.map(|v| v.try_into().unwrap())
-                .collect::<Vec<f64>>()
-                .as_slice(),
-        ))
+    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> anyhow::Result<Tensor> {
+        let values = x.map(f64::try_from).collect::<anyhow::Result<Vec<_>>>()?;
+        self.basis_loglikelihood(&tch_result(Tensor::f_from_slice(&values))?)
     }
 
     fn weights(&self) -> &Tensor {
@@ -393,21 +335,13 @@ impl Distribution for NumericalGaussian {
 }
 
 ///basis_loglikelihoods - params x samples.size + prior x candidates
-pub fn compute_config_loglikelihoods(
-    basis_loglikelihoods: &Tensor,
-    weights: Option<&Tensor>,
-) -> Tensor {
-
-    let config_basis_loglikelihoods = basis_loglikelihoods.sum_dim_intlist(0, false, Kind::Float); //.view((-1, 1));//TODO kind
-
-
-    let config_basis_loglikelihoods = if let Some(weights) = weights {
-        config_basis_loglikelihoods + weights.view((-1, 1)).log()
-    } else {
-        config_basis_loglikelihoods
-    };
-
-    config_basis_loglikelihoods.logsumexp(0, false)
+pub fn compute_config_loglikelihoods(basis_loglikelihoods: &Tensor, weights: Option<&Tensor>) -> anyhow::Result<Tensor> {
+    let sums = tch_result(basis_loglikelihoods.f_sum_dim_intlist(0, false, Kind::Float))?;
+    let sums = if let Some(weights) = weights {
+        let logs = tch_result(tch_result(weights.f_view([-1, 1]))?.f_log())?;
+        tch_result(sums.f_add(&logs))?
+    } else { sums };
+    Ok(tch_result(sums.f_logsumexp(0, false))?)
 }
 
 #[cfg(test)]
@@ -425,6 +359,16 @@ mod tests {
     }
 
     #[test]
+    fn test_density_tensor_failures_are_returned() -> anyhow::Result<()> {
+        let estimator = NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None);
+        assert!(estimator.clc_distr(Tensor::f_zeros([2, 2], FLOAT_CPU)?).is_err());
+        let density = estimator.clc_distr(Tensor::f_from_slice(&[0.0f64, 1.0])?)?;
+        let error = density.basis_loglikelihood(&Tensor::f_zeros([2, 2, 2], FLOAT_CPU)?).unwrap_err();
+        assert!(error.chain().any(|cause| cause.downcast_ref::<tch::TchError>().is_some()));
+        Ok(())
+    }
+
+    #[test]
     fn test_npe() {
         StdRng::seed_from_u64(42);
 
@@ -437,7 +381,7 @@ mod tests {
             None,
         );
 
-        let gaussian = npe.clc_distr(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
+        let gaussian = npe.clc_distr(Tensor::from_slice(&[-1.0, 0.0, 1.0])).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[-1., 0., 1., 0.]).round_decimals(4),
@@ -462,7 +406,7 @@ mod tests {
             gaussian.logpdf_consts.round_decimals(4)
         );
 
-        let pdf = gaussian.pdf(&Tensor::linspace(-3.0, 3.0, 100, FLOAT_CPU));
+        let pdf = gaussian.pdf(&Tensor::linspace(-3.0, 3.0, 100, FLOAT_CPU)).unwrap();
 
 
         assert_eq!(
@@ -488,7 +432,7 @@ mod tests {
         );
 
         let basis_loglikelihood =
-            gaussian.basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU));
+            gaussian.basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU)).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -550,7 +494,7 @@ mod tests {
             compute_config_loglikelihoods(
                 &Tensor::linspace(0., 10., 10, FLOAT_CPU).view((1, 2, 5)),
                 Some(&Tensor::from_slice(&[0.5, 0.5]))
-            )
+            ).unwrap()
             .round_decimals(3)
         );
 
@@ -566,7 +510,7 @@ mod tests {
             compute_config_loglikelihoods(
                 &Tensor::linspace(0., 10., 30, FLOAT_CPU).view((3, 2, 5)),
                 Some(&Tensor::from_slice(&[0.5, 0.5]))
-            )
+            ).unwrap()
             .round_decimals(3)
         )
     }
@@ -583,7 +527,7 @@ mod tests {
             0.0,
             1.0,
             None,
-        );
+        ).unwrap();
         let samples = gaussian._sample(3);
         assert!(samples.iter().all(|v| (0.0..=1.0).contains(v)), "samples={samples:?}");
         assert_eq!(vec![1.0, 1.0, 1.0], samples);

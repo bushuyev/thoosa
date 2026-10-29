@@ -1461,7 +1461,7 @@ mod tests {
             assert!(tch_result(out.as_ref().t_ref().f_allclose(&other.as_ref().t_ref(), 1e-6, 1e-6, false))?, "per-resource output ids must not change label order");
         }
         let out = tch_result(out.as_ref().t_ref().f_squeeze_dim(-1))?;
-        Ok((out.size(), to_vec_f32(&out)))
+        Ok((out.size(), to_vec_f32(&out)?))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

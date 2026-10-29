@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+use crate::tch_error::tch_result;
 
 use anyhow::Context as _;
 use std::collections::HashMap;
@@ -887,58 +888,33 @@ fn turbo_colormap(x: f64) -> RGBColor {
 
 
 //from tch-0.14.0/tests/test_utils.rs
-pub fn from<'a, T>(t: &'a Tensor) -> T
-where
-    <T as TryFrom<&'a tch::Tensor>>::Error: std::fmt::Debug,
-    T: TryFrom<&'a Tensor>,
+pub fn from<'a, T>(t: &'a Tensor) -> anyhow::Result<T>
+where T: TryFrom<&'a Tensor, Error = tch::TchError>,
 {
-    T::try_from(t).unwrap()
+    // Preserve LibTorch's typed error so conversion failures participate in recovery.
+    Ok(tch_result(T::try_from(t))?)
 }
 
-pub fn to_vec_f32(t: &Tensor) -> Vec<f32> {
-    from::<Vec<f32>>(&t.reshape(-1))
+pub fn to_vec_f32(t: &Tensor) -> anyhow::Result<Vec<f32>> {
+    from::<Vec<f32>>(&tch_result(t.f_reshape([-1]))?)
 }
 
-pub fn to_vec_f64(t: &Tensor) -> Vec<f64> {
-    from::<Vec<f64>>(&t.reshape(-1))
+pub fn to_vec_f64(t: &Tensor) -> anyhow::Result<Vec<f64>> {
+    from::<Vec<f64>>(&tch_result(t.f_reshape([-1]))?)
 }
 
-pub fn to_vec_i64(t: &Tensor) -> Vec<i64> {
-    from::<Vec<i64>>(&t.reshape(-1))
+pub fn to_vec_i64(t: &Tensor) -> anyhow::Result<Vec<i64>> {
+    from::<Vec<i64>>(&tch_result(t.f_reshape([-1]))?)
 }
 
 pub fn pad_to(input: &Tensor, to_size: &[i64], pad_with: f64) -> anyhow::Result<Tensor> {
-    debug!("pad_to: input.size={:?}, to_size{:?}",input.size(),to_size);
-
-    if input.size().len() != to_size.len() {
-        anyhow::bail!(format!(
-            "dimensions don't match: {:?} {:?}",
-            input.size(),
-            to_size
-        ));
+    anyhow::ensure!(input.dim() == to_size.len(), "dimensions don't match: {:?} {:?}", input.size(), to_size);
+    let mut padding = Vec::new();
+    for (from, to) in input.size().iter().zip(to_size).rev() {
+        anyhow::ensure!(to >= from, "padding cannot shrink dimension {from} to {to}");
+        padding.extend([0, to - from]);
     }
-    let mut to_size = to_size.to_vec();
-
-    let mut input_size = input.size();
-    input_size.reverse();
-    to_size.reverse();
-
-    let pad_idx = input_size
-        .into_iter()
-        .zip(to_size.into_iter())
-        .enumerate()
-        .flat_map(|(i, (from, to))| {
-            debug!("pad_to: i={i} from={from} to={to}");
-            if from > to {
-                error!("from {from} > to {to} at {i}"); //panic doesn't show up in test
-                panic!("from {from} > to {to} at {i}");
-            } else {
-                [0, to - from]
-            }
-        })
-        .collect::<Vec<i64>>();
-
-    Ok(input.f_pad(pad_idx.as_slice(), "constant", pad_with)?)
+    Ok(tch_result(input.f_pad(&padding, "constant", pad_with))?)
 }
 
 pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool) -> anyhow::Result<(Tensor, Option<Tensor>)> {
@@ -960,7 +936,7 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
         for (dim, (&from, &to)) in cur_size.iter().zip(to_size.iter()).enumerate() {
             if from > to {
                 debug!("pad_to: truncating dim {dim} from {from} to {to}");
-                result = result.f_narrow(dim as i64, 0, to)?;
+                result = tch_result(result.f_narrow(dim as i64, 0, to))?;
             }
         }
         cur_size = result.size();
@@ -993,11 +969,11 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
         pad_idx.push(to - from);  // pad on the "right"
     }
 
-    let padded = result.f_pad(pad_idx.as_slice(), "constant", 0.0)?;
+    let padded = tch_result(result.f_pad(pad_idx.as_slice(), "constant", 0.0))?;
     let mask = if with_mask {
-        let base_mask = Tensor::ones(cur_size.as_slice(), (Kind::Uint8, result.device()));
-        let padded_mask = base_mask.f_pad(pad_idx.as_slice(), "constant", 0.0)?;
-        Some(padded_mask.to_kind(Kind::Bool))
+        let base_mask = tch_result(Tensor::f_ones(cur_size.as_slice(), (Kind::Uint8, result.device())))?;
+        let padded_mask = tch_result(base_mask.f_pad(pad_idx.as_slice(), "constant", 0.0))?;
+        Some(tch_result(padded_mask.f_to_kind(Kind::Bool))?)
     } else {
         None
     };
@@ -1006,38 +982,20 @@ pub fn pad_to_2(input: &Tensor, to_size: &[i64], truncate: bool, with_mask: bool
 }
 
 
-pub fn clone(from: &Tensor) -> Tensor {
-    let to = Tensor::zeros(from.size(), FLOAT_CPU); //TODO clone
-    let _ = from.clone(&to);
-
-    to
+pub fn clone(from: &Tensor) -> anyhow::Result<Tensor> {
+    Ok(tch_result(tch_result(from.f_detach_copy())?.f_to_device(Device::Cpu))?)
 }
 
-pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
-    assert_eq!(
-        tensor.dim(),
-        2,
-        "hist_1_dim: input tensor must have exactly two dimensions."
-    );
-
-    let min_vals = tensor.min_dim(1, true).0; //channels x 1
-    let max_vals = tensor.max_dim(1, true).0; //channels x 1
-
-    let norm = (tensor - &min_vals) / &(&max_vals - &min_vals).clamp_min(1e-8);
-
-    trace!("norm={norm}");
-
-    let bin_indices = (norm * bins as f64)
-        .floor()
-        .clamp(0.0, (bins - 1) as f64)
-        .to_kind(Kind::Int64); // channels x dists
-
-    trace!("bin_indices={bin_indices}");
-
-    let one_hot = bin_indices.one_hot(bins as i64);
-    trace!("one_hot={one_hot}");
-
-    one_hot.sum_dim_intlist(1, false, Kind::Int)
+pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> anyhow::Result<Tensor> {
+    anyhow::ensure!(tensor.dim() == 2 && bins > 0, "histogram requires a matrix and nonzero bins");
+    let minimum = tch_result(tensor.f_min_dim(1, true))?.0;
+    let maximum = tch_result(tensor.f_max_dim(1, true))?.0;
+    let range = tch_result(tch_result(maximum.f_sub(&minimum))?.f_clamp_min(1e-8))?;
+    let norm = tch_result(tch_result(tensor.f_sub(&minimum))?.f_div(&range))?;
+    let scaled = tch_result(tch_result(norm.f_mul_scalar(bins as f64))?.f_floor())?;
+    let indices = tch_result(tch_result(scaled.f_clamp(0.0, (bins - 1) as f64))?.f_to_kind(Kind::Int64))?;
+    let one_hot = tch_result(indices.f_one_hot(bins as i64))?;
+    Ok(tch_result(one_hot.f_sum_dim_intlist(1, false, Kind::Int))?)
 }
 
 
@@ -1978,6 +1936,17 @@ pub mod tests {
     }
 
     #[test]
+    fn test_tensor_utility_errors_preserve_their_source() -> anyhow::Result<()> {
+        let tensor = Tensor::f_zeros([2, 2], FLOAT_CPU)?;
+        let error = super::from::<Vec<f32>>(&tensor).unwrap_err();
+        assert!(error.chain().any(|cause| cause.downcast_ref::<tch::TchError>().is_some()));
+        assert!(hist_1_dim(&tensor, 0).is_err());
+        assert!(super::pad_to(&tensor, &[1, 2], 0.0).is_err());
+        assert!(pad_to_2(&tensor, &[-1, 2], true, true).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn test_masked_mean_and_max_basic() {
         // Shapes: B=2, C=2, T=4
         // x[b,c,:]
@@ -2661,7 +2630,7 @@ pub mod tests {
 
         // debug!("t={t}");
 
-        let hist = hist_1_dim(&t, 3);
+        let hist = hist_1_dim(&t, 3).unwrap();
         // debug!("hist={hist}");
 
         assert_eq!(
@@ -2865,11 +2834,11 @@ pub mod tests {
 
         let m = local_max_1d_mask(&x, 3).unwrap();
         let m_i64 = m.to_kind(Kind::Int64).view([-1]);
-        let v = to_vec_i64(&m_i64);
+        let v = to_vec_i64(&m_i64).unwrap();
         assert_eq!(v, vec![0, 1, 0, 1, 1, 0, 0]);
 
         let peaks = local_max_1d(&x, 3).unwrap().view([-1]);
-        let pv = to_vec_f32(&peaks);
+        let pv = to_vec_f32(&peaks).unwrap();
         assert_eq!(pv, vec![0., 1., 0., 2., 2., 0., 0.]);
     }
 
