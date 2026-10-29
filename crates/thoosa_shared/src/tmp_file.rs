@@ -9,12 +9,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TmpFile {
     path: PathBuf,
+    #[serde(skip, default = "armed")]
+    armed: bool,
 }
+
+// Deserialized guards own cleanup just like freshly created guards.
+fn armed() -> bool { true }
 
 impl TmpFile {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
+            armed: true,
         }
     }
 
@@ -25,7 +31,14 @@ impl TmpFile {
 
 
     /// Remove immediately and disarm the guard.
-    pub fn remove_now(self) -> io::Result<()> {
+    pub fn remove_now(mut self) -> io::Result<()> {
+        self.remove_once()
+    }
+
+    fn remove_once(&mut self) -> io::Result<()> {
+        // Disarm before attempting I/O: even an error must not trigger a second
+        // deletion of a path that another owner could have recreated.
+        self.armed = false;
 
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
@@ -37,6 +50,7 @@ impl TmpFile {
 
 impl Drop for TmpFile {
     fn drop(&mut self) {
+        if !self.armed { return; }
         debug!("TmpFile::drop: self.path={:?}", self.path);
 
         match fs::remove_file(&self.path) {
@@ -65,6 +79,18 @@ mod tests {
         io,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn test_explicit_removal_does_not_delete_a_replacement() -> io::Result<()> {
+        let path = env::temp_dir().join(format!("tmp-file-{}", uuid::Uuid::new_v4()));
+        let mut guard = TmpFile::new(&path);
+        fs::write(&path, b"original")?;
+        guard.remove_once()?;
+        fs::write(&path, b"replacement")?;
+        drop(guard);
+        assert_eq!(fs::read(&path)?, b"replacement");
+        fs::remove_file(path)
+    }
 
     #[test]
     fn removes_file_on_drop() -> io::Result<()> {
