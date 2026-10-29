@@ -477,7 +477,7 @@ where
                 ..
             } = track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, SelectMotifsInputSelector>::new(
                 vec![
-                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FAST))),
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_resources_motifs_dist"))),
                     Adjusters::Input(input_adjuster(SelectMotifsAdjuster::new(find_motifs_run_config.window as i64))),
                 ],
