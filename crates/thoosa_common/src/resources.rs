@@ -46,8 +46,7 @@ impl ResourcesConfig for Simple {
                 {
                     resources.extend(
                         track_await!(store_guard
-                            .list_resource_set_resources_by_descr(&resource_set)).await
-                            .expect("list_resource_set_resources_by_descr"),
+                            .list_resource_set_resources_by_descr(&resource_set)).await?,
                     );
                 }
                 resources

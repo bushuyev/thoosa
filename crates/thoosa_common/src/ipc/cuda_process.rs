@@ -2082,7 +2082,7 @@ mod tests {
                 Ok(())
             },
             async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
                 CudaWorker::run_worker(
                     sock_path,
                     &ws,
@@ -2111,7 +2111,7 @@ mod tests {
                 Ok(())
             },
             async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
                 CudaWorker::run_worker(
                     sock_path,
                     &ws,
@@ -2179,7 +2179,7 @@ mod tests {
                 Ok(())
             },
             async |sock_path| {
-                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
                 CudaWorker::run_worker(
                     sock_path,
                     &ws,

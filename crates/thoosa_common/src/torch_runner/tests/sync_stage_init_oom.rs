@@ -71,7 +71,7 @@ impl SyncStageInit<RunCtxImpl, DynSyncStageEnum<ConstructorStage, ConstructorIni
 #[tokio::test]
 async fn test_sync_stage_constructor_retries_after_run_context_adjustment() -> Result<(), ThoError> {
     let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1234)));
+    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1234)?));
     let calls = Arc::new(AtomicUsize::new(0));
     let sync_init = ConstructorInit { calls: Arc::clone(&calls) };
     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(

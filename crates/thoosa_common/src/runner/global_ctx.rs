@@ -1404,7 +1404,7 @@ mod tests {
     #[test]
     fn test_cache_key_exclusions_ipc() -> Result<(), ThoError> {
         run_ipc_test(module_path!(), check_cache_key_exclusions(), async |socket| {
-            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
             CudaWorker::run_worker(socket, &ws, HashMap::new(), ThoDevice::from(1usize)).await
         })
     }
@@ -1493,7 +1493,7 @@ mod tests {
 
     #[test]
     fn test_device_reset_ipc() -> Result<(), ThoError> {
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
 
         run_ipc_test(
             module_path!(),
