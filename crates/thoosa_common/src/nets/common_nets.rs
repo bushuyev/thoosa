@@ -881,6 +881,12 @@ where
         debug!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={}", min_loss.read());
         // Formatting a VarStore can inspect tensors after a failed CUDA operation.
         trace!("opt_train: done opt, descr={descr}");
+        if let Err(error) = best_config {
+            if min_var_store.read().is_none() { return Err(error); }
+            // Recovery failures above still propagate; ordinary optimizer failure may
+            // retain a completed model, with an explicit partial-success report.
+            warn!("opt_train: partial success for {descr}; optimization stopped early: {error:#}; retaining best_loss={}", min_loss.read());
+        }
         collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)
