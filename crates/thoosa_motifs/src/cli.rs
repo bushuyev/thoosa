@@ -128,6 +128,12 @@ use thoosa_shims::context::tho_cu_restart;
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 
+// Keep malformed user configuration on the command's Result path and retain
+// the parser's typed source together with the configuration being decoded.
+fn parse_cli_config<T: serde::de::DeserializeOwned>(input: &str, name: &str) -> anyhow::Result<T> {
+    serde_json5::from_str(input).with_context(|| format!("invalid {name} configuration"))
+}
+
 #[derive(Debug, Subcommand, Clone)]
 pub enum MotifCommands {
     FindMotifs(FindMotifsArgs),
@@ -156,7 +162,7 @@ impl StageCommand for MotifCommands {
                 debug!("MotifCommands::FindMotifs: args={find_motifs_args:?}");
 
                 let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue =
-                    serde_json5::from_str(&find_motifs_args.run_config_cnt).expect("FindMotifsRunConfig");
+                    parse_cli_config(&find_motifs_args.run_config_cnt, "FindMotifsRunConfig")?;
 
                 debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
 
@@ -200,7 +206,7 @@ impl StageCommand for MotifCommands {
                 let loader = init_loader(ws);
 
                 let seq_scan_run_config_range_or_value: SeqScanRunConfigRangeOrValue =
-                    serde_json5::from_str(&seq_scan_args.run_config_cnt).expect("SeqScanRunConfig");
+                    parse_cli_config(&seq_scan_args.run_config_cnt, "SeqScanRunConfig")?;
 
                 let input_wrapper = Arc::new(ResourcesConfigInput::new(seq_scan_args.resource_config()));
 
@@ -229,7 +235,7 @@ impl StageCommand for MotifCommands {
                 debug!("SelectMotifs: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
                 let loader = init_loader(ws);
 
-                let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
+                let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = parse_cli_config(&select_motifs_args.run_config_cnt, "SelectMotifs2")?;
 
                 let input_wrapper = Arc::new(SelectMotifsInput::standalone(ResourcesConfigInput::new(select_motifs_args.resource_config())));
                 //TODO move it into SelectMotifsStage
@@ -293,7 +299,7 @@ impl StageCommand for MotifCommands {
 
                 let loader = init_loader(ws);
 
-                let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
+                let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = parse_cli_config(&train_motif_nets_args.run_config_cnt, "TrainMotifsNets2")?;
                 let motifs_by = train_motif_nets_args.motifs_by()?;
 
                 let input_wrapper = TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()), train_motif_nets_args.motifs_limit);
@@ -324,7 +330,7 @@ impl StageCommand for MotifCommands {
             MotifCommands::TrainLabelNets(train_label_nets_args) => {
                 debug!("TrainLabelNets: train_label_nets_args.run_config_cnt={:?}",train_label_nets_args.run_config_cnt);
                 let loader = init_loader(ws);
-                let train_motif_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
+                let train_motif_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = parse_cli_config(&train_label_nets_args.run_config_cnt, "TrainLabelNets")?;
 
                 let input_wrapper = Arc::new(ResourcesConfigInput::new(train_label_nets_args.resource_config()));
 
@@ -372,7 +378,7 @@ impl StageCommand for MotifCommands {
             MotifCommands::TrainFinalNet(train_final_net_args) => {
                 debug!("TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}",train_final_net_args.run_config_cnt);
                 let loader = init_loader(ws);
-                let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
+                let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = parse_cli_config(&train_final_net_args.run_config_cnt, "TrainFinalNet")?;
 
                 let input_wrapper = Arc::new(ResourcesConfigInput::new(
                     train_final_net_args.resource_config()));
@@ -1909,6 +1915,13 @@ where
 
 #[cfg(test)]
 mod cli_tests {
+    #[test]
+    fn test_invalid_cli_configuration_preserves_parser_error() {
+        let error = super::parse_cli_config::<std::collections::HashMap<String, u32>>("{count: 'bad'}", "test-command").unwrap_err();
+        assert!(error.to_string().contains("test-command"));
+        assert!(error.downcast_ref::<serde_json5::Error>().is_some());
+    }
+
     use crate::cli::{CommonCommands, MotifAppCommands, MotifCommands, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
     use crate::dims::MotifSlices;
     use crate::distance::MaskMaker::LeQuantile;
