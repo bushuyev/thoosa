@@ -1019,7 +1019,7 @@ where
         #[cfg(tho_debug)]
         let input_id_dbg = format!("sync_init={:?}", sync_init);
 
-        let task = Arc::new(SyncStageInitImpl {
+        let stage = Arc::new(SyncStageInitImpl {
             init: sync_init,
             ws: Arc::clone(ws),
             pd: PhantomData,
@@ -1027,7 +1027,7 @@ where
 
         let output = track_await!(run_with_runner_impl(
             &self.adjusters,
-            task,
+            stage,
             #[cfg(tho_debug)]
             input_id_dbg,
             run_context,
@@ -1169,7 +1169,7 @@ where
 
 async fn run_with_runner_impl<'a, 'z, R, S, A, C, IA, TA, CA>(
     adjusters: &[Adjusters<IA, TA, CA>],
-    task: Arc<R>,
+    stage: Arc<R>,
     #[cfg(tho_debug)]
     input_id_dbg: String,
     run_context: R::Ctx,
@@ -1193,7 +1193,7 @@ where
     // await, so cancellation never leaves a detached job owning an exclusive retry.
     let retry_scope = oom_executor(device_idx).retry_scope();
     retry_scope.run(async {
-    let mut task = Some(task);
+    let mut task = Some(stage);
     let mut run_context = Some(run_context);
 
 
@@ -1215,7 +1215,11 @@ where
             Some(retry_scope.token()),
         )).await {
         Err(te) => {
-            if !runner.can_retry() { return Err(te); }
+            if !runner.can_retry() {
+                warn!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?} runner can't retry",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+
+                return Err(te);
+            }
 
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
@@ -1345,7 +1349,7 @@ where
 
 async fn run_with_runner<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
     adjusters: &[Adjusters<IA, TA, CA>],
-    task: Arc<R>,
+    stage: Arc<R>,
     input: Arc<W>,
     run_context: R::Ctx,
     contexts: C,
@@ -1370,7 +1374,7 @@ where
 
     track_await!(run_with_runner_impl(
         adjusters,
-        task,
+        stage,
         #[cfg(tho_debug)]
         input_id_dbg,
         run_context,
@@ -1382,7 +1386,7 @@ where
 
 async fn run_with_runner_consume<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
     adjusters: &[Adjusters<IA, TA, CA>],
-    task: Arc<R>,
+    stage: Arc<R>,
     input: W,
     run_context: R::Ctx,
     contexts: C,
@@ -1408,7 +1412,7 @@ where
 
     track_await!(run_with_runner_impl(
         adjusters,
-        task,
+        stage,
         #[cfg(tho_debug)]
         input_id_dbg,
         run_context,

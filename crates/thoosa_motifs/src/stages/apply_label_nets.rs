@@ -14,8 +14,8 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
+
+
 use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
@@ -564,13 +564,12 @@ where
 {
     async fn new(device: ThoDevice) -> Result<Arc<DynSyncStageEnum<Self>>, ThoError> {
         // The shared cache serializes installation and isolates worker generations and devices.
-        STACK_APPLIED_LABEL_NETS_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), (), move || async move {
+        STACK_APPLIED_LABEL_NETS_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(device.tho_device_idx()), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
                 // Different context-type cache entries must not overwrite one another in the same worker.
-                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-                let stage_id = STAGE_ID.fetch_add(1, Relaxed);
+
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_recreatable(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(stage_id.to_string()), device.tho_device_idx(), Box::new(StackAppliedLabelNetsInit)).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(STACK_APPLIED_LABEL_NETS_ENDPOINT, Some(0.to_string()), device.tho_device_idx(), Box::new(StackAppliedLabelNetsInit)).await?),
                     init: (),
                 }))
             } else {
@@ -870,6 +869,7 @@ where
         APPLY_LABEL_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(run_context.tho_device_idx(), GlobalCtx::global().cuda_activity_gate(run_context.tho_device_idx()), GlobalCtx::global().is_ipc(), sync_init.trained_net_id, move || async move {
             // Construction has no input tensors that must remain on this device, so an OOM retry may dump every cached tensor.
             let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),

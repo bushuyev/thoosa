@@ -461,7 +461,6 @@ where
     C: RunCtx + 'static,
 {
 
-
     pub fn new_local<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> Self
     where
         CrossBatchCtxFn: Fn(&C) -> Result<CUC, ThoError> + Send + Sync + 'static,
@@ -474,10 +473,6 @@ where
         }
     }
 }
-
-
-
-
 
 
 static CROSS_UNFOLD_CLC_INSTANCES: InstanceCache = InstanceCache::new();
