@@ -1,5 +1,6 @@
+# Resolve the sourced script, not the caller shell.
 if [ -z "${LIBTORCH:-}" ]; then
-    LIBTORCH=$(awk -F'"' '/^LIBTORCH=/{print $2}' "$(dirname "$0")/.cargo/config.toml")
+    LIBTORCH=$(awk -F'"' '/^LIBTORCH=/{print $2}' "$(dirname "${BASH_SOURCE[0]}")/.cargo/config.toml")
 fi
 LIBTORCH="${LIBTORCH%/}"
 
