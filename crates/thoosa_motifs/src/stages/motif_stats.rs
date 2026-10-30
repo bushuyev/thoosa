@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+
 use thoosa_common::tch_error::tch_result;
 
 use crate::dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
@@ -1039,11 +1039,10 @@ where
     async fn new(tho_device_idx: usize) -> Result<Arc<DynSyncStageEnum<MotifStatsConsumeStage<C>>>, ThoError> {
         MOTIF_STATS_CONSUME_STAGE_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
-                static STAGE_ID: AtomicU32 = AtomicU32::new(0);
-                let stage_id = STAGE_ID.fetch_add(1, Ordering::AcqRel);
+
                 // Use shared consuming dispatch so tensor references are deleted only after success.
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_recreatable(MOTIF_STATS_CONSUME_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(MOTIF_STATS_CONSUME_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),
                     init: ()
                 }))
             } else {

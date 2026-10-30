@@ -1072,6 +1072,7 @@ where
         let key = (trained_net_id, sync_init.slice_step, sync_init.quantize);
         let device_idx = run_context.tho_device_idx();
         APPLY_MOTIF_NET_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(device_idx, GlobalCtx::global().cuda_activity_gate(device_idx), GlobalCtx::global().is_ipc(), key, move || async move {
+
             // Construction loads model state and has no cached tensor inputs to retain.
             let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(

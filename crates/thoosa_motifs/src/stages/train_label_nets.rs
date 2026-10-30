@@ -278,9 +278,9 @@ where
     pub async fn new(tho_device_idx:usize) -> Result<Arc<DynSyncStageEnum<SyncLabelBatch<C>>>, ThoError> {
         SYNC_LABEL_BATCH_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(tho_device_idx, GlobalCtx::global().cuda_activity_gate(tho_device_idx), GlobalCtx::global().is_ipc(), 0, move || async move {
             if GlobalCtx::global().is_ipc() {
-                let stage_id = 0;
+
                 Ok(Arc::new(DynSyncStageEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LABEL_BATCH_ENDPOINT, Some(stage_id.to_string()), tho_device_idx, Box::new(())).await?),
+                    stage: Arc::new(ProxyStage::proxy_recreatable(SYNC_LABEL_BATCH_ENDPOINT, Some(0.to_string()), tho_device_idx, Box::new(())).await?),
                     init: (),
                 }))
             } else {

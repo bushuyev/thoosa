@@ -416,7 +416,7 @@ pub enum SyncStageRunnerError {
 pub enum DataErrorKind {
     InputTooShort,
     EmptyTrainingClass,
-    // The item still does not fit after all OOM adjustments; callers must opt in to skipping it.
+    // The stage still does not fit into GPU memory after all OOM adjustments; callers must opt in to skipping it.
     OOMHandlingFailed,
 }
 
@@ -551,7 +551,7 @@ impl ThoError {
         cause.context(msg.into())
     }
 
-    // Used to inject recoverable failures in stage and runner tests.
+    // for injecting recoverable failures in stage and runner tests.
     pub fn oom() -> Self {
         Self::Cuda { action: CudaAction::HandleOOM, msg: "out of memory".into() }
     }
