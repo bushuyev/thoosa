@@ -90,7 +90,7 @@ where
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
     fn tho_forward(&self, t: &ThoTensor<DI, DebugId>, lengths: Option<&mut BatchLengths>, train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
-        let _guard = InferenceModeGuard::new(!train);
+        let _guard = InferenceModeGuard::new(!train)?;
 
         //TODO move to ThoVarStore?
         let store_float_precision = var_store_float_precision(&self.var_store);
@@ -165,7 +165,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     where
         F: Fn(&nn::Path) -> anyhow::Result<Box<dyn ThoModule<DI, DO>>> + Send + Sync + 'static,
     {
-        let _guard = InferenceModeGuard::enabled();
+        let _guard = InferenceModeGuard::enabled()?;
 
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);

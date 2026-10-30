@@ -2653,7 +2653,7 @@ mod train_tests {
 
         assert!(!Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
 
-        let _guard = InferenceModeGuard::enabled();
+        let _guard = InferenceModeGuard::enabled()?;
 
         assert!(Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
 
