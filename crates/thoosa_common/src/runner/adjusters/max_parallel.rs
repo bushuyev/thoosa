@@ -27,7 +27,7 @@ impl Deref for MaxParallelStep {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            MaxParallelStep::SLOW => &2,//TODO rename
+            MaxParallelStep::SLOW => &2,
             MaxParallelStep::MID => &4,
             MaxParallelStep::FAST => &16,
         }

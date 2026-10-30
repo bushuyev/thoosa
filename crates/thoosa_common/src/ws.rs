@@ -309,8 +309,6 @@ impl <'a> VarStoreOrPath<'a> {
     }
 }
 
-
-
 impl <'a>  From<&'a VarStore> for VarStoreOrPath<'a> {
     fn from(value: &'a VarStore) -> Self {
         Self::VarStore(value)

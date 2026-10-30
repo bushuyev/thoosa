@@ -208,8 +208,8 @@ pub fn resource_tensor(
     resource_len:usize,
     channels_motif_kinds:&[Vec<(usize, usize, TestSignalKind)>],
     gap: usize, motif_ampl: f32,
-    add_to_prev_step: bool, //TODO rename
-    motif_from_zero: bool //TODO rename
+    add_to_prev_step: bool,
+    motif_from_zero: bool
 ) -> anyhow::Result<(Tensor, Vec<Vec<Vec<Interval>>>)> {
     use rand::rngs::StdRng;
     use log::debug;

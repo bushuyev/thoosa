@@ -12,7 +12,7 @@ use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::ThoError;
 
 #[derive(Debug, Named)]
-pub struct PairStage<A, B, C> //TODO rename to Pair/Chained
+pub struct PairStage<A, B, C> 
 where
     C: RunCtx + 'static,
 

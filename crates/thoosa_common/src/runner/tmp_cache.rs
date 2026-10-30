@@ -17,7 +17,7 @@ use crate::runner::common::cachable::{BorrowRef, CachedPurgeOutput, DevicesWrap,
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::{CacheKey, RegisteredCacheHandle};
-use crate::runner::purge::{FuturesRunnerMapPurger, WeakMapPurger, PURGE_GPU_CONCURRENCY_LIMIT};
+use crate::runner::purge::{CachePurger, WeakMapPurger, PURGE_GPU_CONCURRENCY_LIMIT};
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -220,7 +220,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     fn register(name: String) -> Self {
         let map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Arc::new(Default::default());
         let registered_cache = GlobalCtx::global()
-            .register_cache((name.clone(), Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn FuturesRunnerMapPurger>));
+            .register_cache((name.clone(), Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn CachePurger>));
 
         Self {
             name,
@@ -237,7 +237,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
 ///for TmpCache
 #[async_trait]
-impl <D> FuturesRunnerMapPurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
+impl <D> CachePurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
 where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
 {

@@ -201,7 +201,7 @@ fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), 
             let retryable = actor.register_stage(worker, ENDPOINT.into(), Some("oom".into()), input(RecoveryAction::OomOnce { marker: marker.clone() })).await?;
             actor.ensure_stage(retryable.clone(), worker).await?;
             std::fs::remove_file(marker)?;
-            global.get_runner(1).request_cuda_reset(ThoError::ContextReset)?;
+            global.get_runner(1).request_cuda_reset(ThoError::CudaBeingRecovered)?;
             assert!(gate.is_paused());
             drop(owner);
             gate.wait_if_paused().await?;
@@ -270,7 +270,7 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
                     gate.wait_for_generation_end(worker.generation).await;
                 } else {
                     release_tx.send(()).unwrap();
-                    assert!(matches!(caller.await?.unwrap_err().what(), ThoError::ContextReset));
+                    assert!(matches!(caller.await?.unwrap_err().what(), ThoError::CudaBeingRecovered));
                 }
                 gate.wait_if_paused().await?;
                 assert_eq!(gate.device_generation().0, worker.generation.0 + 1);
@@ -363,7 +363,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                     let response = actor.install_stage(worker, ENDPOINT.into(), Some(3.to_string()), input(RecoveryAction::Poison)).await?;
                     assert!(matches!(response.status, OpResult::Ok(_)));
                     let error = actor.copy(tch_result(Tensor::f_from_slice(&[1f32]))?.into(), 1.into()).await.unwrap_err();
-                    assert!(matches!(error.what(), ThoError::ContextReset), "fatal direct copy did not report recovery: {error:#}");
+                    assert!(matches!(error.what(), ThoError::CudaBeingRecovered), "fatal direct copy did not report recovery: {error:#}");
                 } else {
                     let actor = actor.clone();
                     let error = submit_worker_request(async move {
@@ -373,7 +373,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                             actor.invoke_stage(worker, ENDPOINT.into(), Some(1.to_string()), input(if mode == "poison" { RecoveryAction::Poison } else { RecoveryAction::Fatal }), mode == "consume").await
                         }
                     }).await.unwrap_err();
-                    assert!(matches!(error.what(), ThoError::ContextReset), "fatal actor path {mode}: {error:#}");
+                    assert!(matches!(error.what(), ThoError::CudaBeingRecovered), "fatal actor path {mode}: {error:#}");
                 }
                 assert!(pending.await.unwrap().is_err(), "retirement must resolve outstanding requests");
                 gate.wait_if_paused().await?;

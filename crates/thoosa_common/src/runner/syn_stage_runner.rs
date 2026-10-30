@@ -536,7 +536,7 @@ impl SyncStageRunner {
     }
 
     fn context_reset_error() -> ThoError {
-        ThoError::new_with_cause("Resetting cuda context", ThoError::ContextReset)
+        ThoError::new_with_cause("Resetting cuda context", ThoError::CudaBeingRecovered)
     }
 
     pub(crate) fn cuda_gate(&self) -> Option<&Arc<CudaActivityGate>> {
@@ -1688,8 +1688,8 @@ mod tests {
                 });
                 queue_ready.await.unwrap();
                 drop(child_exec.tx.reserve().await.unwrap());
-                let ticket = parent_exec.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
-                assert!(matches!(parent.await.unwrap().unwrap_err().what(), ThoError::ContextReset));
+                let ticket = parent_exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
+                assert!(matches!(parent.await.unwrap().unwrap_err().what(), ThoError::CudaBeingRecovered));
                 // The healthy target's exclusive job is still physically running.
                 // Only its queued dependent child should be discarded.
                 parent_exec.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
@@ -1730,8 +1730,8 @@ mod tests {
                 }
             });
             ready.await.unwrap();
-            let ticket = parent_exec.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
-            assert!(matches!(parent.await.unwrap().unwrap_err().what(), ThoError::ContextReset));
+            let ticket = parent_exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
+            assert!(matches!(parent.await.unwrap().unwrap_err().what(), ThoError::CudaBeingRecovered));
             let mut completion = Box::pin(parent_exec.cuda_gate().unwrap().wait_for_pause_to_finish(ticket));
             assert!(futures::poll!(completion.as_mut()).is_pending());
             // The descendant is still physically alive, but must not hold its
@@ -1783,10 +1783,10 @@ mod tests {
             ready.await.unwrap();
             resume.send(()).unwrap();
             queue_ready.await.unwrap();
-            let ticket = ancestor.request_pause(ThoError::ContextReset).unwrap();
+            let ticket = ancestor.request_pause(ThoError::CudaBeingRecovered).unwrap();
             // The submitter may return as soon as the ancestor closes admission;
             // idle also proves that the physical job escaped its pending Resume.
-            assert!(matches!(parent.await.unwrap().unwrap_err().what(), ThoError::ContextReset));
+            assert!(matches!(parent.await.unwrap().unwrap_err().what(), ThoError::CudaBeingRecovered));
             ancestor.wait_until_idle().await;
             ancestor.finish_pause(ticket);
             release.send(()).unwrap();
@@ -1817,7 +1817,7 @@ mod tests {
             ready.recv().await.unwrap();
             ready.recv().await.unwrap();
             assert!(limits.try_acquire_sync_execution().is_none());
-            let ticket = recovering.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
+            let ticket = recovering.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
             healthy.submit(0, async { Ok(()) }, None).await.unwrap();
             cpu.submit(0, async { Ok(()) }, None).await.unwrap();
             assert!(recovering.cuda_gate().unwrap().is_recovering());
@@ -1874,11 +1874,11 @@ mod tests {
         let result = exec.submit_consume(0, async move { Ok(ConsumeResult::<_, ()>::Failed { input, error: needs_restart_error() }) }, Some(scope.token())).await.unwrap();
         let ConsumeResult::Failed { input, error } = result else { panic!("missing fatal failure") };
         assert_eq!(input, vec![7]);
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         tokio::time::timeout(Duration::from_secs(2), exec.cuda_gate().unwrap().wait_if_paused()).await.unwrap().unwrap();
         assert_eq!(exec.cuda_gate().unwrap().device_generation().0, generation.0 + 1);
         // An old retry chain must not run even after admission has reopened.
-        assert!(matches!(exec.submit(0, async { panic!("stale retry ran"); #[allow(unreachable_code)] Ok(()) }, Some(scope.token())).await.unwrap_err().what(), ThoError::ContextReset));
+        assert!(matches!(exec.submit(0, async { panic!("stale retry ran"); #[allow(unreachable_code)] Ok(()) }, Some(scope.token())).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
         assert_eq!(*exec.exclusive_job_id.read(), None);
         drop(scope);
         exec.shutdown().await;
@@ -2055,7 +2055,7 @@ mod tests {
                 }
             });
             started_rx.await.unwrap();
-            exec.request_cuda_reset(ThoError::ContextReset).unwrap();
+            exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
             collect_tx.send(()).unwrap();
             tokio::time::timeout(Duration::from_secs(2), caller).await.unwrap().unwrap().unwrap();
             tokio::time::timeout(Duration::from_secs(2), exec.cuda_gate().unwrap().wait_if_paused()).await.unwrap().unwrap();
@@ -2085,7 +2085,7 @@ mod tests {
         let exec = SyncStageRunner::new_with_recovery(8, recovery);
         let activity = CudaActivityScope::for_operation(&gate).unwrap();
         let descendant = activity.clone();
-        exec.request_cuda_reset(ThoError::ContextReset).unwrap();
+        exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
         assert!(CudaActivityScope::for_operation(&gate).is_err());
         drop(activity);
         let mut idle = Box::pin(gate.wait_until_idle());
@@ -2115,7 +2115,7 @@ mod tests {
         assert!(input_closed);
         for result_rx in [pending_result_rx, channel_result_rx] {
             let result = result_rx.await.expect("purged job must send a result");
-            assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {result:?}");
+            assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {result:?}");
         }
     }
 
@@ -2150,10 +2150,10 @@ mod tests {
         };
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        exec.request_cuda_reset(ThoError::ContextReset).unwrap();
+        exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
 
         let pending_result = tokio::time::timeout(Duration::from_secs(2), pending).await.expect("pending job must be purged")?;
-        assert!(matches!(pending_result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {pending_result:?}");
+        assert!(matches!(pending_result.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {pending_result:?}");
         assert!(!pending_ran.load(Ordering::SeqCst));
 
         let _ = release_running_tx.send(());
@@ -2218,7 +2218,7 @@ mod tests {
             .submit(usize::MAX, async move { Err(needs_restart_error()) }, None)
             .await;
 
-        assert!(matches!(reset_err.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {reset_err:?}");
+        assert!(matches!(reset_err.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {reset_err:?}");
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(reset_calls.load(Ordering::SeqCst), 0);
@@ -2303,7 +2303,7 @@ mod tests {
         let _ = release_tx2.send(());
 
         for result in [job1.await?, job2.await?] {
-            assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {result:?}");
+            assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {result:?}");
         }
 
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -2376,7 +2376,7 @@ mod tests {
         };
 
 
-        assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::ContextReset)), "unexpected reset result: {result:?}");
+        assert!(matches!(result.as_ref().err().map(ThoError::what), Some(ThoError::CudaBeingRecovered)), "unexpected reset result: {result:?}");
 
         tokio::time::timeout(Duration::from_secs(2), async {
             while reset_calls.load(Ordering::SeqCst) == 0 {
@@ -2444,13 +2444,13 @@ mod tests {
         };
 
         let _ = child_started_rx.await;
-        exec.request_cuda_reset(ThoError::ContextReset).unwrap();
+        exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
         let _ = release_child_tx.send(());
 
         let result = tokio::time::timeout(Duration::from_secs(2), parent)
             .await
             .expect("parent task should not deadlock")?;
-        assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset));
+        assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered));
 
         tokio::time::timeout(Duration::from_secs(2), async {
             while reset_calls.load(Ordering::SeqCst) == 0 {
@@ -2471,7 +2471,7 @@ mod tests {
     async fn test_retired_generation_report_does_not_close_accepting() {
         let exec = SyncStageRunner::new_with_reset_hook(8, 1, Arc::new(|_| Box::pin(async { Ok(()) })));
         let generation = exec.cuda_gate().unwrap().device_generation();
-        let ticket = exec.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
+        let ticket = exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
         exec.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
         assert!(exec.request_cuda_reset_for_generation(generation, needs_restart_error()).unwrap().is_none());
         assert!(!exec.cuda_gate().unwrap().is_paused());
@@ -2564,7 +2564,7 @@ mod tests {
             }
         }));
         let exec = SyncStageRunner::new_with_recovery(8, recovery);
-        exec.request_cuda_reset(ThoError::ContextReset).unwrap();
+        exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
         // No subscriber owns admission state; completion persists in the device gate.
         tokio::time::timeout(Duration::from_secs(2), exec.wait_until_accepting(None)).await.unwrap().unwrap();
         assert!(reset_invoked.load(Ordering::SeqCst));
@@ -2594,7 +2594,7 @@ mod tests {
             let other = SyncStageRunner::new_with_reset_hook(8, 2, Arc::new(|_| Box::pin(async { Ok(()) })));
             let cpu = SyncStageRunner::new_cpu(8);
             assert!(cpu.cuda_gate().is_none());
-            assert!(cpu.request_cuda_reset(ThoError::ContextReset).is_err());
+            assert!(cpu.request_cuda_reset(ThoError::CudaBeingRecovered).is_err());
             let generation = owner.cuda_gate().unwrap().device_generation();
             owner.request_cuda_reset(needs_restart_error()).unwrap();
             started.notified().await;
@@ -2652,7 +2652,7 @@ mod tests {
             }
             start.wait().await;
             for caller in callers {
-                assert!(matches!(caller.await.unwrap().unwrap_err().what(), ThoError::ContextReset));
+                assert!(matches!(caller.await.unwrap().unwrap_err().what(), ThoError::CudaBeingRecovered));
             }
             let mut devices = vec![starts.recv().await.unwrap(), starts.recv().await.unwrap()];
             devices.sort();
@@ -2737,7 +2737,7 @@ mod tests {
             }
             starts.recv().await.unwrap();
             starts.recv().await.unwrap();
-            let ticket = owner.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
+            let ticket = owner.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
             owner.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
             assert_eq!(other.cuda_gate().unwrap().device_generation(), CudaDeviceGeneration(0));
             release.notify_waiters();
@@ -2770,7 +2770,7 @@ mod tests {
                 // Poll through capacity reservation and Suspend, but stop before
                 // its acknowledgement. Pause must then win the final enqueue check.
                 assert!(futures::poll!(child.as_mut()).is_pending());
-                exec.request_cuda_reset(ThoError::ContextReset).unwrap();
+                exec.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap();
                 assert!(child.await.is_err());
                 parent_finished.store(true, Ordering::SeqCst);
                 Ok(())

@@ -130,7 +130,7 @@ mod tests {
     #[tokio::test]
     async fn test_failed_gate_closes_queue_and_releases_pending_cleanup() -> Result<(), ThoError> {
         let gate = Arc::new(CudaActivityGate::new(1));
-        let ticket = gate.request_pause(ThoError::ContextReset)?;
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
         let purger = Purger::new(Some(Arc::clone(&gate)));
         let retained = Arc::new(());
         let weak = Arc::downgrade(&retained);

@@ -62,7 +62,7 @@ impl SyncCtx for (){}
 #[async_trait]
 pub trait HandleCtx:Send {
 
-    fn sync_ctx(&self) ->Result<Box<dyn SyncCtx>, ThoError> {//TODO rename to get_guard and SyncCtx -> Guard?
+    fn sync_ctx(&self) ->Result<Box<dyn SyncCtx>, ThoError> {
         Ok(Box::new(()))
     }
 
@@ -344,7 +344,7 @@ pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc
                 .get_runner(gate.device_idx())
                 .request_cuda_reset_for_generation(generation, error)
                 .err()
-                .unwrap_or(ThoError::ContextReset)
+                .unwrap_or(ThoError::CudaBeingRecovered)
         } else {
             error
         }
@@ -1253,7 +1253,7 @@ mod tests {
         assert!(futures::poll!(copy.as_mut()).is_pending());
         let request = receiver.recv().await.unwrap();
         drop(copy);
-        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         let mut idle = Box::pin(gate.wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending());
         let CudaLocalActorMessage::Copy { activity, .. } = request else { panic!("expected copy") };
@@ -1273,7 +1273,7 @@ mod tests {
         assert!(futures::poll!(acquire.as_mut()).is_pending());
         let request = receiver.recv().await.unwrap();
         drop(acquire);
-        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         let mut idle = Box::pin(gate.wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending());
         drop(request);
@@ -1289,7 +1289,7 @@ mod tests {
         let (healthy_tx, mut healthy_rx) = mpsc::channel(1);
         let failed = CudaLocalActorHandle { gate: Arc::clone(&failed_gate), tho_device_idx: 1, sender: failed_tx };
         let healthy = CudaLocalActorHandle { gate: healthy_gate, tho_device_idx: 2, sender: healthy_tx };
-        let pause = failed_gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause = failed_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         for terminal in [false, true] {
             if terminal { failed_gate.fail_pause(pause, None); }
             let src = || ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();

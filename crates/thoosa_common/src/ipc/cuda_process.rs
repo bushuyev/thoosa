@@ -297,7 +297,7 @@ impl SpawnedState {
 impl Drop for SpawnedState {
     fn drop(&mut self) {
         //TODO this can be skipped when shutting down
-        self.pending.close(ThoError::ContextReset);
+        self.pending.close(ThoError::CudaBeingRecovered);
         self.cancel.cancel();
         self.reader_handle.abort();
         self.writer_handle.abort();
@@ -305,9 +305,9 @@ impl Drop for SpawnedState {
         // Child's kill_on_drop terminates it; the registry quarantines buffers
         // unless exit can be confirmed here.
         if matches!(self.child.try_wait(), Ok(Some(_))) {
-            self.pending.exited(ThoError::ContextReset);
+            self.pending.exited(ThoError::CudaBeingRecovered);
         } else {
-            self.pending.quarantine(ThoError::ContextReset.context("CUDA worker retirement interrupted before confirmed exit"));
+            self.pending.quarantine(ThoError::CudaBeingRecovered.context("CUDA worker retirement interrupted before confirmed exit"));
         }
     }
 }
@@ -454,7 +454,7 @@ impl CudaIPCActor {
         // Retirement can consume the worker before a queued message is handled.
         // Resolve its response without borrowing a missing transport.
         if self.spawned_state.is_none() {
-            Self::reject(msg, ThoError::ContextReset);
+            Self::reject(msg, ThoError::CudaBeingRecovered);
             return Ok(());
         }
         let admission = match &msg {
@@ -837,7 +837,7 @@ impl CudaIPCActor {
             BackendControl::Retire { authority, respond_to } => {
                 // A queued recovery command may outlive its coordinator cycle.
                 let result = match self.gate.check_recovery_authority(authority, false) {
-                    Ok(()) => self.retire(ThoError::ContextReset).await,
+                    Ok(()) => self.retire(ThoError::CudaBeingRecovered).await,
                     Err(error) => Err(error),
                 };
                 let _ = respond_to.send(result);
@@ -850,7 +850,7 @@ impl CudaIPCActor {
                     // Fatal CUDA failures may prevent graceful shutdown. Reap
                     // the failed worker and propagate retirement errors before
                     // creating another process for the same device.
-                    self.retire(ThoError::ContextReset).await?;
+                    self.retire(ThoError::CudaBeingRecovered).await?;
 
                     // A fresh primary context requires the old process to have
                     // exited before its replacement is even spawned.
@@ -1687,7 +1687,7 @@ mod tests {
 
         for error in [
             ThoError::AdjusterFailed,
-            ThoError::ContextReset,
+            ThoError::CudaBeingRecovered,
             ThoError::NotFound(Some("worker".to_string())),
             SyncStageRunnerError::SubmitErrorClosed.into(),
             SyncStageRunnerError::SubmitErrorCancelled.into(),
@@ -1752,11 +1752,11 @@ mod tests {
         let (respond_to, _) = tokio::sync::oneshot::channel();
         let worker_id = handle.worker_id().unwrap();
         handle.sender.send(CudaIPCActorMessage::DropThoTensor { key: 42, worker_id, respond_to }).await.unwrap();
-        let wrong = thoosa_shared::CudaActivityGate::new(2).request_pause(ThoError::ContextReset).unwrap();
+        let wrong = thoosa_shared::CudaActivityGate::new(2).request_pause(ThoError::CudaBeingRecovered).unwrap();
         assert!(handle.restart_backend(wrong).await.is_err());
         assert!(handle.retire_backend(wrong).await.is_err());
         assert!(controls.try_recv().is_err());
-        let authority = gate.request_pause(ThoError::ContextReset).unwrap();
+        let authority = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         let mut retirement = Box::pin(handle.retire_backend(authority));
         assert!(futures::poll!(retirement.as_mut()).is_pending());
         let BackendControl::Retire { authority: received, respond_to } = controls.try_recv().unwrap() else { panic!("expected retirement control") };
@@ -1793,13 +1793,13 @@ mod tests {
                 reader_handle: tokio::spawn(std::future::pending()),
                 cancel: CancellationToken::new(), device_info: DeviceInfo { worker_id, free_mem: 0, total_mem: 0 },
             };
-            pending.close(ThoError::ContextReset);
+            pending.close(ThoError::CudaBeingRecovered);
             assert!(response.try_recv().is_err());
             assert!(weak.upgrade().is_some());
             if graceful {
                 assert!(timeout(Duration::from_secs(2), worker.shutdown_with_timeout(2, Duration::from_millis(10))).await.unwrap().is_err());
             } else {
-                timeout(Duration::from_secs(2), worker.retire(ThoError::ContextReset)).await.unwrap().unwrap();
+                timeout(Duration::from_secs(2), worker.retire(ThoError::CudaBeingRecovered)).await.unwrap().unwrap();
             }
             assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists(), "pending buffers cannot be released before child exit and reaping");
             assert!(response.await.unwrap().is_err());
@@ -1819,11 +1819,11 @@ mod tests {
         let retired = handle.worker_id()?;
 
         let old_tensor = || ThoTensor::new_ref((), 42, vec![1], Kind::Float, None, retired);
-        let ticket = gate.request_pause(ThoError::ContextReset)?;
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
         gate.finish_pause(ticket);
 
-        assert!(matches!(handle.copy(old_tensor(), 0usize.into()).await.unwrap_err().what(), ThoError::ContextReset));
-        assert!(matches!(ThoError::from(handle.invoke_stage(retired, "stage".into(), Some(42.to_string()), Box::new(()), false).await.unwrap_err()).what(), ThoError::ContextReset));
+        assert!(matches!(handle.copy(old_tensor(), 0usize.into()).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
+        assert!(matches!(ThoError::from(handle.invoke_stage(retired, "stage".into(), Some(42.to_string()), Box::new(()), false).await.unwrap_err()).what(), ThoError::CudaBeingRecovered));
         assert!(handle.install_stage(retired, "stage".into(), Some(42.to_string()), Box::new(())).await.is_err());
 
 
@@ -1837,7 +1837,7 @@ mod tests {
         assert!(futures::poll!(invoke.as_mut()).is_pending());
         let message = receiver.recv().await.unwrap();
         drop(invoke);
-        let ticket = gate.request_pause(ThoError::ContextReset)?;
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
         let mut idle = Box::pin(gate.wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending(), "cancelled invocation must keep its request leased");
         let CudaIPCActorMessage::InvokeStage { worker_id, .. } = &message else { panic!("expected stage request") };
@@ -1869,9 +1869,9 @@ mod tests {
             super::write_frame(&mut writer, &PostcardToFromBytes::to_bytes(&reply).unwrap(), "test").await.unwrap();
             tokio::time::timeout(std::time::Duration::from_secs(2), pending.failed.cancelled()).await.unwrap();
             assert!(futures::poll!(response.as_mut()).is_pending(), "a malformed reply cannot prove worker access ended");
-            pending.exited(ThoError::ContextReset);
+            pending.exited(ThoError::CudaBeingRecovered);
             let error = tokio::time::timeout(std::time::Duration::from_secs(2), response).await.unwrap().unwrap_err();
-            assert!(matches!(error.what(), ThoError::ContextReset));
+            assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
             cancel.cancel();
             reader_task.await.unwrap();
         }
@@ -1885,7 +1885,7 @@ mod tests {
         let (healthy_tx, mut healthy_rx) = tokio::sync::mpsc::channel(1);
         let failed = CudaIPCActorHandle { gate: Arc::clone(&failed_gate), tho_device_idx: 1, sender: failed_tx, control: mpsc::unbounded_channel().0 };
         let healthy = CudaIPCActorHandle { gate: healthy_gate, tho_device_idx: 2, sender: healthy_tx, control: mpsc::unbounded_channel().0 };
-        let pause = failed_gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause = failed_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         for terminal in [false, true] {
             if terminal { failed_gate.fail_pause(pause, None); }
             let src = || ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
@@ -1912,7 +1912,7 @@ mod tests {
         assert!(futures::poll!(copy.as_mut()).is_pending());
         let request = receiver.recv().await.unwrap();
         drop(copy);
-        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         let mut idle = Box::pin(gate.wait_until_idle());
         assert!(futures::poll!(idle.as_mut()).is_pending());
         // The request retains the scope even though its caller has gone away.
@@ -2190,7 +2190,7 @@ mod export_tests {
             };
             let finish = requests.recv().await.unwrap();
             assert!(matches!(finish.operation, Operation::FinishStageStatePurge { commit: false, export_id: id, .. } if id == export_id));
-            let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+            let pause = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
             assert!(gate.wait_until_idle().now_or_never().is_none(), "accepted export must retain activity until finish replies");
             reply(&pending, finish, OpResult::Ok(None));
             if let Some(keep_live) = keep_live { keep_live.await.unwrap().unwrap(); }
@@ -2259,7 +2259,7 @@ mod export_tests {
         reply(&pending, request, OpResult::Ok(Some(Box::new(StageStateInfo::empty()))));
         let abort = requests.recv().await.unwrap();
         assert!(matches!(abort.operation, Operation::FinishStageStatePurge { commit: false, .. }));
-        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         assert!(gate.wait_until_idle().now_or_never().is_none(), "the transaction must retain activity through the abort reply");
         reply(&pending, abort, OpResult::Ok(None));
         task.await.unwrap();

@@ -590,7 +590,7 @@ mod tests {
     use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-    use crate::runner::purge::FuturesRunnerMapPurger;
+    use crate::runner::purge::CachePurger;
     use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::test_utils::{DummyTensor, parse_numeric_part};
     use async_trait::async_trait;
@@ -945,7 +945,7 @@ mod tests {
         let cache = DummyLoader::cache().await?;
         // Ordinary failures need a fresh computation too; a device restart is
         // neither necessary nor appropriate to evict a failed shared future.
-        for failure in [ThoError::ContextReset, ThoError::oom(), ThoError::new("ordinary stage error")] {
+        for failure in [ThoError::CudaBeingRecovered, ThoError::oom(), ThoError::new("ordinary stage error")] {
             cache.insert(key.clone(), futures_util::future::ready(Err(failure.clone())).boxed().shared().into());
             let error = Arc::clone(&loader).run_cached(input.clone(), RunCtxImpl::new(0, "failed")).await.unwrap_err();
             assert_eq!(error.to_string(), failure.to_string());

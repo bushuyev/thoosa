@@ -187,7 +187,7 @@ impl CudaActivityGate {
         let state = self.state.lock();
         Self::check_state_admission(&state.recovery)?;
         if state.generation != generation {
-            return Err(ThoError::ContextReset);
+            return Err(ThoError::CudaBeingRecovered);
         }
         Ok(())
     }
@@ -200,7 +200,7 @@ impl CudaActivityGate {
                     return error;
                 }
                 if state.generation != generation {
-                    return ThoError::ContextReset;
+                    return ThoError::CudaBeingRecovered;
                 }
                 self.notify.notified()
             };
@@ -223,7 +223,7 @@ impl CudaActivityGate {
     fn check_state_admission(recovery: &CudaRecoveryState) -> Result<(), ThoError> {
         match recovery {
             CudaRecoveryState::Running => Ok(()),
-            CudaRecoveryState::Recovering { .. } => Err(ThoError::ContextReset),
+            CudaRecoveryState::Recovering { .. } => Err(ThoError::CudaBeingRecovered),
             CudaRecoveryState::Failed(failure) => Err(ThoError::CudaRecoveryFailed(Arc::clone(failure))),
         }
     }
@@ -438,7 +438,7 @@ pub mod tho_error {
         // Missing execution infrastructure cannot be treated as an incompatible data item.
         MissingEndpoint(String),
         SyncStageRunner(SyncStageRunnerError),
-        ContextReset, // TODO rename to GpuBeingRestarted. It's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
+        CudaBeingRecovered, 
     }
 
     pub fn cuda_error(action: CudaAction, msg: String) -> ThoError {
@@ -520,7 +520,7 @@ impl Display for ThoError {
             Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
             Self::MissingEndpoint(key) => write!(f, "no initialized endpoint for endpoint_key={key}"),
             Self::SyncStageRunner(error) => Display::fmt(error, f),
-            Self::ContextReset => f.write_str("context reset"),
+            Self::CudaBeingRecovered => f.write_str("context reset"),
         }
     }
 }
@@ -2345,7 +2345,7 @@ mod shared_tests {
     async fn test_collect_futures_with_progress_runs_during_unrelated_cuda_recovery() {
         let started = Arc::new(AtomicUsize::new(0));
         let gate = super::CudaActivityGate::new(1);
-        let pause_ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause_ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
 
         let collect = {
             let started = Arc::clone(&started);
@@ -2552,8 +2552,8 @@ mod shared_tests {
             assert_eq!((shared.is_oom(), shared.is_retryable_oom(), shared.needs_cuda_restart()), (oom, retryable, reset));
         }
 
-        let error: ThoError = Err::<(), _>(ThoError::ContextReset).context("cancel stage").unwrap_err().into();
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        let error: ThoError = Err::<(), _>(ThoError::CudaBeingRecovered).context("cancel stage").unwrap_err().into();
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
     }
 
     #[test]

@@ -383,7 +383,7 @@ mod tests {
                     let result = runner.submit(1, async move {
                         actor.run_stage(fatal_stage, Arc::new(DevicesWrap::wrap(fatal)), 1, &RunCtxImpl::new(1, "fatal reply")).await
                     }, None).await;
-                    assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset));
+                    assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered));
                     tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("endpoint recovery timed out")??;
                     assert_eq!(gate.device_generation().0, generation.0 + 1);
                     let cached = cache.get_or_try_insert_recreatable_with::<(), _, _, _, _>(1, GlobalCtx::global().cuda_activity_gate(1), GlobalCtx::global().is_ipc(), "retained", || async {
@@ -392,8 +392,8 @@ mod tests {
                     assert!(Arc::ptr_eq(&cached, &retained));
                     // Only new invocations of opted-in endpoints can bind to the
                     // replacement. Old tensor keys and mutable sessions stay stale.
-                    assert!(matches!(actor.copy(old_output.strip_types(), 0usize.into()).await.unwrap_err().what(), ThoError::ContextReset));
-                    assert!(matches!(actor.run_stage(owner_managed, Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "stale owner")).await.unwrap_err().what(), ThoError::ContextReset));
+                    assert!(matches!(actor.copy(old_output.strip_types(), 0usize.into()).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
+                    assert!(matches!(actor.run_stage(owner_managed, Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "stale owner")).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
                     // Concurrent first use must share one install; a duplicate
                     // would fail with the worker's existing-endpoint check.
                     let outputs = futures::future::try_join_all((0..8).map(|_| {
@@ -434,7 +434,7 @@ mod tests {
                     let result = runner.submit(1, async {
                         actor.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "fatal worker reply")).await
                     }, None).await;
-                    assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset), "a fatal stage reply must request device recovery");
+                    assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered), "a fatal stage reply must request device recovery");
                     tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("fatal worker restart timed out")??;
                     assert_eq!(gate.device_generation().0, generation.0 + 1);
 
