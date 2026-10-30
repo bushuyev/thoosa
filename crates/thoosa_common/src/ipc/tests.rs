@@ -937,7 +937,7 @@ mod tests {
                         move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
                         false,
                     ).await?;
-                    assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
+                    assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
                     Ok::<(), ThoError>(())
                 }.await
             },

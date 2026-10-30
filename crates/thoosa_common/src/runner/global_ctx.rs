@@ -423,34 +423,8 @@ impl GlobalCtx {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    pub fn is_all_on_cpu(&self, device_idx: usize, force_check: bool) -> bool {
-        if !force_check {
-            return self.is_all_on_cpu[device_idx].load(Relaxed);
-        }
-
-        let is_all_on_cpu = match tokio::runtime::Handle::try_current() {
-            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(|| handle.block_on(self.is_all_on_cpu_force_check(device_idx)))
-            }
-            _ => futures::executor::block_on(self.is_all_on_cpu_force_check(device_idx)),
-        };
-        self.is_all_on_cpu[device_idx].store(is_all_on_cpu, Relaxed);
-        is_all_on_cpu
-    }
-
-    async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
-        let maps = self.caches_snapshot("GlobalCtx::is_all_on_cpu_force_check: timed out waiting for caches read lock");
-
-        for (_cache_key, entry) in maps.iter() {
-            let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
-            if track_await!(entry.purger.has_gpu_data(device_idx)).await {
-                debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
-                return false;
-            }
-        }
-
-        true
+    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
+        self.is_all_on_cpu[device_idx].load(Relaxed)
     }
 
     pub async fn reset_all_on_cpu(&self, device_idx: usize) {
@@ -660,6 +634,24 @@ impl GlobalCtx {
 }
 
 impl GlobalCtx {
+
+    // Forced inspection must yield while waiting for cache locks, including on current-thread runtimes.
+    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
+        let maps = self.caches_snapshot("GlobalCtx::is_all_on_cpu_force_check: timed out waiting for caches read lock");
+
+        for (_cache_key, entry) in maps.iter() {
+            let type_name = entry.name.as_ref();
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
+            if track_await!(entry.purger.has_gpu_data(device_idx)).await {
+                debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
+                self.is_all_on_cpu[device_idx].store(false, Relaxed);
+                return false;
+            }
+        }
+
+        self.is_all_on_cpu[device_idx].store(true, Relaxed);
+        true
+    }
 
     pub fn get_runner(&self, tho_device: usize) -> &SyncStageRunner {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.devices.len={}", self.devices.len());
@@ -903,13 +895,13 @@ pub mod mock_global_ctx {
         pub fn with_is_all_on_cpu(mut self, is_all_on_cpu:bool) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_is_all_on_cpu().times(0..).returning({
-                    move |device_idx, force| {
-                        real.is_all_on_cpu(device_idx, force)
+                    move |device_idx| {
+                        real.is_all_on_cpu(device_idx)
                     }
                 });
             } else {
                 let _ = self.mock.expect_is_all_on_cpu().times(0..)
-                    .returning(move |_device_idx, _force| is_all_on_cpu);
+                    .returning(move |_device_idx| is_all_on_cpu);
             }
 
             self
@@ -1067,6 +1059,13 @@ impl MockGlobalCtx {
             Ok(copy_ctx) => copy_ctx,
             Err(error) => panic!("failed to initialize mock CopyCtx: {error:?}"),
         })).read()).await
+    }
+
+    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
+        // Real delegation remains asynchronous instead of blocking in a mock callback.
+        if let Some(real) = mock_global_ctx::manual_method_real_ctx() {
+            real.is_all_on_cpu_force_check(device_idx).await
+        } else { self.is_all_on_cpu(device_idx) }
     }
 
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
