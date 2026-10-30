@@ -39,9 +39,10 @@ void* tho_get_current_stream(int device) {
   }
 }
 
-void* tho_get_stream_from_pool(int device, bool high_pri) {
+// Match the Rust C ABI integer flag exactly.
+void* tho_get_stream_from_pool(int device, int high_pri) {
   try {
-    auto s = c10::cuda::getStreamFromPool(high_pri, device);
+    auto s = c10::cuda::getStreamFromPool(high_pri != 0, device);
     tho_clear_last_error();
     return new c10::cuda::CUDAStream(s);
   } catch (const c10::Error& e) {
