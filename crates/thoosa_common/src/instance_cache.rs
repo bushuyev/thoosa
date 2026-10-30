@@ -129,7 +129,7 @@ mod tests {
         let gate = Arc::new(CudaActivityGate::new(1));
         let original = cache.get_or_create_with_lifetime::<(), _, _, _, _>(1, Some(&gate), true, 10, || async { Ok(Arc::new(7)) }).await.unwrap();
         for _ in 0..2 {
-            let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+            let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
             gate.wait_until_idle().await;
             gate.finish_pause(ticket);
             let cached = cache.get_or_create_with_lifetime::<(), _, _, _, _>(1, Some(&gate), true, 10, || async { panic!("recreated a retained proxy"); #[allow(unreachable_code)] Ok(Arc::new(8)) }).await.unwrap();
@@ -168,7 +168,7 @@ mod tests {
         let other = cache.get_or_create::<(), _, _, _, _>(2, Some(&second), 10, || async { Ok(Arc::new(2)) }).await.unwrap();
         let cached = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { panic!("duplicate initialization"); #[allow(unreachable_code)] Ok(Arc::new(3)) }).await.unwrap();
         assert!(Arc::ptr_eq(&old, &cached));
-        let ticket = first.request_pause(ThoError::ContextReset).unwrap();
+        let ticket = first.request_pause(ThoError::CudaBeingRecovered).unwrap();
         first.wait_until_idle().await;
         first.finish_pause(ticket);
         let fresh = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { Ok(Arc::new(3)) }).await.unwrap();
@@ -190,9 +190,9 @@ mod tests {
             assert!(futures::poll!(duplicate.as_mut()).is_pending());
             let other = cache.get_or_create::<(), _, _, _, _>(2, Some(&second), 10, || async { Ok(Arc::new(7u32)) }).await.unwrap();
             assert_eq!(*other, 7);
-            let ticket = first.request_pause(ThoError::ContextReset).unwrap();
-            assert!(matches!(creating.await.unwrap_err().what(), ThoError::ContextReset));
-            assert!(matches!(duplicate.await.unwrap_err().what(), ThoError::ContextReset));
+            let ticket = first.request_pause(ThoError::CudaBeingRecovered).unwrap();
+            assert!(matches!(creating.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
+            assert!(matches!(duplicate.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
             first.wait_until_idle().await;
             first.finish_pause(ticket);
             let fresh = cache.get_or_create::<(), _, _, _, _>(1, Some(&first), 10, || async { Ok(Arc::new(9u32)) }).await.unwrap();

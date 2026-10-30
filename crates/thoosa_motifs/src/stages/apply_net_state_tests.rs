@@ -40,7 +40,7 @@ fn label_module(fail_restore: bool) -> anyhow::Result<ThoModuleWithStore<Channel
 
 // Validate protocol guards on the actual stage before running the local cycle.
 // Restoring in reverse order also ensures names, not upload order, bind weights.
-async fn restore_guards<S: StageWithState + FuturesRunnerMapPurger>(stage: &S) -> Result<(), ThoError> {
+async fn restore_guards<S: StageWithState + CachePurger>(stage: &S) -> Result<(), ThoError> {
     let info = stage.get_state_info(1).await?;
     assert!(info.tensors.len() > 1);
     let mut tensors = Vec::new();
@@ -93,8 +93,8 @@ async fn round_trips() -> Result<(), ThoError> {
         restore_guards(stage.as_ref()).await?;
         DynSyncStageWithStateEnum::Local(stage)
     });
-    let motif_cache = global.register_cache(("inference_state_motif".into(), motif.clone() as Arc<dyn FuturesRunnerMapPurger>));
-    let label_cache = global.register_cache(("inference_state_label".into(), label.clone() as Arc<dyn FuturesRunnerMapPurger>));
+    let motif_cache = global.register_cache(("inference_state_motif".into(), motif.clone() as Arc<dyn CachePurger>));
+    let label_cache = global.register_cache(("inference_state_label".into(), label.clone() as Arc<dyn CachePurger>));
     let mut expected_motif = None;
     let mut expected_label = None;
     for cycle in 0..3 {

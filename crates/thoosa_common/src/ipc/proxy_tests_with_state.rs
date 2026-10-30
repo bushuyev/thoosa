@@ -6,7 +6,7 @@ use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapperWithState};
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::CachePurger;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::Workspace;
@@ -389,7 +389,7 @@ where
 
 
 #[async_trait]
-impl <P, C> FuturesRunnerMapPurger for TestStageB<P, C>
+impl <P, C> CachePurger for TestStageB<P, C>
 where
     P:Debug + Send + Sync,
     C:RunCtx
@@ -425,7 +425,7 @@ use crate::tch_error::tch_result;
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::purge::FuturesRunnerMapPurger;
+    use crate::runner::purge::CachePurger;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::ws::mock_ws_simp;
@@ -505,15 +505,15 @@ use crate::tch_error::tch_result;
 
                 let fresh_input = || TestInputB { value: fresh_tensor.clone_ref().unwrap() };
                 let error = actor.run_stage(Arc::clone(&old_stage), fresh_input(), 1, &TestRunCtx).await.unwrap_err();
-                assert!(matches!(error.what(), ThoError::ContextReset));
+                assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
 
                 let error = actor.copy(old_tensor.clone_ref()?, 0.into()).await.unwrap_err();
-                assert!(matches!(error.what(), ThoError::ContextReset));
+                assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
 
                 // Embedded stale tensor references must also be rejected by
                 // the new worker when the endpoint itself belongs to it.
                 let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
-                assert!(matches!(error.what(), ThoError::ContextReset));
+                assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
                 actor.drop_endpoint(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
 
                 actor.drop_tho_tensor(old_key, retired).await?;
@@ -675,7 +675,7 @@ use crate::tch_error::tch_result;
         // Installation and proxy invocation must use the same id to select this stateful worker stage.
         let test_stage = TestStageB::<(), TestRunCtx>::new(Some(1.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
 
-        GlobalCtx::global().register_cache(("train_step".into(), Arc::clone(&test_stage) as Arc<dyn FuturesRunnerMapPurger>));
+        GlobalCtx::global().register_cache(("train_step".into(), Arc::clone(&test_stage) as Arc<dyn CachePurger>));
 
         let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 

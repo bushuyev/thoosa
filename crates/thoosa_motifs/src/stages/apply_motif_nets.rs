@@ -75,7 +75,7 @@ use tokio::sync::MutexGuard;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
-use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::runner::purge::CachePurger;
 #[cfg(test)]
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
@@ -992,7 +992,7 @@ where
 static APPLY_MOTIF_NET_INSTANCES: InstanceCache = InstanceCache::new();
 
 #[async_trait]
-impl <C> FuturesRunnerMapPurger for SyncApplyMotifNet<C>
+impl <C> CachePurger for SyncApplyMotifNet<C>
 where
     C: RunCtx + 'static
 {
@@ -1090,7 +1090,7 @@ where
             ).await?;
 
             // Every configured instance must remain purgeable; concatenated tensor IDs can collide as display strings.
-            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            thoosa_common::runner::global_ctx::GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
 
             Ok(stage)
         }).await

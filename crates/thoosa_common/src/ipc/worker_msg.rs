@@ -19,7 +19,7 @@ impl CudaWorkerId {
     pub fn check(self, expected: Self) -> Result<(), ThoError> {
         // Recreated endpoints get a fresh binding; old tensor and request identities never do.
         if self != expected {
-            return Err(ThoError::ContextReset.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
+            return Err(ThoError::CudaBeingRecovered.context(format!("CUDA worker identity {self:?} does not match {expected:?}")));
         }
         Ok(())
     }
@@ -168,7 +168,7 @@ impl WorkerErrorKind {
                 warn!("WorkerErrorKind:NotFound: what={what:?}");
                 Self::NotFound//TODO add what
             },//TODO add
-            ThoError::ContextReset => Self::ContextReset,
+            ThoError::CudaBeingRecovered => Self::ContextReset,
             ThoError::MissingEndpoint(key) => Self::MissingEndpoint(key.clone()),
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorClosed) => Self::SubmitErrorClosed,
             ThoError::SyncStageRunner(SyncStageRunnerError::SubmitErrorCancelled) => Self::SubmitErrorCancelled,
@@ -203,7 +203,7 @@ impl From<WorkerError> for ThoError {
             WorkerErrorKind::Cuda(action) => tho_error::cuda_error(action, message),
             WorkerErrorKind::AdjusterFailed => Self::AdjusterFailed.context(message),
             WorkerErrorKind::NotFound => Self::NotFound(Some("worker".to_string())).context(message),
-            WorkerErrorKind::ContextReset => Self::ContextReset.context(message),
+            WorkerErrorKind::ContextReset => Self::CudaBeingRecovered.context(message),
             WorkerErrorKind::MissingEndpoint(key) => Self::MissingEndpoint(key).context(message),
             WorkerErrorKind::SubmitErrorClosed => Self::from(SyncStageRunnerError::SubmitErrorClosed).context(message),
             WorkerErrorKind::SubmitErrorCancelled => Self::from(SyncStageRunnerError::SubmitErrorCancelled).context(message),
@@ -282,7 +282,7 @@ mod tests {
     fn test_retired_worker_identity_is_rejected() {
         let old = CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) };
         let replacement = CudaWorkerId { generation: thoosa_shared::CudaDeviceGeneration(1), ..old };
-        assert!(matches!(old.check(replacement).unwrap_err().what(), ThoError::ContextReset));
+        assert!(matches!(old.check(replacement).unwrap_err().what(), ThoError::CudaBeingRecovered));
         assert!(replacement.check(replacement).is_ok());
     }
 }

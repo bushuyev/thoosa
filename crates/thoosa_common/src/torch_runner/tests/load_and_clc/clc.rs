@@ -30,7 +30,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics,
 use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
-use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::CachePurger;
 use thoosa_shared::ipc_types::WorkerOutput;
 
 // //////////////////////////////
@@ -57,7 +57,7 @@ pub struct SyncClcStage {
     use_matmul: bool,
 }
 
-impl  FuturesRunnerMapPurger for SyncClcStage {
+impl CachePurger for SyncClcStage {
 
 }
 

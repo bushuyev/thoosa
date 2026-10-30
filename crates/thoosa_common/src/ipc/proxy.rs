@@ -5,7 +5,7 @@ use crate::ipc::endpoints::{EndpointRegistration, StageRecovery};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult, WorkerInput};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::CachePurger;
 use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
 use anyhow::Context as _;
@@ -781,9 +781,9 @@ impl StageStateDump {
 }
 
 #[async_trait]
-impl <St, Init> FuturesRunnerMapPurger for DynSyncStageWithStateEnum<St, Init>
+impl <St, Init> CachePurger for DynSyncStageWithStateEnum<St, Init>
 where
-    St:SyncStage+StageWithState + FuturesRunnerMapPurger + 'static,
+    St:SyncStage+StageWithState + CachePurger + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static,

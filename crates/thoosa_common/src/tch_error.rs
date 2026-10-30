@@ -87,8 +87,8 @@ mod tests {
     fn test_panic_adapter_classifies_libtorch_and_preserves_typed_errors() {
         let error = thoosa_shared::panic_to_err!(Err::<(), _>(tch::TchError::Torch("CUDA out of memory".into()))).unwrap_err();
         assert!(matches!(error.what(), ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, .. }));
-        let error = thoosa_shared::panic_to_err!(Err::<(), _>(ThoError::ContextReset)).unwrap_err();
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        let error = thoosa_shared::panic_to_err!(Err::<(), _>(ThoError::CudaBeingRecovered)).unwrap_err();
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
     }
 
 }

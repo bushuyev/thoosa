@@ -72,7 +72,7 @@ use thoosa_common::ipc::serialization::json::IpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
-use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::runner::purge::CachePurger;
 use thoosa_shared::tracked_await::track_await;
 
 pub const APPLY_LABEL_NET_ENDPOINT: &str = "APPLY_LABEL_NET_ENDPOINT";
@@ -817,7 +817,7 @@ where
 }
 
 #[async_trait]
-impl <C> FuturesRunnerMapPurger for ApplyLabelNet<C>
+impl <C> CachePurger for ApplyLabelNet<C>
 where
     C: RunCtx + 'static
 {
@@ -885,7 +885,7 @@ where
             ).await?;
 
             ////ApplyLabelNet is needed for final net training - no need to unregister
-            GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
 
             Ok(stage)
         }).await

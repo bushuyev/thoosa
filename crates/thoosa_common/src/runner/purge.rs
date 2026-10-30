@@ -36,9 +36,9 @@ impl<M> WeakMapPurger<M> {
 }
 
 #[async_trait]
-impl<M> FuturesRunnerMapPurger for WeakMapPurger<M>
+impl<M> CachePurger for WeakMapPurger<M>
 where
-    M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
+    M: CachePurger + Debug + Sync + Send + 'static,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self.map.upgrade() {
@@ -78,7 +78,7 @@ where
 }
 
 #[async_trait]
-pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO rename to CachePurger
+pub trait CachePurger: Debug  + Sync + Send {
     async fn has_gpu_data(&self, _device_idx: usize) -> bool {
         false
     }
@@ -134,7 +134,7 @@ where
 }
 
 #[async_trait]
-impl<K, CO> FuturesRunnerMapPurger
+impl<K, CO> CachePurger
     for DashMap<K, thoosa_common::runner::common::cachable::CachedFuture<CO>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
@@ -355,15 +355,15 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), started_rx).await.unwrap().unwrap();
         // No caller polls the failed computation. The cache must still release
         // its suspended activity before recovery reaches the cleanup phase.
-        let ticket = first.request_pause(ThoError::ContextReset).unwrap();
+        let ticket = first.request_pause(ThoError::CudaBeingRecovered).unwrap();
         tokio::time::timeout(Duration::from_secs(2), first.wait_until_idle()).await.expect("an abandoned cache future must not pin recovery");
         map.drop_gpu(1, "device recovery").await.unwrap();
         assert!(!map.contains_key(&DummyCachableId("failed")));
         assert!(map.get(&DummyCachableId("healthy")).unwrap().ptr_eq(&healthy));
-        assert!(matches!(failed.await.unwrap_err().what(), ThoError::ContextReset));
+        assert!(matches!(failed.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
         first.finish_pause(ticket);
         // Cleanly unwind the independent background computation too.
-        let ticket = second.request_pause(ThoError::ContextReset).unwrap();
+        let ticket = second.request_pause(ThoError::CudaBeingRecovered).unwrap();
         tokio::time::timeout(Duration::from_secs(2), second.wait_until_idle()).await.unwrap();
         second.finish_pause(ticket);
     }
@@ -374,10 +374,10 @@ mod tests {
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let failing_gate = Arc::clone(&gate);
         let future = CachedFuture::for_device(async move {
-            failing_gate.request_pause(ThoError::ContextReset).unwrap();
+            failing_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
             Ok(42)
         }.boxed().shared(), Some(Arc::clone(&gate)));
-        assert!(matches!(future.await.unwrap_err().what(), ThoError::ContextReset));
+        assert!(matches!(future.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
         tokio::time::timeout(Duration::from_secs(2), gate.wait_until_idle()).await.unwrap();
     }
 
@@ -413,7 +413,7 @@ mod tests {
         let completed = crate::runner::common::cachable::CachedFuture::for_device(ready(Ok(Arc::clone(&cpu))).boxed().shared(), Some(Arc::clone(&gate)));
         completed.clone().await.unwrap();
         map.insert(DummyCachableId("completed_on_failed_device"), completed.clone());
-        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         gate.wait_until_idle().await;
         tokio::time::timeout(Duration::from_secs(2), map.drop_gpu(1, "device recovery")).await.unwrap().unwrap();
         assert!(!failed.is_on_device(1));

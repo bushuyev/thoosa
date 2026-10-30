@@ -125,9 +125,9 @@ enum PercentileStrategy {
 
 struct TreeStructuredParzenEstimator {
     observations: BinaryHeap<Reverse<RunResult>>,
-    mvpe_lower: Option<MultiVariateParzenEstimator>, //TODO move out
-    mvpe_upper: Option<MultiVariateParzenEstimator>, //TODO move out
-    percentile: f32,                                 //TODO move out
+    mvpe_lower: Option<MultiVariateParzenEstimator>,
+    mvpe_upper: Option<MultiVariateParzenEstimator>,
+    percentile: f32,
     esitmators: Vec<Box<dyn ParzenEstimator>>,
     percentile_strategy: PercentileStrategy,
 }
@@ -197,7 +197,7 @@ impl TreeStructuredParzenEstimator {
             loss,
             eval_config.clone(),
             is_satisfied,
-        ))); //TODO clone
+        )));
 
         let sorted_observations = self.sorted_observations();
         let n_lower = self.n_lower(&sorted_observations, is_satisfied.is_some());

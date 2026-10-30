@@ -208,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_data_skipping_propagates_missing_endpoint_and_failed_recovery() {
-        for error in [ThoError::MissingEndpoint("stage/1".into()), ThoError::CudaRecoveryFailed(Arc::new(crate::CudaRecoveryFailure { original: ThoError::ContextReset, recovery: None }))] {
+        for error in [ThoError::MissingEndpoint("stage/1".into()), ThoError::CudaRecoveryFailed(Arc::new(crate::CudaRecoveryFailure { original: ThoError::CudaBeingRecovered, recovery: None }))] {
             let missing = error.is_missing_endpoint();
             let (_, limit) = watch::channel(2);
             let results = [Err(ThoError::new("incompatible data")), Ok(1), Err(error.context("worker operation"))];
@@ -263,12 +263,12 @@ mod tests {
         for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
             let inner = async move {
                 let (_, limit) = watch::channel(1);
-                let results = [Err::<(), _>(ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "short input".into() }), Err(ThoError::ContextReset)];
+                let results = [Err::<(), _>(ThoError::Data { kind: DataErrorKind::InputTooShort, msg: "short input".into() }), Err(ThoError::CudaBeingRecovered)];
                 collect_futures_with_progress_with_limit(results.into_iter().map(std::future::ready), 2, Arc::new(limit), ordering, CollectionErrorPolicy::Propagate, "inner").await
             };
             let (_, limit) = watch::channel(1);
             let error = collect_futures_with_progress_with_limit(std::iter::once(inner), 1, Arc::new(limit), ordering, CollectionErrorPolicy::SkipData(&[DataErrorKind::InputTooShort]), "outer").await.unwrap_err();
-            assert!(matches!(error.what(), ThoError::ContextReset));
+            assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         }
     }
 
@@ -278,7 +278,7 @@ mod tests {
         for ordering in [FuturesOrdering::Ordered, FuturesOrdering::Unordered] {
             let errors = [
                 ThoError::from_source(std::io::Error::other("storage failed")),
-                ThoError::ContextReset,
+                ThoError::CudaBeingRecovered,
                 ThoError::oom(),
                 ThoError::from_cuda_error("device lost", 700),
                 ThoError::from(SyncStageRunnerError::SubmitErrorClosed),
@@ -427,7 +427,7 @@ mod tests {
                                             let permits = Arc::clone(&permits);
                                             async move {
                                                 started.fetch_add(1, Ordering::SeqCst);
-                                                if idx == 0 { return Err(ThoError::ContextReset); }
+                                                if idx == 0 { return Err(ThoError::CudaBeingRecovered); }
                                                 permits.acquire().await.expect("test keeps semaphore open").forget();
                                                 completed.fetch_add(1, Ordering::SeqCst);
                                                 Ok(idx)
@@ -442,7 +442,7 @@ mod tests {
             assert!(tokio::time::timeout(Duration::from_millis(30), &mut collect).await.is_err());
             permits.add_permits(3);
             let error = tokio::time::timeout(Duration::from_secs(2), collect).await.expect("drain finishes").expect("collector does not panic").unwrap_err();
-            assert!(matches!(error.what(), ThoError::ContextReset));
+            assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
             assert!(error.to_string().contains("required pipeline work: task at input index 0"));
             assert_eq!(completed.load(Ordering::SeqCst), 3);
         }

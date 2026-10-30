@@ -18,7 +18,7 @@ use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::nets::batches::AsyncDataBatch;
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::parzen::optimizer::CompletedTrial;
-use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::runner::purge::CachePurger;
 use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::TrainListener;
@@ -132,7 +132,7 @@ where
             }
         };
         match result {
-            Err(error) if matches!(error.what(), ThoError::ContextReset) || error.needs_cuda_restart() => {
+            Err(error) if matches!(error.what(), ThoError::CudaBeingRecovered) || error.needs_cuda_restart() => {
                 // The attempt has returned and released its stage/cache/batches.
                 // A reset is not a bad hyperparameter trial: rebuild all state
                 // on the replacement worker before publishing any loss to TPE.
@@ -237,7 +237,7 @@ where
             let (train_step, params) = track_await!(self.train_step_factory.new_step(run_config.clone(), ctx.branch(false), best_checkpoint_path.clone())).await?;
             let train_step = Arc::new(train_step);
 
-            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id(), Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>)));
+            let _cache_guard = TrainStepCacheGuard(GlobalCtx::global().register_cache((train_step.stage_id(), Arc::clone(&train_step) as Arc<dyn CachePurger>)));
 
             let mut bad_epochs = 0u32;
             let patience = run_config.as_ref().patience;
@@ -666,11 +666,11 @@ use crate::tch_error::tch_result;
                     let attempt = calls.fetch_add(1, Ordering::SeqCst);
                     let activity = thoosa_shared::CudaActivityScope::try_enter(&train_gate).unwrap().unwrap();
                     if attempt == 0 {
-                        paused.take().unwrap().send(train_gate.request_pause(ThoError::ContextReset).unwrap()).unwrap();
+                        paused.take().unwrap().send(train_gate.request_pause(ThoError::CudaBeingRecovered).unwrap()).unwrap();
                     }
                     async move {
                         let _activity = activity;
-                        if attempt == 0 { Err(ThoError::ContextReset) } else { Ok((42u32, 0.5, ())) }
+                        if attempt == 0 { Err(ThoError::CudaBeingRecovered) } else { Ok((42u32, 0.5, ())) }
                     }
                 }).await
             },
@@ -705,7 +705,7 @@ use crate::tch_error::tch_result;
             }
         }));
         assert!(futures::poll!(run.as_mut()).is_pending());
-        let ticket = gate.request_pause(ThoError::ContextReset)?;
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
         assert!(futures::poll!(run.as_mut()).is_pending());
         assert!(producer.upgrade().is_none(), "reset retained the suspended producer");
         gate.finish_pause(ticket);
@@ -727,7 +727,7 @@ use crate::tch_error::tch_result;
                     if first {
                         // Complete recovery in the same poll as the old result,
                         // so the notification cannot win select before it returns.
-                        let ticket = gate.request_pause(ThoError::ContextReset)?;
+                        let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
                         gate.finish_pause(ticket);
                         stale_result
                     } else { Ok(42) }
@@ -745,14 +745,14 @@ use crate::tch_error::tch_result;
         let calls = AtomicUsize::new(0);
         let error = super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
             calls.fetch_add(1, Ordering::SeqCst);
-            ready(Err::<(), _>(ThoError::ContextReset))
+            ready(Err::<(), _>(ThoError::CudaBeingRecovered))
         }).await.unwrap_err();
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         assert_eq!(calls.load(Ordering::SeqCst), 1, "a bare reset error must not spin without a replacement generation");
         let activity = thoosa_shared::CudaActivityScope::try_enter(&gate).unwrap().unwrap();
-        let ticket = gate.request_pause(ThoError::ContextReset).unwrap();
-        let result = tokio::time::timeout(std::time::Duration::from_secs(1), activity.run(super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || ready(Err::<(), _>(ThoError::ContextReset))))).await.unwrap();
-        assert!(matches!(result.unwrap_err().what(), ThoError::ContextReset), "an admitted ancestor must unwind for recovery to drain");
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), activity.run(super::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || ready(Err::<(), _>(ThoError::CudaBeingRecovered))))).await.unwrap();
+        assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered), "an admitted ancestor must unwind for recovery to drain");
         gate.finish_pause(ticket);
     }
 

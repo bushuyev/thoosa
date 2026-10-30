@@ -14,7 +14,7 @@ use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::ws::{Workspace, mock_ws_simp};
 use futures_util::future::{BoxFuture, FutureExt};
-use log::info;
+use log::{debug};
 use parking_lot::{RwLock};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -170,7 +170,7 @@ async fn test_simp_local() -> Result<(), ThoError> {
 
     do_test_simp().await?;
 
-    info!("local perf:\n{}", format_perf_map(&PERF));
+    debug!("local perf:\n{}", format_perf_map(&PERF));
 
     Ok(())
 }

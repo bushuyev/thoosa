@@ -316,7 +316,7 @@ where
                 }));
             }
             Err(e) => {
-                let is_resetting = matches!(e,  ThoError::ContextReset);
+                let is_resetting = matches!(e,  ThoError::CudaBeingRecovered);
                 warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
             }
         };
@@ -387,7 +387,7 @@ where
                 let t_1 = match track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await {
                     Ok(v) => v,
                     Err(e) => {
-                        let is_resetting = matches!(e,  ThoError::ContextReset);
+                        let is_resetting = matches!(e,  ThoError::CudaBeingRecovered);
                         warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
 
                         // if is_resetting {
@@ -1475,7 +1475,7 @@ mod tests {
         use mock_transfer_output::MockTransferOutputBuilder;
 
         // Copy failures must escape append without retaining an incomplete partial.
-        for cause in [ThoError::oom(), ThoError::ContextReset] {
+        for cause in [ThoError::oom(), ThoError::CudaBeingRecovered] {
             let expected = (cause.is_retryable_oom(), cause.needs_cuda_restart());
             let result = MockTransferOutputBuilder::new().with_transfer_error(cause).build();
             let output = CrossUnfoldClcOutput::new(result, SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("test", "output").into());
