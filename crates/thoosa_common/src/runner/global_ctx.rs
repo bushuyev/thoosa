@@ -2,7 +2,7 @@ use crate::runner::purge::CachePurger;
 use log::{debug, error, info, warn};
 #[allow(unused_imports)]
 use mockall::automock;
-use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
+use crate::copy_ctx::{ CudaActorHandle, CudaLocalActorHandle};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::runner::syn_stage_runner::SyncStageRunner;
 use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
@@ -1052,15 +1052,6 @@ impl MockGlobalCtx {
         self.mock_runner(device)
     }
 
-    pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, _device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
-        static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
-        // This mock-only accessor cannot return initialization errors without changing the generated mock API.
-        track_await!(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(match CopyCtx::make_instance_for_cuda_device(0, 0.2, 16) {
-            Ok(copy_ctx) => copy_ctx,
-            Err(error) => panic!("failed to initialize mock CopyCtx: {error:?}"),
-        })).read()).await
-    }
-
     pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
         // Real delegation remains asynchronous instead of blocking in a mock callback.
         if let Some(real) = mock_global_ctx::manual_method_real_ctx() {
@@ -1069,17 +1060,8 @@ impl MockGlobalCtx {
     }
 
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
-        let device = device.into();
-        if let Some(real) = mock_global_ctx::manual_method_real_ctx() {
-            return real.cuda_actor(device);
-        }
-
-        static COPY_CTX_ONCE: std::sync::OnceLock<Box<dyn CudaActorHandle>> = std::sync::OnceLock::new();
-        // This mock-only accessor must preserve the infallible generated mock API.
-        COPY_CTX_ONCE.get_or_init(|| match CudaLocalActorHandle::new(Arc::new(CudaActivityGate::new(device.tho_device_idx()))) {
-            Ok(actor) => Box::new(actor) as Box<dyn CudaActorHandle>,
-            Err(error) => panic!("failed to initialize mock CUDA actor: {error:?}"),
-        })
+        // Tests using real CUDA actors must install a runtime that owns every requested device.
+        mock_global_ctx::manual_method_real_ctx().expect("configure a real runtime for CUDA actor access").cuda_actor(device)
     }
 
 
