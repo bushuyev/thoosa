@@ -496,10 +496,8 @@ mod tests {
                 } else {
                     Err(ThoError::new_with_cause(
                         "copy failed",
-                        ThoError::Cuda {
-                            action: CudaAction::Other,
-                            msg: "copy failed".into(),
-                        },
+                        // Use the constructor so injected CUDA errors capture their backtrace.
+                        thoosa_shared::tho_error::cuda_error(CudaAction::Other, "copy failed".into()),
                     ))
                 }
 

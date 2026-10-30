@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
 use thoosa_common::runner::sync_stage::StageStateInfo;
-use thoosa_shared::{CudaAction, SyncStageRunnerError, ThoError};
+use thoosa_shared::{tho_error, CudaAction, SyncStageRunnerError, ThoError};
 
 /// Numeric tensor and endpoint IDs are only meaningful in their originating
 /// worker. A replacement process may allocate exactly the same IDs again.
@@ -200,7 +200,7 @@ impl From<WorkerError> for ThoError {
 
         let WorkerError { kind, message } = error;
         match kind {
-            WorkerErrorKind::Cuda(action) => Self::Cuda { action, msg: message },
+            WorkerErrorKind::Cuda(action) => tho_error::cuda_error(action, message),
             WorkerErrorKind::AdjusterFailed => Self::AdjusterFailed.context(message),
             WorkerErrorKind::NotFound => Self::NotFound(Some("worker".to_string())).context(message),
             WorkerErrorKind::ContextReset => Self::ContextReset.context(message),

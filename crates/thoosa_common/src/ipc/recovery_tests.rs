@@ -50,7 +50,8 @@ fn input(action: RecoveryAction) -> Box<dyn WorkerInput> {
 }
 
 fn fatal() -> ThoError {
-    ThoError::Cuda { action: CudaAction::NeedsRestart, msg: "injected fatal lifecycle error".into() }
+    // Use the constructor so injected CUDA errors capture their backtrace.
+    thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "injected fatal lifecycle error".into())
 }
 
 // A real out-of-range CUDA gather raises a device assertion. Retain allocations
@@ -135,7 +136,7 @@ fn initialize<'a>(_tage_id:Option<String>, input: Box<dyn WorkerInput>, _ws: Arc
             RecoveryAction::OomOnce { marker } => {
                 if !Path::new(&marker).exists() {
                     std::fs::write(marker, "retry can initialize")?;
-                    return Err(ThoError::Cuda { action: CudaAction::HandleOOM, msg: "injected initialization OOM".into() });
+                    return Err(thoosa_shared::tho_error::cuda_error(CudaAction::HandleOOM, "injected initialization OOM".into()));
                 }
             }
             RecoveryAction::Probe => {},
