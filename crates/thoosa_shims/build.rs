@@ -19,7 +19,7 @@ fn main() {
         .define("CMAKE_CUDA_ARCHITECTURES", "89")
         .define("CUDAToolkit_ROOT", cuda_root)
         .define("CMAKE_CUDA_COMPILER", format!("{cuda_root}/bin/nvcc"))
-        .define("CMAKE_BUILD_TYPE", "Debug")
+        // cmake derives Debug/Release/RelWithDebInfo from Cargo optimization and debug settings.
         .define(
             "CUDA_CUDART_LIBRARY",
             format!("{cuda_root}/lib64/libcudart.so"),
