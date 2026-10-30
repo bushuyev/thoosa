@@ -102,19 +102,20 @@ impl Output for FindMotifsSavableResult {}
 
 //TODO trait for MotifTracker
 #[derive(Debug)]
-pub struct SimpleMotifTracker<'a> {
+// The store owns its observations; test fixtures need no borrowed production lifetime.
+pub struct SimpleMotifTracker {
     last: Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>,                //i_0, match_0, match_1, dist
-    dumper: Option<Box<dyn MotifTrackerStore + 'a>>, //lifetime is for DummyDumper
+    dumper: Option<Box<dyn MotifTrackerStore>>,
     min_slices_counts: Option<u32>,
     max_slices_counts: Option<u32>,
 }
 
 const CAPACITY: usize = 10_000_000;
 
-impl<'a> SimpleMotifTracker<'a> {
+impl SimpleMotifTracker {
     pub fn new(
-        dumper: Box<dyn MotifTrackerStore + 'a>,
+        dumper: Box<dyn MotifTrackerStore>,
         min_slices_counts: Option<u32>,
         max_slices_counts: Option<u32>,
     ) -> SimpleMotifTracker {
@@ -177,7 +178,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn take_dumper(&mut self) -> anyhow::Result<Box<dyn MotifTrackerStore + 'a>> {
+    pub fn take_dumper(&mut self) -> anyhow::Result<Box<dyn MotifTrackerStore>> {
         self.dumper.take().ok_or_else(|| anyhow::anyhow!("SimpleMotifTracker::take_dumper: dumper is already taken"))
     }
 
@@ -228,19 +229,14 @@ impl SelectMotifsArgs {
 #[cfg(test)]
 mod motif_find_tests {
 
-    use async_trait::async_trait;
     use log::debug;
     use parking_lot::Mutex;
-    use std::fmt::Debug;
     use std::sync::Arc;
     use tch::Tensor;
     use thoosa_common::utils::*;
     use thoosa_shared::*;
 
-    use crate::find::MotifTrackerStore;
     use crate::motif_tracker_store::SlicesMatch;
-    use crate::motifs_store::MotifsStore;
-    use thoosa_shared::run_configs::RunConfigId;
 
     #[ctor::ctor]
     fn init() {
@@ -388,52 +384,13 @@ mod motif_find_tests {
     }
 
 
-    //TODO replace with mockall
-    #[derive(Debug)]
-    struct DummyDumper<'a> {
-        motifs: &'a mut Vec<SlicesMatch>,
-    }
-
-    impl<'a> DummyDumper<'a> {
-        pub fn new(motifs: &'a mut Vec<SlicesMatch>) -> Self {
-            Self { motifs }
-        }
-    }
-
-    #[async_trait]
-    impl<'a> MotifTrackerStore for DummyDumper<'a> {
-        fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> anyhow::Result<()> {
-            self.motifs
-                .extend(motifs.into_iter().collect::<Vec<SlicesMatch>>());
-
-            Ok(())
-        }
-
-        async fn load_slices_into_groups(
-            &mut self,
-            _store: &dyn MotifsStore,
-            _min_slices_counts: Option<u32>,
-            _max_slices_counts: Option<u32>,
-        ) -> anyhow::Result<usize> {
-            todo!()
-        }
-
-        fn run_config_id(&self) -> RunConfigId {
-            todo!()
-        }
-
-        fn channel(&self) -> u32 {
-            todo!()
-        }
-    }
-
     #[test]
     pub fn test_simple_motif_tracker() -> anyhow::Result<()> {
-        let mut motifs = vec![];
+        let motifs = Arc::new(Mutex::new(Vec::new()));
         {
-            DummyDumper::new(&mut motifs);
             let mut mt = super::SimpleMotifTracker::new(
-                Box::new(DummyDumper::new(&mut motifs)),
+                crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder::new()
+                    .with_save_slices({ let motifs = Arc::clone(&motifs); move |values| { motifs.lock().extend(values); Ok(()) } }).build(),
                 Some(2),
                 Some(100),
             );
@@ -444,18 +401,18 @@ mod motif_find_tests {
 
             mt.dump();
         }
-        assert_eq!(motifs.len(), 3);
+        assert_eq!(motifs.lock().len(), 3);
         assert_eq!(
             SlicesMatch(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0),
-            motifs[0]
+            motifs.lock()[0]
         );
         assert_eq!(
             SlicesMatch(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0),
-            motifs[1]
+            motifs.lock()[1]
         );
         assert_eq!(
             SlicesMatch(TensorIdSliceIdx(0, 30), TensorIdSliceIdx(1, 30), 1.0),
-            motifs[2]
+            motifs.lock()[2]
         );
 
 
@@ -484,9 +441,10 @@ mod motif_find_tests {
         let m = 100;
         let step = 100;
 
-        let mut motifs = vec![];
+        let motifs = Arc::new(Mutex::new(Vec::new()));
         let mut mt = super::SimpleMotifTracker::new(
-            Box::new(DummyDumper::new(&mut motifs)),
+            crate::motif_tracker_store::mock_motif_tracker_store::MockMotifTrackerStoreBuilder::new()
+                    .with_save_slices({ let motifs = Arc::clone(&motifs); move |values| { motifs.lock().extend(values); Ok(()) } }).build(),
             Some(2),
             Some(100),
         );
