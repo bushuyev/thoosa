@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use anyhow::Context as _;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, error, warn};
+use log::{debug, warn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;
@@ -293,9 +293,21 @@ where
         recovery: StageRecovery,
     ) -> Result<Self, ThoError> {
 
-        let actor:&dyn Any = GlobalCtx::global().cuda_actor(tho_device_idx).as_ref();
-        let ipc_actor = actor.downcast_ref::<CudaIPCActorHandle>().ok_or_else(|| ThoError::new("IPC proxy requires an IPC actor"))?.clone();
+        let ipc_actor = GlobalCtx::global().execution(tho_device_idx).ipc_actor()?;
+        Self::install_on(ipc_actor, endpoint_name, stage_id, tho_device_idx, init_data, clone_refs, recovery).await
+    }
 
+    // Backend installation passes the actor explicitly; compatibility constructors
+    // resolve the installed runtime only once, before entering this boundary.
+    pub(crate) async fn install_on(
+        ipc_actor: CudaIPCActorHandle,
+        endpoint_name: &'static str,
+        stage_id: Option<String>,
+        tho_device_idx: usize,
+        init_data: Box<dyn WorkerInput>,
+        clone_refs: Option<crate::runner::stage_install::InputCloner<St>>,
+        recovery: StageRecovery,
+    ) -> Result<Self, ThoError> {
         let worker_id = ipc_actor.worker_id()?;
         let registration = if recovery == StageRecovery::RecreateFromInit {
             let registration = ipc_actor.register_stage(worker_id, endpoint_name.to_string(), stage_id.clone(), init_data).await?;
@@ -473,32 +485,8 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
     fn drop(&mut self) {
-        // Registered endpoints release their logical ownership independently of
-        // admission. Their token also fences delayed deletion after key reuse.
         if self.registration.is_some() { return; }
-        debug!("ProxyStage2::drop: endpoint_name={:?}", self.endpoint_name);
-
-        let endpoint_name = self.endpoint_name;
-        let stage_id = self.stage_id.clone();
-        let tho_device_idx = self.tho_device_idx;
-        let worker_id = self.worker_id;
-
-        debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id:?} tho_device_idx={tho_device_idx}");
-
-        let ipc_actor = self.actor.clone();
-
-
-        tokio::spawn(async move {
-
-            debug!("ProxyStage2::drop: endpoint_name={endpoint_name} stage_id={stage_id:?} tho_device_idx={tho_device_idx} spawned");
-
-            if let Err(error) = ipc_actor.drop_endpoint(stage_id.clone(), endpoint_name.to_string(), worker_id).await {
-                if !GlobalCtx::is_shutting_down() {
-                    error!("ProxyStage2::drop: failed to drop endpoint_name={endpoint_name} stage_id={stage_id:?} tho_device_idx={tho_device_idx}: {error:?}");
-                }
-            }
-            Ok::<_, ThoError>(())
-        });
+        self.actor.release_endpoint(self.stage_id.clone(), self.endpoint_name.to_string(), self.worker_id);
     }
 }
 

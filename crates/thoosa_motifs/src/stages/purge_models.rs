@@ -447,7 +447,7 @@ mod tests {
     use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, WsConfigs};
     use crate::cli::{MotifAppCommands, MotifCommands};
     use crate::stages::train_label_nets::TrainLabelNetRunConfig;
-    use thoosa_shared::run_configs::{RUN_ID, RunConfig};
+    use thoosa_shared::run_configs::{RunConfig};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
     use thoosa_store::{SqlStore, TrainedNetsBy};
@@ -610,7 +610,7 @@ mod tests {
             thoosa_store::create_tables,
             create_motif_tables
         ]).await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
         Ok((ws, store))
     }
 

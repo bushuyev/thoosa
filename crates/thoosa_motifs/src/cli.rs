@@ -263,7 +263,7 @@ impl StageCommand for MotifCommands {
 
                 let loader = init_loader(ws);
 
-                let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = parse_cli_config(&train_motif_nets_args.run_config_cnt, "TrainMotifsNets2")?;
+                let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = parse_cli_config(&train_motif_nets_args.run_config_cnt, "TrainMotifsNets")?;
                 let motifs_by = train_motif_nets_args.motifs_by()?;
 
                 let input_wrapper = TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()), train_motif_nets_args.motifs_limit);

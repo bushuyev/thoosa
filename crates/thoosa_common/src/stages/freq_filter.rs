@@ -43,7 +43,7 @@ use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput};
 use thoosa_common::ipc::cuda_wokrer::AllTensors;
 #[cfg(test)]
 use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
-use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
+use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 #[cfg(test)]
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
@@ -143,23 +143,13 @@ where
         let id = init.new_id().to_string();
 
         SYNC_FREQ_FILTER_INSTANCES.get_or_try_insert_recreatable_with::<C, _, _, _, _>(init.tho_device_idx, GlobalCtx::global().cuda_activity_gate(init.tho_device_idx), GlobalCtx::global().is_ipc(), id.clone(), move || async move {
-            let stage = if GlobalCtx::global().is_ipc() {
-
-                // Install and invoke the endpoint with the run-config id so every filter configuration keeps its own worker-side state.
-
-                Arc::new(DynSyncStageWithStateEnum::Proxy {
-                    stage: Arc::new(ProxyStage::proxy_with_input_cloner_recreatable(
-                        SYNC_FREQ_FILTER_ENDPOINT,
-                        Some(id),
-                        init.tho_device_idx,
-                        Box::new(init.clone()),
-                        Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>)),
-                    ).await?),
-                    init: (),
-                })
-            } else {
-                Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
-            };
+            let remote = init.clone();
+            let stage = Arc::new(GlobalCtx::global().execution(init.tho_device_idx).install_stateful(
+                SYNC_FREQ_FILTER_ENDPOINT, crate::ipc::endpoints::StageRecovery::RecreateFromInit,
+                || async move { Ok(Arc::new(Self::new_local(init)?)) },
+                || async move { Ok((Box::new(remote) as Box<dyn WorkerInput>, ())) },
+                Some(Arc::new(|input: &ThoTensor<ChannelsData, SynKey>| Ok(Box::new(input.clone_ref()?) as Box<dyn WorkerInput>))),
+            ).await?);
             let _registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
 
             Ok(stage)
@@ -988,8 +978,10 @@ mod tests {
             let reference = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(configs.clone(), 2, 100., config_id, 0))?);
             let tensor_count = reference.get_state_info(0).await?.tensors.len();
             let init = SyncFreqFilterIpcInit::new(configs, 2, 100., config_id, 1);
-            let endpoint_id = init.new_id().to_string();
             let stage = SyncFreqFilter::<RunCtxImpl>::new(init).await?;
+            // Installation allocates transport identity independently of the
+            // filter's configuration/cache key.
+            let endpoint_id = stage.stage_id();
             let ctx = RunCtxImpl::new(1, "freq_filter_state");
             // Exercise both initial invocation and repeated restore cycles.
             for cycle in 0..3 {

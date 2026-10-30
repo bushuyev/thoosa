@@ -1789,7 +1789,7 @@ mod tests {
             }.boxed()
         }
 
-        async fn train_input(cuda_actor: &Box<dyn CudaActorHandle>) -> Result<TrainStepInput<InDims, OutDims>, ThoError> {
+        async fn train_input(cuda_actor: &Arc<dyn CudaActorHandle>) -> Result<TrainStepInput<InDims, OutDims>, ThoError> {
             Ok(TrainStepInput::<InDims, OutDims>::new(
                 cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([3, 100], FLOAT_CPU))?)?, 1.into()).await?.to_types(debug_id!("2"))?,
                 None,

@@ -15,7 +15,7 @@ use tokio::time::MissedTickBehavior;
 use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
 use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing, format_perf_map, PERF};
-use thoosa_shared::run_configs::{run_id, RUN_ID};
+
 use thoosa_shared::tracked_await::{snapshot_not_ready, track_await};
 use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::Store;
@@ -91,13 +91,14 @@ where
         }
     };
 
-    RUN_ID.set(match args.run_id{
+    let run_id = match args.run_id{
         None => {
             // TODO throw error if command doesn't support new run_id - inference, export etc
             track_await!(store.save_run(format!("{args:?}"))).await?
         }
         Some(run_id) => run_id
-    }).expect("can't set run_id");
+    };
+    store.bind_run(run_id)?;
 
     let devices = list_devices();
     let execution_device = args.execution_device.resolve(args.ipc, devices.iter().any(|device| matches!(device, tch::Device::Cuda(0))))?;
@@ -111,7 +112,7 @@ where
         args.ws_path,
         tch::get_num_interop_threads(),
         tch::get_num_threads(),
-        run_id()
+        run_id
     );
     std::io::stdout().flush()?;
 
@@ -144,6 +145,8 @@ where
     let mut prev_park = vec![0u64; workers];
     let mut prev_busy = vec![std::time::Duration::ZERO; workers];
 
+    let session = crate::runner::global_ctx::RunSession { runtime: GlobalCtx::global().runtime(), run_id };
+    let residency = session.runtime.residency();
     let mut purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));//TODO config
         track_await!(ticker.tick()).await;
@@ -189,7 +192,7 @@ where
                     // CPU cache maintenance uses the cache registry's own locks;
                     // a recovering GPU must not stop unrelated CPU work.
                     debug!("run_cli: purge_cpu tick");
-                    GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
+                    residency.purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
                     debug!("run_cli: purge_cpu done");
                 }
                 _ = rx.changed() => {
@@ -209,13 +212,13 @@ where
     )));
 
     let command_result = if let Some(command ) = args.command{
-        let root_ctx = RunCtxImpl::new(execution_device, "root_ctx");
+        let root_ctx = RunCtxImpl::new_in(&session.runtime, execution_device, "root_ctx");
         debug!("run_common_cli: command={command:?}");
         // A local CUDA failure can originate in detached copy work even if the
         // command no longer awaits that request. Still terminate the application.
         tokio::select! {
             biased;
-            failure = GlobalCtx::wait_for_process_failure() => Err(failure.into()),
+            failure = session.runtime.wait_for_process_failure() => Err(failure.into()),
             result = command.run(&store, &ws, root_ctx) => result,
         }
     } else { Ok(()) };
@@ -224,13 +227,13 @@ where
 
     info!("perf: \n{}", format_perf_map(&PERF));
 
-    track_await!(GlobalCtx::global().shutdown()).await;
+    track_await!(session.runtime.shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);
     // A purge may be waiting for work in the poisoned local process. It must
     // not delay the application shutdown requested by the recovery coordinator.
     tokio::select! {
-        _ = GlobalCtx::wait_for_process_failure() => {
+        _ = session.runtime.wait_for_process_failure() => {
             purge_cpu_worker.abort();
             let _ = track_await!(purge_cpu_worker).await;
         }
@@ -238,8 +241,8 @@ where
     }
 
 
-    info!("run_id {} done", run_id());
+    info!("run_id {} done", run_id);
 
-    if let Some(failure) = GlobalCtx::process_failure() { return Err(failure.into()); }
+    if let Some(failure) = session.runtime.process_failure() { return Err(failure.into()); }
     command_result
 }

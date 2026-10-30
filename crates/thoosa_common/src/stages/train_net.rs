@@ -288,8 +288,6 @@ where
                     Ok::<_, ThoError>((checkpoint, valid_loss))
                 }.await;
 
-
-
                 collect_eta_record_completion(epochs_eta_guard.id());
                 match epoch_result {
                     Ok((checkpoint, valid_loss)) => {
@@ -328,7 +326,7 @@ where
                     Err(error) => return Err(error),
                 }
             }
-            info!("TrainNet: completed_epochs={completed_epochs} aborted_epochs={aborted_epochs} descr={descr}");
+            debug!("TrainNet: completed_epochs={completed_epochs} aborted_epochs={aborted_epochs} descr={descr}");
 
             if best_saved {
                 debug!("TrainNet::run_inner: descr={descr} final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");

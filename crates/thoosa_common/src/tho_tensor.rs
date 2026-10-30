@@ -19,7 +19,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, DebugId, ThoSelector, WithId};
-use thoosa_shared::{n_trace_line, CopyToDevice, ThoError};
+use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::debug_id;
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
@@ -189,7 +189,7 @@ impl<D: Dims> Display for ThoTensor<D, DebugId> {
 pub struct KeyHolder {
     pub key:u64,
     pub worker_id: CudaWorkerId,
-    count:Arc<()>,
+    count:Arc<RemoteAllocation>,
     pub do_drop:bool,
 }
 
@@ -205,21 +205,38 @@ impl Clone for KeyHolder {
     }
 }
 
+// The last Arc owner releases exactly once even when references are dropped on
+// different threads. Namespacing by actor prevents independent runtimes sharing keys.
+#[derive(Debug)]
+struct RemoteAllocation {
+    key: u64,
+    worker: CudaWorkerId,
+    release: Option<crate::ipc::cuda_process::TensorReleaseHandle>,
+    enabled: std::sync::atomic::AtomicBool,
+}
+impl Drop for RemoteAllocation {
+    fn drop(&mut self) {
+        if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(release) = &self.release { release.release(self.key, self.worker); }
+        }
+    }
+}
+impl KeyHolder {
+    fn ownership(key: u64, worker: CudaWorkerId, release: Option<crate::ipc::cuda_process::TensorReleaseHandle>) -> Arc<RemoteAllocation> {
+        static KEYS: OnceLock<Mutex<HashMap<(u64, CudaWorkerId, u64), std::sync::Weak<RemoteAllocation>>>> = OnceLock::new();
+        let mut keys = KEYS.get_or_init(Default::default).lock();
+        let identity = (release.as_ref().map_or(0, |owner| owner.owner_id), worker, key);
+        if let Some(owner) = keys.get(&identity).and_then(std::sync::Weak::upgrade) { return owner; }
+        // Remove dead metadata as new references arrive; the registry owns no tensor.
+        keys.retain(|_, owner| owner.strong_count() != 0);
+        let owner = Arc::new(RemoteAllocation { key, worker, release, enabled: std::sync::atomic::AtomicBool::new(false) });
+        keys.insert(identity, Arc::downgrade(&owner));
+        owner
+    }
+}
 impl Drop for KeyHolder {
     fn drop(&mut self) {
-        debug!("KeyHolder::drop: self={self:?} self.worker_id.device_idx={} strong_count={:?} GlobalCtx::is_installed()={}", self.worker_id.device_idx, Arc::strong_count(&self.count), GlobalCtx::is_installed() );
-        if GlobalCtx::is_installed() && !GlobalCtx::is_shutting_down() &&  self.do_drop && self.worker_id.device_idx != 0 && Arc::strong_count(&self.count) == 2 {
-            debug!("KeyHolder::drop: self.key={:?}: {}", self.key, n_trace_line(&Backtrace::capture(), 50) );
-
-            let device_idx = self.worker_id.device_idx;
-            let key = self.key;
-            let worker_id = self.worker_id;
-            tokio::spawn(async move {
-                if let Err(e) = GlobalCtx::global().cuda_actor(device_idx).drop_tho_tensor(key, worker_id).await {
-                    error!("Can't drop tensor key={key:?} e={e:?}");
-                }
-            });
-        }
+        if self.do_drop { self.count.enabled.store(true, std::sync::atomic::Ordering::Relaxed); }
     }
 }
 
@@ -401,9 +418,14 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         // let key_holder = if GlobalCtx::is_installed(){
         debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
 
-        // let trace = n_trace_line(&Backtrace::capture(), 200);
-        static KEYS:OnceLock<Mutex<HashMap<(CudaWorkerId, u64), Arc<()>>>> = OnceLock::new();
-        let count = Arc::clone(KEYS.get_or_init(||Mutex::new(HashMap::new())).lock().entry((worker_id, key)).or_insert(Arc::new(())));
+        let release = crate::ipc::cuda_process::TensorReleaseHandle::current().or_else(|| {
+            // Compatibility for explicit reference construction. IPC decoding
+            // supplies the original actor without consulting the installed facade.
+            if crate::runner::global_ctx::GlobalCtx::is_installed() {
+                crate::runner::global_ctx::GlobalCtx::global().execution(worker_id.device_idx).ipc_backend().map(|actor| actor.tensor_releaser())
+            } else { None }
+        });
+        let count = KeyHolder::ownership(key, worker_id, release);
 
         debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
 
@@ -423,6 +445,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             pd: PhantomData,
         }
 
+    }
+
+    pub(crate) fn set_release_handle(&mut self, release: crate::ipc::cuda_process::TensorReleaseHandle) {
+        if let ThoTensorInner::Ref { key, .. } = &mut self.inner { key.count = KeyHolder::ownership(key.key, key.worker_id, Some(release)); }
     }
 
     pub fn ref_worker_id(&self) -> Option<CudaWorkerId> {
