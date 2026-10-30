@@ -220,7 +220,8 @@ mod tests {
     use tokio::sync::Notify;
 
     fn fatal() -> ThoError {
-        ThoError::Cuda { action: CudaAction::NeedsRestart, msg: "original CUDA failure".into() }
+        // Use the constructor so injected CUDA errors capture their backtrace.
+        thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "original CUDA failure".into())
     }
 
     fn drained() -> Result<oneshot::Receiver<()>, ThoError> {

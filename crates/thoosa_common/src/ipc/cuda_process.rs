@@ -1651,7 +1651,8 @@ mod tests {
         use thoosa_shared::{CudaAction, SyncStageRunnerError};
 
         for action in [CudaAction::HandleOOM, CudaAction::NeedsRestart, CudaAction::Other] {
-            let error = ThoError::Cuda { action, msg: "device failure detail".into() }.context("forward model");
+            // Use the constructor so injected CUDA errors capture their backtrace.
+            let error = thoosa_shared::tho_error::cuda_error(action, "device failure detail".into()).context("forward model");
             let job = ThoError::from(SyncStageRunnerError::JobError { job_id: 27, inner: Box::new(error) });
             let received = round_trip_worker_error(job.context("worker request 42"));
             assert!(matches!(&received, ThoError::Cuda { action: received_action, .. } if *received_action == action));
@@ -1726,7 +1727,7 @@ mod tests {
         // when they pass through the same wire path as ordinary CUDA failures.
         for recovery in [None, Some(ThoError::oom().context("replacement allocation"))] {
             let has_recovery = recovery.is_some();
-            let original = ThoError::Cuda { action: CudaAction::NeedsRestart, msg: "illegal address".into() }.context("original stage");
+            let original = thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "illegal address".into()).context("original stage");
             let error = ThoError::CudaRecoveryFailed(Arc::new(CudaRecoveryFailure { original, recovery }));
             let received = round_trip_worker_error(error.context("worker recovery"));
             assert!(received.is_cuda_recovery_failed());
@@ -2274,7 +2275,7 @@ mod export_tests {
         let (tx, mut requests) = mpsc::channel(8);
         let (send, receive) = oneshot::channel();
         let task = tokio::spawn(CudaIPCActor::export_stage(worker, "missing".into(), None, Arc::new(AtomicU64::new(1)), Arc::clone(&pending), tx, Arc::clone(&gate), send));
-        let error = ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "description failed".into() };
+        let error = thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::HandleOOM, "description failed".into());
         reply(&pending, requests.recv().await.unwrap(), error.into());
         assert!(receive.await.unwrap().unwrap_err().is_oom());
         task.await.unwrap();
@@ -2294,7 +2295,7 @@ mod export_tests {
         let mut dump = receive.await.unwrap().unwrap();
         let commit = tokio::spawn(dump.export.take().unwrap().commit());
         let request = requests.recv().await.unwrap();
-        let error = ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "purge failed".into() };
+        let error = thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::HandleOOM, "purge failed".into());
         reply(&pending, request, error.into());
         assert!(commit.await.unwrap().unwrap_err().is_oom(), "the final worker error must reach the offload caller");
         assert!(!pending.failed.is_cancelled(), "failed commit must not retire an otherwise healthy worker");

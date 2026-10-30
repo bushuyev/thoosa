@@ -151,7 +151,7 @@ impl CudaActivityScope {
 mod tests {
     use std::sync::{Arc, Barrier};
     use tokio::sync::mpsc;
-    use crate::{CudaAction, CudaActivityGate, CudaDeviceGeneration, CudaRecoveryFailure, CudaRecoveryState, SyncStageRunnerError, ThoError};
+    use crate::{tho_error, CudaAction, CudaActivityGate, CudaDeviceGeneration, CudaRecoveryFailure, CudaRecoveryState, SyncStageRunnerError, ThoError};
 
     #[test]
     fn test_reserved_enqueue_is_rejected_during_pause_and_retried_after() {
@@ -228,7 +228,7 @@ mod tests {
     }
 
     fn original_failure() -> ThoError {
-        ThoError::Cuda { action: CudaAction::NeedsRestart, msg: "illegal address".into() }.context("stage failed")
+        tho_error::cuda_error(CudaAction::NeedsRestart, "illegal address".into()).context("stage failed")
     }
 
     #[derive(Default)]

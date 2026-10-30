@@ -1,6 +1,6 @@
 //! Adapt LibTorch failures at the tensor boundary, preserving their original
 //! sources and the shared error's CUDA recovery semantics.
-use thoosa_shared::{ThoError, cuda_cause_from_msg};
+use thoosa_shared::{cuda_cause_from_msg, tho_error, ThoError};
 
 #[ctor::ctor]
 fn register_libtorch_error_adapter() {
@@ -15,7 +15,7 @@ fn classify_libtorch_error(error: anyhow::Error) -> anyhow::Error {
     if let Some(tch::TchError::Torch(msg)) = error.downcast_ref::<tch::TchError>() {
         if msg.to_ascii_lowercase().contains("cuda") {
             let ThoError::Cuda { action, .. } = cuda_cause_from_msg(msg.clone()) else { unreachable!() };
-            return error.context(ThoError::Cuda { action, msg: "LibTorch operation failed".into() });
+            return error.context(tho_error::cuda_error(action, "LibTorch operation failed".into()));
         }
     }
     error
