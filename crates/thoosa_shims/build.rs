@@ -9,32 +9,19 @@ fn main() {
         .expect("LIBTORCH must be set, e.g. via .cargo/config.toml");
 
     let libtorch = libtorch.trim_end_matches('/');
-    let cuda_root = "/usr/local/cuda";
-
-    let dst = Config::new("src-cpp")
-        .define(
-            "Torch_DIR",
-            format!("{libtorch}/share/cmake/Torch"),
-        )
-        .define("CMAKE_CUDA_ARCHITECTURES", "89")
-        .define("CUDAToolkit_ROOT", cuda_root)
-        .define("CMAKE_CUDA_COMPILER", format!("{cuda_root}/bin/nvcc"))
-        // cmake derives Debug/Release/RelWithDebInfo from Cargo optimization and debug settings.
-        .define(
-            "CUDA_CUDART_LIBRARY",
-            format!("{cuda_root}/lib64/libcudart.so"),
-        )
-        .define(
-            "CUDA_NVTX_LIBRARY",
-            format!("{cuda_root}/lib64/libnvToolsExt.so"),
-        )
-        .define(
-            "CUDA_driver_LIBRARY",
-            "/usr/lib/x86_64-linux-gnu/libcuda.so",
-        )
-        .generator("Ninja")
-        .build_target("thoosa_shims")
-        .build();
+    // CMake discovers CUDA by default; overrides support alternate installations and cross builds.
+    let mut config = Config::new("src-cpp");
+    config.define("Torch_DIR", format!("{libtorch}/share/cmake/Torch"));
+    for (env_name, cmake_name) in [
+        ("CUDA_HOME", "CUDAToolkit_ROOT"),
+        ("CUDACXX", "CMAKE_CUDA_COMPILER"),
+        ("THOOSA_CUDA_ARCHITECTURES", "CMAKE_CUDA_ARCHITECTURES"),
+        ("THOOSA_CUDA_DRIVER_LIBRARY", "CUDA_cuda_driver_LIBRARY"),
+    ] {
+        println!("cargo:rerun-if-env-changed={env_name}");
+        if let Ok(value) = env::var(env_name) { config.define(cmake_name, value); }
+    }
+    let dst = config.generator("Ninja").build_target("thoosa_shims").build();
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
