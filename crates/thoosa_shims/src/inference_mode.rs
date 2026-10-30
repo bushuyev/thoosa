@@ -21,21 +21,22 @@ pub struct InferenceModeGuard {
 }
 
 impl InferenceModeGuard {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(enabled: bool) -> Result<Self, thoosa_shared::ThoError> {
         let ptr = unsafe { tho_inference_mode_new(enabled as i32) };
-        let ptr = NonNull::new(ptr).expect("failed to create c10::InferenceMode guard");
+        let ptr = NonNull::new(ptr).ok_or_else(|| crate::cuda_result::cuda_error_from_last_error("tho_inference_mode_new"))?;
 
-        Self {
+        // Return native diagnostics instead of panicking at allocation failure.
+        Ok(Self {
             ptr,
             _not_send_sync: PhantomData,
-        }
+        })
     }
 
-    pub fn enabled() -> Self {
+    pub fn enabled() -> Result<Self, thoosa_shared::ThoError> {
         Self::new(true)
     }
 
-    pub fn disabled() -> Self {
+    pub fn disabled() -> Result<Self, thoosa_shared::ThoError> {
         Self::new(false)
     }
 
@@ -49,5 +50,19 @@ impl Drop for InferenceModeGuard {
         unsafe {
             tho_inference_mode_delete(self.ptr.as_ptr());
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_inference_guard_restores_thread_state() -> Result<(), thoosa_shared::ThoError> {
+        let before = InferenceModeGuard::is_enabled();
+        {
+            let _guard = InferenceModeGuard::new(!before)?;
+            assert_eq!(InferenceModeGuard::is_enabled(), !before);
+        }
+        assert_eq!(InferenceModeGuard::is_enabled(), before);
+        Ok(())
     }
 }

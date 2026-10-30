@@ -1,9 +1,16 @@
+#include "errors.h"
 #include <c10/core/InferenceMode.h>
 
 extern "C" void* tho_inference_mode_new(int enabled) noexcept {
     try {
-        return new c10::InferenceMode(enabled != 0);
+        auto* guard = new c10::InferenceMode(enabled != 0);
+        tho_clear_last_error();
+        return guard;
+    } catch (const std::exception& e) {
+        tho_set_last_error_ex("tho_inference_mode_new", e);
+        return nullptr;
     } catch (...) {
+        tho_set_last_error_code("tho_inference_mode_new", CUDA_ERROR_UNKNOWN, "unknown C++ exception");
         return nullptr;
     }
 }
