@@ -290,7 +290,7 @@ impl StageWithState for SyncClcStage {
 
                 FailUntil::DumpedToCpu => {
                     let device_idx = ctx.tho_device_idx();
-                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
+                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
                     debug!("SyncClcStage::do_run_with_state: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
                     if !is_all_on_cpu {
@@ -332,7 +332,7 @@ impl SyncStage for ClcDynSyncStage {
     }
 
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        if self.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false) {
+        if self.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx()) {
             return Err(ThoError::oom());
         }
         Arc::clone(&self.stage).do_run(input, ctx)
@@ -342,7 +342,7 @@ impl SyncStage for ClcDynSyncStage {
 impl AsyncStageDispatch<ClcDynSyncStage> for ClcDynSyncStage {
     fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a ThoTensor<LoadedTensor, SynKey>, ctx: &'a RunCtxImpl) -> BoxFuture<'a, Result<ThoTensor<ClcStageOutput, SynKey>, ThoError>> {
         async move {
-            if stage.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false) {
+            if stage.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx()) {
                 return Err(ThoError::oom());
             }
             AsyncStageDispatch::run(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx).await
@@ -351,7 +351,7 @@ impl AsyncStageDispatch<ClcDynSyncStage> for ClcDynSyncStage {
 
     fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: ThoTensor<LoadedTensor, SynKey>, ctx: RunCtxImpl) -> BoxFuture<'a, ConsumeResult<ThoTensor<LoadedTensor, SynKey>, ThoTensor<ClcStageOutput, SynKey>>> {
         async move {
-            if stage.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false) {
+            if stage.fail_until_dump_to_cpu && !GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx()) {
                 return ConsumeResult::Failed { input, error: ThoError::oom() };
             }
             AsyncStageDispatch::consume(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx).await

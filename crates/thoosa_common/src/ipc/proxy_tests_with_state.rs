@@ -694,7 +694,7 @@ use crate::tch_error::tch_result;
         debug!("test_with_state_target: cpu_tensor={}", cpu_t);
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
-        assert!(!GlobalCtx::global().is_all_on_cpu(1, true));
+        assert!(!GlobalCtx::global().is_all_on_cpu_force_check(1).await);
         let dump_all_to_cpu_result = GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await;
         debug!("test_with_state_target: dump_all_to_cpu_result={dump_all_to_cpu_result:?}");
         assert!(dump_all_to_cpu_result.is_ok());
