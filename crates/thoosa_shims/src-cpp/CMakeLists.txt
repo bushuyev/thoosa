@@ -10,7 +10,7 @@ set(CMAKE_CUDA_STANDARD 11)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CMAKE_CUDA_ARCHITECTURES 89)
+# Architecture selection is supplied by the toolchain or the Cargo override.
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
