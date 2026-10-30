@@ -21,27 +21,23 @@ use std::sync::Arc;
 use tch::{Device, Kind, TchError, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
-use thoosa_common::resources::SavableResult;
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::stages::audio::{BandAggregation, LOG_EPS, LshPlanes, assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError, collect_futures_with_progress, panic_to_err};
-use thoosa_store::Store;
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
 
@@ -213,6 +209,7 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
+    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     loader: Arc<L>,
@@ -222,6 +219,7 @@ where
     channels:u32,
     bucket_window_samples: i64,
     bucket_step_samples: i64,
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     tmp_path:PathBuf,
     temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>
 }
@@ -309,10 +307,6 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn new(resource_id: ResourceId, tensor: &'a ThoTensor<D, Id>, sample_offset: i64) -> Self {
-        Self { resource_id, tensor: ThoDataRef::Borrowed(tensor), sample_offset }
-    }
-
     fn from_data_ref(resource_id: ResourceId, tensor: ThoDataRef<'a, ThoTensor<D, Id>>, sample_offset: i64) -> Self {
         Self { resource_id, tensor, sample_offset }
     }
@@ -949,7 +943,7 @@ where
         debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
 
 
-        let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len(), 1);
+        let _eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len(), 1);
         let resources_len = resources.len();
         let futures = resources.into_iter().map(|resource|{
             let mut sync_bucketing_ctx = ctx.branch(false);
@@ -1003,7 +997,7 @@ where
             }
         });
 
-        let loaded_motifs = track_await!(collect_futures_with_progress(
+        let _loaded_motifs = track_await!(collect_futures_with_progress(
             futures,
             resources_len,
             FuturesOrdering::Unordered,
@@ -1338,23 +1332,21 @@ mod tests {
     use thoosa_common::tch_error::tch_result;
     use super::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingInput, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, PatchTempStore, SelectBucketsInputSelector, bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups};
     use crate::cli::{import_resources, plot_motif};
-    use crate::cli::{plot_resource, run_opt};
+    use crate::cli::plot_resource;
     use crate::dims::MotifSlices;
     use crate::distance::{EucDistConfig, SimilarityMetric, clc_d2_similarity};
     use crate::fragments::Resolution;
     use crate::motif_tracker_store::IdSlice;
     use crate::motifs_store::MotifsStore;
-    use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
     use crate::stages::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
     use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-    use crate::stages::slices_stats::euclidean_distance;
     use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::RawTensorLoader;
     use crate::tch_test_utils;
     use futures_util::{StreamExt, TryStreamExt};
     use log::debug;
-    use parking_lot::{RawRwLock, RwLock};
+    use parking_lot::RwLock;
     use rand::random_range;
     use std::collections::{HashMap, HashSet};
     use std::fs;
@@ -1363,29 +1355,27 @@ mod tests {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tch::Device::Cuda;
-    use tch::{Device, Tensor};
+    use tch::Tensor;
     use thoosa_common::data_with_extra::DataWithExtra;
-    use thoosa_common::nets::common_nets::OptConfig;
-    use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::resources::Simple;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
+    use thoosa_common::ws::{WsConfigs};
     use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::resource::{Resource, ResourcesConfig};
-    use thoosa_shared::run_configs::{RunConfig, RunConfigId};
+    use thoosa_shared::resource::ResourcesConfig;
+    use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt_for_dir, mono_key};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_store::{SqlStore, Store};
+    use thoosa_store::{SqlStore};
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -1500,7 +1490,7 @@ mod tests {
         )?));
         let motif_len = 64usize;
 
-        let imported_ids = import_resources(
+        let _imported_ids = import_resources(
             &ws,
             sql_store.as_ref(),
             &["label_0", "label_1"],
@@ -1632,7 +1622,7 @@ mod tests {
         }).await?/motifs.len() as f32;
 
         debug!("heavy_run_mel_path: avg_norm_thickness={avg_norm_thickness:?}");
-        let run_config: crate::stages::bucketing::BucketRunConfigRangeOrValue<crate::stages::bucketing::BucketRunConfigFields> = crate::stages::bucketing::BucketRunConfigRangeOrValue {
+        let _run_config: crate::stages::bucketing::BucketRunConfigRangeOrValue<crate::stages::bucketing::BucketRunConfigFields> = crate::stages::bucketing::BucketRunConfigRangeOrValue {
             id: None,
             bucket_count: RangeOrValue::Range { range: Range {start:64, end:512}, step: None },
             min_slices: RangeOrValue::Value(2),
@@ -1646,7 +1636,7 @@ mod tests {
             }),
         };
 
-        let find_and_select_input = Arc::new(BucketingInput::new(
+        let _find_and_select_input = Arc::new(BucketingInput::new(
             Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
         ));
 
@@ -1693,7 +1683,8 @@ mod tests {
         Ok(())
     }
 
-    async fn plot_test_resources(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
+    #[expect(dead_code, reason = "Optional plot helper for inspecting bucketing test inputs.")]
+    async fn plot_test_resources(store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
         for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
             // resource
 
@@ -1751,7 +1742,7 @@ mod tests {
 
 
 
-        let imported_ids = import_resources(
+        let _imported_ids = import_resources(
             &ws,
             sql_store.as_ref(),
             &["label_0", "label_1"],

@@ -1,28 +1,21 @@
 use crate::dims::MotifProbability;
 use crate::train_nets::MotifNetParams;
-use async_trait::async_trait;
 use cached_derive::Cached;
-use log::debug;
 use parking_lot::RwLock;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::dims::{Batch, Dims, Slice};
+use thoosa_common::dims::{Batch, Slice};
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
-use thoosa_shared::{ThoError, mono_key, perf_log, debug_id, sync_read_lock};
+use thoosa_shared::{ThoError, mono_key, perf_log, sync_read_lock};
 #[derive(Debug, Clone, CpuData)]
 #[cpu_data(shallow)]
 pub struct LoadMotifNetInput {
@@ -65,6 +58,7 @@ where
 {
 
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     quantize: bool,
     pd:PhantomData<C>
 }

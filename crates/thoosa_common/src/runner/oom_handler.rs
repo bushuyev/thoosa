@@ -8,28 +8,25 @@ use parking_lot::RwLock;
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use thoosa_common::runner::sync_stage::ConsumeResult;
-use thoosa_shared::traits::{OutId, Stage};
+use thoosa_shared::traits::{Stage};
+#[cfg(test)]
+use thoosa_shared::traits::OutId;
 use thoosa_common::runner::sync_stage::{SyncStage};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
-use dashmap::DashSet;
-use log::{debug, error, info, trace, warn};
-use mockall::{Any, automock};
-use std::any::TypeId;
+use log::{debug, info, warn};
+use mockall::automock;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::Arc;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, RunCtx, ThoSelector, WithId};
 use thoosa_shared::ThoError;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use tokio::task::spawn_blocking;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -704,33 +701,8 @@ where
     type Out = SyncStageInitOutput<St>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct OomFastPathKey {
-    task: TypeId,
-    input: TypeId,
-    selector: TypeId,
-    device_idx: usize,
-}
 
-static OOM_FAST_PATH_DISABLED: OnceLock<DashSet<OomFastPathKey>> = OnceLock::new();
 
-fn oom_fast_path_disabled() -> &'static DashSet<OomFastPathKey> {
-    OOM_FAST_PATH_DISABLED.get_or_init(DashSet::new)
-}
-
-fn oom_fast_path_key<R, W, S>(device_idx: usize) -> OomFastPathKey
-where
-    R: 'static,
-    W: 'static,
-    S: 'static,
-{
-    OomFastPathKey {
-        task: TypeId::of::<R>(),
-        input: TypeId::of::<W>(),
-        selector: TypeId::of::<S>(),
-        device_idx,
-    }
-}
 
 fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::syn_stage_runner::SyncStageRunner {
     GlobalCtx::global().get_runner(tho_device_idx)
@@ -952,7 +924,7 @@ where
             return track_await!(<IA as InputRun<R, W, S>>::run_stage(Arc::clone(task), input, None, 0, run_context, None)).await;
         }
 
-        let tho_device_idx = run_context.tho_device_idx();
+        let _tho_device_idx = run_context.tho_device_idx();
 
         track_await!(run_with_runner(
             &self.adjusters,
@@ -1456,7 +1428,6 @@ pub mod test_types {
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use thoosa_shared::traits::{RangeSelector, Select, WithId};
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
@@ -1798,96 +1769,17 @@ mod tests {
     use super::mock_input_adjuster::{MockInputAdjuster, build as mock_input_adjuster};
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
-    use super::test_types::{TestId, TestInput, TestOutput};
+    use super::test_types::{TestInput, TestOutput};
     use super::{Adjusters, Contexts, OOMHandler};
-    use super::{InputContext, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext, input_adjuster, run_ctx_adjuster, task_adjuster};
+    use super::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext, input_adjuster, run_ctx_adjuster, task_adjuster};
     // use crate::common::runnable::Runnable;
-    use crate::runner::common::MockRunCtx;
     use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RangeSelector, Stage, WithId};
+    use thoosa_shared::traits::RangeSelector;
     use thoosa_shared::ThoError;
     // type Selector = Range<[usize; 1]>;
-
-    #[derive(Debug)]
-    struct AsyncTestStage {
-        results: Arc<Mutex<VecDeque<Result<TestOutput, ThoError>>>>,
-    }
-
-    impl AsyncTestStage {
-        fn new(results: VecDeque<Result<TestOutput, ThoError>>) -> Self {
-            Self {
-                results: Arc::new(Mutex::new(results)),
-            }
-        }
-    }
-
-    impl Adjustable for AsyncTestStage {}
-
-    impl Stage for AsyncTestStage {
-        type In<'a> = Arc<DevicesWrap<TestInput>>;
-        type Out = Arc<DevicesWrap<TestOutput>>;
-        type Ctx = MockRunCtx;
-    }
-
-    impl AsyncStage for AsyncTestStage {
-        // // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-        // // type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-        // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        //     WithId::id(input)
-        // }
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<TestInput>>,
-            _ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<TestOutput>>, ThoError> {
-            let next = self
-                .results
-                .lock().unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Err(ThoError::new("no more results")));
-
-            match next {
-                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o))),
-                Err(e) => Err(e),
-            }
-        }
-    }
-
-    impl OutId for AsyncTestStage {
-        fn out_id(
-            &self,
-            input_id: &<Self::In<'static> as WithId>::ID,
-        ) -> <Self::Out as WithId>::ID {
-            input_id.clone()
-        }
-    }
-
-    #[derive(Debug)]
-    struct AsyncInputCtx {
-        outputs: Vec<Arc<DevicesWrap<TestOutput>>>,
-    }
-
-    impl InputContext<'static, AsyncTestStage> for AsyncInputCtx {
-        async fn add_partial_output(&mut self, o: Arc<DevicesWrap<TestOutput>>) -> Result<(), ThoError> {
-            self.outputs.push(o);
-            Ok(())
-        }
-
-        fn all_done(&self) -> bool {
-            true
-        }
-
-        async fn build_final_output(self) -> Result<Arc<DevicesWrap<TestOutput>>, ThoError> {
-            self.outputs.into_iter().next().ok_or_else(|| {
-                ThoError::new("no output in AsyncInputCtx")
-            })
-        }
-    }
 
     #[derive(Debug)]
     struct BorrowOnlyInput {

@@ -1,30 +1,29 @@
 use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
-use crate::dims::{AnyDims, Batch, Dims};
+use crate::dims::{Batch, Dims};
+#[cfg(test)]
+use crate::dims::AnyDims;
 use crate::copy_ctx::{complete_cuda_stream, finish_cuda_run};
+#[cfg(test)]
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
 use crate::nets::state_transfer::{StateTensors, VarStoreState};
 use thoosa_common::runner::sync_stage::StageStateInfo;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+#[cfg(test)]
+use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
 use log::debug;
 use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
-use tch::Device::{Cpu, Cuda};
-use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
-use tch::{Device, Kind, Tensor, nn, no_grad};
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
-use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_shared::traits::{Named, ThoSelector};
-use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, panic_to_err};
+use tch::Device::Cpu;
+use tch::nn::{Optimizer, OptimizerConfig, VarStore};
+use tch::{Device, Tensor, nn, no_grad};
+#[cfg(test)]
+use tch::Kind;
+use thoosa_shared::{MoveToDevice, ThoError, panic_to_err};
 use thoosa_shims::stream::ThoCudaStream;
 use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamParamStateSnapshot, AdamWOptimizerSnapshot, SgdGroupSnapshot, SgdOptimizerSnapshot, SgdParamStateSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot};
 use tokio::task::JoinSet;
@@ -480,7 +479,7 @@ where
              * copies so the async future never carries an Optimizer reference.
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
-                OptSnapshot::Opt { opt, vs, module } => {
+                OptSnapshot::Opt { opt, vs, module: _module } => {
                     (unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? }, vs)
                 }
                 _ => {
@@ -910,6 +909,8 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Optimizer comparison is test scaffolding, not part of the runtime API.
+#[cfg(test)]
 async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'static str) -> anyhow::Result<()>{
     // Every supported optimizer uses the same deterministic trajectory so device restoration is compared under identical pressure.
     const IMAGE_DIM: i64 = 128;
@@ -1137,25 +1138,13 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
 
 #[cfg(test)]
 mod tests {
-    use crate::dims::{AnyDims, Batch};
-    use crate::ipc::cuda_wokrer::CudaWorker;
-    use crate::ipc::wraps::SyncStageIpcWrapper;
-    use crate::nets::builder::{Node, SeqBuilder};
-    use crate::nets::tho_varstore::{ModConfig, OptSnapshot, ThoTrainModule, clone_adam_snapshot_to, clone_var_store_to, do_test_reset_optimizer, replace_data};
+    use crate::nets::tho_varstore::{clone_var_store_to, do_test_reset_optimizer};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_device::ThoDevice;
-    use crate::tho_tensor::ThoTensor;
     use log::debug;
-    use std::collections::HashMap;
-    use std::io::Cursor;
-    use std::sync::{Arc, Mutex};
-    use tch::Device::{Cpu, Cuda};
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::{Init, Module, OptimizerConfig, VarStore, Variables};
-    use tch::{Device, Kind, Tensor, nn};
-    use thoosa_shared::{CopyToDevice, ThoError};
-    use thoosa_shims::optimizers::*;
+    use tch::Device::Cpu;
+    use tch::nn::{Init, VarStore};
+    use tch::{Tensor, nn};
 
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");

@@ -1,87 +1,68 @@
 use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
-use crate::data;
-use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
-use crate::dims::{ChannelsMotifsDists, MotifSlices};
+use crate::dims::MotifSlices;
 use crate::motifs_store::MotifsStore;
 use crate::stages::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::export::{Export as ExportStage, ExportArgs, ExportInput};
-use crate::stages::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
+use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
 use crate::stages::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
 use crate::stages::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
-use clap::{Args, Parser, Subcommand};
-use futures_util::future::{BoxFuture, join_all, try_join_all};
-use futures_util::{FutureExt, StreamExt, TryStreamExt};
-use log::{Level, LevelFilter, debug, error, info, trace, warn};
-use mockall_double::double;
-use parking_lot::{RawRwLock, RwLock};
+use clap::{Args, Subcommand};
+use futures_util::future::BoxFuture;
+use futures_util::{FutureExt};
+use log::{debug, error, info, trace, warn};
+use parking_lot::RwLock;
 use plotters::prelude::BLACK;
 use plotters::style::ShapeStyle;
-use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use serde::Serialize;
 use std::any::Any;
-use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::fs::{File, OpenOptions, read_dir};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::marker::PhantomData;
-use std::ops::{Deref, Range};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
-use std::{fs, process};
-use tch::Device::{Cpu, Cuda};
-use tch::Kind::Float;
-use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-use tch::nn::VarStore;
+use std::sync::Arc;
+use std::process;
+use tch::Device::Cpu;
 use tch::{Device, IndexOp, Tensor};
-use thoosa_common::dims::{AnyDims, Batch, ChannelsData, ThoBatch};
-use thoosa_common::progress_socket::CollectEtaProgressSocketServer;
-use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
+use thoosa_common::dims::{AnyDims, ChannelsData};
+use thoosa_common::resources::{Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::traits::Stage;
 
-use crate::find;
-use crate::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
+use crate::find::{FindMotifsArgs, SelectMotifsArgs};
 use crate::fragments::{
-    DataBy, MotifsToTensorArgs, PlotDataArgs, Resolution};
-use crate::motifs_ws::{load_final_model, parse_motif_path};
+    DataBy, PlotDataArgs, Resolution};
+use crate::motifs_ws::parse_motif_path;
 use crate::stages::apply_motif_nets::apply_motif_net_forward;
 use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, apply_motif_net_endpoint_init, stack_applied_motif_nets_init};
-use crate::stages::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
-use crate::stages::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
+use crate::stages::find_and_select_motifs::FindAndSelectMotifsRunConfigFields;
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, MotifStats, MotifStatsInput, MotifStatsOutput, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
-use crate::stages::select_buckets::SelectBucketsRunConfigRangeOrValue;
+use crate::stages::motif_stats::{MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT, MotifStats, MotifStatsInput, motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init};
 use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::stages::seq_scan::SeqScanStage;
-use crate::stages::slices_stats::{Aggr, Metrics};
-use crate::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, TrainFinalNetsRunConfigResult, new_train_final_net, sync_logits_batch_init, train_final_step_endpoint_inits};
-use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNets, TrainLabelNetsArgs, new_train_label_nets, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
-use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNetResult, TrainMotifNets, TrainMotifNetsResult, train_motif_step_endpoint_inits};
-use crate::train_nets;
-use crate::train_nets::{FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
-use thoosa_common::args::{CommonArgs, StageCommand};
-use thoosa_common::copy_ctx::CudaActorHandle;
+use crate::stages::slices_stats::Metrics;
+use crate::stages::train_final_net::{SYNC_LOGITS_BATCH_ENDPOINT, new_train_final_net, sync_logits_batch_init, train_final_step_endpoint_inits};
+use crate::stages::train_label_nets::{SYNC_LABEL_BATCH_ENDPOINT, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetsArgs, new_train_label_nets, sync_label_batch_endpoint_init, train_label_step_endpoint_inits};
+use crate::stages::train_motif_nets::{TrainMotifNetInput, TrainMotifNets, train_motif_step_endpoint_inits};
+use crate::train_nets::{TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs};
+use thoosa_common::args::StageCommand;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
-use thoosa_common::nets::nodes::ThoModule;
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::stages::freq_filter::{FreqFilter, SYNC_FREQ_FILTER_ENDPOINT, SyncFreqFilter, SyncFreqFilterIpcInit};
 use thoosa_common::stages::seq_scan::SeqScanRunConfigRangeOrValue;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
-use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
+use thoosa_common::utils::{load_run_config, plot_series, plot_series_with_sidebar_values};
 use thoosa_properties_map::ToHashmap;
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
@@ -90,42 +71,25 @@ use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
-use thoosa_common::nets::common_nets::{BinaryHeadLse, BinaryHeadPoolArgs, CommonTrainingRunConfig, OptConfig, PlotVecf32, SelfAttentionNetArgs, ThoModuleWithStore, opt_train};
+use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
-use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId, run_id};
+use thoosa_shared::hyperparameter::FieldName;
+use thoosa_shared::resource::{ResourceId, ResourceStats};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::AsyncStage;
-use thoosa_shared::traits::{Adjustable, Data, DataId, MaxParallelCtx, OutId, RunCtx, Select, DebugId, WithId};
-use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, RangeOrValue, collect_futures_best_effort_with_progress, mono_key, panic_to_err_async, parse_resources, debug_id};
-use thoosa_shared::{ResourceType, ThoError, cdt, cdt_for_dir};
+use thoosa_shared::traits::{Adjustable, MaxParallelCtx, RunCtx};
+use thoosa_shared::val::NamedVal;
+use thoosa_shared::{FuturesOrdering, RangeOrValue, collect_futures_best_effort_with_progress, mono_key, panic_to_err_async, parse_resources};
+use thoosa_shared::{ResourceType, ThoError, cdt};
 use thoosa_store::{SqlStore, Store};
-use tokio::runtime::{Handle, Runtime};
-use tokio::time::MissedTickBehavior;
-use tokio::{select, sync::watch, time::{self, Duration}};
-use torch_sys::at_grad_set_enabled;
-use tracing::Instrument;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::distance::{EucDistConfig, EucDistConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, average_euclidean_distance};
 use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, STACK_APPLIED_LABEL_NETS_ENDPOINT, apply_label_net_endpoint_init, stack_applied_label_nets_init};
 use crate::stages::cross_batch_clc::{CROSS_UNFOLD_CLC_ENDPOINT, sync_cross_unfold_clc_endpoint_init};
 use crate::stages::prepare_cross_batch::{PREPARE_CROSS_BATCH_ENDPOINT, prepare_cross_batch_endpoint_init};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOMHandler};
-use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
-use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::colors_iter::DistinctColorIter;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::perf_logging::{PERF, SyncMakeWriter, format_perf_map, init_tracing, install_panic_hook};
-use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
-use thoosa_shared::tracked_await::snapshot_not_ready;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shims::context::tho_cu_restart;
-use thoosa_shims::cpp_log::init_cpp_logging;
 use thoosa_store::rusqlite::Transaction;
 
 // Keep malformed user configuration on the command's Result path and retain
@@ -171,7 +135,7 @@ impl StageCommand for MotifCommands {
 
                 let input_wrapper = Arc::new(ResourcesConfigInput::new(find_motifs_args.resource_config()));
 
-                let mut init_ctx = ctx.branch(true);
+                let init_ctx = ctx.branch(true);
                 let init_loader = Arc::clone(&loader);
                 let init_ws = Arc::clone(&ws);
                 let init_store = Arc::clone(&store);
@@ -338,7 +302,7 @@ impl StageCommand for MotifCommands {
                 let mut init_ctx = ctx.branch(true);
                 let labels_filter = train_label_nets_args.labels_filter();
 
-                let run_config_ids = track_await!(run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
+                let _run_config_ids = track_await!(run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
                     train_motif_nets_run_config_range_or_value,
                     input_wrapper,
                     &ws,
@@ -385,7 +349,7 @@ impl StageCommand for MotifCommands {
 
                 let opt_config = Arc::new(train_final_net_args.opt_config.clone());
                 let init_ctx = ctx.branch(true);
-                let run_config_ids = track_await!(run_opt::< _, _, TrainFinalNetRunConfig, _, _>(
+                let _run_config_ids = track_await!(run_opt::< _, _, TrainFinalNetRunConfig, _, _>(
                     train_final_net_run_config_range_or_value,
                     input_wrapper,
                     &ws,
@@ -520,7 +484,7 @@ impl StageCommand for CommonCommands {
     type Workspace = dyn crate::motifs_ws::MotifsWorkspace;
     type Ctx = RunCtxImpl;
 
-    async fn run(self, store: &Self::Store, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, mut ctx:RunCtxImpl) -> anyhow::Result<()> {
+    async fn run(self, _store: &Self::Store, _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _ctx:RunCtxImpl) -> anyhow::Result<()> {
         match self {
             CommonCommands::SayHello(args) => {
                 debug!("CommonCommands::SayHello:run: args={args:?}");
@@ -699,7 +663,7 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-pub fn sync_freq_filter_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_freq_filter_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let Ok(init) = init.downcast::<SyncFreqFilterIpcInit>() else {
@@ -815,50 +779,6 @@ pub fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMo
     )
 }
 
-fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
-
-    let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
-        match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
-            None => RangeOrValue::Value(100),
-            Some(value) => {
-                let window = value.val().to_i64(0) as u32;
-                // info!("Window: window={window}");
-                let end = window.saturating_mul(max_k);
-                let start = window / min_k;
-                RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/steps, 0)) }
-            }
-        }
-    };
-    FindMotifsRunConfigRangeOrValue {
-        id: None,
-        step: RangeOrValue::Value(10),
-        // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((50, 0)) },
-        freq_filter: Some(vec![
-            AverageFilter(AverageFilterParamsRangeOrValue {
-                window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(10),
-            }),
-            // SavGolFilter(SavGolFilterParamsRangeOrValue {
-            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
-            //     stride: RangeOrValue::Value(10),
-            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            // }),
-        ]),
-        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                    q: RangeOrValue::Value(0.05),
-                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
-                }),
-            }),
-        }),
-        max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-        min_slices: Some(RangeOrValue::Value(2)),
-    }
-}
 
 
 fn dyn_step<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &P) -> RangeOrValue<u32> {
@@ -1589,7 +1509,7 @@ where
 
         let motif_net = Arc::clone(&motif_net);
 
-            let result = (|| {
+            let _result = (|| {
                 let out = apply_motif_net_forward(
                     mono_key!(resource_id, format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
                     tensor.as_ref(),
@@ -1655,7 +1575,7 @@ where
 
     let all_slices = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(1usize).copy(motif.data().shallow_clone::<AnyDims>().strip_types(), 0.into()).await?.t();
 
-    let result = (move || {
+    let _result = (move || {
 
         // trace!("plot_motif: motif.t={}", motif.data().t_ref());
         // let all_slices = motif.data().t_ref().unbind(0);
@@ -1761,7 +1681,7 @@ where
 
     debug!("run_grid: run_configs={run_configs:?}");
 
-    let mut run_config_ids = track_await!(save_run_configs(
+    let run_config_ids = track_await!(save_run_configs(
         input_run_config_ids.as_ref().map(|v| v.as_slice()),
         &store,
         &mut run_configs,
@@ -1818,97 +1738,8 @@ where
     Ok(run_config_id)
 }
 
-async fn perf_unfold_concat_cuda_vs_cpu() -> anyhow::Result<()>{
-    async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> anyhow::Result<u128> {
-        let mut tensors = Vec::with_capacity(num_tensors);
-
-        let ctx = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(1usize);
-
-        let t_0 = Instant::now();
-        for i in 0..num_tensors {
-
-
-            let t = Tensor::f_stack(&[
-                track_await!(make_t(&dim_1, &(i as i64), 0.1, ctx.as_ref(), cuda_first)).await?,
-                track_await!(make_t(&dim_1, &(i as i64), 0.2, ctx.as_ref(), cuda_first)).await?,
-                track_await!(make_t(&dim_1, &(i as i64), 0.3, ctx.as_ref(), cuda_first)).await?,
-                track_await!(make_t(&dim_1, &(i as i64), 0.4, ctx.as_ref(), cuda_first)).await?,
-                track_await!(make_t(&dim_1, &(i as i64), 0.5, ctx.as_ref(), cuda_first)).await?,
-            ], 0)?
-                .f_unfold(1, 1000, 100)?;
-
-            tensors.push(t);
-        }
-
-        let batch = Tensor::f_concat(tensors.as_slice(), 1)?;
-        let batch= if !cuda_first {
-            track_await!(ctx.copy(batch.into(), 1.into())).await?.t()
-        } else {
-            batch
-        };
-
-        assert_eq!(batch.device(), Cuda(0));
-
-        Ok(t_0.elapsed().as_millis())
-    }
-
-    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &dyn CudaActorHandle, cuda_first:bool) -> anyhow::Result<Tensor> {
-        let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
-
-        if cuda_first {
-            Ok(track_await!(copy_ctx.copy(t.into(), 1.into())).await?.t())
-        } else {
-            Ok(t)
-        }
-    }
-
-    // log::set_max_level(Info);
-    // GlobalCtx::init_devices(2);
-
-    let num_tensors = 3;
-
-    let mut cuda_first_time = 0;
-    let mut cpu_first_time = 0;
-
-    let rounds = 20;
-
-    for r in 0..rounds*2 {
-        if r % 2 == 0 {
-            cuda_first_time += track_await!(load_tensors(&100_000, num_tensors, true)).await?;
-        } else {
-            cpu_first_time += track_await!(load_tensors(&100_000, num_tensors, false)).await?;
-        }
-
-    }
-
-
-    println!("cuda_first_time in {} cpu_first_time={}", cuda_first_time/rounds, cpu_first_time/rounds);
-
-    Ok(())
-}
 
 //to check if there are no `#field_ident field value Real(87.0) is not valid: ThoosaError { msg: "can't convert Real(87.0)", frame_0
-fn check_opt_run_config<RCRV, RC>(find_and_select_run_config: &RCRV) -> anyhow::Result<()>
-where
-    RCRV: OptRunConfigSource,
-    RC: RunConfig + TryFrom<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>, Error = anyhow::Error> + ToHashmap,
-    <RCRV as OptRunConfigSource>::P: 'static,
-{
-    let opt_run_config = find_and_select_run_config.opt_run_configs()?;
-    let const_vals = opt_run_config.grid_run_config_source().const_params();
-    let grid_runs = opt_run_config.grid_to_vals_and_opt_params()?;
-
-    for (grid_vals, opt_hps) in grid_runs {
-        let opt_vals = opt_hps.iter().map(|hp| NamedVal::new(hp.name().clone(), hp.random_sample())).collect::<Vec<_>>();
-
-        for i in 0..100 {
-            let mut run_config: RC = [const_vals.as_slice(), grid_vals.as_slice(), &opt_vals].concat().into_iter().try_into()?;
-
-            debug!("run_config={run_config:?}");
-        }
-    }
-    Ok(())
-}
 
 
 
@@ -1921,90 +1752,43 @@ mod cli_tests {
         assert!(error.downcast_ref::<serde_json5::Error>().is_some());
     }
 
-    use crate::cli::{CommonCommands, MotifAppCommands, MotifCommands, RunAllArgs, import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot};
-    use crate::dims::MotifSlices;
-    use crate::distance::MaskMaker::LeQuantile;
+    use crate::cli::{MotifAppCommands, MotifCommands, import_resources, median_window_from_find_and_select};
     use crate::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
-    use crate::find::{
-        FixedFindMotifsConfig, SelectMotifsParams};
     use crate::fragments::Resolution;
-    use crate::fragments::{DataBy, PlotDataArgs};
-    use crate::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
+    use crate::fragments::DataBy;
     use crate::motifs_store::MotifsStore;
-    use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
-    use crate::stages::find_motifs::FindMotifsStage;
-    use crate::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::stages::motif_stats::MotifStats;
-    use crate::stages::slices_stats::{Aggr, Metrics};
+    use crate::stages::find_and_select_motifs::FindAndSelectMotifsRunConfigFields;
+    use crate::stages::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, QuantileAggrRangeOrValue, SlicesFilterRangeOrValue};
     use crate::stages::stft::SyncStftSelector;
-    use crate::stages::tensor_loader::RawTensorLoader;
-    use crate::stages::train_label_nets::TrainLabelNetRunConfig;
-    use crate::tch_test_utils;
-    use crate::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
-    use crate::train_nets::{InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue, lin_motif_node};
+    use crate::tch_test_utils::resource_tensor_two_easy_motifs;
     use clap::Parser;
-    use futures::executor::block_on;
-    use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
-    use log::{LevelFilter, debug, error, info, set_max_level, trace};
-    use mockall_double::double;
-    use parking_lot::lock_api::MutexGuard;
-    use parking_lot::{Mutex, RawMutex, RawRwLock, RwLock};
-    use plotters::prelude::{BLACK, IntoLinspace};
-    use rand::{Rng, RngExt, rng};
-    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-    use rayon::prelude::IntoParallelIterator;
-    use std::cmp::{max, min};
-    use std::collections::{HashMap, HashSet};
-    use std::io::Read;
-    use std::ops::Range;
-    use std::path::{Path, PathBuf};
+    use log::debug;
+    use parking_lot::RwLock;
+    use std::collections::HashMap;
+        use std::ops::Range;
+    use std::path::Path;
     use std::sync::Arc;
-    use std::time::Duration;
-    use std::vec::IntoIter;
-    use std::{fs, ptr};
-    use tch::Device::{Cpu, Cuda};
-    use tch::Kind::Float;
-    use tch::display::{PrinterOptions, set_print_options};
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::{Device, IndexOp, Tensor, nn};
+    use tch::Tensor;
     use thoosa_common::args::CommonArgs;
-    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::debug_plot;
-    use thoosa_common::dims::ChannelsData;
-    use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
-    use thoosa_common::nets::nodes::ThoModule;
-    use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, Simple};
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
-    use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::stages::freq_filter::{FreqFilter, SyncFreqFilter, SyncFreqFilterIpcInit};
-    use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
-    use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParams, NotchBandFilterParamsRangeOrValue, Padding};
-    use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
-    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs, mock_ws_simp};
-    use thoosa_properties_map::ToHashmap;
-    use thoosa_run_config_args::OptRunConfigSource;
-    use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::perf_logging::{PERF, format_perf_map, set_panic_hook};
-    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
-    use thoosa_shared::run_configs::RunConfig;
-    use thoosa_shared::run_configs::RunConfigId;
+    use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParams, InputFilter, InputFilterRangeOrValue, MedianFilterParams, Padding};
+    use thoosa_common::ws::{WsConfigs};
+    use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::AsyncStage;
-    use thoosa_shared::traits::{Data, DataId, RunCtx};
+    use thoosa_shared::traits::{RunCtx};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError, cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp};
+    use thoosa_shared::{RangeOrValue, ResourceType, cdt_for_dir};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_store::{SqlStore, Store};
+    use thoosa_store::{SqlStore};
 
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
@@ -2261,7 +2045,7 @@ mod cli_tests {
             |_: String| Ok(Tensor::from_slice(&[0., 1., 2., 0., 10., 20.]).view((2, -1))),
             None,
             true,
-            |t: &Transaction|{
+            |_t: &Transaction|{
                 Ok(())
             },
         ).await?;
@@ -2312,7 +2096,7 @@ mod cli_tests {
             |_: String| Ok(Tensor::from_slice(&[0., 100., 0.]).view((1, -1))),
             Some(freq_filter),
             true,
-            |t: &Transaction|{
+            |_t: &Transaction|{
                 Ok(())
             }
         ).await?;
@@ -2338,7 +2122,7 @@ mod cli_tests {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (pulse_triangle_t, intervals, _) = resource_tensor_two_easy_motifs(
+        let (pulse_triangle_t, _intervals, _) = resource_tensor_two_easy_motifs(
             1000,
             1,
             100,
@@ -2354,7 +2138,7 @@ mod cli_tests {
 
         debug_plot!(&pulse_triangle_t, "pulse_triangle")?;
 
-        let (pulse_sin_t, intervals, _) = resource_tensor_two_easy_motifs(
+        let (pulse_sin_t, _intervals, _) = resource_tensor_two_easy_motifs(
             1000,
             1,
             100,

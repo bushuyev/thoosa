@@ -2,7 +2,7 @@ use super::cross_batch_clc::{CrossInput, UnfoldParams, unfold_and_cat};
 use futures_util::{FutureExt, future::BoxFuture};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::{marker::PhantomData, sync::{Arc, atomic::{AtomicU32, Ordering}}};
+use std::{marker::PhantomData, sync::Arc};
 use thoosa_common::dims::AnyDims;
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};

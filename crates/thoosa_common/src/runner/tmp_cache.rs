@@ -6,9 +6,8 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::{stream, TryStreamExt, StreamExt};
 use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use mockall_double::double;
-use tokio::sync::RwLockReadGuard;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::ThoError;
@@ -328,7 +327,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::future::Future;
     use std::pin::Pin;
     use async_trait::async_trait;
@@ -336,14 +335,11 @@ mod tests {
     use thoosa_cpu_data_derive::CpuData;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::{debug_id, CopyToDevice, ThoError, CudaAction};
     // use crate::common::Data;
-    use crate::runner::global_ctx::mock_global_ctx;
     use thoosa_shared::traits::{CachableIdTr, Data, DebugId, WithId};
     // use crate::common::Data;
     use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::global_ctx::RegisteredCacheHandle;
     use crate::runner::tmp_cache::TmpCached;
 
     #[tokio::test]

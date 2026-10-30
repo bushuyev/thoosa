@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use log::{debug, info, trace};
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -12,14 +12,10 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
-use std::time::Instant;
 use tch::Tensor;
-use thoosa_common::cuda_utils::maybe_cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, CpuStateCheckpoint, checkpoint_operation, copy_state_tensor};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::serialization::json::IpcCodec;
 use thoosa_common::ipc::worker_msg::{WorkerInput};
 use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::nodes::LossFp;
@@ -30,14 +26,12 @@ use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
-use thoosa_common::utils::optimizer_mem_size;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
-use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, os_thread_id, panic_to_err};
+use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, panic_to_err};
 use tokio::sync::MutexGuard;
 use tokio::task::coop::cooperative;
 use thoosa_shared::ipc_types::WorkerOutput;
@@ -54,6 +48,7 @@ where
     DI: Dims, DO: Dims, C: RunCtx
 {
     id:SynKey,
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of
     // them crosses the local/IPC boundary independently.

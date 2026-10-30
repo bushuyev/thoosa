@@ -12,16 +12,14 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::ThoError;
 use tokio::task::JoinSet;
 
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap, SelectRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, SelectRef};
 use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
-use crate::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::SynKey;
 
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
@@ -126,7 +124,7 @@ where
         let out_id = runnable.out_id(input.id()); //.clone();
 
         match self.config {
-            OOMRunnerConfig::MaxParallel { max, step } => {
+            OOMRunnerConfig::MaxParallel { max: _max, step } => {
                 let run_ctx = ctx.branch(false);
                 let adjusters: Vec<Adjusters<NoInputAdjuster, NoStageAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(step)))];
                 OOMHandler::<NoInputAdjuster, NoStageAdjuster, _, S>::new(
@@ -357,7 +355,6 @@ pub mod fixtures {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use thoosa_shared::traits::OutId;
     use thoosa_shared::traits::{Adjustable, AsyncStage, Stage};
     use thoosa_shared::traits::{Data, Metrics, Select, ThoSelector, WithId};
@@ -566,7 +563,7 @@ pub mod fixtures {
         async fn run(
             self: Arc<Self>,
             input: Self::In<'static>,
-            ctx: Self::Ctx,
+            _ctx: Self::Ctx,
         ) -> Result<Self::Out, ThoError> {
             self.run_count.fetch_add(1, Relaxed);
 
@@ -593,38 +590,29 @@ mod tests {
     use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-    use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;
     use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::test_utils::{DummyTensor, parse_numeric_part};
     use async_trait::async_trait;
     use cached_derive::Cached;
-    use clap::{Args, Parser, Subcommand};
-    use crossbeam::deque::Worker;
-    use futures_util::future::{BoxFuture, Shared};
-    use log::{debug, error};
+    use log::debug;
     use mockall_double::double;
     use std::collections::{HashMap, HashSet};
-    use std::process::Stdio;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
-    use std::time::Duration;
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, AsyncStage, Stage};
     use thoosa_common::runner::sync_stage::{SyncStage};
     use thoosa_shared::traits::{Data, OutId, RunCtx, WithId};
     use thoosa_shared::ThoError;
-    use tokio::process::{Child, Command};
     #[double]
     use crate::runner::global_ctx::GlobalCtx;
     use crate as thoosa_common;
     use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
-    use crate::runner::cache_areas::CacheArea;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
@@ -679,7 +667,7 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             input: Self::In<'static>,
-            ctx: Self::Ctx,
+            _ctx: Self::Ctx,
         ) -> Result<Self::Out, ThoError> {
             self.run_count.fetch_add(1, Relaxed);
 
@@ -1013,7 +1001,7 @@ mod tests {
         // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let mut ctx_device_1 = RunCtxImpl::new(1, "noname");
         let ctx_device_1_0 = ctx_device_1.branch(false);
-        let ctx_device_1_data = ctx_device_1.branch(false);
+        let _ctx_device_1_data = ctx_device_1.branch(false);
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
@@ -1152,7 +1140,7 @@ mod tests {
         ));
         let mut ctx_device_0 = RunCtxImpl::new(1, "noname");
         let ctx_device_0_run = ctx_device_0.branch(false);
-        let ctx_device_0_data = ctx_device_0.branch(false);
+        let _ctx_device_0_data = ctx_device_0.branch(false);
 
         let multed = load_and_mut.run_cached(
             DLoaderInput {

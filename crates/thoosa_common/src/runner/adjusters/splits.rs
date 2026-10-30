@@ -226,9 +226,7 @@ mod tests {
     use std::sync::Arc;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::mock_cachable_id::MockCachableId;
-    use thoosa_shared::traits::{Adjustable, Data, Stage, WithId};
+    use thoosa_shared::traits::{Adjustable, Data, Stage};
     use thoosa_common::runner::sync_stage::{SyncStage};
     use thoosa_shared::ThoError;
 
@@ -443,7 +441,7 @@ mod tests {
         let mut context_impl:SplitsAdjusterContextImpl<MockTestStage, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
 
 
-        let mut selector = MockTestSelector::new();
+        let selector = MockTestSelector::new();
 
 
         let adjusted_selector = match splits_adjuster.adjust(selector, &mut context_impl).await {
@@ -460,7 +458,7 @@ mod tests {
 
         context_impl.add_partial_output(MockTestOutput::new()).await?;
 
-        let adjusted_selector = match splits_adjuster.adjust(adjusted_selector, &mut context_impl).await {
+        let _adjusted_selector = match splits_adjuster.adjust(adjusted_selector, &mut context_impl).await {
             Ok(selector) => selector,
             Err(error) => anyhow::bail!("adjust after partial output failed: {error:?}"),
         };

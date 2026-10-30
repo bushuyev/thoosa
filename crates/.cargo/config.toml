@@ -1,3 +1,14 @@
+# Host-side proc macros also compile thoosa_shared with generic_const_exprs.
+# Select the same solver rustc already falls back to, without its compatibility warning.
+target-applies-to-host = false
+
+[unstable]
+host-config = true
+target-applies-to-host = true
+
+[host]
+rustflags = ["-Znext-solver=coherence"]
+
 [build]
 target = "x86_64-unknown-linux-gnu"
 target-dir = "target"

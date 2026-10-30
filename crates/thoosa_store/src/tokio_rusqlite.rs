@@ -86,6 +86,7 @@ pub(crate) enum Error<E = rusqlite::Error> {
     ///
     /// This contains the [`Connection`] for retry purposes and the underlying
     /// [`rusqlite::Error`].
+    #[cfg_attr(not(test), expect(dead_code, reason = "Adapter regression tests exercise this API; production uses the narrower SqlStore interface."))]
     Close((Connection, rusqlite::Error)),
 
     /// The dispatched closure panicked, but the worker thread survived and the
@@ -130,12 +131,14 @@ impl From<rusqlite::Error> for Error<rusqlite::Error> {
 }
 
 /// The result returned on method calls in this crate.
+#[cfg_attr(not(test), expect(dead_code, reason = "Adapter regression tests exercise this API; production uses the narrower SqlStore interface."))]
 pub(crate) type Result<T, E = rusqlite::Error> = std::result::Result<T, Error<E>>;
 
 type CallFn = Box<dyn FnOnce(&mut rusqlite::Connection) + Send + 'static>;
 
 enum Message {
     Execute(CallFn),
+    #[cfg_attr(not(test), expect(dead_code, reason = "Adapter regression tests exercise this API; production uses the narrower SqlStore interface."))]
     Close(oneshot::Sender<rusqlite::Result<()>>),
 }
 
@@ -153,12 +156,14 @@ pub(crate) struct Connection {
 
 impl Connection {
     /// Open a new connection to a SQLite database.
+    #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
     pub(crate) async fn open<P: AsRef<Path>>(path: P) -> std::result::Result<Self, rusqlite::Error> {
         let path = path.as_ref().to_owned();
         start(move || rusqlite::Connection::open(path)).await
     }
 
     /// Open a new in-memory connection.
+    #[cfg_attr(not(test), expect(dead_code, reason = "Adapter regression tests exercise this API; production uses the narrower SqlStore interface."))]
     pub(crate) async fn open_in_memory() -> std::result::Result<Self, rusqlite::Error> {
         start(rusqlite::Connection::open_in_memory).await
     }
@@ -173,6 +178,7 @@ impl Connection {
     }
 
     /// Open a new connection with flags and VFS.
+    #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
     pub(crate) async fn open_with_flags_and_vfs<P: AsRef<Path>>(
         path: P,
         flags: OpenFlags,
@@ -184,6 +190,7 @@ impl Connection {
     }
 
     /// Open a new in-memory connection with flags.
+    #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
     pub(crate) async fn open_in_memory_with_flags(
         flags: OpenFlags,
     ) -> std::result::Result<Self, rusqlite::Error> {
@@ -191,6 +198,7 @@ impl Connection {
     }
 
     /// Open a new in-memory connection with flags and VFS.
+    #[expect(dead_code, reason = "Preserve the adapter connection-opening API alongside the constructor used by SqlStore.")]
     pub(crate) async fn open_in_memory_with_flags_and_vfs(
         flags: OpenFlags,
         vfs: &str,
@@ -245,6 +253,7 @@ impl Connection {
     /// worker thread stays alive.
     ///
     /// Calling this on a closed connection still panics.
+    #[cfg_attr(not(test), expect(dead_code, reason = "Adapter regression tests exercise this API; production uses the narrower SqlStore interface."))]
     pub(crate) async fn call_unwrap<F, R>(&self, function: F) -> R
     where
         F: FnOnce(&mut rusqlite::Connection) -> R + Send + 'static,
@@ -265,6 +274,7 @@ impl Connection {
     /// Close the database connection.
     ///
     /// If a clone already closed it, this returns `Ok(())`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "Adapter regression tests exercise this API; production uses the narrower SqlStore interface."))]
     pub(crate) async fn close(self) -> Result<()> {
         let (sender, receiver) = oneshot::channel::<rusqlite::Result<()>>();
 

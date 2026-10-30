@@ -120,8 +120,6 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
     use tch::{Device, IndexOp, Kind, Tensor};
-    use tch::kind::FLOAT_CPU;
-    use crate::criteria::norm_thickness;
 
     fn row_matrix(n: i64, m: i64) -> Tensor {
         // Rows encode their index so we can check uniqueness/bounds.

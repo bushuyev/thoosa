@@ -6,72 +6,34 @@ use clap::clap_derive::Args;
 use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::builder::{Node, SeqBuilder};
 use thoosa_common::nets::nodes::{BinaryHeadPool, InitMode, ThoModule};
-use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
-use thoosa_common::resources::{Empty, Labeled, Logits, NetResources, SavableResult};
-use thoosa_common::utils::{ListenerResponse, TrainListener, plot_series};
-use thoosa_common::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
-use thoosa_common::ws::Workspace;
-use thoosa_shared::{CopyToDevice, mono_key, panic_to_err, panic_to_err_async};
+use thoosa_common::resources::{Empty, Logits, NetResources};
+use thoosa_common::utils::{mask_from_lengths, masked_max, masked_mean};
 
-use log::{debug, error, info, trace, warn};
-use parking_lot::{Mutex, RwLock};
-use plotters::prelude::BLACK;
+use log::{debug, trace};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::fmt::Debug;
 use std::path::PathBuf;
-use std::{fmt, fs};
-use tch::Device::Cpu;
-use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore, init};
-use tch::{Device, Kind, TchError, Tensor, nn};
-use thoosa_shared::ThoError;
-use thoosa_shared::val::{NamedRange, NamedVal, Val};
+use std::fs;
+use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, VarStore, init};
+use tch::{Device, Tensor};
 
-use async_trait::async_trait;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::{SeqCst, Relaxed};
-use tch::Kind::Float;
 use thoosa_cpu_data_derive::CpuData;
-use thoosa_store::Store;
-use torch_sys::at_grad_set_enabled;
 
-use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Spectorgram};
-use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::dims::{Batch, Dims, Slice};
+use crate::dims::{MotifSlices, Spectorgram};
+use thoosa_common::dims::Dims;
 use thoosa_common::nets::common_nets;
-use thoosa_common::nets::common_nets::{BinaryHeadPoolArgs, BinaryHeadPoolArgsBuilder, BinaryHeadPoolArgsFields, BinaryHeadPoolArgsRangeOrValue,
-                                       CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue,
-                                       ConvNetArgs, ConvNetArgsBuilder, ConvNetArgsFields, ConvNetArgsRangeOrValue,
-                                       ConvNetJoint, ConvNetParams, LinLenNetParams, OptConfig,
-                                       SelfAttentionNetArgs, SelfAttentionNetArgsBuilder, SelfAttentionNetArgsFields, SelfAttentionNetArgsRangeOrValue,
-                                       SelfAttentionNetParams,
-                                       StftRunConfig, StftRunConfigBuilder, StftRunConfigFields, StftRunConfigRangeOrValue,
-                                       WithCommonTrainingRunConfig,
+use thoosa_common::nets::common_nets::{BinaryHeadPoolArgs, BinaryHeadPoolArgsBuilder, BinaryHeadPoolArgsFields, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetArgsBuilder, ConvNetArgsFields, ConvNetArgsRangeOrValue, ConvNetJoint, ConvNetParams, LinLenNetParams, OptConfig, SelfAttentionNetArgs, SelfAttentionNetArgsBuilder, SelfAttentionNetArgsFields, SelfAttentionNetArgsRangeOrValue, SelfAttentionNetParams, StftRunConfig, StftRunConfigBuilder, StftRunConfigFields, StftRunConfigRangeOrValue, WithCommonTrainingRunConfig,
 };
 use thoosa_common::nets::nodes::InitModeBuilder;
 use thoosa_common::nets::nodes::InitModeFields;
 use thoosa_common::nets::nodes::InitModeRangeOrValue;
-use thoosa_common::nets::tho_varstore::clone_var_store_to;
-use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::run_configs::RunConfig;
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
-use thoosa_shared::test_utils::{is_flag_set, set_flag};
-use thoosa_shared::tmp_file::TmpFile;
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, DebugId, ToJsonFile, WithId};
-use thoosa_shims::inference_mode::InferenceModeGuard;
+use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::traits::{Data, ToJsonFile, WithId};
 
 #[derive(Debug)]
 pub struct TrainLabelNetRunConfigResultParams<'a> {
@@ -620,7 +582,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     };
 
 
-    let mut builder = builder
+    let builder = builder
     .closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cosine_motif_node: 1. t.size={:?}", t.size());
@@ -647,7 +609,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?;
 
     #[cfg(test)]
-    let mut builder = builder.closure(
+    let builder = builder.closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cosine_motif_node: 2. t.size={:?}", t.size());
             Ok(t.shallow_clone())

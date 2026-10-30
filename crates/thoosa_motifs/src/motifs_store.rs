@@ -1,39 +1,22 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
-use futures_util::future::BoxFuture;
-use futures_util::{FutureExt, StreamExt};
-use parking_lot::{Mutex, RwLock};
 use std::array::IntoIter;
-use std::backtrace::Backtrace;
-use std::cell::RefCell;
-use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::fmt::{Debug, Display};
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicUsize;
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, trace, warn};
 use mockall::predicate::eq;
-use mockall::{PredicateBoxExt, mock};
-use polars::polars_utils::index::Bounded;
-use polars::polars_utils::itertools::Itertools;
-use rand::seq::SliceRandom;
-use rand::{Rng, RngExt};
-use rusqlite::trace::TraceEvent;
+use mockall::mock;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Error, OpenFlags, ToSql, Transaction, params};
-use serde::{Deserialize, Serialize};
+use rusqlite::{Connection, Error, Transaction, params};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::run_configs::{RunConfigId, RunId, run_id};
-use thoosa_shared::traits::DataId;
 use thoosa_shared::val::Val;
-use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
 use thoosa_store::{LimitBy, Store, SetCond, RunConfigEntry, TrainedNetsBy, RunConfigRow, RunConfigFilter, RunMotifEntry, TrainedNetEntry, TrainedNet, SqlStore, conds_to_q};
 use crate::motif_tracker_store::{CheckGroups, IdSlice};
@@ -255,7 +238,7 @@ impl MotifsStore for SqlStore {
         train_coeff: f32,
         valid_coeff: f32,
         min_p: f32,
-        allow_leaky_split: bool,
+        _allow_leaky_split: bool,
     ) -> anyhow::Result<()> {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_data_sets", move |conn| {
@@ -1654,7 +1637,6 @@ mod store_tests {
     use thoosa_store::ExternalSqlWriter;
     use thoosa_shared::resource::ResourceStore;
     use std::collections::HashMap;
-    use std::fmt::{Display, Formatter};
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -1662,13 +1644,12 @@ mod store_tests {
 
     use log::debug;
     use rusqlite::params;
-    use parking_lot::{Mutex, RawMutex, RwLock};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::{RunConfigId, RUN_ID};
     use thoosa_shared::val::Val;
-    use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt, cdt_for_dir, MotifSlice};
+    use thoosa_shared::{TensorIdSliceIdx, cdt_for_dir, MotifSlice};
     use super::{MotifsStore, create_motif_tables};
-    use crate::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
+    use crate::motif_tracker_store::{SlicesMatch, SqlMotifTrackerStore};
 
     use thoosa_store::{LimitBy, RunConfigFilter, SetCond, SqlStore, Store, TrainedNetsBy};
     use std::path::PathBuf;
@@ -1692,7 +1673,7 @@ mod store_tests {
         // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         // let mut store = test_store_from_path("/tmp/test_db.db3"))?;
 
-        let mut store = test_store().await?;
+        let store = test_store().await?;
 
         let import_id = store.save_import("test".to_string()).await?;
 
@@ -1834,7 +1815,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_resources_not_labled() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
 
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
@@ -1874,7 +1855,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_save_data_sets_group_created() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
 
         init_test_store(&store).await?;
 
@@ -1895,7 +1876,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_save_data_sets_allow_leaky_split_reuses_resources() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
         store.save_label("bbb").await?;
@@ -1991,7 +1972,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_save_data_sets_limit_by_length_keeps_resources_within_total_length() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
         store.save_label("bbb").await?;
@@ -2076,7 +2057,7 @@ mod store_tests {
     async fn test_save_slices() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = test_store_from_path(
+        let store = test_store_from_path(
             test_dir.join("test_db.db3"),
         ).await?;
 
@@ -2158,11 +2139,11 @@ mod store_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.load_slices_into_groups(store.as_ref(), None, None).await?;
+        let _groups = slices_store.load_slices_into_groups(store.as_ref(), None, None).await?;
 
         {
             let store_guard = Arc::clone(&store);
-            let mut guard = store_guard.open_external_writer_conn()?;
+            let guard = store_guard.open_external_writer_conn()?;
             let mut stmt = guard.prepare("SELECT sm.motif_id, s_0.resource_id, s_0.slice_idx, s_1.resource_id, s_1.slice_idx FROM slice_matches sm \
              JOIN slices s_0 ON s_0.id=sm.slice_id_0 \
              JOIN slices s_1 ON s_1.id=sm.slice_id_1 \
@@ -2247,7 +2228,7 @@ mod store_tests {
             input_run_config_ids
         );
 
-        let (run_config, motifs) = store.list_selected_motifs(&[select_motifs_run_config_id], 20, None).await?.into_iter().next().expect("no selected motif");
+        let (_run_config, motifs) = store.list_selected_motifs(&[select_motifs_run_config_id], 20, None).await?.into_iter().next().expect("no selected motif");
 
         debug!("motifs: {:?}", motifs);
 
@@ -2288,7 +2269,7 @@ mod store_tests {
         assert_eq!(expected_ids, find_run_motif_ids);
         //
         // //TODO
-        let (channel, run_config_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
+        let (channel, run_config_id_, mut slices, _resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
         slices.sort();
 
         debug!("slices={slices:?}");
@@ -2305,14 +2286,14 @@ mod store_tests {
         assert_eq!(7, channel);
         assert_eq!(find_motifs_run_config_id, run_config_id_);
 
-        let (channel, run_config_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None).await?;
+        let (_channel, _run_config_id_, mut slices, _resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None).await?;
         slices.sort();
 
 
         let resources = store.list_resources_not_in_group("pure group 10", 10).await;
         debug!("resources={resources:?}");
 
-        let (channel, run_config_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0))).await?;
+        let (_channel, _run_config_id_, slices, _resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0))).await?;
 
         debug!("random slices={slices:?}");
         //
@@ -2380,11 +2361,11 @@ mod store_tests {
         assert!(input_run_config_ids.contains(&(selected_run_config_ids[0], first_find_run_config_id)));
         assert!(input_run_config_ids.contains(&(selected_run_config_ids[1], second_find_run_config_id)));
 
-        let (_run_config_id, first_selected) = store.list_selected_motifs(&[selected_run_config_ids[0]], 2, None).await?.into_iter().next().expect("no selected motif");;
+        let (_run_config_id, first_selected) = store.list_selected_motifs(&[selected_run_config_ids[0]], 2, None).await?.into_iter().next().expect("no selected motif");
         assert_eq!(vec![(first_motif_ids[0], 1.0)], first_selected[0]);
         assert_eq!(vec![(first_motif_ids[1], 1.0)], first_selected[1]);
 
-        let (_run_config_id, second_selected) = store.list_selected_motifs(&[selected_run_config_ids[1]], 2, None).await?.into_iter().next().expect("no selected motif");;
+        let (_run_config_id, second_selected) = store.list_selected_motifs(&[selected_run_config_ids[1]], 2, None).await?.into_iter().next().expect("no selected motif");
         assert_eq!(Vec::<(u32, f64)>::new(), second_selected[0]);
         assert_eq!(vec![(second_motif_ids[0], 1.0)], second_selected[1]);
 
@@ -2393,7 +2374,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_save_list_trained_nets() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let run_config_id = store.save_run_config(
@@ -2454,7 +2435,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_motifs_slices_filters_slice_run_config_ids() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = {
@@ -2527,7 +2508,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_motif_slices_filters_slice_run_config_ids() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = {
@@ -2638,7 +2619,7 @@ mod store_tests {
     async fn test_save_run_config() -> anyhow::Result<()> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = test_store_from_path(
+        let store = test_store_from_path(
             test_dir.join("test_db.db3"),
         ).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
@@ -2703,7 +2684,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_configs_page_and_by_ids() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let run_config_id_1 = store.save_run_config(None, &"first", "test", HashMap::new()).await?;
@@ -2724,7 +2705,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let root_run_config_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
@@ -2766,7 +2747,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_get_prev_run_config_id() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let input_run_config_id = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
@@ -2799,7 +2780,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_input_run_config_ids_reads_large_sets_in_chunks() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let input_run_config_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
@@ -2833,7 +2814,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_config_ids_with_outputs_reads_large_sets_in_chunks() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let mut parent_run_config_ids = Vec::with_capacity(1001);
@@ -2862,9 +2843,9 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_resources_by_file_stem() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         {
-            let import_id = store.save_import("test".to_string()).await?;
+            let _import_id = store.save_import("test".to_string()).await?;
 
             store.save_resources_labels(
                 &HashMap::from([
@@ -2912,7 +2893,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_resources_by_label_filters_by_min_probability() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
         store.save_label("bbb").await?;
@@ -2975,7 +2956,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_respects_constraints() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_a", 2048), ("res_b", 2048)]).await?;
@@ -3002,7 +2983,7 @@ mod store_tests {
         )?;
 
         const WIDTH: u32 = 40;
-        let (channel, run_config_id, random_slices, resources_map) =
+        let (channel, _run_config_id, random_slices, resources_map) =
             store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::new(|length: u32| length), Some(2usize)).await?;
 
         assert_eq!(channel_id, channel);
@@ -3039,7 +3020,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_respects_min_distance() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_main", 4096)]).await?;
@@ -3059,7 +3040,7 @@ mod store_tests {
 
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
-        let (channel, run_config_id, random_slices, resources_map) =
+        let (channel, _run_config_id, random_slices, resources_map) =
             store.list_random_slices_out_of_motif(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length), Some(2usize)).await?;
 
         assert_eq!(channel_id, channel);
@@ -3086,7 +3067,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_uses_input_len_adjuster() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_main", 2000)]).await?;
@@ -3123,7 +3104,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn heavy_list_random_slices() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
 
         create_resources(&store, (0..100).map(|i| (&*format!("res_{i}").leak(), 2000u32)).collect::<Vec<_>>().as_slice()).await?;
 
@@ -3146,7 +3127,7 @@ mod store_tests {
         const WIDTH: u32 = 200;
         let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|length: u32| length);
         let n = Instant::now();
-        let (channel, _, random_slices, resources_map) = store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster), Some(100)).await?;
+        let (_channel, _, random_slices, _resources_map) = store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::clone(&input_len_adjuster), Some(100)).await?;
 
         debug!("random_slices.size={} elapsed={}", random_slices.len(), n.elapsed().as_millis());
         assert_eq!(100, random_slices.len());
@@ -3156,7 +3137,7 @@ mod store_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_falls_back_to_other_resources() -> anyhow::Result<()> {
-        let mut store = test_store().await?;
+        let store = test_store().await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_main", 220), ("res_other", 500)]).await?;
@@ -3269,18 +3250,14 @@ mod store_tests {
 
 #[cfg(test)]
 mod fs_store_tests {
-    use crate::fs_store::{ChunkedSlicesReader, FileMotifTrackerStore};
-    use crate::motif_tracker_store::{filter_groups_by_slices_count, IdSlice, SlicesMatch};
-    use thoosa_store::{SqlStore, Store};
-    use log::LevelFilter::Trace;
-    use log::{debug, error};
-    use parking_lot::{Mutex, RwLock};
+    use crate::fs_store::FileMotifTrackerStore;
+    use crate::motif_tracker_store::SlicesMatch;
+    use thoosa_store::Store;
+    use log::debug;
     use std::collections::{HashMap, HashSet};
     use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-    use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, group_slices};
+    use std::path::Path;
+    use thoosa_shared::{TensorIdSliceIdx, cdt_for_dir};
     use thoosa_shared::run_configs::RUN_ID;
     use super::MotifsStore;
 
@@ -3290,7 +3267,7 @@ mod fs_store_tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
+        let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
@@ -3326,7 +3303,7 @@ mod fs_store_tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
+        let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
@@ -3372,7 +3349,7 @@ mod fs_store_tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
+        let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
@@ -3415,7 +3392,7 @@ mod fs_store_tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
+        let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
@@ -3455,10 +3432,10 @@ mod fs_store_tests {
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
-        let mut store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
+        let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let resource_ids = super::store_tests::init_test_store(&store).await?;
+        let _resource_ids = super::store_tests::init_test_store(&store).await?;
 
         let run_config_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
 

@@ -1152,17 +1152,13 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
 #[cfg(test)]
 mod tests {
 use crate::tch_error::tch_result;
-    use crate::debug_plot;
-    use crate::stages::audio::{BandAggregation, assign_lsh_buckets_per_channel, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes, make_lsh_planes_for_buckets, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms};
-    use crate::utils::{debug_plot_impl, debug_plot_impl_wh, plot_spectrogram, reset_print_options};
+    use crate::stages::audio::{BandAggregation, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes_for_buckets};
+    use crate::utils::reset_print_options;
     use log::debug;
-    use std::collections::HashMap;
-    use std::sync::Arc;
     use tch::kind::FLOAT_CPU;
-    use tch::{Device, IndexOp, Kind, Tensor};
+    use tch::{Device, Kind, Tensor};
     use thoosa_shared::audio_utils::compose_freqs;
-    use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
-    use thoosa_shared::{ThoError, sin_v_f};
+    use thoosa_shared::ThoError;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_audio() -> Result<(), ThoError>{
@@ -1193,7 +1189,7 @@ use crate::tch_error::tch_result;
         )?;
 
         debug!("bands size = {:?} channels_slices_freqamp=\n{channels_slices_freqamp}", channels_slices_freqamp.size());
-        let num_bits = 4; //should be taken from RunConfig
+        let _num_bits = 4; //should be taken from RunConfig
         let planes = tch_result(make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], 10, Kind::Float, Device::Cpu))?;
 
         let buckets = tch_result(lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, true))?;

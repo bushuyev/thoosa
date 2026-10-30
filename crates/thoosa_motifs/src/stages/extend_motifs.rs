@@ -8,14 +8,14 @@ use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
 use crate::stages::find_motifs::config_to_stage;
 use crate::stages::find_motifs_run_config::{Aggr, ExtendMotifsRunConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, Metrics};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput};
 use crate::stages::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistOutput};
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::stages::stage_ids::EXTEND_MOTIFS;
 use crate::stages::stft::SyncStftSelector;
 use async_trait::async_trait;
-use log::{debug, error, warn};
+use log::{debug, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -28,27 +28,24 @@ use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to};
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
-use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_store::Store;
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Stage, ThoSelector};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
@@ -146,8 +143,8 @@ where
         motif_loader: Arc<ML>,
         run_configs: Vec<ExtendMotifsRunConfig>,
         find_motifs_run_config_ids: Vec<RunConfigId>,
-        max_batch: i64,
-        fail_if_size_bigger_than: Option<usize>,
+        _max_batch: i64,
+        _fail_if_size_bigger_than: Option<usize>,
     ) -> Result<Self, ThoError> {
         let channels = perf_log!(sync_read_lock!(ws)).channels() as usize;
 
@@ -170,7 +167,7 @@ where
             clc_resources_motifs_dist: Arc::new(ClcResourcesMotifsDist::<C>::new(
                 channels,
                 #[cfg(test)]
-                fail_if_size_bigger_than
+                _fail_if_size_bigger_than
             )),
             motif_stats
         })
@@ -213,14 +210,14 @@ where
                 }
             });
 
-        let run_configs__stacked_motifs = track_await!(collect_futures_with_progress(
+        let run_configs_stacked_motifs = track_await!(collect_futures_with_progress(
             futures,
             find_motifs_run_configs_len,
             FuturesOrdering::Ordered,
             thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::load_stacked_motifs",
         )).await?;
-        Ok(run_configs__stacked_motifs)
+        Ok(run_configs_stacked_motifs)
     }
 
 
@@ -339,7 +336,7 @@ where
         // This stays inside the run-config loop.
         // Stacked motifs are cached by find_motifs_run_config_id, while stats depend on metric/aggr (including floats in aggr).
         // Stats must be computed separately so motifs and statistics can be cached independently.
-        let run_configs__stacked_motifs = track_await!(Self::load_stacked_motifs(
+        let run_configs_stacked_motifs = track_await!(Self::load_stacked_motifs(
             &self.store,
             &self.stacked_motifs_loader,
             ctx.branch(true),
@@ -349,8 +346,8 @@ where
         let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>> =
             Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
-        let run_configs__stacked_motifs_len = run_configs__stacked_motifs.len();
-        let futures = run_configs__stacked_motifs
+        let run_configs_stacked_motifs_len = run_configs_stacked_motifs.len();
+        let futures = run_configs_stacked_motifs
             .into_iter()
             .map(|(find_motifs_run_config, motif_data)| {
                 let resources = Arc::clone(&resources);
@@ -393,7 +390,7 @@ where
 
         let _ = track_await!(collect_futures_with_progress(
             futures,
-            run_configs__stacked_motifs_len,
+            run_configs_stacked_motifs_len,
             FuturesOrdering::Unordered,
             thoosa_shared::CollectionErrorPolicy::Propagate,
             "SelectMotifsStage::extend_motifs_for_run_config",
@@ -418,7 +415,7 @@ where
         resources: Arc<Vec<Resource>>,
         channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>>,
         max_batch: i64, //TODO rename max chunk size
-        total_size: usize,
+        _total_size: usize,
         mut ctx: C,
     ) -> Result<(), ThoError> {
         let num_resources = resources.len();
@@ -544,7 +541,7 @@ where
                                     ).in_scope(|| {
                                         use rayon::prelude::*;
                                         rayon_pool().install(|| {
-                                            let mut match_indices = mask_dists.into_indices_iter()?;
+                                            let match_indices = mask_dists.into_indices_iter()?;
                                             let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| {
                                                 (mask_channel as usize, motif_idx as usize, slice_idx as usize)
                                             }).collect::<Vec<_>>();
@@ -675,6 +672,7 @@ where
 
 #[derive(Debug)]
 struct SelectMotifsInputSelectorWrap {
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     id: SynKey,
     batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resource_ids: Vec<ResourceId>,
@@ -845,8 +843,8 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
         let channel_masks_motif_ids = output.into_iter().try_fold(
             (
-                (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<Tensor>>>(),
-                (0..self.channels).map(|c|vec![]).collect::<Vec<Vec<SynKey>>>()
+                (0..self.channels).map(|_c|vec![]).collect::<Vec<Vec<Tensor>>>(),
+                (0..self.channels).map(|_c|vec![]).collect::<Vec<Vec<SynKey>>>()
             ),
 
             |mut channel_masks, partial_output| -> Result<_, ThoError> {
@@ -1221,7 +1219,6 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::to_vec_f32;
-    use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::{ThoError, mono_key};
@@ -1284,7 +1281,7 @@ mod tests {
         )
             .await?;
 
-        let mut ctx_for_data = ctx.branch(false);
+        let _ctx_for_data = ctx.branch(false);
         let motifs_stats = SelectRef::select_ref(&motifs_stats, 0, Some(SyncStftSelector)).await?;
         let motifs_stats_t =  motifs_stats.t_ref().shallow_clone();
 

@@ -6,42 +6,36 @@ use crate::dims::Dims;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IPC_SOCK_ENV };
 use crate::ipc::ipc_cuda_utils::recv_fd;
-use crate::ipc::proxy_tests::TestOutputA;
-use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
 use crate::ipc::worker_msg::{CudaWorkerId};
 use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, DebugOutput, OpResult, Operation, WorkerCopyDonePayload, WorkerInput};
-use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper, SyncStageIpcWrapperWithState, WorkerWrapperWithState};
-use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::run_ctx::RunCtxImpl;
+use crate::ipc::wraps::{ErasedWithState, SyncStageIpcWrapper};
 use crate::tho_device::ThoDevice;
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use crate::tho_tensor::ThoTensor;
 use crate::ws::{FsWorkspace, Workspace, WsConfigs};
 use anyhow::Context as _;
 use clap::Parser;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use log::{debug, error, info, trace, warn, LevelFilter};
+use log::{debug, info, warn, LevelFilter};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Mutex, RwLock};
-use rand::{Rng, rng};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Serializer;
+use serde::Serialize;
 use std::collections::HashMap;
-use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 use tch::{Device, Tensor};
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
-use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, RunCtx, WithId};
+use thoosa_shared::traits::{Data, Named, RunCtx, WithId};
+#[cfg(test)]
 use thoosa_common::runner::sync_stage::{StageStateInfo};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err};
 use thoosa_shims::context::ThoCudaContext;
@@ -49,7 +43,6 @@ use thoosa_shims::stream::ThoCudaStream;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tracing::field::debug;
 
 
 //32 low and 32 high preallocated streams from https://github.com/pytorch/pytorch/blob/main/c10/cuda/CUDAStream.h
@@ -496,7 +489,7 @@ impl CudaWorker {
 
         debug!("run_worker: worker connected");
 
-        let (mut reader, mut writer) = stream.into_split();
+        let (reader, mut writer) = stream.into_split();
 
         let (free_mem, total_mem) = cuda_mem_for_device(cuda_device);
 
@@ -507,7 +500,7 @@ impl CudaWorker {
 
         let arena_size = file.metadata()?.len() as usize;
 
-        let mut arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
+        let arena = unsafe { MmapOptions::new().len(arena_size).map_mut(&file)? };
        /* unsafe {
             assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_RANDOM), 0);
             assert_eq!(libc::madvise(arena.as_mut_ptr().cast(), arena.len(), libc::MADV_HUGEPAGE), 0);
@@ -569,10 +562,10 @@ impl CudaWorker {
                     };
                     Ok(status)
                 }
-                Operation::H2dCopy { tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
+                Operation::H2dCopy { tensor_key: _tensor_key, kind, shape, tensor_byte_len, arena_offset, dst_key } => {
                     debug!("process_worker_request: Operation::H2dCopy kind={kind:?} shape={shape:?} tensor_byte_len={tensor_byte_len:?} arena_offset={arena_offset}");
 
-                    let cuda_device = context.tho_device.gpu_ordinal()?;
+                    let _cuda_device = context.tho_device.gpu_ordinal()?;
                     validate_arena_tensor_metadata(kind, &shape, tensor_byte_len, arena_offset, &context.shared_arena, "H2D source")?;
 
                     let source_address = context.shared_arena.address(arena_offset, tensor_byte_len, "H2D source")?;
@@ -826,7 +819,7 @@ pub trait WorkerStageInput: Debug + Sized + Debug {
         Err(ThoError::new("input requires a typed worker adapter for reference cloning"))
     }
 
-    fn ref_to_tensor(&self, all_cuda_tensors: &AllTensors, remove: bool) -> Result<Self, ThoError> {//on worker side
+    fn ref_to_tensor(&self, _all_cuda_tensors: &AllTensors, _remove: bool) -> Result<Self, ThoError> {//on worker side
         Err(ThoError::new("input does not support worker tensor materialization"))
     }
 
@@ -935,7 +928,7 @@ where
     D: Dims,
     Id: Clone + Debug + Named + Serialize,
 {
-    pub fn worker_tensor_to_ref(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<ThoTensor<D, Id>, ThoError> {
+    pub fn worker_tensor_to_ref(self, all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<ThoTensor<D, Id>, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let size = out_tensor.size();
@@ -996,14 +989,14 @@ impl RunCtx for WokerRunCtx {
         self.tho_device_idx
     }
 
-    fn branch(&mut self, with_new_cache_area: bool) -> Self
+    fn branch(&mut self, _with_new_cache_area: bool) -> Self
     where
         Self: Sized
     {
         WokerRunCtx::new(self.tho_device_idx)
     }
 
-    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
+    fn add_purge_gpu_closure(&mut self, _cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }
 

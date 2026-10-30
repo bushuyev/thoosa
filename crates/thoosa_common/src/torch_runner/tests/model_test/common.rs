@@ -2,15 +2,14 @@ use std::ops::Range;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tch::{IndexOp, Kind, Tensor};
+use tch::{IndexOp, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics, Select, ThoSelector, WithId};
-use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics, ThoSelector, WithId};
+use thoosa_shared::{ThoError};
 
 use crate::dims::{Dims, LocalSelect};
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use crate::tho_tensor::{ThoTensor};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
 pub struct FileInputId(pub &'static str);

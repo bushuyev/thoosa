@@ -1,78 +1,32 @@
-use std::any::Any;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 
 use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::stages::stage_ids::RAW_TENSOR_LOADER;
 use log::debug;
-use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use tch::Device::Cpu;
-use tch::{Device, Tensor};
-use thoosa_common::dims::Dims;
-use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use thoosa_common::ipc::worker_msg::{WorkerInput};
-use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
-use thoosa_common::runner::run_ctx::RunCtxImpl;
+use tch::Device;
+use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
-use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{ConsumeResult, SyncStage};
+use thoosa_shared::traits::{AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{ThoError, mono_key};
 // use crate::stages::stages_seq::StagesSeq;
-use thoosa_shared::ipc_types::WorkerOutput;
 
 type LoadFn =
 dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
 
-#[derive(Clone)]
-struct DebugLoadFn(Arc<LoadFn>);
 
-impl Debug for DebugLoadFn {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Loader closures are opaque, so expose only their stable role in debug output.
-        f.write_str("LoadFn")
-    }
-}
 
-#[derive(Debug)]
-struct RawTensorLoaderInputWrapper {
-    resource: Arc<Resource>,
-}
 
-impl RawTensorLoaderInputWrapper {
-    fn new(resource: Arc<Resource>) -> Self {
-        Self { resource }
-    }
-}
 
-impl BorrowRef for RawTensorLoaderInputWrapper {
-    type Out<'a> = Resource where Self: 'a;
-
-    fn borrow_ref<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
-    where
-        Self: 'a,
-    {
-        std::future::ready(Ok(self.resource.as_ref().clone()))
-    }
-
-}
 
 
 ///it always loads data into CPU tensors which are copied to gpu cells of its DevicesWrap output when BorrowRef::borrow_to is invoked from thoosa_common::runner::oom_handler::run_stage_borrowed
@@ -171,7 +125,6 @@ where
 #[cfg(test)]
 pub(crate) mod mock_tensor_loader {
     use async_trait::async_trait;
-    use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -185,7 +138,6 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{AsyncStage, OutId, Stage, WithId};
-    use thoosa_common::runner::sync_stage::{SyncStage};
     mock! {
         #[derive(Debug, Named)]
         pub TensorLoader {}
@@ -247,7 +199,7 @@ pub(crate) mod mock_tensor_loader {
                 (k, Arc::new(DevicesWrap::wrap(tensor)))
             }).collect());
 
-            self.mock.expect_run_cached().returning(move |input, ctx|{
+            self.mock.expect_run_cached().returning(move |input, _ctx|{
                 Ok(Arc::clone(data_map
                     .get(&input.id())
                     .expect(&format!("no mock data for {input:?} in MockTensorLoader"))))

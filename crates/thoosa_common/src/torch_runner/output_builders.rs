@@ -8,7 +8,7 @@ use crate::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
 use thoosa_shared::ThoError;
 use thoosa_shared::CopyToDevice;
-use thoosa_shared::traits::{Data, Named, WithId};
+use thoosa_shared::traits::{Named, WithId};
 
 #[allow(dead_code)]
 #[derive(Debug)]

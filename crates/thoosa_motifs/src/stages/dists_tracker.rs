@@ -7,16 +7,13 @@ use futures::{FutureExt, future::BoxFuture};
 use log::{debug, info, trace};
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::io::Cursor;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::Device;
-use tch::Device::{Cpu, Cuda};
+use tch::Device::Cpu;
 use tch::Kind::{Bool, Uint8};
 use tch::{Kind, Tensor};
-use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::dims::AnyDims;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageOutput, insert_worker_tensor};
@@ -24,13 +21,11 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
 use thoosa_common::utils::tensor_mem_size;
-use thoosa_common::ws::Workspace;
 use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
@@ -38,7 +33,6 @@ use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{RunCtx, Stage};
 use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_store::Store;
 
 type DistsMaskTensor = ThoTensor<AnyDims, SynKey>;
 
@@ -84,7 +78,9 @@ impl DistsPtr {
 
 #[derive(Debug)]
 pub struct DenseMaskMatchIter {
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     mask: Tensor,
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     dists: Option<Tensor>,
     mask_ptr: *const u8,
     dists_ptr: Option<DistsPtr>,
@@ -158,7 +154,9 @@ impl Iterator for DenseMaskMatchIter {
 
 #[derive(Debug)]
 pub struct PackedMaskMatchIter {
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     mask: Tensor,
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     dists: Option<Tensor>,
     bytes_ptr: *const u8,
     dists_ptr: Option<DistsPtr>,
@@ -296,7 +294,9 @@ impl FlatIndicesMatchIter {
 
 #[derive(Debug)]
 pub struct FlatIndicesMatchIter {
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     indices: Tensor,
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     dists: Option<Tensor>,
     coords: TrueCoords3dIter,
     dists_ptr: Option<DistsPtr>,
@@ -325,7 +325,9 @@ impl Iterator for FlatIndicesMatchIter {
 
 #[derive(Debug)]
 pub struct TripletIndicesMatchIter {
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     indices: Tensor,
+    #[expect(dead_code, reason = "Owns the tensor storage addressed by the iterator raw pointers.")]
     dists: Option<Tensor>,
     indices_ptr: *const i64,
     dists_ptr: Option<DistsPtr>,
@@ -505,15 +507,6 @@ impl DistsMask {
         }
     }
 
-    fn local_tensor_ref<'a>(tensor: &'a DistsMaskTensor, label: &str) -> Result<thoosa_common::tho_tensor::TensorRef<'a>, ThoError> {
-        match &tensor.inner {
-            ThoTensorInner::Val { .. } => Ok(tensor.t_ref()),
-            ThoTensorInner::Ref { key, .. } => {
-                panic!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}")
-            },
-        }
-    }
-
     fn into_local_part(self) -> Result<DistsMaskLocalPart, ThoError> {
         Ok(DistsMaskLocalPart {
             mask: Self::into_local_tensor(self.mask, "into_local_part mask")?,
@@ -550,7 +543,7 @@ impl DistsMask {
     }
 
     pub fn into_worker_ipc_refs(self, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<Self, ThoError> {//TODO replace with worker_tensor_to_ref
-        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice) -> Result<DistsMaskTensor, ThoError> {
+        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<DistsMaskTensor, ThoError> {
             let tensor = DistsMask::into_local_tensor(tensor, "into_worker_ipc_refs")?;
             let size = tensor.size();
             let kind = tensor.kind();
@@ -792,36 +785,6 @@ impl DistsMask {
             DistsMaskType::AsIs => Ok(self.mask.size()),
             DistsMaskType::MaskPacked(mask_size, _) => Ok(mask_size.clone()),
             DistsMaskType::MaskIndexes(mask_size) => Ok(mask_size.clone()),
-        }
-    }
-
-    fn unpack_mask_cpu(&self) -> Result<Tensor, ThoError> {
-        let mask = self.unpack_mask_device(&Cpu)?;
-        assert!(mask.device().eq(&Cpu), "DistsMask::unpack_mask_cpu: expected CPU");
-        Ok(mask)
-    }
-
-    fn unpack_mask_device(&self, device: &Device) -> Result<Tensor, ThoError> {
-        match &self.mask_type {
-            DistsMaskType::MaskIndexes(_) => Err(ThoError::new(
-                "DistsMask::unpack_mask_device: mask is indices",
-            )),
-            DistsMaskType::MaskPacked(mask_size, _) => {
-                let bits = unpack_packed_mask(&*Self::local_tensor_ref(&self.mask, "unpack_mask_device")?, mask_size)?;
-                if &bits.device() == device {
-                    Ok(bits)
-                } else {
-                    Ok(tch_result(bits.f_to_device(*device))?)
-                }
-            }
-            DistsMaskType::AsIs => {
-                let mask = Self::local_tensor_ref(&self.mask, "unpack_mask_device")?;
-                if &mask.device() == device {
-                    Ok(tch_result(mask.f_alias())?)
-                } else {
-                    Ok(tch_result(mask.f_to_device(*device))?)
-                }
-            }
         }
     }
 
@@ -1108,7 +1071,7 @@ impl CrossClcResultMerge for DistsMask {
                     )?;
                     (left_indices, right_indices)
                 } else {
-                    let mut right_indices = right_mask;
+                    let right_indices = right_mask;
                     if right_count > 0 {
                         let offset = tch_result(tch_result(Tensor::f_from_slice(&[left_size[last_dim]]))?
                             .f_to_device(right_indices.device()))?;
@@ -1185,7 +1148,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let mut merged_mask_sizes = first_size;
                 merged_mask_sizes[last_dim] = total_last;
-                let mut mask_out = tch_result(Tensor::f_zeros(merged_mask_sizes.as_slice(), (Bool, device)))?;
+                let mask_out = tch_result(Tensor::f_zeros(merged_mask_sizes.as_slice(), (Bool, device)))?;
 
                 let mut offset = 0;
                 for part in parts.iter() {
@@ -1223,7 +1186,7 @@ impl CrossClcResultMerge for DistsMask {
 
                     let mut merged_dists_sizes = dists_size;
                     merged_dists_sizes[dists_last_dim] = total_dists_last;
-                    let mut dists_out = tch_result(Tensor::f_zeros(merged_dists_sizes.as_slice(), (dists_kind, dists_device)))?;
+                    let dists_out = tch_result(Tensor::f_zeros(merged_dists_sizes.as_slice(), (dists_kind, dists_device)))?;
 
                     let mut offset = 0;
                     for part in parts.iter() {
@@ -1278,7 +1241,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let packed_mask = if all_aligned {
                     let total_bytes = total_last / 8;
-                    let mut out = tch_result(Tensor::f_zeros([rows, total_bytes], (Uint8, device)))?;
+                    let out = tch_result(Tensor::f_zeros([rows, total_bytes], (Uint8, device)))?;
                     let mut byte_offset = 0;
                     for part in parts.iter() {
                         let sizes = match &part.mask_type {
@@ -1292,7 +1255,7 @@ impl CrossClcResultMerge for DistsMask {
                     }
                     tch_result(out.f_reshape([-1]))?
                 } else {
-                    let mut out_bits = tch_result(Tensor::f_zeros([rows, total_last], (Bool, device)))?;
+                    let out_bits = tch_result(Tensor::f_zeros([rows, total_last], (Bool, device)))?;
                     let mut offset = 0;
                     for part in parts.iter() {
                         let sizes = match &part.mask_type {
@@ -1358,7 +1321,7 @@ impl CrossClcResultMerge for DistsMask {
                     merged_dists_sizes[dists_last_dim] = total_dists_last;
                     let device = dists_device.unwrap();
                     let kind = dists_kind.unwrap();
-                    let mut dists_out = tch_result(Tensor::f_zeros(merged_dists_sizes.as_slice(), (kind, device)))?;
+                    let dists_out = tch_result(Tensor::f_zeros(merged_dists_sizes.as_slice(), (kind, device)))?;
 
                     let mut offset = 0;
                     for part in parts.iter() {
@@ -1407,7 +1370,7 @@ impl CrossClcResultMerge for DistsMask {
                 let DistsMaskLocalPart {
                     mask: first_mask,
                     dists: first_dists,
-                    mask_type: first_type,
+                    mask_type: _first_type,
                 } = first;
 
                 assert!(!base_size.is_empty(), "DistsMask merge: size mismatch");
@@ -1429,7 +1392,7 @@ impl CrossClcResultMerge for DistsMask {
 
                 let mut indices_parts = Vec::new();
                 let mut offset = base_size[last_dim];
-                let mut indices = if indices_rank == 1 {
+                let indices = if indices_rank == 1 {
                     rebase_flat_indices_last_dim(first_mask, &base_size, 0, total_last)?
                 } else {
                     first_mask
@@ -1462,7 +1425,7 @@ impl CrossClcResultMerge for DistsMask {
                     );
                     let indices_count = indices_size[0];
 
-                    let mut indices = if indices_rank == 1 {
+                    let indices = if indices_rank == 1 {
                         rebase_flat_indices_last_dim(mask, &size, offset, total_last)?
                     } else {
                         mask
@@ -1709,10 +1672,8 @@ where
 #[cfg(test)]
 mod tests {
     use thoosa_common::tch_error::tch_result;
-    use futures_util::StreamExt;
-    use log::debug;
+        use log::debug;
     use tch::Device::Cuda;
-    use tch::kind::FLOAT_CPU;
     use tch::{Device, Kind, Tensor};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::utils::reset_print_options;
@@ -2075,7 +2036,7 @@ mod tests {
         let dists_masks = DistsMask::new(mask, Some(dists), DistsMaskType::MaskIndexes(vec![3, 3, 3]))?.to_cpu().await?;
 
 
-        let mut iter = dists_masks.into_indices_iter()?;
+        let iter = dists_masks.into_indices_iter()?;
     
 
         assert_eq!(

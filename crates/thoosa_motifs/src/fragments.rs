@@ -1,36 +1,12 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display};
-use std::fs;
-use std::hash::Hash;
-use std::ops::Deref;
-use std::path::Path;
+use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::str::FromStr;
 
-use crate::distance::{average_euclidean_distance, clc_dist_d2};
 use anyhow::Context as _;
 use clap::{Args, ValueEnum};
-use crossbeam_utils::sync::WaitGroup;
-use futures::FutureExt;
-use futures_util::future::join_all;
-use log::{debug, info, trace, warn};
-use parking_lot::RwLock;
-use regex::Regex;
-use std::panic::AssertUnwindSafe;
-use tch::Device;
-use tch::Device::Cpu;
-use tch::IndexOp;
-use tch::Kind::Float;
-use tch::Tensor;
 use thoosa_common::transforms::filters::InputFilter;
-use thoosa_shared::panic_to_err;
 use thoosa_common::utils::*;
-use thoosa_common::ws::Workspace;
-use thoosa_shared::TensorIdSliceIdx;
-use thoosa_shared::ThoError;
-use thoosa_shared::resource::{Resource, ResourceId};
+use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::{RunConfigId};
 use thoosa_shared::*;
 
@@ -377,29 +353,9 @@ impl MotifsToTensorArgs {
 mod motifs_tests {
     use super::{DataBy, PlotDataArgs, Resolution};
     use std::path::PathBuf;
-    use std::collections::{HashMap, HashSet};
-    use std::fs;
-    use std::ops::Index;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::UNIX_EPOCH;
 
-    use tch::{Device, IndexOp, Tensor};
 
-    use log::debug;
-    use parking_lot::RwLock;
-    use tch::Device::Cpu;
-    use tch::Kind::Float;
-    use tch::kind::FLOAT_CPU;
-    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilter;
-    use thoosa_common::utils::*;
-    use thoosa_common::ws::{Workspace, mock_ws_simp};
-    use thoosa_shared::MotifSlice;
-    use thoosa_shared::TensorIdSliceIdx;
-    use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::resource::{Resource, ResourceId};
-    use thoosa_shared::{ThoError, cdt_for_dir};
 
     #[ctor::ctor]
     fn init() {

@@ -1,14 +1,11 @@
 use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::cuda_utils::cuda_mem;
-use crate::dims::{AnyDims, Dims};
-use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel, MaxParallelStep};
-use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
+use crate::dims::{AnyDims};
+use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
-use crate::runner::common::*;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-use crate::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-use crate::runner::oom_handler::{Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use crate::runner::global_ctx::{GlobalCtx};
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
 use crate::runner::test_utils::parse_numeric_part;
@@ -19,38 +16,25 @@ use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder
 use crate::utils::lin_for_size;
 use async_trait::async_trait;
 pub(crate) use clc::sync_clc_endpoint_init;
-use clc::{ClcDynSyncStage, ClcStage, ClcStageOutput, SyncClcStage, SyncClcStageInit};
+use clc::{ClcDynSyncStage, ClcStage, ClcStageOutput, SyncClcStage};
 use futures_util::StreamExt;
-use futures_util::future::{BoxFuture, Shared};
 pub(crate) use loader::sync_test_tensor_loader_endpoint_init;
-use loader::{LoadedRange, LoadedTensor, LoaderInput, SyncTestTensorLoader, SyncTestTensorLoaderInit, TestTensorLoader};
+use loader::{LoadedRange, LoaderInput, TestTensorLoader};
 use log::debug;
 use num_traits::ToPrimitive;
 use parking_lot::RwLock;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::ops::{Add, Deref};
-use std::ops::Mul;
 use std::sync::Arc;
 use std::time::Duration;
-use tch::Device::{Cpu, Cuda};
+use tch::Device::{Cpu};
 use tch::Kind::Float;
-use tch::kind::FLOAT_CPU;
-use tch::{Device, IndexOp, Kind, Scalar, Tensor};
+use tch::{Device, Kind, Scalar, Tensor};
 use thoosa_named_derive::Named;
-use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MonoMetrics, Named, OutId, RunCtx, Select, DebugId, Stage, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
+use thoosa_shared::comp_id::{SynKey};
+use thoosa_shared::traits::{AsyncStage, CachableIdTr, MonoMetrics, OutId, RunCtx, DebugId, Stage, WithId};
 use thoosa_shared::ThoError;
 use thoosa_shared::{CopyToDevice, mono_key, debug_id};
-use tokio::sync::Mutex;
-use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::{EnvFilter, fmt};
 
 pub mod loader;
 pub mod clc;
@@ -157,7 +141,7 @@ impl AsyncStage for LoadAndClcStage {
             .run(&self.clc_task, loaded, ctx.branch(false), &required_ids, size)
             .await?;
 
-        let device_idx = ctx.tho_device_idx();
+        let _device_idx = ctx.tho_device_idx();
 
         Ok(Arc::new(DevicesWrap::wrap(result)))
     }

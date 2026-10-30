@@ -5,19 +5,16 @@ use cached_derive::Cached;
 use futures_util::future::try_join_all;
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
-use std::any::Any;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use tch::Kind::Float;
-use tch::{IndexOp, Tensor};
+use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
 use crate::dims::{ChannelsMotifsSlices, MotifSlices};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::pad_to;
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
@@ -25,12 +22,10 @@ use crate::stages::stft::SyncStftSelector;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, MonoMetrics, OutId, RunCtx, Select, Stage, WithId};
-use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, sample_n_owned};
-use thoosa_store::Store;
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, Stage, WithId};
+use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 
 #[derive(Debug, Clone, CpuData)]
 #[cpu_data(shallow)]

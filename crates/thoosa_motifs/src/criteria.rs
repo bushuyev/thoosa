@@ -3,7 +3,6 @@ use std::sync::{Arc, OnceLock};
 use log::debug;
 use parking_lot::RwLock;
 use tch::{Kind, TchError, Tensor};
-use tch::Kind::Float;
 use thoosa_common::utils::tensor_digest;
 
 type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync>;
@@ -887,7 +886,7 @@ pub fn periodicity_acf_01(
     // Local max at tau means: rho[tau] > rho[tau-1] AND rho[tau] >= rho[tau+1] AND rho[tau] > 0
     // We'll build peaks_full[tau] = rho[tau] if local max else 0, for tau=1..lag_max.
 
-    let lag_max_usize = lag_max as i64;
+    let _lag_max_usize = lag_max as i64;
 
     // interior maxima for tau=2..lag_max-1 (requires lag_max>=3)
     let one_slot = Tensor::zeros(&[1], (x.kind(), x.device()));
@@ -968,7 +967,6 @@ mod tests {
     use tracing::debug;
     use thoosa_common::transforms::utils::sin_t;
     use thoosa_common::utils;
-    use thoosa_shared::ThoError;
     use crate::criteria::{interesting_turning_points_ratio, interesting_turning_points_ratio_trapezoid_01, periodicity_acf_01};
 
     #[cfg(test)]
@@ -976,7 +974,6 @@ mod tests {
         use super::*;
         use tch::{TchError, Tensor};
         use thoosa_common::utils::debug_plot_impl;
-        use thoosa_shared::ThoError;
         use crate::criteria::{coherence, inlier_ratio, interesting_turning_points_ratio_peaked_01, norm_thickness};
 
         fn f64_of_scalar(t: &Tensor) -> f64 {
@@ -1107,7 +1104,7 @@ mod tests {
             let a = [1.0f32, 2.0, 3.0, 4.0];
             let q = [1.0f32, -1.0, 1.0, -1.0];
 
-            let mut x = Tensor::zeros(&[4, 4], (tch::Kind::Float, tch::Device::Cpu));
+            let x = Tensor::zeros(&[4, 4], (tch::Kind::Float, tch::Device::Cpu));
             for i in 0..4 {
                 let mut row = Vec::new();
                 for t in 0..4 {

@@ -22,13 +22,11 @@ use log::debug;
 use num_traits::ToPrimitive;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tch::Device::Cuda;
-use tch::{Device, Kind, Scalar, Tensor};
+use tch::{Kind, Scalar, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, MonoMetrics, OutId, RunCtx, DebugId, Stage};
 use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, debug_id};
 use tokio::sync::{Mutex, MutexGuard};
@@ -187,19 +185,6 @@ impl ClcStage {
     {
 
         Self { id: id.clone(), sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await) }
-    }
-
-    pub async fn new_proxy(
-        id: SynKey,
-        k: f64,
-        fail_until: Vec<FailUntil>,
-        dim: i64,
-        kind: Kind,
-        device: ThoDevice,
-        use_matmul: bool,
-    ) -> Result<Self, ThoError> {
-
-        Ok(Self { id: id.clone(), sync_clc: Arc::new(SyncClcStage::new(id, k, fail_until, dim, kind, device, use_matmul).await) })
     }
 
 }
@@ -386,7 +371,7 @@ impl StageWithState for ClcDynSyncStage {
     }
 }
 
-pub(crate) fn sync_clc_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_clc_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncClcStageInit>().expect("SyncClcStage endpoint received an unexpected initializer type");
     async move {

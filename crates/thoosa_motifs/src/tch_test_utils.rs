@@ -3,7 +3,6 @@ use rand::{Rng, RngExt, SeedableRng};
 use rand::prelude::{SliceRandom, StdRng};
 use log::debug;
 use thoosa_shared::test_utils::{gen_signal, TestSignalKind};
-use thoosa_shared::ThoError;
 use thoosa_common::utils::to_vec_f32;
 
 pub fn deterministic_noise(len: usize, seed: u32, amp: f32) -> Vec<f32> {
@@ -93,16 +92,6 @@ impl From<Interval> for (f32, f32) {
     }
 }
 
-#[inline]
-fn normal_step(rng: &mut impl Rng, sigma: f32) -> f32 {
-    // Box–Muller, single sample ~ N(0, sigma^2)
-    //https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform
-    let u1: f32 = rng.random::<f32>().max(f32::MIN_POSITIVE);
-    let u2: f32 = rng.random::<f32>();
-    let r = (-2.0 * u1.ln()).sqrt();
-    let theta = std::f32::consts::TAU * u2;
-    sigma * r * theta.cos()
-}
 
 
 fn z_norm(x: &mut [f32]) {

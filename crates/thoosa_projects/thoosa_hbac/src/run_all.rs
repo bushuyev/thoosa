@@ -347,6 +347,7 @@ pub struct RunAllSettings {
 
 
 // This alternative test profile is currently not selected.
+#[cfg(test)]
 pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -> AllConfigs {
 
     //let find_motifs_run_config_range_or_value = run_all_find_motifs_config_grid_0(2, 2, 4);
@@ -800,6 +801,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
     }
 }
 
+#[expect(dead_code, reason = "Alternative no-filter profile retained for manual experiments.")]
 pub fn run_all_find_motifs_config_no_filters(min_slices: u32) -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
 
     FindMotifsRunConfigRangeOrValue {
@@ -833,6 +835,8 @@ pub fn run_all_find_motifs_config_no_filters(min_slices: u32) -> FindMotifsRunCo
 
 
 
+// Only the alternative test profile uses this configuration.
+#[cfg(test)]
 pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMotifsRunConfigFields> {
     let max_k =2;
     let min_k =2;

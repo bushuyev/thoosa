@@ -65,11 +65,6 @@ pub(super) struct AStageOutput {
 }
 
 impl AStageOutput {
-    pub(super) fn from_value(id: SynKey, value: ThoTensor<AStageOutputDims, ()>) -> Self {
-        // Worker decoding already owns the tensor, so avoid rebuilding it through a shallow clone.
-        Self { id, value }
-    }
-
     pub(super) fn new(id: SynKey, tensor: Tensor) -> Result<Arc<DevicesWrap<Self>>, ThoError> {
         Ok(Arc::new(DevicesWrap::wrap(
             AStageOutput{
@@ -115,7 +110,7 @@ impl Select<RangeSelector> for AStageOutput {
 impl LocalSelect<(), RangeSelector> for ThoTensor<AStageOutputDims, ()> {
     type Output = ThoTensor<AStageOutputDims, ()>;
 
-    fn local_subview(id: &(), t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
+    fn local_subview(_id: &(), t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
         ThoTensor::new(
             (),
             t.i(selector.start[0]..selector.end[0]).copy().into()

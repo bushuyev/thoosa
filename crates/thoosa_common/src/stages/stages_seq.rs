@@ -1,18 +1,15 @@
 use crate::runner::common::cachable::CachedPurgeOutput;
 use async_trait::async_trait;
-use futures_util::future::{BoxFuture, Shared};
 use log::debug;
-use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::Cached;
 use thoosa_named_derive::Named;
-use thoosa_shared::applicables_runner::*;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{AsyncStage, Data, OutId, RunCtx, Stage, WithId};
-use thoosa_shared::{ThoError, ThoosaError};
+use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::ThoError;
 
 #[derive(Debug, Named)]
 pub struct PairStage<A, B, C> //TODO rename to Pair/Chained
@@ -150,7 +147,7 @@ where
     async fn run_cached(
         self: Arc<Self>,
         input: Self::In<'static>,
-        mut ctx: Self::Ctx,
+        ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
         let input_id = input.id().clone();
         debug!("ABStage::run_cached: input.id={input_id:?}");

@@ -7,7 +7,10 @@ pub mod cuda_wokrer;
 pub mod tests;
 pub mod serialization;
 pub mod wraps;
+// Proxy fixtures and their typetag registrations belong to test binaries only.
+#[cfg(test)]
 mod proxy_tests;
+#[cfg(test)]
 mod proxy_tests_with_state;
 pub mod worker_msg;
 pub mod proxy;

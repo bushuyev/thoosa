@@ -804,7 +804,7 @@ impl std::fmt::Display for OuterFields {
     #[allow(non_snake_case)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Inner(SingleFieldFields) => f.write_fmt(format_args!("inner")),
+            Self::Inner(..) => f.write_fmt(format_args!("inner")),
         }
     }
 }

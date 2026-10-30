@@ -20,18 +20,14 @@ use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::seq_scan::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
 use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::transforms::filters::InputFilter;
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::mono_key;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
-use thoosa_store::Store;
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage};
 use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, CpuData)]
@@ -55,9 +51,9 @@ impl SavableResult for SeqScanOutput {
 
     async fn save(
         &mut self,
-        store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        p: Self::P<'_>
+        _store: &Arc<dyn MotifsStore>,
+        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+        _p: Self::P<'_>
     ) -> anyhow::Result<u32> {
         Ok(0)
     }
@@ -65,9 +61,13 @@ impl SavableResult for SeqScanOutput {
 
 #[derive(Debug, Clone)]
 struct SeqScanBucketEntry {
+    #[cfg_attr(not(test), expect(dead_code, reason = "Tests inspect the collected bucket entry metadata."))]
     resource: Resource,
+    #[cfg_attr(not(test), expect(dead_code, reason = "Tests inspect the collected bucket entry metadata."))]
     slice_idx: usize,
+    #[cfg_attr(not(test), expect(dead_code, reason = "Tests inspect the collected bucket entry metadata."))]
     slice_start: u32,
+    #[cfg_attr(not(test), expect(dead_code, reason = "Tests inspect the collected bucket entry metadata."))]
     score: f32,
 }
 
@@ -586,8 +586,6 @@ mod tests {
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::AsyncStage;
-    use thoosa_shared::traits::WithId;
-
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
@@ -771,7 +769,7 @@ mod tests {
             8,
         ).await?);
 
-        let out = stage
+        let _out = stage
             .run(
                 Arc::new(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?),
                 mock_run_ctx::default(0),

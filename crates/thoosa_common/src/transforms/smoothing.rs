@@ -1,6 +1,5 @@
 use log::debug;
 use tch::{Device, Kind, TchError, Tensor};
-use thoosa_shared::ThoError;
 
 //TODO this doesn't work - signal is not changed
 /// Rough heuristic:
@@ -376,7 +375,6 @@ pub fn moving_average(x: &Tensor, window: u32, step: i64) -> anyhow::Result<Tens
 mod tests {
     use tch::Tensor;
     use thoosa_common::transforms::smoothing::moving_average;
-    use thoosa_shared::ThoError;
 
 
     #[test]

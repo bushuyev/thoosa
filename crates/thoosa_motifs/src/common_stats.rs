@@ -1,5 +1,4 @@
 use tch::{Device, Kind, Tensor, TchError};
-use thoosa_shared::ThoError;
 
 #[derive(Debug, Clone)]
 pub struct Stats {
@@ -126,7 +125,7 @@ fn per_window_metrics(
 fn avg_rms_to_template(w: &Tensor, t: &Tensor) -> Result<Tensor, TchError> {
     // w: [M,L], t: [L]
     let sz = w.size();
-    let l = sz[1];
+    let _l = sz[1];
     let diff = w.f_sub(t)?;                      // [M,L]
     let diff2 = diff.f_mul(&diff)?;              // [M,L]
     let mse = diff2.f_mean_dim(1, false, w.kind())?; // [M]
