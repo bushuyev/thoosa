@@ -15,32 +15,29 @@ use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::backtrace::Backtrace;
+#[cfg(test)]
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::os::fd::{AsFd, OwnedFd};
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tch::Device::{Cpu, Cuda};
-use tch::{Device, Tensor};
+use tch::Tensor;
 use thoosa_shared::CudaActivityPauseTicket;
 use thoosa_shared::ThoError;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey};
-use thoosa_common::ipc::tensor_info::{IpcTensorKind};
 use thoosa_shims::arena::{shared_arena_capacity, shared_arena_offset_of};
-use thoosa_shims::context::ThoCudaContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, spawn_blocking};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
-use tracing::field::debug;
 use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
 use thoosa_common::runner::sync_stage::StageStateInfo;
 use crate::ipc::proxy::StageStateDump;
@@ -54,9 +51,6 @@ const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_REAP_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
-    format!("{endpoint_name}\t{payload}")
-}
 
 
 
@@ -92,26 +86,6 @@ where
 
 
 
-pub(crate) async fn handle_worker_request(payload: String) -> String {
-    debug!("handle_worker_request: payload={payload:?}");
-
-    match payload.as_str() {
-        "ping" => "pong".to_string(),
-
-        "status" => "worker-status: alive".to_string(),
-
-        msg if msg.starts_with("copy: ") => {
-            let text = &msg["copy: ".len()..];
-
-            format!("copy: {text} done")
-        }
-
-
-        other => {
-            format!("unknown-command {other:?}")
-        }
-    }
-}
 
 // State uploads acknowledge installation; they do not allocate a Data key
 // whose lifetime can be represented by a worker tensor reference.
@@ -1632,52 +1606,32 @@ mod tests {
     use crate::tch_error::tch_result;
     use super::{BackendControl, PendingRequests};
     use crate::copy_ctx::CudaActorHandle;
-    use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-    use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, CudaIPCActorMessage, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload};
+    use crate::cuda_utils::{cuda_mem, speed_gb_per_s};
+    use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, CudaIPCActorMessage};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::tests::run_ipc_test;
-    use crate::ipc::wraps::SyncStageIpcWrapper;
-    use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
-    use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-    use crate::runner::run_ctx::RunCtxImpl;
     // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
-    use crate::utils::{lin_for_size, tensor_digest};
-    use crate::ws::{Workspace, mock_ws_simp};
+    use crate::utils::tensor_digest;
+    use crate::ws::mock_ws_simp;
     use anyhow::Context as _;
-    use futures_util::FutureExt;
-    use futures_util::future::BoxFuture;
-    use log::{debug, info, warn};
-    use mockall::PredicateBoxExt;
+    use log::{debug, info};
     use parking_lot::RwLock;
     use rand::random_range;
-    use std::any::Any;
     use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::process::Stdio;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::Instant;
-    use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::{Device, Kind, Tensor};
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
+    use tch::{Kind, Tensor};
+    use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::traits::RunCtx;
-    use thoosa_shared::{ThoError, mono_key};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{UnixListener, UnixStream};
-    use tokio::process::{Child, Command};
-    use tokio::sync::Mutex;
+    use thoosa_shared::ThoError;
     use tokio::sync::mpsc;
     use tokio::task::JoinSet;
 

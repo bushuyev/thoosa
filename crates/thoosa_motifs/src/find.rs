@@ -1,81 +1,30 @@
-use crate::motif_tracker_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore};
+use crate::motif_tracker_store::{MotifTrackerStore, SlicesMatch};
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
-use clap::clap_derive::{Args, Subcommand};
-use crossbeam_channel::SendError;
-use crossbeam_utils::sync::WaitGroup;
-use futures::executor::block_on;
-use futures::future::join_all;
-use futures::{FutureExt, StreamExt};
-use futures_util::future::{BoxFuture, try_join_all};
+use clap::clap_derive::Args;
 use log::*;
-use log::{debug, error, info, trace, warn};
-use parking_lot::Mutex;
+use log::{debug, trace, warn};
 use parking_lot::RwLock;
-use rand::Rng;
-use rand::seq::SliceRandom;
-use std::cell::Cell;
-use std::cmp::max;
-use std::collections::HashMap;
-use std::fmt::{Debug, Display, Formatter};
-use std::fs::{File, OpenOptions};
-use std::future::Future;
-use std::hash::Hash;
-use std::io::Write;
-use std::marker::PhantomData;
-use std::num::NonZero;
-use std::ops::{Add, AddAssign, Deref, Range};
-use std::panic::AssertUnwindSafe;
-use std::rc::Rc;
+use std::fmt::Debug;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
-use std::thread::current;
-use std::time::{Duration, Instant};
-use std::{f64, fmt, fs, mem, thread};
-use tch::{Device, IndexOp, Kind, Tensor};
+use std::{f64, mem};
+use tch::{IndexOp, Tensor};
 use thoosa_common::utils::*;
-use thoosa_shared::val::Val;
-use thoosa_shared::{CopyToDevice, TensorIdSliceIdx};
-use thoosa_shared::{avg_hist, parse_key_val};
-use thoosa_shared::{RangeOrValue, ResourceType, ThoError, make_combos};
-use thoosa_store::{SqlStore, Store};
+use thoosa_shared::TensorIdSliceIdx;
+use thoosa_shared::avg_hist;
+use thoosa_shared::ResourceType;
 
-use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeQuantile, LocalMin, Tril};
-use crate::distance::dist_d2;
-use crate::distance::{MaskMaker, average_euclidean_distance, clc_dist_d2, slice_t};
-use crate::train_nets::*;
 use plotters::prelude::BLACK;
-use rayon::iter::IndexedParallelIterator;
-use rayon::iter::ParallelIterator;
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
-use serde::Deserialize;
-use tch::Device::{Cpu, Cuda};
-use tch::Kind::{Bool, Float};
-use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
-use thoosa_common::dims::Dims;
-use thoosa_common::parzen::optimizer::ConfigurationSpace;
-use thoosa_common::resources::{Labeled, SavableResult, Simple};
-use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::resources::{SavableResult, Simple};
 use thoosa_common::transforms::filters::clc_frequencies;
-use thoosa_common::ws::{FsWorkspace, Workspace};
+use thoosa_common::ws::{FsWorkspace};
 use thoosa_cpu_data_derive::CpuData;
-use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::run_configs::RunConfig;
 
-use crate::fs_store::FileMotifTrackerStore;
-use thoosa_properties_map::{FromHashmap, ToHashmap};
-use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::colors_iter::DistinctColorIter;
-use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_shared::panic_to_err;
 use thoosa_shared::parse_resources;
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
+use thoosa_shared::resource::ResourcesConfig;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::Data;
-use thoosa_shared::val::Val::UInt;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsArgs {
@@ -140,9 +89,9 @@ impl SavableResult for FindMotifsSavableResult {
 
     async fn save(
         &mut self,
-        store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        p: Self::P<'_>
+        _store: &Arc<dyn MotifsStore>,
+        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+        _p: Self::P<'_>
     ) -> anyhow::Result<u32> {
         //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
         Ok(0)
@@ -278,55 +227,20 @@ impl SelectMotifsArgs {
 
 #[cfg(test)]
 mod motif_find_tests {
-    use std::{fs, mem, thread};
 
     use async_trait::async_trait;
-    use crossbeam_channel::internal::SelectHandle;
-    use crossbeam_utils::sync::WaitGroup;
-    use futures::executor::block_on;
-    use log::LevelFilter::Trace;
-    use log::{debug, set_max_level, trace};
-    use parking_lot::RwLock;
-    use parking_lot::{Mutex, RawMutex};
-    use plotters::prelude::full_palette::ORANGE_800;
-    use plotters::prelude::{Color, RGBAColor, ShapeStyle};
-    use plotters::style::full_palette::{GREY_A100, YELLOW_A100};
-    use rayon::iter::ParallelBridge;
-    use rayon::iter::ParallelIterator;
-    use std::collections::{HashMap, HashSet};
-    use std::fmt::{Debug, Display};
-    use std::fs::create_dir_all;
-    use std::ops::{Add, AddAssign, Deref};
-    use std::path::{Path, PathBuf};
+    use log::debug;
+    use parking_lot::Mutex;
+    use std::fmt::Debug;
     use std::sync::Arc;
-    use std::sync::atomic::Ordering::Relaxed;
-    use std::sync::atomic::{AtomicU32, AtomicU64};
-    use tch::Device::Cpu;
-    use tch::Kind::{Bool, Float, Int};
-    use tch::kind::DOUBLE_CPU;
-    use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::transforms::filters::BandPassFilterParams;
+    use tch::Tensor;
     use thoosa_common::utils::*;
     use thoosa_shared::*;
 
-    use crate::distance::clc_dist_d2;
-    use crate::find::{
-        FixedFindMotifsConfig, MotifTrackerStore,
-    };
-    use crate::motif_tracker_store::{IdSlice, SlicesMatch};
+    use crate::find::MotifTrackerStore;
+    use crate::motif_tracker_store::SlicesMatch;
     use crate::motifs_store::MotifsStore;
-    use thoosa_common::resources::Simple;
-    use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
-    use thoosa_properties_map::ToHashmap;
-    use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::colors_iter::DistinctColorIter;
-    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
-    use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::val::Val;
-    use thoosa_shared::val::Val::UInt;
-    use thoosa_store::{SqlStore, Store};
 
     #[ctor::ctor]
     fn init() {
@@ -498,8 +412,8 @@ mod motif_find_tests {
         async fn load_slices_into_groups(
             &mut self,
             _store: &dyn MotifsStore,
-            min_slices_counts: Option<u32>,
-            max_slices_counts: Option<u32>,
+            _min_slices_counts: Option<u32>,
+            _max_slices_counts: Option<u32>,
         ) -> anyhow::Result<usize> {
             todo!()
         }

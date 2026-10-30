@@ -1,49 +1,36 @@
 use thoosa_common::tch_error::tch_result;
-use crate::dims::{Batch, Dims};
-use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use crate::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage, StageState};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
+use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage, StageState};
+use crate::ipc::serialization::json::JsonIpcCodec;
+use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::{SyncStageIpcWrapper, WorkerWrapperWithState};
-use crate::nets::common_nets::ThoModuleWithStore;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
-use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::Workspace;
 use async_trait::async_trait;
-use futures_util::future::{BoxFuture, FutureExt, ready};
-use futures_util::{StreamExt, ready};
+use futures_util::future::{BoxFuture, FutureExt};
 use log::debug;
-use parking_lot::{Mutex, RwLock};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
-use tch::Device::Cpu;
 use tch::Kind::Int;
 use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{ErasedStageState, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
+use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
-use tokio::sync::{MutexGuard, RwLockReadGuard};
-use tracing::field::debug;
+use tokio::sync::MutexGuard;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::{TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
-use thoosa_store::rusqlite::fallible_iterator::FallibleIterator;
 use crate::cuda_utils::tensor_mem_size;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -155,7 +142,7 @@ pub struct TestRunCtx;//corresponds to RunCtxImpl
 impl Named for TestRunCtx {}
 
 impl MaxParallelCtx for TestRunCtx{
-    fn set_max_other_parallel(&mut self, permit: u8) {}
+    fn set_max_other_parallel(&mut self, _permit: u8) {}
 
     fn max_other_parallel(&self) -> u8 { 0 }
 }
@@ -173,14 +160,14 @@ impl RunCtx for TestRunCtx {
         1
     }
 
-    fn branch(&mut self, with_new_cache_area: bool) -> Self
+    fn branch(&mut self, _with_new_cache_area: bool) -> Self
     where
         Self: Sized
     {
         TestRunCtx
     }
 
-    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
+    fn add_purge_gpu_closure(&mut self, _cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }
 
@@ -258,7 +245,7 @@ where
 const TEST_ENDPOINT: &str = "TestStageB";
 
 
-pub fn with_state_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn with_state_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     let init: Box<dyn Any> = init;
     let init = init.downcast::<TestStageInitB>().unwrap();
     async move {
@@ -306,7 +293,7 @@ where
 {
     type S = TestStageBState;//can be a struct containing a tensor, module etc
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {//ensure state is present on the target device
+    fn pre_run(&self, _to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {//ensure state is present on the target device
         async move {
             let lock_guard: MutexGuard<StageState<TestStageBState>> = self.state.lock().await;
 
@@ -317,7 +304,7 @@ where
         }.boxed()
     }
 
-    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
+    fn get_state_info(&self, _tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             let guard = self.state.lock().await;
             let k_0 = &guard.as_ref().k_0;
@@ -352,7 +339,7 @@ where
         }.boxed()
     }
 
-    fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+    fn get_state_tensor(&self, _tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async move {
 
             match &*self.state.lock().await {
@@ -377,11 +364,11 @@ where
         }.boxed()
     }
 
-    fn set_state_tensor(&self, tho_device: usize, tensor_id: String, t: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+    fn set_state_tensor(&self, _tho_device: usize, tensor_id: String, t: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async {
             debug!("TestStageB::set_state_tensor: tensor_id={tensor_id:?}");
 
-            let mut guard = self.state.lock().await;
+            let guard = self.state.lock().await;
 
 
             StageState::set_state_tensor(tensor_id, t, guard).await?;
@@ -392,7 +379,7 @@ where
 
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
         Ok(TestOutputB {
             value: tch_result(input.value.as_ref().f_mul(&tch_result(k.k_0.as_ref().f_add(&k.k_1.as_ref()))?))?.into(),
@@ -408,7 +395,7 @@ where
     C:RunCtx
 {
 
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+    async fn has_gpu_data(&self, _device_idx: usize) -> bool {
 
         match &*self.state.lock().await {
             StageState::Ready(_) => true,
@@ -417,13 +404,13 @@ where
         }
     }
 
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, _device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("TestStageB::drop_gpu");
         *self.state.lock().await = StageState::OffLoaded(vec![K_0.to_string(), K_1.to_string()]);
         Ok(())
     }
 
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
+    async fn purge_cpu(&self, _purge_until: u64) -> usize {
        0
     }
 }
@@ -435,26 +422,22 @@ use crate::tch_error::tch_result;
     use crate::ipc::proxy::DynSyncStageWithStateEnum;
     use crate::ipc::proxy_tests_with_state::{TEST_ENDPOINT, TestStageInitB, with_state_init};
     use crate::ipc::proxy_tests_with_state::{TestInputB, TestRunCtx, TestStageB};
-    use crate::ipc::serialization::json::JsonIpcCodec;
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::purge::FuturesRunnerMapPurger;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
+    use crate::ws::mock_ws_simp;
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
-    use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_shared::ThoError;
-    use thoosa_common::runner::sync_stage::SyncStage;
-    use tracing::field::debug;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

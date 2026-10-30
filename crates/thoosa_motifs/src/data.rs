@@ -1,24 +1,17 @@
 use anyhow::Context as _;
 use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
-use parking_lot::{Mutex, RwLock};
-use std::fmt::{Debug, Display};
-use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::Add;
 use std::path::Path;
 
 use log::debug;
 use polars::prelude::*;
 use polars::prelude::{LazyFrame, NamedFrom, ScanArgsParquet, Series};
 
-use tch::{Device, IndexOp, Tensor};
+use tch::{Device, Tensor};
 
-use thoosa_common::utils::from;
-use thoosa_shared::ThoError;
-use thoosa_shared::resource::{Resource, ResourceId};
+use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_store::Store;
 use tracing::Instrument;
 
 #[derive(Default)]
@@ -237,15 +230,12 @@ pub async fn labeled_tensors_by_descr<'a>(
 
 #[cfg(test)]
 mod data_tests {
-    use log::debug;
     use polars::prelude::*;
-    use std::mem::forget;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, IndexOp, Kind, Tensor};
+    use tch::{IndexOp, Tensor};
     use crate::data::split_frame_by_offsets;
     use thoosa_shared::test_utils::init_test_logging;
-    use thoosa_shared::{TensorIdSliceIdx, ThoError};
 
     #[ctor::ctor]
     fn init() {

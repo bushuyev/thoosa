@@ -69,7 +69,7 @@ pub fn pearson_corr_distance_matrix_0_2_single(x: &Tensor, eps: f64) -> Result<T
     let sx = x.size();
     debug_assert_eq!(sx.len(), 2, "x must be [Sa, W]");
 
-    let device = x.device();
+    let _device = x.device();
     // let x = x.to_device(device).to_kind(Kind::Float);
 
     let w = sx[1] as f64;

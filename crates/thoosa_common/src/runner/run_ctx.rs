@@ -74,9 +74,10 @@ impl WithId for RunCtxImpl {
 }
 
 impl RunCtxImpl {
-    pub fn new(tho_device_idx: usize, id: &str,) -> Self {
+    pub fn new(tho_device_idx: usize, _id: &str,) -> Self {
 
-        Self::with_cache_area(tho_device_idx, mono_key!(0u32, id).into())
+        // mono_key only retains the diagnostic name in debug builds.
+        Self::with_cache_area(tho_device_idx, mono_key!(0u32, _id).into())
     }
 
 
@@ -128,7 +129,7 @@ impl RunCtx for RunCtxImpl {
 
         let mut branched_ctx= if with_new_cache_area {
 
-            let mut branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
+            let branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
 
             debug!("RunCtxImpl::branch: branch_name={:?}", branched_ctx.id);
 

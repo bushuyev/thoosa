@@ -5282,7 +5282,6 @@ dependencies = [
  "quote",
  "syn 2.0.106",
  "thoosa_macros_utils",
- "thoosa_properties_map",
  "thoosa_shared",
 ]
 

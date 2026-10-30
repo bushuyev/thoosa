@@ -1,15 +1,11 @@
 use thoosa_common::tch_error::tch_result;
-use log::{debug, trace};
-use std::cmp::min;
+use log::trace;
 use std::ops::Range;
-use tch::kind::FLOAT_CPU;
-use tch::{IndexOp, Tensor};
-use thoosa_common::dims::{AnyMetrics, Batch, ChannelsData, Dims, LocalSelect};
-use thoosa_common::stages::freq_filter::ChannelsDataSelector;
+use tch::Tensor;
+use thoosa_common::dims::{ChannelsData, LocalSelect};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::MonoMetrics;
-use thoosa_shared::traits::{Adjustable, DataId, Select, ThoSelector};
 use thoosa_shared::{ThoError, mono_key};
 
 #[derive(Clone, Debug, Default)]

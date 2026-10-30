@@ -2,39 +2,29 @@ use thoosa_common::tch_error::tch_result;
 use std::backtrace::Backtrace;
 use crate::dims::{AnyDims, ChannelsData, Dims};
 use crate::runner::common::cachable::ThoDataRef;
-use thoosa_shared::traits::RunCtx;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use async_trait::async_trait;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, warn};
 use mockall_double::double;
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
-use std::sync::atomic::AtomicU8;
-use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::{Mutex, ReentrantMutex, ReentrantMutexGuard};
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, DebugId, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, DebugId, ThoSelector, WithId};
 use thoosa_shared::{n_trace_line, CopyToDevice, ThoError};
-use thoosa_shared::{panic_to_err, debug_id};
+use thoosa_shared::debug_id;
 use torch_sys::IntList;
 use thoosa_shared::comp_id::SynKey;
 use crate::ipc::worker_msg::{CudaWorkerId, WorkerInput};
 use thoosa_shared::ipc_types::{WorkerOutput};
-use thoosa_common::ipc::tensor_info::{IpcTensorKind};
 
 
 // Synchronize the non-Sync Tensor handle instead of asserting Sync for arbitrary IDs.
@@ -336,7 +326,7 @@ where
     fn size(&self) -> Self::Metrics {
         match &self.inner {
             ThoTensorInner::Val { t } => t.lock().size().try_into().unwrap_or_default(),
-            ThoTensorInner::Ref { size, .. } => Self::Metrics::try_from(size.clone()).unwrap_or_else(|e| panic!("Tho tensor size metrics conversion failed")),
+            ThoTensorInner::Ref { size, .. } => Self::Metrics::try_from(size.clone()).unwrap_or_else(|_e| panic!("Tho tensor size metrics conversion failed")),
         }
     }
 
@@ -351,7 +341,7 @@ where
     fn mem_size(&self) -> u64 {
         match &self.inner {
             ThoTensorInner::Val { t } => { let t = t.lock(); t.size().iter().fold(1u64, |a, v| a * (*v as u64)) * t.kind().elt_size_in_bytes() as u64 },
-            ThoTensorInner::Ref { key, .. } => {
+            ThoTensorInner::Ref { key: _key, .. } => {
                 1000 //TODO
             }
         }
@@ -375,16 +365,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Ref { key, .. } => {
                 error!("ThoTensor::inner_tensor_ref: {:?}", Backtrace::capture());
                 panic!("can't get ref of a remote tensor key={key:?}")
-            },
-        }
-    }
-
-    fn inner_tensor_mut(&mut self) -> &mut Tensor {
-        match &mut self.inner {
-            ThoTensorInner::Val { t } => t.get_mut(),
-            ThoTensorInner::Ref { key, .. } => {
-                error!("ThoTensor::inner_tensor_mut: {:?}", Backtrace::capture());
-                panic!("can't get mut ref of a remote tensor key={key:?}")
             },
         }
     }
@@ -554,7 +534,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
     pub fn tho_device_idx(&self) -> usize {
         match &self.inner {
-            ThoTensorInner::Val { t } => ThoDevice::try_from(self.t_ref().device()).expect("CPU/CUDA tensor device").tho_device_idx(),
+            ThoTensorInner::Val { t: _t } => ThoDevice::try_from(self.t_ref().device()).expect("CPU/CUDA tensor device").tho_device_idx(),
             ThoTensorInner::Ref { key, .. } => key.worker_id.device_idx,
         }
     }
@@ -658,6 +638,7 @@ where
 impl<D: Dims, Id> Output for ThoTensor<D, Id> where Id: Named + Debug + Clone + Debug + Send + Sync + Eq + std::hash::Hash + 'static {}
 
 pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
+    #[expect(dead_code, reason = "Keeps the typed identity borrow tied to the mutable tensor view.")]
     id: &'a Id,
     t: &'a mut Tensor,
     pd: PhantomData<D>,
@@ -747,11 +728,11 @@ mod thread_safety_tests {
     use crate::ipc::cuda_wokrer::AllTensors;
 
     #[derive(Debug, Clone)]
-    struct CellId(Cell<usize>);
+    struct CellId(#[expect(dead_code, reason = "The field determines auto traits checked below.")] Cell<usize>);
     impl Named for CellId {}
 
     #[derive(Debug, Clone)]
-    struct LocalId(Rc<Cell<usize>>);
+    struct LocalId(#[expect(dead_code, reason = "The field determines auto traits checked below.")] Rc<Cell<usize>>);
     impl Named for LocalId {}
 
     // Negative assertions prevent an unconditional unsafe impl from reopening the safe-code holes.

@@ -2,9 +2,8 @@
 
 use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::proxy_tests::{TestRunCtx, TestStageA};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::tests::{init_ipc_test, run_ipc_test};
+use crate::ipc::serialization::json::{JsonIpcCodec};
+use crate::ipc::tests::{run_ipc_test};
 use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
@@ -16,15 +15,13 @@ use crate::tho_device::ThoDevice;
 use crate::ws::{Workspace, mock_ws_simp};
 use futures_util::future::{BoxFuture, FutureExt};
 use log::info;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{RwLock};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
-use tch::{Device, Tensor};
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ipc_types::WorkerOutput;
@@ -139,7 +136,7 @@ where
     }
 }
 
-fn simp_stage_init<'a>(tage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn simp_stage_init<'a>(_tage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let Ok(_init) = init.downcast::<()>() else {

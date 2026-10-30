@@ -1,16 +1,11 @@
-use crate::debug_plot;
 use crate::dims::Dims;
 use crate::nets::batches::BatchLengths;
-use crate::nets::nodes::{InitMode, ThoCosineConv1d, ThoModule, path_var};
+use crate::nets::nodes::{ThoModule, path_var};
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
-use crate::utils::plot_spectrogram;
-use crate::utils::z_norm_dims;
 use log::{debug, trace};
 use std::sync::Arc;
 use tch::nn::Path;
-use tch::{IndexOp, Kind, Tensor, nn};
-use thoosa_shared::ThoError;
-use thoosa_shared::comp_id::SynKey;
+use tch::{Kind, Tensor, nn};
 use thoosa_shared::traits::DebugId;
 
 
@@ -82,7 +77,7 @@ pub fn cosine_conv2d_bank_logits(
         ));
     }
 
-    let b = x_sz[0];
+    let _b = x_sz[0];
     let c = x_sz[1];
     let h = x_sz[2];
     let w = x_sz[3];
@@ -216,7 +211,9 @@ pub struct ThoCosineConv2d {
     /// Learnable logit bias
     pub beta: Tensor,
 
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     kh:i64,//frequencies
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     kw:i64,//time
 
     cfg: CosineConv2dBankConfig,
@@ -420,7 +417,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
 
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
-    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
+    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyCosineConv2d::tho_forward: x_in={x_in:?}");
 
         let y = self.forward_anywhere(&x_in.as_ref())?; // [B,1,1,1] if full match
@@ -434,7 +431,6 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
 mod tests {
     use crate::dims::AnyDims;
     use crate::nets::cosine_2d::ThoCosineConv2d;
-    use crate::nets::nodes::{InitDummy, InitMode};
     use crate::tho_tensor::ThoTensor;
     use log::debug;
     use std::sync::Arc;
@@ -442,7 +438,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
-    use thoosa_shared::{ThoError, debug_id};
+    use thoosa_shared::debug_id;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_check_dims() -> anyhow::Result<()> {

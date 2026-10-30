@@ -11,7 +11,6 @@ use std::any::Any;
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
@@ -19,8 +18,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
-use tokio::sync::{MappedMutexGuard, MutexGuard, RwLockReadGuard};
-use uuid::Uuid;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {

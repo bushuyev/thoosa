@@ -1,53 +1,43 @@
-use crate::distance::clc_dist_d2;
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::find_motifs::{CrossUnfoldMaskFn, MasksCtx};
 use crate::stages::prepare_cross_batch::PreparedCrossBatch;
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
-use async_trait::async_trait;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, trace, warn};
+use log::{debug, warn};
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use tch::kind::FLOAT_CPU;
-use tch::{TchError, Tensor};
+use tch::Tensor;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
-use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
+use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tch_error::tch_result;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
-use thoosa_common::ws::Workspace;
 use thoosa_digest_id::DigestHash;
 use thoosa_digest_id_derive::DigestHash as DigestHashDerive;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
+use thoosa_shared::{ThoError, mono_key};
 
 pub const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
@@ -485,48 +475,10 @@ where
     }
 }
 
-#[derive(Debug)]
-struct CrossUnfoldClcProxyCtx<C>//TODO remove the context adapter once the shared run context can be used directly
-where
-    C: RunCtx + 'static,
-{
-    proxy: Arc<DynSyncStageEnum<CrossUnfoldClc<crate::stages::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::stages::find_motifs::MasksCtx, RunCtxImpl>>>,
-    _pd: PhantomData<C>,
-}
 
-impl<C> Adjustable for CrossUnfoldClcProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-}
 
-impl<C> OutId for CrossUnfoldClcProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        input_id.clone()
-    }
-}
 
-impl<C> Stage for CrossUnfoldClcProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-    type In<'a> = CrossInput<'a, Arc<Resource>>;
-    type Out = CrossUnfoldClcOutput<DistsMask>;
-    type Ctx = C;
-}
 
-impl<C> SyncStage for CrossUnfoldClcProxyCtx<C>
-where
-    C: RunCtx + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxyCrossUnfoldClc requires RunCtxImpl"))?;
-        Arc::clone(&self.proxy).do_run(input, ctx)
-    }
-}
 
 static CROSS_UNFOLD_CLC_INSTANCES: InstanceCache = InstanceCache::new();
 
@@ -557,7 +509,7 @@ where
 #[typetag::serde(name = "CrossUnfoldClcOutput_DistsMask")]
 impl WorkerOutput for CrossUnfoldClcOutput<DistsMask>{}
 
-pub fn sync_cross_unfold_clc_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_cross_unfold_clc_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let init: Box<dyn Any> = init;
         let Ok(init) = init.downcast::<crate::stages::find_motifs::FindMotifsCrossUnfoldClcInit>() else {
@@ -823,19 +775,13 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params:
 
 #[cfg(test)]
 mod tests {
-    use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams, unfold_and_cat};
+    use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
     use crate::stages::find_motifs::{MasksCtx, MeanDistsCtx};
     use log::debug;
-    use parking_lot::RwLock;
-    use std::marker::PhantomData;
     use std::sync::Arc;
     use tch::Device::{Cpu, Cuda};
-    use tch::Kind::{Bool, Uint8};
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::{Kind, Tensor};
-    use thoosa_common::dims::ChannelsData;
-    use thoosa_common::runner::common::MockRunCtx;
+    use tch::Tensor;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::runner::sync_stage::SyncStage;
@@ -845,7 +791,6 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::Stage;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {
@@ -855,7 +800,7 @@ mod tests {
         GlobalCtx::init_devices(2)?;
 
         let cross_batch_fn: Box<dyn CrossBatchFn<DistsMask, MasksCtx, RunCtxImpl>> = Box::new(
-            |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, ctx: &MasksCtx, _: &RunCtxImpl| {
+            |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, _ctx: &MasksCtx, _: &RunCtxImpl| {
                 debug!("t_0=\n{t_0}");
                 debug!("t_1=\n{t_1}");
                 debug!("input={input:?}");

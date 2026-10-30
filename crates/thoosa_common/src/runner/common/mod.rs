@@ -1,9 +1,8 @@
 // removed unused feature gate to reduce warnings
 
 use std::fmt::Debug;
+#[cfg(test)]
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::Stage;
-use thoosa_shared::traits::{Named, WithId};
 pub mod cachable;
 
 

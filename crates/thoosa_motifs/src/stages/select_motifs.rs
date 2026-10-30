@@ -1,74 +1,29 @@
-use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
-use async_trait::async_trait;
-use log::{debug, error, info, trace, warn};
+use log::{debug, info, warn};
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
-use std::f64;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
-use tch::Device::Cpu;
-use tch::Kind::{Float, Uint8};
-use tch::kind::FLOAT_CUDA;
-use tch::{IndexOp, Kind, Tensor};
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-use tokio::io::AsyncWriteExt;
-use tokio::sync::OwnedRwLockWriteGuard;
-use tokio::task::{JoinHandle, JoinSet};
 
-use mockall_double::double;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::dims::{ChannelsMotifsDists, ChannelsMotifsSlices, MotifSlices};
-use crate::find::FixedFindMotifsConfig;
-use crate::motif_tracker_store::IdSlice;
-use crate::stages::cross_batch_clc::{CrossInput, UnfoldParams, unfold_and_cat};
-use crate::stages::cross_loader::{RangeOrSlice, ResourcesConfigInput};
-use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
-use crate::stages::find_motifs::config_to_stage;
-use crate::stages::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsRunConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
-use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-use crate::stages::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistOutput};
-use crate::stages::slices_stats::Aggr;
-use crate::stages::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
-use crate::stages::tensor_loader::RawTensorLoader;
-use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::cuda_utils::pack_bits_bool;
+use crate::dims::MotifSlices;
+use crate::stages::cross_loader::ResourcesConfigInput;
+use crate::stages::find_motifs_run_config::{Metrics, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
+use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput};
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::runner::run_ctx::RunCtxImpl;
-use thoosa_common::runner::tmp_cache::TmpCached;
-use thoosa_common::resources::{Labeled, SavableResult, Simple};
-use thoosa_common::stages::freq_filter::ChannelsDataSelector;
-use thoosa_common::tho_device::ThoDevice;
+use thoosa_common::resources::Simple;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::{load_run_config, pad_to};
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
+use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::rayon_pool::rayon_pool;
-use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
+use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, WithId, hump};
-use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_store::Store;
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, hump};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 
 pub use crate::stages::resources_motifs_clc_dist::{fold_dists, fold_mask};
-use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stage_ids::SELECT_MOTIFS;
 use thoosa_shared::tracked_await::track_await;
 //The overall logic in Find and Select Motifs Stages is as following:
@@ -211,7 +166,9 @@ where
 
     id: SynKey,
     store: Arc<dyn MotifsStore>,
+    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws:Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     loader:Arc<L>,
 
     run_configs:Vec<SelectMotifsRunConfig>,//TODO map to Vec<Arc in new
@@ -251,7 +208,7 @@ where
         run_configs:Vec<SelectMotifsRunConfig>,
         find_motifs_run_config_ids:Vec<RunConfigId>,
         // #[cfg(test)]
-        fail_if_size_bigger_than:Option<usize>
+        _fail_if_size_bigger_than:Option<usize>
     ) -> Result<Self, ThoError> {
 
         let motif_stats = Arc::new(MotifStats::new(
@@ -479,63 +436,39 @@ pub mod tests {
     use crate::motif_tracker_store::IdSlice;
     use crate::motifs_store::{MockMotifsStore, MockMotifsStoreBuilder, MotifsStore};
     use crate::stages::cross_loader::ResourcesConfigInput;
-    use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
     use crate::stages::extend_motifs::{ExtendMotifsInput, ExtendMotifsStage};
     use crate::stages::find_motifs_run_config::SelectMotifsSavableResult;
     use crate::stages::find_motifs_run_config::{CoherenceRunConfig, ExtendMotifsRunConfig, FindMotifsRunConfig, InlierRatioRunConfig, MotifCriterionConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
-    use crate::stages::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};
-    use crate::stages::motif_stats::MotifStats;
-    use crate::stages::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsStage, fold_dists, fold_mask};
-    use crate::stages::slices_iter::SlicesIter;
-    use crate::stages::slices_stats::{Aggr, Metrics};
-    use crate::stages::stacked_moitfs_loader::{StackedMotifsOutput, StackedMotifsOutputId};
+    use crate::stages::slices_stats::Metrics;
     use crate::stages::tensor_loader::mock_tensor_loader;
-    use crate::stages::tensor_loader::mock_tensor_loader::MockTensorLoader;
     use crate::tch_test_utils;
     use crate::tch_test_utils::Interval;
-    use crate::tch_test_utils::generate_motifs_with_avg_distance;
-    use dashmap::DashMap;
-    use log::Level::Debug;
-    use log::LevelFilter::{Info, Trace};
+    use log::LevelFilter::Info;
     use log::{LevelFilter, debug};
     use parking_lot::RwLock;
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tch::Device::Cuda;
-    use tch::Kind::Bool;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tch::{IndexOp, Kind, Tensor};
-    use thoosa_common::data_with_extra::DataWithExtra;
-    use thoosa_common::dims::ChannelsData;
-    use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
-    use thoosa_common::runner::adjusters::splits::OutputBuilder;
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::DropIf::IfNotMax;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use tch::kind::FLOAT_CPU;
+    use tch::{Kind, Tensor};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
-    use thoosa_common::runner::global_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runner::run_ctx::RunCtxImpl;
-    use thoosa_common::resources::{Labeled, SavableResult, Simple};
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm};
-    use thoosa_common::ws::mock_ws_simp;
+    use thoosa_common::resources::Simple;
+    use thoosa_common::utils::reset_print_options;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::NotInGroup;
-    use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::test_utils::{TestSignalKind, gen_signal};
+    use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::AsyncStage;
-    use thoosa_shared::traits::{DataId, RunCtx};
-    use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir};
-    use thoosa_store::{RunConfigRow, Store};
+    use thoosa_shared::traits::DataId;
+    use thoosa_shared::ThoError;
+    use thoosa_store::RunConfigRow;
     use tokio::fs;
 
     #[ctor::ctor]
@@ -594,7 +527,7 @@ pub mod tests {
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, TestSignalKind::Pulse)]], 100, 10.0f32, true, true)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals)];
 
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -670,7 +603,7 @@ pub mod tests {
         let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, TestSignalKind::Pulse)]], 200, 10.0f32, true, true)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals), (&resource_b, &[channel_0_motifs_ids.as_slice()][..],  &resource_b_intervals)];
 
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -747,7 +680,7 @@ pub mod tests {
 
         let resources_channels_intervals = [(&resource_a, &[motifs_ids.as_slice()][..], &resource_a_intervals)];
 
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -801,7 +734,7 @@ pub mod tests {
         Ok(())
     }
 
-    fn resources_add_slices_to_motif_expectations(run_config_id: RunConfigId, channel_0_motifs_ids: &[u32], resources_channel_intervals: &[(&Resource, &[&[u32]], &Vec<Vec<Vec<Interval>>>)]) -> Vec<(RunConfigId, u32, i64, HashSet<IdSlice>)> {
+    fn resources_add_slices_to_motif_expectations(run_config_id: RunConfigId, _channel_0_motifs_ids: &[u32], resources_channel_intervals: &[(&Resource, &[&[u32]], &Vec<Vec<Vec<Interval>>>)]) -> Vec<(RunConfigId, u32, i64, HashSet<IdSlice>)> {
 
         let mut motif_hash = HashMap::new();
         for (resource, channel_0_motifs_ids, channel_intervals) in resources_channel_intervals {
@@ -811,7 +744,7 @@ pub mod tests {
                 for (m_idx, intervals) in motifs_intervals.iter().enumerate() {
 
                     let motif_id = channel_0_motifs_ids[c][m_idx]; //.get(m_idx).expect(&format!("no motif for index {m_idx}"));
-                    let mut motif_intervals = motif_hash.entry((motif_id.clone(), c)).or_insert_with(HashSet::new);
+                    let motif_intervals = motif_hash.entry((motif_id.clone(), c)).or_insert_with(HashSet::new);
 
                     for interval in intervals {
                         motif_intervals.insert(IdSlice(0, resource.id(), interval.start as u32));
@@ -845,8 +778,8 @@ pub mod tests {
         let channel_1_motif_0 = 3;
 
         let channel_0_motifs_ids = vec![channel_0_motif_0, channel_0_motif_1];
-        let channel_1_motifs_ids = vec![channel_1_motif_0];
-        let channel_2_motifs_ids:Vec<u32> = vec![];
+        let _channel_1_motifs_ids = vec![channel_1_motif_0];
+        let _channel_2_motifs_ids:Vec<u32> = vec![];
 
         let resources_group = "group";
 
@@ -886,7 +819,7 @@ pub mod tests {
         let expected_add_slices_to_motif_calls = resources_add_slices_to_motif_expectations(select_motifs_run_config_id, &channel_0_motifs_ids, &resources_channels_intervals);
         debug!("test_3_resources_2_labels_3_channels_3_motifs: expected_add_slices_to_motif_calls={expected_add_slices_to_motif_calls:?}");
 
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values([(
                     find_motifs_run_config_id,
@@ -1218,26 +1151,6 @@ pub mod tests {
     }
 
     // #[test]
-    fn resource_tensor_offsets_channels_when_space_allows() -> Result<(), ThoError> {
-        let (_, intervals) = tch_test_utils::resource_tensor(
-            1200,
-            &[vec![(1, 100, TestSignalKind::Pulse)], vec![(1, 120, TestSignalKind::Triangle)]], 300, 10.0f32,
-            true,
-            true,
-        )?;
-
-        assert_eq!(intervals.len(), 2);
-        assert_eq!(intervals[0].len(), 1);
-        assert_eq!(intervals[1].len(), 1);
-        assert_eq!(intervals[0][0].len(), 1);
-        assert_eq!(intervals[1][0].len(), 1);
-        let first_channel_interval = &intervals[0][0][0];
-        let second_channel_interval = &intervals[1][0][0];
-        assert!(first_channel_interval.end <= second_channel_interval.start);
-
-        Ok(())
-    }
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_uses_existing_slices_when_extend_config_is_none() -> Result<(), ThoError> {
@@ -1288,7 +1201,7 @@ pub mod tests {
             (MotifLoaderInput::all_slices(DataId(12)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_12_t)),
         ]).finish());
 
-        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
+        let select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
             &ws,
@@ -1611,7 +1524,7 @@ pub mod tests {
         let resources_group = "group";
 
 
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(run_config_id)])
                 .with_list_run_config_values([(
                     run_config_id,
@@ -1674,7 +1587,7 @@ pub mod tests {
 
         let ctx =  mock_run_ctx::default(1);
 
-        let result = select_motifs_stage.run(standalone_select_input(resources_group), ctx).await?;
+        let _result = select_motifs_stage.run(standalone_select_input(resources_group), ctx).await?;
 
         Ok(())
     }

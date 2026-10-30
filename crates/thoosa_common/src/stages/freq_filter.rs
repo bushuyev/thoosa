@@ -1,43 +1,51 @@
 use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
-use crate::debug_plot;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::debug;
+#[cfg(test)]
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::any::{Any, TypeId};
+#[cfg(test)]
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Deref, Range};
-use std::sync::{Arc, LazyLock};
-use tch::Device::{Cpu, Cuda};
-use tch::Kind::Float;
+use std::ops::Range;
+use std::sync::Arc;
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterContext, SplitsAdjusterContextImpl};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{DevicesWrap};
+#[cfg(test)]
+use thoosa_common::runner::common::cachable::Cached;
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{AsyncStage, OutId, Stage, StageHash, ThoSelector};
+use thoosa_shared::traits::{AsyncStage, OutId, Stage, ThoSelector};
 use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
-use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
+use thoosa_common::dims::{AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
 use crate::dims::LocalSelect;
 use crate::cuda_utils::tensor_mem_size;
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+#[cfg(test)]
+use crate::ipc::serialization::json::JsonIpcCodec;
+#[cfg(test)]
 use crate::ipc::wraps::SyncStageIpcWrapper;
-use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
+use thoosa_common::ipc::cuda_wokrer::{WorkerStageInput};
+#[cfg(test)]
+use thoosa_common::ipc::cuda_wokrer::AllTensors;
+#[cfg(test)]
+use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
 use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
+#[cfg(test)]
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
@@ -45,17 +53,19 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
 use thoosa_common::transforms::smoothing::{median, moving_average};
 use thoosa_common::utils::z_norm;
-use thoosa_common::ws::{Workspace, WsConfigs};
-use thoosa_digest_id::{blake3, DigestHash};
+use thoosa_common::ws::{WsConfigs};
+#[cfg(test)]
+use thoosa_common::ws::Workspace;
+use thoosa_digest_id::DigestHash;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Metrics, MonoMetrics, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use thoosa_shared::ipc_types::{TensorKey};
 use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
-use tokio::sync::{MutexGuard, RwLockReadGuard};
+use tokio::sync::MutexGuard;
 use crate::instance_cache::InstanceCache;
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
@@ -123,12 +133,12 @@ where
 {
 
     pub async fn new(init:SyncFreqFilterIpcInit) -> Result<Arc<DynSyncStageWithStateEnum<SyncFreqFilter<C>>>, ThoError> {
-        let find_motifs_run_config_id = init.find_motifs_run_config_id;
+        let _find_motifs_run_config_id = init.find_motifs_run_config_id;
         // Filters outlive training trials. Retain their proxy and configuration;
         // its endpoint is installed lazily in each replacement worker.
         let gate = GlobalCtx::global().cuda_activity_gate(init.tho_device_idx);
         let activity = gate.as_ref().map(thoosa_shared::CudaActivityScope::for_operation).transpose()?;
-        let generation = gate.as_ref().and_then(|gate| activity.as_ref().and_then(|scope| scope.generation(gate)));
+        let _generation = gate.as_ref().and_then(|gate| activity.as_ref().and_then(|scope| scope.generation(gate)));
         // let id = (TypeId::of::<Self>(), find_motifs_run_config_id, init.tho_device_idx);
         let id = init.new_id().to_string();
 
@@ -150,7 +160,7 @@ where
             } else {
                 Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
             };
-            let registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            let _registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
 
             Ok(stage)
 
@@ -710,7 +720,7 @@ where
         }.boxed()
     }
 
-    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
+    fn get_state_info(&self, _tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async move {
             let filters = self.filters.lock().await;
             let mut tensors = Vec::new();
@@ -726,7 +736,7 @@ where
         }.boxed()
     }
 
-    fn get_state_tensor(&self, tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+    fn get_state_tensor(&self, _tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async move {
             let filters = self.filters.lock().await;
             let slot = filters.iter().enumerate().find(|(index, _)| index.to_string() == tensor_id).and_then(|(_, filter)| filter.tensor()).ok_or_else(|| ThoError::NotFound(Some(tensor_id)))?;
@@ -767,7 +777,7 @@ where
         device_idx != 0 && filters.iter().filter_map(PreparedFilter::tensor).any(|slot| slot.tensor.as_ref().is_some_and(|tensor| tensor.tho_device_idx() == device_idx))
     }
 
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("SyncFreqFilter::purge_gpu");
         let mut filters = self.filters.lock().await;
         for filter in filters.iter_mut() {
@@ -781,7 +791,7 @@ where
         Ok(())
     }
 
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         // In IPC, the parent has already copied every state tensor to CPU.
         // Release worker storage, retaining only metadata needed for restoration.
         let mut filters = self.filters.lock().await;
@@ -870,7 +880,7 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
     type Output = ThoTensor<ChannelsData, SynKey>;
 
     fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
-        let size: MonoMetrics<1, 2> = t.size().try_into()?;
+        let _size: MonoMetrics<1, 2> = t.size().try_into()?;
 
         let ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end);
         debug!("ChannelsData2Selector::subview 1. ranges={ranges:?}, size={:?}", t.size());
@@ -1237,7 +1247,7 @@ mod tests {
         );
 
 
-        let d : StageHash = init.blake3_hash().into();
+        let _d : StageHash = init.blake3_hash().into();
         assert_eq!(size_of::<StageHash>(), 32);
 
     }

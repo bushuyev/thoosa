@@ -5,7 +5,7 @@ use parking_lot::RwLock;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::{ResourceType, ThoError};
+use thoosa_shared::ResourceType;
 use thoosa_store::Store;
 use thoosa_shared::tracked_await::track_await;
 

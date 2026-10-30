@@ -1,63 +1,43 @@
 use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
 use crate::stages::bucketing::{BucketingInput, BucketingStage};
-use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
+use crate::stages::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
 use crate::stages::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType, DistsTracker, tensor_from_ipc_bytes, tensor_to_ipc_bytes};
-use crate::stages::tensor_loader::RawTensorLoader;
-use async_trait::async_trait;
-use std::collections::HashMap;
 
-use mockall_double::double;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use futures_util::FutureExt;
-use log::{debug, error, info, trace, warn};
+use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::dims::{ChannelsMotifsDists, MotifSlices};
+use crate::dims::ChannelsMotifsDists;
 use crate::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use crate::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use crate::stages::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, FinderKind, MaxSlices, SlicesFilter};
-use crate::stages::motif_loader::{MotifLoader, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+use crate::stages::motif_loader::MotifLoader;
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput};
 use crate::stages::slices_stats::{Aggr as StatsAggr, Metrics};
-use tch::Device::Cpu;
-use tch::Kind::{Bool, Float};
-use tch::kind::FLOAT_CPU;
 use tch::{Device, Kind, Tensor};
-use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::worker_msg::WorkerInput;
-use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_common::resources::Simple;
 use thoosa_common::stages::freq_filter::FreqFilter;
 use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use thoosa_store::{SqlStore, Store};
-use tokio::runtime::Handle;
-use tokio::task::{JoinError, JoinSet};
-use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum};
+use thoosa_common::ipc::proxy::DynSyncStageEnum;
 use thoosa_digest_id::DigestHash;
 use thoosa_digest_id_derive::DigestHash as DigestHashDerive;
 use crate::stages::prepare_cross_batch::PrepareCrossBatch;
@@ -148,7 +128,7 @@ where
         }
     }
 
-    pub async fn run(&self, input: Arc<ResourcesConfigInput<RC>>, mut ctx:C) -> Result<Arc<()>, ThoError> {
+    pub async fn run(&self, input: Arc<ResourcesConfigInput<RC>>, ctx:C) -> Result<Arc<()>, ThoError> {
         match self {
             Self::CrossLoader { cross_loader, .. } => {
                 track_await!(Arc::clone(cross_loader).run(input, ctx)).await
@@ -640,54 +620,30 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::{import_resources, run_grid};
-    use crate::dims::MotifSlices;
-    use crate::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
+    use crate::find::FixedFindMotifsConfig;
     use crate::motif_tracker_store::CheckGroups;
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_motifs::FindMotifsStage;
-    use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
-    use crate::stages::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+    use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::motif_stats::RANDOM_STATS_GROUP;
-    use crate::stages::select_motifs::SelectMotifsStage;
-    use crate::stages::tensor_loader::{RawTensorLoader, mock_tensor_loader};
+    use crate::stages::tensor_loader::mock_tensor_loader;
     use crate::tch_test_utils;
-    use log::LevelFilter::Trace;
-    use log::{debug, set_max_level};
+    use log::debug;
     use parking_lot::RwLock;
-    use std::collections::HashMap;
-    use std::fs;
-    use std::path::Path;
     use std::sync::Arc;
-    use tch::Device::Cuda;
-    use tch::display::set_print_options_full;
-    use tch::kind::INT64_CPU;
-    use tch::{Device, IndexOp, Tensor};
-    use thoosa_common::data_with_extra::DataWithExtra;
-    use thoosa_common::debug_plot;
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::Cached;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
+    use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runner::run_ctx::RunCtxImpl;
-    use thoosa_common::resources::{Labeled, Simple};
-    use thoosa_common::tho_device::ThoDevice;
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::utils::{debug_plot_impl, lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};
-    use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::resources::Simple;
+    use thoosa_common::utils::debug_plot_impl;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
-    use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::mono_key;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::TestSignalKind;
-    use thoosa_shared::traits::{AsyncStage, DataId, RunCtx, Stage};
-    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp};
-    use thoosa_store::{RunConfigRow, SqlStore};
+    use thoosa_shared::traits::{AsyncStage, RunCtx};
+    use thoosa_shared::ThoError;
+    use thoosa_store::RunConfigRow;
 
     #[ctor::ctor]
     pub fn init() {
@@ -737,7 +693,7 @@ mod tests {
 
         let resources_group = "group";
 
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {

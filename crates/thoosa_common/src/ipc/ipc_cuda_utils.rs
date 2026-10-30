@@ -5,22 +5,14 @@
 //! callers that still need standalone shared mappings.
 
 use std::ffi::c_void;
-use std::fmt::Debug;
 use std::io;
 use std::mem::{size_of, zeroed};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
-use serde::{Deserialize, Serialize};
-use tch::{Kind, Tensor};
 use tokio::net::UnixStream;
 
-use thoosa_common::ipc::tensor_info::IpcTensorKind;
-use thoosa_shared::ThoError;
 
 
-fn invalid(message: impl Into<String>) -> ThoError {
-    ThoError::new(message)
-}
 
 
 
@@ -134,119 +126,4 @@ fn recv_fd_once(socket_fd: RawFd) -> io::Result<OwnedFd> {
         }
     }
     received_fd.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SCM_RIGHTS message contained no fd"))
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Context as _;
-    use std::path::PathBuf;
-    use std::process::Stdio;
-
-    use tch::Device::Cpu;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::UnixListener;
-    use tokio::process::{Child, Command};
-
-    use thoosa_shims::context::ThoCudaContext;
-
-    use super::*;
-
-    const TEST_SOCKET_ENV: &str = "THOOSA_MEMFD_COPY_TEST_SOCKET";
-    const TEST_MODE_ENV: &str = "THOOSA_MEMFD_COPY_TEST_MODE";
-    const TEST_FRAME_MAX: usize = 16 * 1024 * 1024;
-
-
-    async fn write_frame(stream: &mut UnixStream, payload: &[u8]) -> Result<(), ThoError> {
-        if payload.len() > u32::MAX as usize {
-            return Err(invalid(format!("test frame too large: {}", payload.len())));
-        }
-        stream.write_all(&(payload.len() as u32).to_le_bytes()).await?;
-        stream.write_all(payload).await?;
-        stream.flush().await?;
-        Ok(())
-    }
-
-    async fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>, ThoError> {
-        let mut len = [0u8; 4];
-        stream.read_exact(&mut len).await?;
-        let len = u32::from_le_bytes(len) as usize;
-        if len > TEST_FRAME_MAX {
-            return Err(invalid(format!("test frame too large: {len}")));
-        }
-        let mut payload = vec![0u8; len];
-        stream.read_exact(&mut payload).await?;
-        Ok(payload)
-    }
-
-    async fn write_json<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<(), ThoError> {
-        write_frame(stream, &serde_json::to_vec(value)?).await
-    }
-
-    async fn read_json<T: for<'de> Deserialize<'de>>(stream: &mut UnixStream) -> Result<T, ThoError> {
-        Ok(serde_json::from_slice(&read_frame(stream).await?)?)
-    }
-
-    fn test_name() -> String {
-        let module = module_path!();
-        let module = module.split_once("::").map(|(_, module)| module).unwrap_or(module);
-        format!("{module}::test_interprocess_h2d_d2h_and_worker_restart")
-    }
-
-    async fn spawn_worker(mode: &str) -> Result<(Child, UnixStream), ThoError> {
-        let dir = tempfile::tempdir()?;
-        let socket_path = dir.path().join("memfd-copy.sock");
-        let listener = UnixListener::bind(&socket_path)?;
-        let mut command = Command::new(std::env::current_exe()?);
-        command
-            .arg(test_name())
-            .arg("--exact")
-            .arg("--nocapture")
-            .env(TEST_SOCKET_ENV, &socket_path)
-            .env(TEST_MODE_ENV, mode)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-        let mut child = command.spawn()?;
-        let accepted = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept()).await;
-        let stream = match accepted {
-            Ok(Ok((stream, _))) => stream,
-            Ok(Err(error)) => return Err(error.into()),
-            Err(_) => {
-                let status = child.try_wait()?;
-                let _ = child.kill().await;
-                return Err(invalid(format!("memfd copy worker failed to connect; status={status:?}")));
-            }
-        };
-        drop(dir);
-        Ok((child, stream))
-    }
-
-    async fn wait_worker(mut child: Child) -> Result<(), ThoError> {
-        let status = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
-            .await
-            .context("memfd copy worker did not exit")??;
-        if !status.success() {
-            return Err(invalid(format!("memfd copy worker exited with {status}")));
-        }
-        Ok(())
-    }
-
-    fn f32_bytes(values: &[f32]) -> &[u8] {
-        unsafe {
-            // SAFETY: f32 has no invalid bit patterns and the returned slice borrows
-            // values for exactly its initialized byte extent.
-            std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values))
-        }
-    }
-
-    fn tensor_bytes(tensor: &Tensor, byte_len: usize) -> Vec<u8> {
-        let mut bytes = vec![0u8; byte_len];
-        unsafe {
-            // SAFETY: tests call this only for contiguous CPU tensors whose validated
-            // metadata requires exactly byte_len bytes.
-            std::ptr::copy_nonoverlapping(tensor.data_ptr().cast::<u8>(), bytes.as_mut_ptr(), byte_len);
-        }
-        bytes
-    }
-
 }

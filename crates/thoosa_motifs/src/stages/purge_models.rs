@@ -10,16 +10,14 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
+use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
-use thoosa_store::{Store, TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetEntry};
+use thoosa_store::{TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, TrainedNetEntry};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,7 +450,7 @@ mod tests {
     use thoosa_shared::run_configs::{RUN_ID, RunConfig};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::{ThoError, cdt_for_dir};
-    use thoosa_store::{SqlStore, Store, TrainedNetsBy};
+    use thoosa_store::{SqlStore, TrainedNetsBy};
 
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]

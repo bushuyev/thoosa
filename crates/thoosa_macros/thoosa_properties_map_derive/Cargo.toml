@@ -10,7 +10,7 @@ proc-macro = true
 syn.workspace = true
 quote.workspace = true
 
-thoosa_properties_map = {path = "../thoosa_properties_map" }
+# Generated thoosa_properties_map paths resolve in the caller, not this proc-macro crate.
 thoosa_macros_utils = {path = "../thoosa_macros_utils" }
 thoosa_shared = {path = "../../thoosa_shared" }
 proc-macro2.workspace = true

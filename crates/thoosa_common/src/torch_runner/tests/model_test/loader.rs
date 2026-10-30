@@ -31,9 +31,6 @@ impl ABLoader {
     }
 }
 
-pub(crate) fn new_file_input_cache(value: impl Into<FileInput>) -> Arc<FileInput> {
-    Arc::new(value.into())
-}
 
 impl OutId for ABLoader {
     fn out_id(

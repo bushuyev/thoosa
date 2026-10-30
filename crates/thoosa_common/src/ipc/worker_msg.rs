@@ -1,10 +1,7 @@
-use crate::ipc::cuda_wokrer::WorkerStageOutput;
-use crate::runner::common::cachable::ThoDataRef;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
-use tch::TchError;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
 use thoosa_common::runner::sync_stage::StageStateInfo;

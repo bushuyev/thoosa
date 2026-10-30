@@ -19,12 +19,10 @@ use log::{debug, trace, warn};
 use crate::data_with_extra::DataWithExtra;
 use parking_lot::Mutex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::collections::{HashMap, HashSet};
 use crate::runner::global_ctx::CacheKey;
 use std::marker::PhantomData;
-use std::mem;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thoosa_shared::n_trace_line;
@@ -34,8 +32,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::{AsyncStage, Stage, WithId};
 use thoosa_shared::traits::{CachableIdTr, Data, Named, OutId, RunCtx, Select, ThoSelector};
-use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock};
-use thoosa_shims::stream::ThoStreamGuard;
+use thoosa_shared::{CopyToDevice, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock};
 use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
 
 trait DeviceCopier<O>: Debug + Send + Sync {
@@ -1202,7 +1199,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use thoosa_shared::CopyToDevice;
-    use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::tracked_await::track_await;
     use thoosa_shared::traits::{DummyWithId as DummyCachableId, RangeSelector, RunCtx, WithId};
     use tokio::sync::{Notify, Semaphore};
@@ -1522,7 +1518,7 @@ mod tests {
         let lock = &tested.cached_data[1];
         assert!(track_await!(lock.read()).await.is_none());
 
-        let ctx_for_data = mock_run_ctx::default(1);
+        let _ctx_for_data = mock_run_ctx::default(1);
 
         let data_on_1 = tested.select_ref(1, None).await?;
 

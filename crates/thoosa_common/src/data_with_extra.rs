@@ -4,7 +4,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::Debug;
 use std::sync::Arc;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, ThoSelector};
 use thoosa_shared::traits::{Data, Select, WithId};

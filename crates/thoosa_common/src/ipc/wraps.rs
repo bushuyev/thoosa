@@ -1,32 +1,25 @@
-use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::copy_ctx::{HandleCtx, run_cuda_stage};
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
-use crate::runner::common::cachable::ThoDataRef;
-use crate::runner::global_ctx::GlobalCtx;
+use crate::ipc::serialization::json::IpcCodec;
+use crate::ipc::worker_msg::WorkerInput;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_device::ThoDevice;
-use crate::tho_tensor::ThoTensor;
-use async_trait::async_trait;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{FutureExt};
 use futures_util::future::BoxFuture;
-use log::{debug, error};
-use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
+use log::debug;
 use std::any::Any;
 use std::borrow::Borrow;
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::sync::Arc;
 use tch::Tensor;
 use thoosa_shared::ThoError;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, RunCtx, Stage};
-use thoosa_common::runner::sync_stage::{ConsumeResult, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
-use tokio::sync::{MappedMutexGuard, MutexGuard};
+use thoosa_shared::traits::{RunCtx, Stage};
+use thoosa_common::runner::sync_stage::{ConsumeResult, StageStateInfo, StageWithState, SyncStage};
+#[cfg(test)]
+use tokio::sync::MappedMutexGuard;
+#[cfg(test)]
+use tokio::sync::MutexGuard;
 use thoosa_shared::ipc_types::WorkerOutput;
 
 ///
@@ -43,7 +36,7 @@ impl WorkerWrapperCtx for WokerRunCtx {
 
 impl WorkerWrapperCtx for crate::runner::run_ctx::RunCtxImpl {
     fn from_worker_ctx(ctx: &WokerRunCtx) -> Self {
-        let mut stage_ctx = Self::new(ctx.tho_device_idx(), "WorkerWrapper");
+        let stage_ctx = Self::new(ctx.tho_device_idx(), "WorkerWrapper");
 
         stage_ctx
     }
@@ -297,15 +290,15 @@ pub trait SyncStageIpcWrapper: Send + Sync + Debug {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
-    fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+    fn do_run(&self, _input: &Box<dyn WorkerInput>, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         // A wrapper may support only one dispatch capability.
         Err(ThoError::new("worker wrapper does not support borrowed execution"))
     }
-    fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
+    fn consume(&self, _input: Box<dyn WorkerInput>, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
         Err(ThoError::new("worker wrapper does not support consuming execution"))
     }
     
-    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>//move to SyncStageIpcWrapperWithState
+    fn purge(&self, _tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>//move to SyncStageIpcWrapperWithState
     {
         async move {
             Ok(())

@@ -862,7 +862,6 @@ mod tpe_optimizer_tests {
     use crate::nets::common_nets::OptConfig;
     use crate::parzen::optimizer::Val::Int;
     use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection, Val, stack_params};
-    use crate::tho_tensor::ThoTensor;
     use log::debug;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};

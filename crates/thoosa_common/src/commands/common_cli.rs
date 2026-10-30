@@ -1,9 +1,6 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::ops::ControlFlow;
-use std::ops::ControlFlow::{Break, Continue};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,10 +16,8 @@ use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
 use thoosa_shared::perf_logging::{install_panic_hook, SyncMakeWriter, init_tracing, format_perf_map, PERF};
 use thoosa_shared::run_configs::{run_id, RUN_ID};
-use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::{snapshot_not_ready, track_await};
 use thoosa_shims::cpp_log::init_cpp_logging;
-use thoosa_store::rusqlite::Transaction;
 use thoosa_store::Store;
 use crate::args::{CommonArgs, StageCommand};
 use crate::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
@@ -31,7 +26,7 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx::RunCtxImpl;
 
 use crate::utils::list_devices;
-use crate::ws::{Workspace, WsConfigs};
+use crate::ws::Workspace;
 use crate::version::VERSION;
 
 ///main process function: sets up logging, spawns IPC Worker if needed, strats CPU purger
@@ -39,7 +34,7 @@ pub async fn run_common_cli<C, CS, R, W>(
     args: CommonArgs<C>,
     store:Arc<CS>,
     ws: Arc<RwLock<Box<W>>>,
-    resource_to_tensor: R,
+    _resource_to_tensor: R,
     cdt_for_dir: String,
 ) -> anyhow::Result<()>
 where
@@ -214,7 +209,7 @@ where
     )));
 
     let command_result = if let Some(command ) = args.command{
-        let mut root_ctx = RunCtxImpl::new(execution_device, "root_ctx");
+        let root_ctx = RunCtxImpl::new(execution_device, "root_ctx");
         debug!("run_common_cli: command={command:?}");
         // A local CUDA failure can originate in detached copy work even if the
         // command no longer awaits that request. Still terminate the application.

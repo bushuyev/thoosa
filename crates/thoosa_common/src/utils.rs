@@ -7,7 +7,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Display};
 use std::iter::Map;
 
-use log::{debug, error, trace};
+use log::{debug, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -28,7 +28,6 @@ use tch::nn::VarStore;
 use tch::nn::{LinearConfig, Optimizer};
 use tch::{Device, IndexOp, Kind, TchError, Tensor, nn};
 use thoosa_shared::{ThoError, cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw};
-use thoosa_store::Store;
 use torch_sys::cuda::atc_cuda_device_count;
 
 use crate::dims::Dims;
@@ -38,9 +37,8 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
-use thoosa_properties_map::FromHashmap;
 use thoosa_shared::colors_iter::DistinctColorIter;
-use thoosa_shared::run_configs::{RunConfig, RunConfigId};
+use thoosa_shared::run_configs::RunConfigId;
 
 pub use crate::run_config_loader::load_run_config;
 
@@ -1190,7 +1188,6 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 }
 
 use crate::nets::common_nets::ThoModuleWithStore;
-use thoosa_shared::tracked_await::track_await;
 
 
 pub trait TrainListener: Send + Sync {
@@ -1887,22 +1884,19 @@ pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
 pub mod tests {
 
     use crate::nets::batches::BatchLengths;
-    use std::cmp::max;
 
-    use crate::utils::{TrainListener, assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, tensor_digest, to_vec_f32, to_vec_i64};
+    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_to_2, plot_spectrogram, stretch, to_vec_f32, to_vec_i64};
     use clap::{Args, Parser, Subcommand};
 
-    use log::{debug, set_max_level};
+    use log::debug;
     use std::collections::{HashMap, HashSet};
 
-    use log::LevelFilter::Trace;
     use serde::Deserialize;
     use std::fmt::Debug;
     use std::path::PathBuf;
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
-    use tch::nn::VarStore;
     use tch::{Device, Kind, Tensor};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -1911,14 +1905,11 @@ pub mod tests {
 
     use thoosa_shared::hyperparameter::Hyperparameter;
 
-    use crate::dims::AnyDims;
-    use crate::nets::common_nets::SelfAttentionNetParams;
-    use crate::nets::nodes::ThoModule;
 
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{RangeOrValue, ThoError, cdt_for_dir, clc_step, sin_v_f};
+    use thoosa_shared::{RangeOrValue, cdt_for_dir, clc_step, sin_v_f};
 
     #[ctor::ctor]
     fn init() {

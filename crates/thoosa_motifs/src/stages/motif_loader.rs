@@ -4,72 +4,53 @@ use thoosa_common::tch_error::tch_result;
 
 use async_trait::async_trait;
 use cached_derive::Cached;
-use log::{debug, error, info, trace, warn};
+use log::{debug, warn};
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter, format};
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Instant;
-use tch::Device::Cpu;
-use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
-use thoosa_common::runner::common::DropIf;
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::MaxParallelCtx;
 
 use crate::dims::{ChannelsMotifsSlices, MotifSlices};
 use crate::motif_tho_tensor::MotifThoTensor;
-use crate::stages::cross_dims::ChannelsDataVec;
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-use crate::stages::tensor_loader::RawTensorLoader;
-use ambassador::Delegate;
 use futures_util::future::BoxFuture;
-use thoosa_common::dims::{ChannelsData, Dims};
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, OutId, RunCtx, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
-use thoosa_store::Store;
 
-use crate::stages::apply_motif_nets::{STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets};
-use crate::stages::find_motifs::{FilteredLoaderStage, LoaderStageChoice, config_to_stage};
-use crate::stages::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
-use crate::stages::stft::SyncStftSelector;
-use rand::distr::{Alphanumeric, SampleString};
+use crate::stages::find_motifs::{LoaderStageChoice, config_to_stage};
+use crate::stages::stage_ids::{MOTIF_LOADER, RAW_TENSOR_LOADER};
 use tch::Kind::Float;
 use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
-use thoosa_common::stages::freq_filter::FreqFilter;
-use thoosa_common::stages::stages_seq::{PairStage, SingleOrPair};
+use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::load_run_config;
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::CpuOrGpu;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::tracked_await::track_await;
@@ -619,7 +600,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncMotifLoaderOutput{}
 
-pub fn sync_motif_loader_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_motif_loader_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         Ok(Box::new(WorkerWrapper::new(Arc::new(SyncMotifLoader::<RunCtxImpl>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
@@ -1206,7 +1187,7 @@ where
             }
         }
 
-        let mut dst = tch_result(Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.t_ref().kind(), input.raw_tensor.t_ref().device())))?;
+        let dst = tch_result(Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.t_ref().kind(), input.raw_tensor.t_ref().device())))?;
         for (slice_i, slice) in valid_slices.into_iter().enumerate() {
             let src = tch_result(input.raw_tensor.t_ref().f_i((input.channel, slice as i64..(slice + input.window) as i64)))?;
             tch_result(tch_result(dst.f_get(slice_i as i64))?.f_copy_(&src))?;
@@ -1219,7 +1200,7 @@ where
 
 
 
-pub fn sync_load_motif_resources_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_motif_resources_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput converts the tensor reference into an owned worker-side input.
@@ -1478,7 +1459,7 @@ where
             }
         }
 
-        let mut output = tch_result(Tensor::f_zeros(
+        let output = tch_result(Tensor::f_zeros(
             [input.channels, valid_slices.len() as i64, input.window as i64],
             (Float, input.raw_tensor.t_ref().device()),
         ))?;
@@ -1495,7 +1476,7 @@ where
 
 
 
-pub fn sync_load_random_slices_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_load_random_slices_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared worker wrapper reconstructs the borrowed raw tensor as owned worker data.
@@ -1680,12 +1661,11 @@ pub mod mock_motif_loader {
     use tch::Tensor;
     use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::runner::common::MockRunCtx;
-    use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap};
-    use thoosa_common::runner::sync_stage::SyncStage;
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
+    use thoosa_shared::traits::{AsyncStage, OutId, Stage, WithId};
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     mock! {
@@ -1739,7 +1719,7 @@ pub mod mock_motif_loader {
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx| {
-                let mut ctx = ctx;
+                let _ctx = ctx;
                 block_in_place(|| {
                     Handle::current().block_on(async {
                         Ok(Arc::clone(data_map.get(input.as_ref()).expect(&format!("no mock data for v={input:? } in MockMotifLoader"))))
@@ -1770,31 +1750,21 @@ mod tests {
     use crate::distance::average_euclidean_distance;
     use crate::motifs_store::MockMotifsStoreBuilder;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::stages::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
+    use crate::stages::motif_loader::{MotifLoader, RandomSlicesLoader, SlicesLoaderInput};
     use crate::stages::stft::SyncStftSelector;
     use crate::stages::tensor_loader::mock_tensor_loader;
-    use log::LevelFilter::Trace;
-    use log::{debug, set_max_level, trace};
+    use log::trace;
     use parking_lot::RwLock;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::sync::Arc;
-    use tch::Tensor;
-    use thoosa_common::data_with_extra::DataWithExtra;
-    use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-    use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, run_ctx_adjuster};
-    use thoosa_common::runner::run_ctx::RunCtxImpl;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::lin_t;
-    use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::{DataId, RunCtx};
@@ -1813,7 +1783,7 @@ mod tests {
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
             .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, motif_source_run_config_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
@@ -1866,7 +1836,7 @@ mod tests {
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false);
+        let _ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false);
 
         let t = motif.select_ref(0, Some(SyncStftSelector)).await?;
 
@@ -1893,7 +1863,7 @@ mod tests {
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
-        let mut store = MockMotifsStoreBuilder::new()
+        let store = MockMotifsStoreBuilder::new()
             .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0i64, run_config_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
@@ -1944,7 +1914,7 @@ mod tests {
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
+        let _ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
         .branch(false);
         let t = slices.select_ref(0, Some(SyncStftSelector)).await?;
 

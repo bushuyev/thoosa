@@ -1,21 +1,13 @@
 use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
-use core::f32;
 use log::Level::Trace;
-use log::{debug, error, info, log_enabled, trace, warn};
-use parking_lot::{Mutex, RwLock};
+use log::{debug, error, log_enabled, trace, warn};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::fmt::format;
-use std::ops::{Add, ControlFlow};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64};
-use std::sync::atomic::Ordering::Relaxed;
-use tch::Device::{Cpu, Cuda};
 use tch::Kind;
 use tch::Kind::{Bool, Float};
-use tch::kind::{FLOAT_CPU, INT64_CPU};
-use tch::{IndexOp, TchError, Tensor};
+use tch::{IndexOp, Tensor};
 use thoosa_common::debug_plot;
-use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_norm_dims};
+use thoosa_common::utils::{tensor_mem_size, z_norm, z_norm_dims};
 use thoosa_digest_id_derive::DigestHash;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -392,53 +384,6 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> anyhow::Result<Tensor> {
     Ok(full_mask)
 }
 
-/// Minimum over a sliding window of size (2*radius+1) along `dim`.
-/// Implemented as: minpool(x) = -maxpool(-x) using max_pool2d on a [B,1,1,L] view.
-fn window_min_along_dim(x: &Tensor, dim: i64, radius: i64) -> anyhow::Result<Tensor> {
-    if radius <= 0 {
-        return Ok(x.shallow_clone());
-    }
-
-    let sizes = x.size();
-    let ndim = sizes.len() as i64;
-    let dim = if dim < 0 { dim + ndim } else { dim };
-    if dim < 0 || dim >= ndim {
-        return Err(anyhow::anyhow!("window_min_along_dim: invalid dim={dim} for ndim={ndim}"));
-    }
-
-    // permute so that `dim` becomes the last dimension
-    let mut perm: Vec<i64> = (0..ndim).filter(|&d| d != dim).collect();
-    perm.push(dim);
-
-    let x_perm = x.f_permute(&perm)?;
-
-    let mut perm_sizes = x_perm.size();
-    let l = perm_sizes.pop().unwrap(); // last dim length
-    let b: i64 = perm_sizes.iter().product(); // flatten all leading dims
-
-    // [B, 1, L] -> [B, 1, 1, L]
-    let x_flat = x_perm.f_reshape(&[b, 1, l])?;
-    let x_4d = x_flat.f_unsqueeze(2)?;
-
-    let k = 2 * radius + 1;
-
-    // minpool(x) = -maxpool(-x)
-    let neg = x_4d.f_neg()?;
-    let pooled = neg.f_max_pool2d(&[1, k], &[1, 1], &[0, radius], &[1, 1], false)?;
-    let win_min_4d = pooled.f_neg()?;
-
-    // back: [B, 1, 1, L] -> [.., L] -> unpermute to original layout
-    let win_min_flat = win_min_4d.f_squeeze_dim(2)?;
-    let win_min_perm = win_min_flat.f_reshape(&x_perm.size())?;
-
-    // invert permutation
-    let mut inv = vec![0i64; perm.len()];
-    for (i, &p) in perm.iter().enumerate() {
-        inv[p as usize] = i as i64;
-    }
-
-    Ok(win_min_perm.f_permute(&inv)?)
-}
 
 fn window_min_2d_last_dims(x_bhw: &Tensor, radius0: i64, radius1: i64) -> anyhow::Result<Tensor> {
     if radius0 <= 0 && radius1 <= 0 {
@@ -917,39 +862,20 @@ mod distance_tests {
     use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
     use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeAccumulatedQuantile, LeQuantile, LocalMin, Tril};
     use crate::distance::{
-        MaskMaker,
         accumulating_mean_mask, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask,
         local_min_mask_suppressed, slice_t, z_normalized_euclidean,
     };
-    use chrono::Utc;
-    use log::LevelFilter::{Debug, Trace};
-    use log::__private_api::enabled;
-    use log::{debug, max_level, set_max_level, trace};
+    use log::{debug, trace};
     use parking_lot::Mutex;
-    use plotters::prelude::{BLACK, GREEN, RED};
-    use plotters::style::full_palette::ORANGE;
-    use sci_rs::na::SimdBool;
     use std::f32::consts::PI;
-    use std::fmt::Display;
     use std::ops::Deref;
-    use std::sync::atomic::AtomicI64;
-    use tch::Device::{Cpu, Cuda};
+    use tch::Device::Cpu;
     use tch::Kind::{Bool, Float, Int, Int64};
     use tch::Tensor;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
-    use tch::{Device, IndexOp, Kind};
-    use thoosa_common::nets::builder::Node::Par;
+    use tch::kind::{FLOAT_CPU, INT64_CPU};
+    use tch::IndexOp;
     use thoosa_common::utils::{
-        from, hist_1_dim, lin_iter,
-        lin_t, plot_series, plot_series_with_points, reset_print_options,
-        skewness_kurtosis_1_dim, three_sigs_tensor, to_vec_f32, z_norm_dims,
-    };
-    use thoosa_common::ws::mock_ws_simp;
-    use thoosa_shared::colors_iter::DistinctColorIter;
-    use thoosa_shared::panic_to_err;
-    use thoosa_shared::{
-        ThoError,
-        comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v,
+        lin_t, z_norm_dims,
     };
 
     #[ctor::ctor]
@@ -1260,7 +1186,7 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         //set_max_level(Trace);
-        let (mask, Some(dist_t)) = clc_d2_similarity_and_mask(
+        let (mask, Some(_dist_t)) = clc_d2_similarity_and_mask(
             &slice_0,
             &slice_1,
             SimilarityMetric::EucDist(EucDistConfig { z_normalize: false }),
@@ -1469,7 +1395,7 @@ mod distance_tests {
         let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
 
         let mut total_samples = Mutex::new(Tensor::zeros([3], INT64_CPU));
-        let mask = LeAccumulatedMean {
+        let _mask = LeAccumulatedMean {
             k: 1.0,
             avg: &mut means,
             total_samples: &mut total_samples,
@@ -1724,18 +1650,6 @@ mod distance_tests {
     }
 
     // #[test]TODO
-    fn test_local_min_mask_0() {
-        // set_max_level(Trace);
-
-        let distances = Tensor::from_slice(&[0.]).view((1, 1, 1));
-
-        debug!("distances=\n{distances}");
-
-        let mask = local_min_mask(&distances, 1).unwrap();
-
-        debug!("mask=\n{mask}");
-    }
-
     #[test]
     fn test_quantile_mask() {
         // set_max_level(Trace);
@@ -2251,7 +2165,7 @@ mod distance_tests {
             .map(|x| (4. * PI * (x as f32 / input_n as f32)).sin())
             .collect::<Vec<f32>>(); //sin_v(input_n, 0.5);
 
-        let x = lin_t(input_n);
+        let _x = lin_t(input_n);
         /*plot_series(
             vec![
                 (format!("ch_0"), GREEN, vec_f32_from(&x).into_iter().zip(ch_0.clone().into_iter()).collect::<Vec<(f32, f32)>>()),

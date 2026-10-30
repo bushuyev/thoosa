@@ -54,7 +54,7 @@ pub trait StageWithState: SyncStage + Sync {//TODO rename to StatefulStage
 
     ///returns Option::None in IPC mode when it's used from ProxyStage where instead of copying from CPU to GPU it uploads StageState to the worker
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>>;
-    fn get_state_info(&self, tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
+    fn get_state_info(&self, _tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             Ok(StageStateInfo::empty())
         }.boxed()
@@ -65,13 +65,13 @@ pub trait StageWithState: SyncStage + Sync {//TODO rename to StatefulStage
         Box::pin(async { Err(ThoError::new("stage does not support checkpoint restoration")) })
     }
 
-    fn get_state_tensor(&self, tho_device: usize, tensor_id:String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+    fn get_state_tensor(&self, _tho_device: usize, _tensor_id:String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async {
             Err(ThoError::new("stage does not support checkpoint tensor export"))
         }.boxed()
     }
 
-    fn set_state_tensor(&self, tho_device: usize, tensor_id:String, t:Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+    fn set_state_tensor(&self, _tho_device: usize, _tensor_id:String, _t:Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async {
             Err(ThoError::new("stage does not support checkpoint tensor import"))
         }.boxed()

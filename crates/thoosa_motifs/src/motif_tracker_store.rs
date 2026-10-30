@@ -1,7 +1,7 @@
 use crate::motifs_store::MotifsStore;
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use log::{debug, trace, warn};
+use log::{debug, warn};
 use parking_lot::Mutex;
 use rusqlite::types::Value;
 use rusqlite::Connection;
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{group_slices_try, TensorIdSliceIdx, ThoError};
+use thoosa_shared::{group_slices_try, TensorIdSliceIdx};
 
 // Tracker persistence belongs to the motif crate so it can depend on MotifsStore directly
 // without exposing motif-specific callbacks through the common Store crate.
@@ -179,7 +179,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
     async fn load_slices_into_groups(
         &mut self,
         store: &dyn MotifsStore,
-        min_slices_counts: Option<u32>,
+        _min_slices_counts: Option<u32>,
         max_slices_counts: Option<u32>,
     ) -> anyhow::Result<usize> {
         // SQLite locking, row iteration, and grouping must not occupy a Tokio worker.

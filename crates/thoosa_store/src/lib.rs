@@ -7,37 +7,31 @@ mod tokio_rusqlite;
 use anyhow::Context as _;
 pub use rusqlite;
 
-use parking_lot::RwLock;
 use std::array::IntoIter;
 use std::backtrace::Backtrace;
-use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use async_trait::async_trait;
 
-use log::{debug, error, info, trace, warn};
-use mockall::{mock, PredicateBoxExt};
+use log::{debug, error, trace, warn};
+use mockall::mock;
 use mockall::predicate::eq;
-use rand::{Rng, RngExt};
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Error, OpenFlags, Transaction, params, ToSql};
+use rusqlite::{Connection, Error, OpenFlags, Transaction, params};
 use rusqlite::trace::TraceEvent;
 use serde::{Deserialize, Serialize};
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_shared::run_configs::{run_id, RunConfigId, RunId};
 use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
-use thoosa_shared::traits::DataId;
 
 #[derive(Debug)]
 pub enum SetCond {
@@ -1225,7 +1219,6 @@ impl Store for SqlStore {
 }
 
 fn init_sqlite_writer(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
-    use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -1246,7 +1239,6 @@ fn init_sqlite_writer(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
 }
 
 fn init_sqlite_reader(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
-    use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -1272,21 +1264,22 @@ fn init_sqlite_reader_no_tmp_files(conn: &mut rusqlite::Connection) -> rusqlite:
     Ok(())
 }
 
+#[expect(dead_code, reason = "Optional callback for the commented SQLite trace hooks above.")]
 fn debug_trace_event(ev: TraceEvent) {
     match ev {
-        TraceEvent::Stmt(a, b) => {
+        TraceEvent::Stmt(_a, b) => {
             debug!("[sqlite trace reader], TraceEvent::Stmt: {b:?}");
         }
-        TraceEvent::Profile(a, b) => {
+        TraceEvent::Profile(_a, b) => {
             debug!("[sqlite trace reader], TraceEvent::Profile: {b:?}");
         }
-        TraceEvent::Row(a) => {
+        TraceEvent::Row(_a) => {
             debug!("[sqlite trace reader], TraceEvent::Row:");
         }
-        TraceEvent::Close(a) => {
+        TraceEvent::Close(_a) => {
             debug!("[sqlite trace reader], TraceEvent::Close:  backtrace={}", Backtrace::capture());
         }
-        x => {
+        _x => {
             debug!("[sqlite trace reader] x");
         }
     }
@@ -1380,8 +1373,8 @@ impl SqlStore {
 
     pub fn load_non_motif_resource_contexts(
         motif_id: u32,
-        run_config_id: RunConfigId,
-        channel: i64,
+        _run_config_id: RunConfigId,
+        _channel: i64,
         input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
         conn: &Connection,
     ) -> anyhow::Result<Vec<RandomSliceResourceCtx>> {
@@ -1552,11 +1545,6 @@ impl SqlStore {
     {
         let reader_id = self.rr.fetch_add(1, Ordering::Relaxed) % self.readers.len();
         self.readers[reader_id].call(f).await.map_err(|error| Self::map_tokio_rusqlite_err(ctx, error))
-    }
-
-    fn reader(&self) -> &tokio_rusqlite::Connection {
-        let idx = self.rr.fetch_add(1, Ordering::Relaxed) % self.readers.len();
-        &self.readers[idx]
     }
 
     fn save_resources_labels_do_insert(
@@ -2366,7 +2354,7 @@ impl SqlStore {
             let resource_id = row.get::<usize, usize>(1)?;
             let length = row.get::<usize, usize>(2)?;
 
-            let mut ids_length = resources_by_label.entry(label_id).or_insert((vec![], vec![]));
+            let ids_length = resources_by_label.entry(label_id).or_insert((vec![], vec![]));
             ids_length.0.push(resource_id);
             ids_length.1.push(length);
         }
@@ -2379,72 +2367,6 @@ impl SqlStore {
             return Err(anyhow::anyhow!("min_p must be in range [0.0, 1.0] (min_p={min_p})"));
         }
         Ok(())
-    }
-
-    fn balanced_split_counts(
-        target_count: usize,
-        train_coeff: f32,
-        valid_coeff: f32,
-    ) -> [usize; 3] {
-        if target_count == 0 {
-            return [0, 0, 0];
-        }
-
-        let test_coeff = (1.0 - train_coeff - valid_coeff).max(0.0);
-        let coeffs = [train_coeff as f64, test_coeff as f64, valid_coeff as f64];
-        let active = coeffs
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, coeff)| if *coeff > 0.0 { Some(idx) } else { None })
-            .collect::<Vec<usize>>();
-
-        if active.is_empty() {
-            return [0, 0, 0];
-        }
-
-        let total_coeff = active.iter().map(|idx| coeffs[*idx]).sum::<f64>();
-        let mut counts = [0usize; 3];
-        let mut remainders = Vec::with_capacity(active.len());
-        let mut assigned = 0usize;
-
-        for idx in active.iter().copied() {
-            let quota = (target_count as f64) * coeffs[idx] / total_coeff;
-            let floor = quota.floor() as usize;
-            counts[idx] = floor;
-            assigned += floor;
-            remainders.push((idx, quota - (floor as f64)));
-        }
-
-        remainders.sort_by(|(left_idx, left_remainder), (right_idx, right_remainder)| {
-            right_remainder
-                .partial_cmp(left_remainder)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left_idx.cmp(right_idx))
-        });
-
-        for (idx, _) in remainders.into_iter().take(target_count.saturating_sub(assigned)) {
-            counts[idx] += 1;
-        }
-
-        if target_count >= active.len() {
-            for idx in active.iter().copied() {
-                if counts[idx] > 0 {
-                    continue;
-                }
-
-                if let Some(donor_idx) = active
-                    .iter()
-                    .copied()
-                    .filter(|donor_idx| counts[*donor_idx] > 1)
-                    .max_by(|left_idx, right_idx| counts[*left_idx].cmp(&counts[*right_idx]).then_with(|| right_idx.cmp(left_idx)))
-                {
-                    counts[donor_idx] -= 1;
-                    counts[idx] += 1;
-                }
-            }
-        }
-
-        counts
     }
 
     pub fn save_param_value(
@@ -2812,7 +2734,7 @@ impl MockStoreBuilder {
     pub fn with_get_input_run_config_ids<R:Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self{
         let map = results.into();
         self.store.expect_get_input_run_config_ids().returning(
-            move |run_config_id, input_type|{
+            move |run_config_id, _input_type|{
                 map.get(&run_config_id).cloned().map(|result| Ok(result?)).expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
             }
         );
@@ -2834,7 +2756,7 @@ impl MockStoreBuilder {
         input_run_config_id: Option<Vec<RunConfigId>>,
         run_config_type: &'static str,
         descr: &'static str,
-        keys: &'static str,
+        _keys: &'static str,
         properties_vals: HashMap<String, Val>,
         result: Result<RunConfigId, ThoError>,
     ) -> Self {

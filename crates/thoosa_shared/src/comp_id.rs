@@ -1,7 +1,5 @@
-use std::any::TypeId;
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
-use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -12,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use thoosa_digest_id_derive::DigestHash;
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
-use crate::traits::StageHash;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ElvVal {
