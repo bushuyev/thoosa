@@ -18,7 +18,7 @@ unsafe extern "C" {
     fn tho_get_current_stream(device: i32) -> CudaStreamPtr;
     fn tho_get_stream_from_pool(device: i32, high_pri: i32) -> CudaStreamPtr;
     fn tho_stream_device(stream: CudaStreamPtr) -> i32;
-    fn tho_stream_raw(stream: CudaStreamPtr) -> *mut c_void;
+    fn tho_stream_raw(stream: CudaStreamPtr, out: *mut *mut c_void) -> CuResult;
 
     fn tho_stream_guard_new(stream: CudaStreamPtr) -> CudaStreamGuardPtr;
     fn tho_stream_guard_delete(guard: CudaStreamGuardPtr);
@@ -85,10 +85,10 @@ impl ThoCudaStream {
 
     /// Underlying CUDA stream handle for custom CUDA code.
     pub fn raw_cuda_stream(&self) -> Result<*mut c_void, ThoError> {
-        let p = unsafe { tho_stream_raw(self.ffi_ptr()) };
-        NonNull::new(p)
-            .map(|p| p.as_ptr())
-            .ok_or_else(|| cuda_error_from_last_error("tho_stream_raw"))
+        // Success is separate from the possibly null default-stream handle.
+        let mut stream = std::ptr::null_mut();
+        check_cuda_status(unsafe { tho_stream_raw(self.ffi_ptr(), &mut stream) }, "tho_stream_raw")?;
+        Ok(stream)
     }
 
     pub fn device(&self) -> i32 {
@@ -139,4 +139,18 @@ where
 {
     let _guard = ThoStreamGuard::new(stream)?;
     Ok(f())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_default_stream_handle_and_invalid_wrapper() -> Result<(), ThoError> {
+        // Fresh test processes start with the CUDA default stream, whose raw handle is null.
+        let stream = ThoCudaStream::current(0)?;
+        assert!(stream.raw_cuda_stream()?.is_null());
+        let mut raw = std::ptr::null_mut();
+        assert_ne!(unsafe { tho_stream_raw(std::ptr::null_mut(), &mut raw) }, CUDA_SUCCESS);
+        Ok(())
+    }
 }
