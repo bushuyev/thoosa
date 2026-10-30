@@ -237,7 +237,7 @@ impl SyncStage for SyncClassifierStage {
                     }
                 }
                 FailUntil::DumpedToCpu => {
-                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx(), false);
+                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx());
                     if !is_all_on_cpu {
                         debug!("Classifier::do_run: OOM DumpedToCpu");
                         return Err(ThoError::oom());

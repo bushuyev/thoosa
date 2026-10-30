@@ -1004,7 +1004,7 @@ mod tests {
                 assert_eq!(stage.has_gpu_data(1).await, global.is_ipc() || tensor_count > 0);
                 global.dump_all_to_cpu(&HashMap::new(), 1, "freq filter state test").await?;
                 assert!(!stage.has_gpu_data(1).await);
-                assert!(global.is_all_on_cpu(1, true));
+                assert!(global.is_all_on_cpu_force_check(1).await);
                 // The CPU dump must survive both repeated global and direct purges.
                 global.dump_all_to_cpu(&HashMap::new(), 1, "already offloaded").await?;
                 stage.purge_gpu(None, 1, "already offloaded").await?;

@@ -77,7 +77,7 @@ where
     assert_eq!(num_calls(), 1);
 
     GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test_ab_clc").await?;
-    assert!(GlobalCtx::global().is_all_on_cpu(1, true));
+    assert!(GlobalCtx::global().is_all_on_cpu_force_check(1).await);
 
     let out = Arc::clone(&ab_stage).run_cached(
         ABClcStageInput::new(
