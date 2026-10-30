@@ -78,24 +78,23 @@ int tho_stream_device(void* raw_stream) {
   }
 }
 
-void* tho_stream_raw(void* raw_stream) {
+CUresult tho_stream_raw(void* raw_stream, void** out) {
   try {
-    if (!raw_stream) {
-      tho_set_last_error_code("tho_stream_raw", CUDA_ERROR_INVALID_HANDLE, "null stream");
-      return nullptr;
+    if (!raw_stream || !out) {
+      return tho_set_last_error_code("tho_stream_raw", CUDA_ERROR_INVALID_HANDLE, "null stream");
     }
     auto* s = static_cast<c10::cuda::CUDAStream*>(raw_stream);
     tho_clear_last_error();
-    return reinterpret_cast<void*>(s->stream());
+    // A null CUDA handle is the valid default stream, not an error.
+    *out = reinterpret_cast<void*>(s->stream());
+    return CUDA_SUCCESS;
   } catch (const c10::Error& e) {
-    tho_set_last_error_cuda_msg("tho_stream_raw", e.what_without_backtrace(), CUDA_ERROR_UNKNOWN);
-    return nullptr;
+    return tho_set_last_error_cuda_msg("tho_stream_raw", e.what_without_backtrace(), CUDA_ERROR_UNKNOWN);
   } catch (const std::exception& e) {
     tho_set_last_error_ex("tho_stream_raw", e);
-    return nullptr;
+    return CUDA_ERROR_UNKNOWN;
   } catch (...) {
-    tho_set_last_error_code("tho_stream_raw", CUDA_ERROR_UNKNOWN, "unknown C++ exception");
-    return nullptr;
+    return tho_set_last_error_code("tho_stream_raw", CUDA_ERROR_UNKNOWN, "unknown C++ exception");
   }
 }
 
