@@ -380,7 +380,8 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(profile.motifs_epochs),
-            batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
+            // batch_size: RangeOrValue::Range { range: Range { start: 10, end: profile.max_batch_size }, step: None },
+            batch_size: RangeOrValue::Value(20),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -986,7 +987,7 @@ mod tests {
     use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::hyperparameter::FieldName;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
-    use thoosa_shared::run_configs::RUN_ID;
+
     use thoosa_shared::test_utils::{clear_flag, TestSignalKind};
     use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::traits::{OutId, Stage};
@@ -1283,7 +1284,7 @@ mod tests {
             // Some(&[(20, true), (10, true)])
         ).await?;
 
-        RUN_ID.set(store.save_run("heavy_test_run_all".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("heavy_test_run_all".into()).await?)?;
 
         let resources = store.list_resources_by_ids(&imported_ids).await?;
 

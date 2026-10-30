@@ -181,6 +181,8 @@ enum CudaIPCActorMessage {
 // Recovery and shutdown never compete with ordinary work for queue capacity.
 #[derive(Debug)]
 enum BackendControl {
+    ReleaseEndpoint { stage_id: Option<String>, endpoint: String, worker_id: CudaWorkerId },
+    ReleaseTensor { key: u64, worker_id: CudaWorkerId },
     Retire { authority: CudaActivityPauseTicket, respond_to: oneshot::Sender<Result<(), ThoError>> },
     Restart { authority: CudaActivityPauseTicket, respond_to: oneshot::Sender<Result<(), ThoError>> },
     Shutdown { respond_to: oneshot::Sender<Result<(), ThoError>> },
@@ -204,6 +206,7 @@ pub struct CudaIPCActor {
     cuda_worker_args: Arc<Vec<String>>,
     // Keep an actor-owned descriptor so a reset can map the same parent allocator into the replacement worker.
     arena_fd: OwnedFd,
+    release: Option<TensorReleaseHandle>,
 }
 
 #[derive(Debug)]
@@ -317,11 +320,11 @@ fn unit_reply(response: CudaWorkerMsgOut) -> Result<(), ThoError> {
 }
 
 impl CudaIPCActor {
-    async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, control: mpsc::UnboundedReceiver<BackendControl>, arena_fd: OwnedFd) -> Result<Self, ThoError> {
+    async fn new(gate: Arc<thoosa_shared::CudaActivityGate>, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>, control: mpsc::UnboundedReceiver<BackendControl>, arena_fd: OwnedFd, release: Option<TensorReleaseHandle>) -> Result<Self, ThoError> {
         let tho_device_idx = gate.device_idx();
         let cuda_worker_args = Arc::new(cuda_worker_args);
 
-        let spawned_state = Self::spawn_worker_and_loops(CudaWorkerId { device_idx: tho_device_idx, generation: gate.device_generation() }, &cuda_worker_args, arena_fd.as_fd()).await?;
+        let spawned_state = Self::spawn_worker_and_loops(CudaWorkerId { device_idx: tho_device_idx, generation: gate.device_generation() }, &cuda_worker_args, arena_fd.as_fd(), release.clone()).await?;
 
 
         debug!("CudaIPCActor::new: worker device_info={:?}", spawned_state.device_info);
@@ -335,6 +338,7 @@ impl CudaIPCActor {
             endpoint_events_tx,
             spawned_state: Some(spawned_state),
             retirement_error: None,
+            release: release.clone(),
             control,
             next_id: Arc::new(AtomicU64::new(1)),
             tho_device_idx,
@@ -343,7 +347,7 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>) -> Result<SpawnedState, ThoError> {
+    async fn spawn_worker_and_loops(worker_id: CudaWorkerId, cuda_worker_args: &Vec<String>, arena_fd: std::os::fd::BorrowedFd<'_>, release: Option<TensorReleaseHandle>) -> Result<SpawnedState, ThoError> {
         info!("CudaIPCActor::spawn_worker_and_loops: cuda_worker_args={cuda_worker_args:?}");
 
         let (child, stream, device_info) = Self::spawn_worker_for_cuda_device(worker_id, cuda_worker_args, arena_fd).await?;
@@ -357,7 +361,7 @@ impl CudaIPCActor {
         let pending = Arc::new(PendingRequests::new(worker_id));
         let cancel = CancellationToken::new();
         let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending), cancel.child_token()));
-        let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token()));
+        let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token(), release));
 
         info!("CudaIPCActor::spawn_worker_and_loops: ok");
 
@@ -834,6 +838,34 @@ impl CudaIPCActor {
     async fn control(&mut self, control: BackendControl) -> bool {
         info!("CudaIPCActor::control: control={control:?}");
         match control {
+            BackendControl::ReleaseEndpoint { stage_id, endpoint, worker_id } => {
+                if let Some(worker) = &self.spawned_state {
+                    if worker.worker_id == worker_id {
+                        let request = CudaWorkerMsgIn::new(worker_id, self.next_id.fetch_add(1, Ordering::Relaxed), Operation::DropStage { endpoint_name: endpoint, stage_id });
+                        let result = async {
+                            let permit = worker.tx.reserve().await.context("worker writer closed")?;
+                            let (reply, _response) = oneshot::channel();
+                            worker.pending.enqueue(permit, request, reply, None, false)
+                        }.await;
+                        if let Err(error) = result { warn!("endpoint release failed: {error:#}"); }
+                    }
+                }
+            }
+            BackendControl::ReleaseTensor { key, worker_id } => {
+                if let Some(worker) = &self.spawned_state {
+                    if worker.worker_id == worker_id {
+                        let request = CudaWorkerMsgIn::new(worker_id, self.next_id.fetch_add(1, Ordering::Relaxed), Operation::DropThoTensor { tensor_key: key });
+                        // Queue before later shutdown, but do not wait for CUDA:
+                        // a hung worker must still be interruptible by retirement.
+                        let result = async {
+                            let permit = worker.tx.reserve().await.context("worker writer closed")?;
+                            let (reply, _response) = oneshot::channel();
+                            worker.pending.enqueue(permit, request, reply, None, false)
+                        }.await;
+                        if let Err(error) = result { warn!("tensor release failed: {error:#}"); }
+                    }
+                }
+            }
             BackendControl::Retire { authority, respond_to } => {
                 // A queued recovery command may outlive its coordinator cycle.
                 let result = match self.gate.check_recovery_authority(authority, false) {
@@ -855,7 +887,7 @@ impl CudaIPCActor {
                     // A fresh primary context requires the old process to have
                     // exited before its replacement is even spawned.
                     let worker_id = CudaWorkerId { device_idx: self.tho_device_idx, generation: thoosa_shared::CudaDeviceGeneration(self.gate.device_generation().0.checked_add(1).expect("worker generation overflow")) };
-                    let replacement = Self::spawn_worker_and_loops(worker_id, &self.cuda_worker_args, self.arena_fd.as_fd()).await?;
+                    let replacement = Self::spawn_worker_and_loops(worker_id, &self.cuda_worker_args, self.arena_fd.as_fd(), self.release.clone()).await?;
                     // Spawning awaits readiness; do not publish a replacement
                     // if recovery authority was revoked during that wait.
                     if let Err(error) = self.gate.check_recovery_authority(authority, true) {
@@ -1105,6 +1137,7 @@ async fn reader_loop<R>(
     mut reader: R,
     pending: PendingResponses,
     cancel: CancellationToken,
+    release: Option<TensorReleaseHandle>,
 ) where
     R: AsyncRead + Unpin,
 {
@@ -1131,7 +1164,7 @@ async fn reader_loop<R>(
             }
         };
 
-        match PostcardToFromBytes::from_bytes::<CudaWorkerMsgOut>(&frame) {
+        match match &release { Some(owner) => owner.decoding(|| PostcardToFromBytes::from_bytes::<CudaWorkerMsgOut>(&frame)), None => PostcardToFromBytes::from_bytes::<CudaWorkerMsgOut>(&frame) } {
             Ok(msg) => {
                 debug!("reader_loop: msg={msg:?}");
                 if let Err(error) = pending.complete(msg) {
@@ -1166,16 +1199,41 @@ async fn send_request(tx: mpsc::Sender<CudaWorkerMsgIn>, pending: PendingRespons
     reply_rx.await.with_context(|| format!("response channel for request {id} was dropped"))?
 }
 
+/// A narrow release capability retained by remote resources. Drop only queues
+/// work; the owning actor drains releases before its queued shutdown command.
+#[derive(Debug, Clone)]
+pub struct TensorReleaseHandle { control: mpsc::UnboundedSender<BackendControl>, pub(crate) owner_id: u64 }
+impl TensorReleaseHandle {
+    pub(crate) fn release(&self, key: u64, worker_id: CudaWorkerId) { let _ = self.control.send(BackendControl::ReleaseTensor { key, worker_id }); }
+    pub(crate) fn decoding<T>(&self, f: impl FnOnce() -> T) -> T {
+        struct Restore(Option<TensorReleaseHandle>);
+        impl Drop for Restore { fn drop(&mut self) { DECODING_RELEASE.with(|slot| *slot.borrow_mut() = self.0.take()); } }
+        let previous = DECODING_RELEASE.with(|slot| slot.replace(Some(self.clone())));
+        let _restore = Restore(previous);
+        f()
+    }
+    pub(crate) fn current() -> Option<Self> { DECODING_RELEASE.with(|slot| slot.borrow().clone()) }
+}
+thread_local! { static DECODING_RELEASE: std::cell::RefCell<Option<TensorReleaseHandle>> = const { std::cell::RefCell::new(None) }; }
+
 #[derive(Debug, Clone)]
 pub struct CudaIPCActorHandle {
     gate: Arc<thoosa_shared::CudaActivityGate>,
     tho_device_idx: usize,
     sender: mpsc::Sender<CudaIPCActorMessage>,
     control: mpsc::UnboundedSender<BackendControl>,
+    release_id: u64,
 }
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
+    pub(crate) fn release_endpoint(&self, stage_id: Option<String>, endpoint: String, worker_id: CudaWorkerId) {
+        // Cleanup and shutdown share FIFO submission; Drop needs no Tokio context.
+        let _ = self.control.send(BackendControl::ReleaseEndpoint { stage_id, endpoint, worker_id });
+    }
+
+    pub(crate) fn activity_gate(&self) -> Arc<thoosa_shared::CudaActivityGate> { Arc::clone(&self.gate) }
+    pub fn tensor_releaser(&self) -> TensorReleaseHandle { TensorReleaseHandle { control: self.control.clone(), owner_id: self.release_id } }
     pub(crate) async fn register_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput>) -> Result<Arc<EndpointRegistration>, ThoError> {
         let (respond_to, response) = oneshot::channel();
         self.sender.send(CudaIPCActorMessage::RegisterStage { worker_id, key: EndpointKey { endpoint_name, stage_id }, init_data, activity: self.activity_for(worker_id)?, respond_to }).await.context("CUDA actor channel closed")?;
@@ -1242,7 +1300,9 @@ impl CudaIPCActorHandle {
 
         let (sender, receiver) = mpsc::channel(8);
         let (control, controls) = mpsc::unbounded_channel();
-        let actor = CudaIPCActor::new(Arc::clone(&gate), cuda_worker_args, receiver, controls, arena_fd).await?;
+        static NEXT_RELEASE_OWNER: AtomicU64 = AtomicU64::new(1);
+        let release_id = NEXT_RELEASE_OWNER.fetch_add(1, Ordering::Relaxed);
+        let actor = CudaIPCActor::new(Arc::clone(&gate), cuda_worker_args, receiver, controls, arena_fd, Some(TensorReleaseHandle { control: control.clone(), owner_id: release_id })).await?;
         tokio::spawn(CudaIPCActor::run(actor));
 
         Ok(Self {
@@ -1250,6 +1310,7 @@ impl CudaIPCActorHandle {
             gate,
             sender,
             control,
+            release_id,
         })
     }
 
@@ -1380,7 +1441,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         let r = recv.await.context("CUDA actor response channel closed")?;
         debug!("CudaIPCActorHandle::copy:  get result: r={r:?}");
         match r? {
-            IpcCopyResult::Tensor(tensor) => Ok(tensor),
+            IpcCopyResult::Tensor(mut tensor) => { tensor.set_release_handle(self.tensor_releaser()); Ok(tensor) },
             IpcCopyResult::StateInstalled => Err(ThoError::new("data copy returned a state acknowledgment")),
         }
     }
@@ -1647,6 +1708,21 @@ mod tests {
     }
 
     #[test]
+    fn test_remote_release_retains_owner_and_runs_once_ipc() {
+        use super::TensorReleaseHandle;
+        let (control, mut commands) = mpsc::unbounded_channel();
+        let owner = TensorReleaseHandle { control, owner_id: 999999 };
+        let worker = crate::ipc::worker_msg::CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        let tensor: ThoTensor = owner.decoding(|| ThoTensor::new_ref((), 123, vec![1], Kind::Float, None, worker));
+        let clone = tensor.clone_ref().unwrap();
+        drop(tensor);
+        assert!(commands.try_recv().is_err());
+        std::thread::spawn(move || drop(clone)).join().unwrap();
+        assert!(matches!(commands.try_recv().unwrap(), BackendControl::ReleaseTensor { key: 123, worker_id } if worker_id == worker));
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
     fn test_worker_error_round_trip_preserves_cuda_recovery() {
         use thoosa_shared::{CudaAction, SyncStageRunnerError};
 
@@ -1748,7 +1824,7 @@ mod tests {
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let (sender, _receiver) = mpsc::channel(1);
         let (control, mut controls) = mpsc::unbounded_channel();
-        let handle = CudaIPCActorHandle { gate: Arc::clone(&gate), tho_device_idx: 1, sender, control };
+        let handle = CudaIPCActorHandle { release_id: 0, gate: Arc::clone(&gate), tho_device_idx: 1, sender, control };
         let (respond_to, _) = tokio::sync::oneshot::channel();
         let worker_id = handle.worker_id().unwrap();
         handle.sender.send(CudaIPCActorMessage::DropThoTensor { key: 42, worker_id, respond_to }).await.unwrap();
@@ -1815,7 +1891,7 @@ mod tests {
 
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
-        let handle = CudaIPCActorHandle { gate: Arc::clone(&gate), tho_device_idx: 1, sender, control: mpsc::unbounded_channel().0 };
+        let handle = CudaIPCActorHandle { release_id: 0, gate: Arc::clone(&gate), tho_device_idx: 1, sender, control: mpsc::unbounded_channel().0 };
         let retired = handle.worker_id()?;
 
         let old_tensor = || ThoTensor::new_ref((), 42, vec![1], Kind::Float, None, retired);
@@ -1859,7 +1935,7 @@ mod tests {
             let pending = Arc::new(PendingRequests::new(current));
             let cancel = tokio_util::sync::CancellationToken::new();
             let (reader, mut writer) = tokio::io::duplex(1024);
-            let reader_task = tokio::spawn(super::reader_loop(reader, Arc::clone(&pending), cancel.clone()));
+            let reader_task = tokio::spawn(super::reader_loop(reader, Arc::clone(&pending), cancel.clone(), None));
             let (sender, mut requests) = tokio::sync::mpsc::channel(1);
             let request = CudaWorkerMsgIn::new(current, 42, Operation::Debug);
             let mut response = Box::pin(super::send_request_and_wait_msg(sender, Arc::clone(&pending), request));
@@ -1883,8 +1959,8 @@ mod tests {
         let healthy_gate = Arc::new(thoosa_shared::CudaActivityGate::new(2));
         let (failed_tx, mut failed_rx) = tokio::sync::mpsc::channel(1);
         let (healthy_tx, mut healthy_rx) = tokio::sync::mpsc::channel(1);
-        let failed = CudaIPCActorHandle { gate: Arc::clone(&failed_gate), tho_device_idx: 1, sender: failed_tx, control: mpsc::unbounded_channel().0 };
-        let healthy = CudaIPCActorHandle { gate: healthy_gate, tho_device_idx: 2, sender: healthy_tx, control: mpsc::unbounded_channel().0 };
+        let failed = CudaIPCActorHandle { release_id: 0, gate: Arc::clone(&failed_gate), tho_device_idx: 1, sender: failed_tx, control: mpsc::unbounded_channel().0 };
+        let healthy = CudaIPCActorHandle { release_id: 0, gate: healthy_gate, tho_device_idx: 2, sender: healthy_tx, control: mpsc::unbounded_channel().0 };
         let pause = failed_gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         for terminal in [false, true] {
             if terminal { failed_gate.fail_pause(pause, None); }
@@ -1904,7 +1980,7 @@ mod tests {
     async fn test_cancelled_copy_caller_keeps_activity_with_request() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
-        let handle = CudaIPCActorHandle { sender, tho_device_idx: 1, gate: Arc::clone(&gate), control: mpsc::unbounded_channel().0 };
+        let handle = CudaIPCActorHandle { release_id: 0, sender, tho_device_idx: 1, gate: Arc::clone(&gate), control: mpsc::unbounded_channel().0 };
         // A CPU tensor exercises real copy admission and message ownership
         // without starting a CUDA worker or allocating GPU storage.
         let src = ThoTensor::new((), Tensor::f_from_slice(&[1f32]).unwrap()).unwrap();
@@ -1922,7 +1998,7 @@ mod tests {
         gate.finish_pause(pause);
     }
 
-    async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
+    async fn run_ipc_copy_perf(cuda_actor: &'static Arc<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Float;
         let dim_1 = 4u64;
@@ -1967,7 +2043,7 @@ mod tests {
         init_type: tch::Kind,
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
-        cuda_actor: &'static Box<dyn CudaActorHandle>,
+        cuda_actor: &'static Arc<dyn CudaActorHandle>,
     ) -> Result<(), ThoError> {
         let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64).max(1.0) as i64;
         let mut src_t = Tensor::rand([dim_0, dim_1], FLOAT_CPU);

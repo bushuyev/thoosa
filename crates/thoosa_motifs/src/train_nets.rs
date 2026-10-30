@@ -1361,7 +1361,7 @@ mod train_tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::perf_logging::{PERF, format_perf_map, set_panic_hook};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId};
+    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
     use thoosa_shared::traits::DebugId;
     use thoosa_shared::val::Val;
     use thoosa_shared::{CopyToDevice, ThoError, batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len};

@@ -15,3 +15,5 @@ mod syn_stage_runner;
 mod cuda_recovery;
 
 pub mod sync_stage;
+
+pub mod stage_install;

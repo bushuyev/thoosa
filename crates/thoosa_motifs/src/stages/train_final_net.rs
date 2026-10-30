@@ -227,7 +227,7 @@ where
 
                     ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len)).boxed()
                 },
-                Arc::new(TrainFinalStepFactory::new(num_label_nets, labels_len as u32)),
+                Arc::new(TrainFinalStepFactory::new(num_label_nets, labels_len as u32, GlobalCtx::global().execution(ctx.tho_device_idx()))),
                 opt_config,
                 train_final_run_configs,
                 |rc: &TrainFinalNetRunConfig| rc.common_training_args.epochs,
@@ -704,13 +704,14 @@ fn train_final_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn Wo
 
 #[derive(Debug)]
 struct TrainFinalStepFactory {
+    execution: thoosa_common::runner::global_ctx::DeviceExecutionCtx,
     num_label_nets: u32,
     labels_len: u32,
 }
 
 impl TrainFinalStepFactory {
-    fn new(num_label_nets: u32, labels_len: u32) -> Self {
-        Self { num_label_nets, labels_len }
+    fn new(num_label_nets: u32, labels_len: u32, execution: thoosa_common::runner::global_ctx::DeviceExecutionCtx) -> Self {
+        Self { num_label_nets, labels_len, execution }
     }
 }
 
@@ -721,35 +722,29 @@ where
 {
     async fn new_step(&self, run_config: TrainFinalNetRunConfig, ctx: C, vs_path: PathBuf) -> Result<(DynSyncStageWithStateEnum<SyncTrainFinalStep<C>>, FinalNetParams), ThoError> {
         let node_params = FinalNetParams::new(self.num_label_nets, run_config.net.mid_features, self.labels_len, run_config.net.num_layers);
-        if GlobalCtx::global().is_ipc() {
-
-
-            let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: ctx.tho_device_idx(), vs_path };
-            let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
-            Ok((DynSyncStageWithStateEnum::Proxy { stage: Arc::new(ProxyStage::proxy_with_input_cloner(TRAIN_FINAL_STEP_ENDPOINT, Some(SyncTrainFinalStep::<C>::next_id().to_string()), ctx.tho_device_idx(), Box::new(init), input_cloner).await?), init: () }, node_params))
-        } else {
-            let params_for_module = node_params.clone();
-
-            let (train_step, _) = TrainStep::new_local(
-                ctx.tho_device_idx().into(),
-                move |run_config, device| async move {
-
-                    let config = ModConfig::new(
-                        run_config.common_training_args.tho_optimizer(),
-
-                        move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
-                        run_config.common_training_args.lr,
-                    );
-
-                    Ok((ThoTrainModule::new_on_device(config, device)?, ()))
-                },
-                Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>),
-                train_final_loss,
-                run_config,
-                vs_path,
-            ).await?;
-            Ok((DynSyncStageWithStateEnum::Local(Arc::new(train_step)), node_params))
-        }
+        let device = ctx.tho_device_idx();
+        let execution = &self.execution;
+        let init = TrainFinalStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone(), tho_device_idx: device, vs_path: vs_path.clone() };
+        let params_for_module = node_params.clone();
+        let input_cloner = Arc::new(|input: &thoosa_common::stages::train_step::TrainStepInput<LabelProbability, LabelsProbabilities>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainFinalStepInput(input.clone_refs_for_worker()?))) });
+        let stage = execution.install_stateful(
+            TRAIN_FINAL_STEP_ENDPOINT, thoosa_common::ipc::endpoints::StageRecovery::OwnerManaged,
+            || async move {
+                let (train_step, _) = TrainStep::new_local(
+                    device.into(),
+                    move |run_config, device| async move {
+                        let config = ModConfig::new(run_config.common_training_args.tho_optimizer(),
+                            move |var_store| final_net(&params_for_module)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&var_store.root()),
+                            run_config.common_training_args.lr);
+                        Ok((ThoTrainModule::new_on_device(config, device)?, ()))
+                    },
+                    Arc::new(Box::new(|batch| batch) as TrainStepXFn<LabelProbability>), train_final_loss, run_config, vs_path,
+                ).await?;
+                Ok(Arc::new(train_step))
+            },
+            || async move { Ok((Box::new(init) as Box<dyn WorkerInput>, ())) }, Some(input_cloner),
+        ).await?;
+        Ok((stage, node_params))
     }
 }
 
@@ -797,7 +792,7 @@ mod tests {
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig};
+    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
     use thoosa_shared::val::NamedVal;
@@ -994,7 +989,7 @@ mod tests {
             thoosa_store::create_tables,
             create_motif_tables
         ]).await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>> = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));
         let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
