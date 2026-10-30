@@ -1326,7 +1326,7 @@ where
 
             warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
             #[cfg(tho_debug)]
-            track_await!(GlobalCtx::global().debug_caches(device_idx, "all_failed")).await;
+            track_await!(GlobalCtx::global().debug_caches(device_idx, &format!("all_failed for {}", input_id_dbg))).await;
 
             #[cfg(tho_debug)]
             GlobalCtx::global().cuda_actor(device_idx).debug_worker().await?;

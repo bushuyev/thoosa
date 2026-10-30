@@ -589,6 +589,9 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
 
             #[cfg(feature = "test-restart-hooks")]
             {
+                use log::info;
+                use thoosa_shared::test_utils::{is_flag_set, set_flag};
+
                 static CALL_COUNTER:parking_lot::Mutex<u64> = parking_lot::Mutex::new(0);
                 let mut guard = CALL_COUNTER.lock();
                 *guard +=1;
