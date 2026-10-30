@@ -15,20 +15,32 @@ import gdb
 from collections import deque, defaultdict
 
 
-TRACING_INSTRUMENT_POLL_SPEC = (
-    "/home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/"
-    "tracing-0.1.43/src/instrument.rs:318"
-)
+def breakpoint_spec(name):
+    # Source locations depend on the exact dependency build. Require explicit,
+    # validated overrides instead of silently installing stale line breakpoints.
+    spec = os.environ.get(name)
+    if not spec:
+        raise gdb.GdbError(f"Set {name} to a symbol or /path/to/source.rs:line before sourcing span_ring.py")
+    path, separator, line = spec.rpartition(":")
+    if separator and line.isdigit():
+        if not os.path.isfile(path):
+            raise gdb.GdbError(f"Breakpoint source does not exist: {path}")
+        with open(path) as source:
+            count = sum(1 for _ in source)
+        if not 1 <= int(line) <= count:
+            raise gdb.GdbError(f"Breakpoint line outside source: {spec}")
+    else:
+        try:
+            _, locations = gdb.decode_line(spec)
+        except gdb.error as error:
+            raise gdb.GdbError(f"Unresolved breakpoint {spec}: {error}")
+        if not locations:
+            raise gdb.GdbError(f"No debug location for breakpoint {spec}; load the matching executable first")
+    return spec
 
-TOKIO_CORE_POLL_BEGIN_SPEC = (
-    "/home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/"
-    "tokio-1.52.3/src/runtime/task/core.rs:364"
-)
-
-TOKIO_CORE_POLL_RESULT_SPEC = (
-    "/home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/"
-    "tokio-1.52.3/src/runtime/task/core.rs:379"
-)
+TRACING_INSTRUMENT_POLL_SPEC = breakpoint_spec("THOOSA_TRACING_POLL_BREAKPOINT")
+TOKIO_CORE_POLL_BEGIN_SPEC = breakpoint_spec("THOOSA_TOKIO_POLL_BEGIN_BREAKPOINT")
+TOKIO_CORE_POLL_RESULT_SPEC = breakpoint_spec("THOOSA_TOKIO_POLL_RESULT_BREAKPOINT")
 
 # Set to True if TOKIO_CORE_POLL_RESULT_SPEC points directly inside Poll::Pending branch.
 CORE_RESULT_LINE_IS_ALREADY_PENDING_BRANCH = False
