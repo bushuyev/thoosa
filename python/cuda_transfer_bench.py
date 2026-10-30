@@ -58,7 +58,9 @@ def default_sizes() -> List[int]:
 
 
 def choose_iters(nbytes: int, target_total_bytes: int, min_iters: int, max_iters: int) -> int:
-    iters = math.ceil(target_total_bytes / nbytes)
+    if nbytes <= 0 or target_total_bytes <= 0 or not 0 < min_iters <= max_iters:
+        raise ValueError("sizes and iteration bounds must be positive and ordered")
+    iters = (target_total_bytes + nbytes - 1) // nbytes
     iters = max(min_iters, iters)
     iters = min(max_iters, iters)
     return iters
@@ -134,6 +136,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Reject malformed workloads before CUDA initialization or allocation.
+    try:
+        if args.sizes:
+            sizes = [parse_size(x) for x in args.sizes.split(",")]
+        else:
+            sizes = default_sizes()
+
+        target_total_bytes = parse_size(args.target_total)
+        if args.warmup < 0 or args.device < 0:
+            raise ValueError("warmup and device must be nonnegative")
+        for size in sizes:
+            choose_iters(size, target_total_bytes, args.min_iters, args.max_iters)
+    except ValueError as error:
+        parser.error(str(error))
+
     if not torch.cuda.is_available():
         print("CUDA is not available in this PyTorch build.", file=sys.stderr)
         return 1
@@ -142,12 +159,6 @@ def main() -> int:
     device = torch.device(f"cuda:{args.device}")
     stream = torch.cuda.Stream(device=device)
 
-    if args.sizes:
-        sizes = [parse_size(x) for x in args.sizes.split(",")]
-    else:
-        sizes = default_sizes()
-
-    target_total_bytes = parse_size(args.target_total)
 
     print(f"PyTorch:      {torch.__version__}")
     print(f"CUDA:         {torch.version.cuda}")
