@@ -8,7 +8,6 @@ use crate::runner::syn_stage_runner::SyncStageRunner;
 use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
 use crate::runner::purger::Purger;
 use crate::tho_device::ThoDevice;
-use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
 use std::any::{Any, TypeId};
@@ -27,40 +26,353 @@ use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned
 use tokio::sync::RwLock as AsyncRwLock;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
 
-pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 
-///supposed to be internal, don't use it in Stages except when instantiating to check if it should be ipc proxy
+/// Compatibility facade. New code retains Runtime or a narrow service handle.
 #[derive(Debug)]
 pub struct GlobalCtx {
-
-    devices: Vec<DeviceExecutionCtx>,
-
-    caches: Arc<CacheRegistry>,
-    is_all_on_cpu: Vec<AtomicBool>,
-    cache_time: AtomicU64, //for tracking CPU-only lifetime
-    purger: Purger,
-
-    is_ipc: bool,
-    #[expect(dead_code, reason = "Keeps the shared arena fd owned until the runtime is dropped.")]
-    arena_fd:Option<OwnedFd> //TODO needed in IPC mode only
+    runtime: Arc<Runtime>,
 }
 
-// Keep actor and runner ownership together: direct actor copies and scheduled
-// stages must use the very same device gate. The runner retains its coordinator.
+/// Explicit owner, usable without installing the process compatibility facade.
 #[derive(Debug)]
-struct DeviceExecutionCtx {
-    runner: SyncStageRunner,
-    cuda_actor: Option<Box<dyn CudaActorHandle>>,
+pub struct Runtime {
+    devices: Vec<DeviceExecutionCtx>,
+    residency: Arc<ResidencyService>,
+    failure: Arc<RuntimeFailure>,
+    is_ipc: bool,
+    _arena_fd: Option<OwnedFd>,
+}
+
+#[derive(Debug)]
+pub struct ResidencyService {
+    caches: Arc<CacheRegistry>,
+    is_all_on_cpu: Vec<AtomicBool>,
+    cache_time: AtomicU64,
+    purger: Arc<Purger>,
+    is_ipc: bool,
+}
+
+#[derive(Debug)]
+struct RuntimeFailure {
+    shutting_down: AtomicBool,
+    failure: tokio::sync::watch::Sender<Option<ThoError>>,
+    gates: Vec<Arc<CudaActivityGate>>,
+}
+
+// Actor, scheduling, and transport installation share one device admission gate.
+#[derive(Debug, Clone)]
+pub struct DeviceExecutionCtx {
+    runner: Arc<SyncStageRunner>,
+    cuda_actor: Option<Arc<dyn CudaActorHandle>>,
+    ipc_actor: Option<CudaIPCActorHandle>,
 }
 
 impl DeviceExecutionCtx {
     fn cpu() -> Self {
-        Self { runner: SyncStageRunner::new_cpu(1024), cuda_actor: None }
+        Self { runner: Arc::new(SyncStageRunner::new_cpu(1024)), cuda_actor: None, ipc_actor: None }
+    }
+    pub fn ipc_actor(&self) -> Result<CudaIPCActorHandle, ThoError> {
+        self.ipc_actor.clone().ok_or_else(|| ThoError::new("stage installation requires an IPC backend"))
+    }
+    pub(crate) fn ipc_backend(&self) -> Option<CudaIPCActorHandle> { self.ipc_actor.clone() }
+    pub fn device_idx(&self) -> usize { self.runner.cuda_gate().map_or(0, |gate| gate.device_idx()) }
+    pub fn runner(&self) -> &SyncStageRunner { &self.runner }
+    pub fn actor(&self) -> Option<Arc<dyn CudaActorHandle>> { self.cuda_actor.clone() }
+}
+
+/// One command's identity and lifetime. Services can be shared deliberately,
+/// while a new store session binds its own run ID before configuration writes.
+#[derive(Debug, Clone)]
+pub struct RunSession {
+    pub runtime: Arc<Runtime>,
+    pub run_id: thoosa_shared::run_configs::RunId,
+}
+
+impl Runtime {
+    fn build_local(num_devices: usize) -> anyhow::Result<Arc<Self>> {
+        anyhow::ensure!(num_devices > 0, "runtime needs a CPU device");
+        let gates: Vec<_> = (1..num_devices).map(|i| Arc::new(CudaActivityGate::new(i))).collect();
+        let residency = Arc::new(ResidencyService::new(num_devices, false, gates.first().cloned()));
+        let failure = Arc::new(RuntimeFailure { shutting_down: AtomicBool::new(false), failure: tokio::sync::watch::channel(None).0, gates: gates.clone() });
+        let mut devices = vec![DeviceExecutionCtx::cpu()];
+        for gate in gates {
+            let actor: Arc<dyn CudaActorHandle> = Arc::new(CudaLocalActorHandle::new(Arc::clone(&gate))?);
+            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor), Arc::clone(&residency), Arc::clone(&failure), false);
+            devices.push(DeviceExecutionCtx { runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), cuda_actor: Some(actor), ipc_actor: None });
+        }
+        Ok(Arc::new(Self { devices, residency, failure, is_ipc: false, _arena_fd: None }))
+    }
+    async fn build_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> anyhow::Result<Arc<Self>> {
+        anyhow::ensure!(num_devices > 0, "runtime needs a CPU device");
+        // Arena ownership stays with this runtime and the actors' duplicated FDs.
+        // LibTorch's CPU allocator is process-wide. Install it once, then give
+        // each runtime and actor its own descriptor instead of reinitializing it.
+        static ARENA: OnceLock<Result<(), String>> = OnceLock::new();
+        if let Err(error) = ARENA.get_or_init(|| {
+            if unsafe { shared_arena_init(48 * 1024 * 1024 * 1024) } == 0 { Ok(()) } else { Err("shared_arena_init failed".into()) }
+        }) { anyhow::bail!("{error}"); }
+        let raw_fd = unsafe { shared_arena_dup_fd() };
+        anyhow::ensure!(raw_fd >= 0, "shared_arena_dup_fd failed");
+        let arena_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let gates: Vec<_> = (1..num_devices).map(|i| Arc::new(CudaActivityGate::new(i))).collect();
+        let residency = Arc::new(ResidencyService::new(num_devices, true, gates.first().cloned()));
+        let failure = Arc::new(RuntimeFailure { shutting_down: AtomicBool::new(false), failure: tokio::sync::watch::channel(None).0, gates: gates.clone() });
+        let mut devices = vec![DeviceExecutionCtx::cpu()];
+        for gate in gates {
+            let ipc_actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
+            let actor: Arc<dyn CudaActorHandle> = Arc::new(ipc_actor.clone());
+            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor), Arc::clone(&residency), Arc::clone(&failure), true);
+            devices.push(DeviceExecutionCtx { runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), cuda_actor: Some(actor), ipc_actor: Some(ipc_actor) });
+        }
+        Ok(Arc::new(Self { devices, residency, failure, is_ipc: true, _arena_fd: Some(arena_fd) }))
+    }
+    fn recovery(gate: Arc<CudaActivityGate>, actor: Arc<dyn CudaActorHandle>, residency: Arc<ResidencyService>, failure: Arc<RuntimeFailure>, is_ipc: bool) -> Arc<CudaRecoveryCoordinator> {
+        let restart_actor = Arc::clone(&actor);
+        let restart_gate = Arc::clone(&gate);
+        CudaRecoveryCoordinator::with_backend(gate, Arc::new(move |device| {
+            let (actor, gate, residency) = (Arc::clone(&restart_actor), Arc::clone(&restart_gate), Arc::clone(&residency));
+            Box::pin(async move {
+                residency.drop_data_on_device(device, "recovery").await?;
+                actor.restart_backend(thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?).await
+            })
+        }), if is_ipc { Some(Arc::new(move |_, authority| { let actor = Arc::clone(&actor); Box::pin(async move { actor.retire_backend(authority).await }) })) } else { None },
+        if is_ipc { None } else { Some(Arc::new(move |error| {
+            failure.shutting_down.store(true, Relaxed);
+            for gate in &failure.gates { gate.fail_process(error.clone()); }
+            failure.failure.send_if_modified(|current| { if current.is_some() { false } else { *current = Some(error); true } });
+        })) })
+    }
+    pub fn is_shutting_down(&self) -> bool { self.failure.shutting_down.load(Relaxed) }
+    pub fn process_failure(&self) -> Option<ThoError> { self.failure.failure.borrow().clone() }
+    pub async fn wait_for_process_failure(&self) -> ThoError {
+        let mut failure = self.failure.failure.subscribe();
+        loop {
+            if let Some(error) = failure.borrow_and_update().clone() { return error; }
+            if failure.changed().await.is_err() { return ThoError::new("process failure notifier closed"); }
+        }
+    }
+    pub fn local(num_devices: usize) -> anyhow::Result<Arc<Self>> { Self::build_local(num_devices) }
+    pub async fn ipc(num_devices: usize, worker_args: Vec<String>) -> anyhow::Result<Arc<Self>> { Self::build_ipc(num_devices, worker_args).await }
+    pub fn execution(&self, device: usize) -> DeviceExecutionCtx { self.devices[device].clone() }
+    pub fn residency(&self) -> Arc<ResidencyService> { Arc::clone(&self.residency) }
+    pub async fn shutdown(&self) {
+        if let Err(error) = self.residency.purger.shutdown().await { error!("purger shutdown failed: {error:#}"); }
+        self.failure.shutting_down.store(true, Relaxed);
+        for device in &self.devices {
+            if let Some(actor) = &device.cuda_actor {
+                if let Err(error) = actor.shutdown().await { error!("actor shutdown failed: {error:#}"); }
+            }
+        }
+    }
+}
+
+impl ResidencyService {
+    fn new(num_devices: usize, is_ipc: bool, gate: Option<Arc<CudaActivityGate>>) -> Self {
+        Self { caches: Arc::new(CacheRegistry::default()), is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(), cache_time: AtomicU64::new(0), purger: Arc::new(Purger::new(gate)), is_ipc }
+    }
+    pub(crate) fn cleanup(&self) -> Arc<Purger> { Arc::clone(&self.purger) }
+    pub fn cache_registry(&self) -> Arc<CacheRegistry> {
+        Arc::clone(&self.caches)
+    }
+    pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle {
+        debug!("GlobalCtx::register_cache: cache={}", cache.0);
+        let cache_type = cache.1.type_name();
+        let name: Arc<str> = cache.0.into();
+        let key = CacheKey::Named(Arc::clone(&name));
+        let gate = Arc::new(AsyncRwLock::new(()));
+        let entry = Arc::new(CacheRegistryEntry {
+            name,
+            map: None,
+            purger: cache.1,
+            gate: Arc::clone(&gate),
+        });
+
+        // Check before inserting so a duplicate cannot replace a live cache.
+        let mut caches = perf_log!(sync_write_lock!(self.caches.entries));
+        assert!(!caches.contains_key(&key), "duplicate {key:?}/{cache_type}");
+        caches.insert(key.clone(), entry);
+
+        RegisteredCacheHandle { key, gate }
+    }
+    fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot {
+        perf_log!(self.caches.snapshot(), "{descr}")
+    }
+    async fn lock_cache_shared(entry: &Arc<CacheRegistryEntry>, ctx: &'static str) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        async_perf_log!(async_read_owned_lock!(Arc::clone(&entry.gate), "{ctx}"), "{ctx}")
+    }
+    pub fn remove_cache(&self, key: &CacheKey) {
+        debug!("GlobalCtx::remove_cache: key={:?}", key);
+
+        assert!(
+            perf_log!(sync_write_lock!(self.caches.entries, "key={key:?}"))
+            .remove(key)
+            .is_some()
+        );
+
+        debug!("GlobalCtx::remove_cache: {:?} lock acquired/released, removed ", key);
+    }
+    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
+        self.is_all_on_cpu[device_idx].load(Relaxed)
+    }
+    pub async fn reset_all_on_cpu(&self, device_idx: usize) {
+        self.is_all_on_cpu[device_idx].store(false, Relaxed);
+    }
+    async fn debug_caches_snapshot(&self, device_idx: usize, descr: &str, maps: &CacheSnapshot) {
+        debug!("GlobalCtx::debug_caches: descr={descr:?}");
+
+        let mut total_gpu_mem = 0;
+        for (_cache_key, entry) in maps.iter() {
+            let type_name = entry.name.as_ref();
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
+            info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
+            match track_await!(entry.purger.debug_gpu(device_idx)).await {
+                Ok(v) => total_gpu_mem += v,
+                Err(e) => log::error!("GlobalCtx::debug_gpu: failed with {e:?}"),
+            }
+        }
+
+        if !self.is_ipc {
+            info!(
+                "GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
+                thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
+            );
+        }
+    }
+    pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
+        let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
+        track_await!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
+    }
+    pub async fn dump_all_to_cpu<'a>(
+        &'a self,
+        required_ids: &HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>,
+        tho_device_idx: usize,
+        descr: &str,
+    ) -> Result<(), ThoError> {
+        assert_ne!(tho_device_idx, 0);
+
+        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
+
+        let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
+
+        for (cache_key, entry) in maps.iter() {
+            let type_name = entry.name.as_ref();
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
+            if !track_await!(entry.purger.has_gpu_data(tho_device_idx)).await {
+                debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} has no data on device_idx={tho_device_idx}, skipping");
+                collect_eta_record_completion(dump_eta_guard.id());
+                continue;
+            }
+
+            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
+            track_await!(entry.purger.purge_gpu(required_ids.get(cache_key).map(|v| *v), tho_device_idx, type_name)).await?;
+            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
+            collect_eta_record_completion(dump_eta_guard.id());
+        }
+
+        self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
+        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
+
+        #[cfg(tho_debug)]
+        {
+            track_await!(self.debug_caches(tho_device_idx, descr)).await;
+
+            self.cuda_actor(tho_device_idx).debug_worker().await?;
+        }
+
+        Ok(())
+    }
+    pub async fn drop_data_on_device<'a>(
+        &'a self,
+        tho_device_idx: usize,
+        descr: &str,
+    ) -> Result<(), ThoError> {
+        assert_ne!(tho_device_idx, 0);
+        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr}");
+        let maps = self.caches_snapshot("GlobalCtx::drop_data_on_device: timed out waiting for caches read lock");
+
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
+        let mut failure = None;
+
+        for (_cache_key, entry) in maps.iter() {
+            let type_name = entry.name.as_ref();
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
+            debug!("GlobalCtx::drop_data_on_device: type_name={type_name}");
+            match track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await {
+                Ok(_) => {
+                    debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
+                }
+                Err(e) => {
+                    warn!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
+                    // Finish invalidating the other caches, but do not resume
+                    // work with references whose invalidation failed.
+                    if failure.is_none() { failure = Some(e.context(format!("invalidating device {tho_device_idx} cache {type_name}"))); }
+                }
+            }
+
+            collect_eta_record_completion(dump_eta_guard.id());
+        }
+
+        if let Some(error) = failure { return Err(error); }
+        self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
+        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
+
+        Ok(())
+    }
+    pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
+        debug!("GlobalCtx::purge_cpu: retain_last={retain_last}");
+
+
+        let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
+
+
+        if purge_until > 0 {
+            let maps = self.caches_snapshot("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
+
+            #[cfg(tho_debug)]
+            track_await!(self.debug_caches_snapshot(1, "before purge_cpu", &maps)).await;
+
+            for (_cache_key, entry) in maps.iter() {
+                let type_name = entry.name.as_ref();
+                let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
+                let purged = track_await!(entry.purger.purge_cpu(purge_until)).await;
+                debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
+            }
+
+            #[cfg(tho_debug)]
+            track_await!(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
+        }
+
+        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
+    }
+    pub fn do_age(&self) {
+        self.cache_time.fetch_add(1, Relaxed);
+    }
+    pub fn cache_age(&self) -> u64 {
+        self.cache_time.load(Relaxed)
+    }
+    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
+        let maps = self.caches_snapshot("GlobalCtx::is_all_on_cpu_force_check: timed out waiting for caches read lock");
+
+        for (_cache_key, entry) in maps.iter() {
+            let type_name = entry.name.as_ref();
+            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
+            if track_await!(entry.purger.has_gpu_data(device_idx)).await {
+                debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
+                self.is_all_on_cpu[device_idx].store(false, Relaxed);
+                return false;
+            }
+        }
+
+        self.is_all_on_cpu[device_idx].store(true, Relaxed);
+        true
+    }
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
+        self.purger.run_purge_gpu(closures)
     }
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
-static PROCESS_FAILURE: std::sync::LazyLock<tokio::sync::watch::Sender<Option<ThoError>>> = std::sync::LazyLock::new(|| tokio::sync::watch::channel(None).0);
 
 // Use the same identity for cache lookup and OOM exclusions. Display names do
 // not distinguish generic stage types; owned instance names need no leaks.
@@ -163,151 +475,21 @@ impl GlobalCtx {
 
     // TODO num_devices is to be replaced with Cuda devices list kept in a static const.
     // Currently it's assumed that there is single Cuda(0) device and first device is always CPU. So if num_devices==2 then devices would be [Cpu, Cuda(0)]
-    fn new(num_devices: usize) -> anyhow::Result<Self> {
-        debug!("GlobalCtx::new: num_devices={num_devices}");
-
-        assert!(num_devices > 0);//TODO test if it works without GPU
-
-        let mut devices = Vec::with_capacity(num_devices);
-        devices.push(DeviceExecutionCtx::cpu());
-        for tho_device_idx in 1..num_devices {
-            let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
-
-            let recovery = CudaRecoveryCoordinator::with_backend(
-                Arc::clone(&gate),
-                Arc::new(GlobalCtx::cuda_restart),
-                None,
-                Some(Arc::new(GlobalCtx::fail_process))
-            );
-
-            devices.push(DeviceExecutionCtx {
-                runner: SyncStageRunner::new_with_recovery(1024, recovery),
-                cuda_actor: Some(Box::new(CudaLocalActorHandle::new(Arc::clone(&gate))?)),
-            });
-        }
-
-        // Supply the admission gate directly; CPU-only runtimes have no CUDA gate.
-        let purger = Purger::new(devices.get(1).and_then(|device| device.runner.cuda_gate()).cloned());
-        Ok(Self {
-            devices,
-
-            caches: Arc::new(CacheRegistry::default()),
-
-            is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
+    fn new(num_devices: usize) -> anyhow::Result<Self> { Ok(Self { runtime: Runtime::local(num_devices)? }) }
+    async fn new_ipc(num_devices: usize, args: Vec<String>) -> anyhow::Result<Self> { Ok(Self { runtime: Runtime::ipc(num_devices, args).await? }) }
 
 
-            cache_time: Default::default(),
-            purger,
-
-            is_ipc: false,
-            arena_fd: None,
-        })
-    }
-
-    async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> anyhow::Result<Self> {
-        debug!("GlobalCtx::new: num_devices={num_devices}");
-
-        assert!(num_devices > 0);
-
-        const ARENA_SIZE: usize = 48 * 1024 * 1024 * 1024; //TODO config
-
-        let rc = unsafe {
-            shared_arena_init(
-                ARENA_SIZE
-            )
-        };
-
-        if rc != 0 {
-            anyhow::bail!("shared_arena_init failed");
-        }
-
-        let raw_fd = unsafe {
-            shared_arena_dup_fd()
-        };
-
-        if raw_fd < 0 {
-            anyhow::bail!("shared_arena_dup_fd failed");
-        }
 
 
-        let arena_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
 
-        let mut devices = Vec::with_capacity(num_devices);
-        devices.push(DeviceExecutionCtx::cpu());
-        for tho_device_idx in 1..num_devices {
-            let gate = Arc::new(CudaActivityGate::new(tho_device_idx));
 
-            let recovery = CudaRecoveryCoordinator::with_backend(
-                Arc::clone(&gate),
-                Arc::new(GlobalCtx::cuda_restart),
-                Some(Arc::new(|device, authority| Box::pin(async move { GlobalCtx::global().cuda_actor(device).retire_backend(authority).await }))),
-                None
-            );
-
-
-            devices.push(DeviceExecutionCtx {
-                runner: SyncStageRunner::new_with_recovery(1024, recovery),
-                // Each actor retains its own descriptor so replacement workers can
-                // remap the parent-owned arena independently of other devices.
-                cuda_actor: Some(Box::new(CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?)),
-            });
-        }
-
-        // Supply the admission gate directly; CPU-only runtimes have no CUDA gate.
-        let purger = Purger::new(devices.get(1).and_then(|device| device.runner.cuda_gate()).cloned());
-        Ok(Self {
-            devices,
-
-            caches: Arc::new(CacheRegistry::default()),
-
-            is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
-
-            cache_time: Default::default(),
-            purger,
-
-            is_ipc: true,
-            arena_fd: Some(arena_fd),
-        })
-    }
-
-    fn cuda_restart(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
-        async move {
-            // This device's coordinator invokes the hook after its activity drains.
-            info!("GlobalCtx::cuda_restart: tho_device_idx={tho_device_idx}");
-
-            //drop slots belonging to the device being reset and remove cache entries with no other devices' (CPU) data, i.e. if the entry was not copied from or dumped to CPU yet
-            let r = track_await!(GlobalCtx::global()
-                .drop_data_on_device(tho_device_idx, "drop"))
-                .await;
-
-            info!("GlobalCtx::cuda_restart: drop_device done with result={r:?}");
-            // A replacement must not be published while cache invalidation failed.
-            r?;
-
-            let gate = GlobalCtx::global().cuda_activity_gate(tho_device_idx).expect("no CUDA gate");
-
-            info!("GlobalCtx::cuda_restart: gate={gate:?}");
-
-            let authority = thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?;
-
-            info!("GlobalCtx::cuda_restart: authority={authority:?}");
-
-            GlobalCtx::global()
-                .cuda_actor(tho_device_idx)
-                .restart_backend(authority)
-                .await?;
-
-
-            info!("GlobalCtx::cuda_restart: all done");
-
-            Ok(())
-        }.boxed()
-    }
+    pub fn runtime(&self) -> Arc<Runtime> { Arc::clone(&self.runtime) }
+    pub fn execution(&self, device: usize) -> DeviceExecutionCtx { self.runtime.execution(device) }
 
     /// Instance caches use the same gate as dispatch when creating device state.
     pub fn cuda_activity_gate(&self, tho_device_idx: usize) -> Option<Arc<CudaActivityGate>> {
-        self.devices[tho_device_idx].runner.cuda_gate().cloned()
+        self.runtime.devices[tho_device_idx].runner.cuda_gate().cloned()
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -331,9 +513,7 @@ impl GlobalCtx {
         Ok(())
     }
 
-    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
-        self.purger.run_purge_gpu(closures)
-    }
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{ self.runtime.residency.run_purge_gpu(closures) }
 
     ///num_devices: number of devices - CPU + GPU count
     pub fn init_devices(num_devices: usize) -> anyhow::Result<&'static GlobalCtx> {
@@ -358,50 +538,15 @@ impl GlobalCtx {
     }
 
 
-    pub fn cache_registry(&self) -> Arc<CacheRegistry> {
-        Arc::clone(&self.caches)
-    }
+    pub fn cache_registry(&self) -> Arc<CacheRegistry> { self.runtime.residency.cache_registry() }
 
-    pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle {
-        debug!("GlobalCtx::register_cache: cache={}", cache.0);
-        let cache_type = cache.1.type_name();
-        let name: Arc<str> = cache.0.into();
-        let key = CacheKey::Named(Arc::clone(&name));
-        let gate = Arc::new(AsyncRwLock::new(()));
-        let entry = Arc::new(CacheRegistryEntry {
-            name,
-            map: None,
-            purger: cache.1,
-            gate: Arc::clone(&gate),
-        });
+    pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle { self.runtime.residency.register_cache(cache) }
 
-        // Check before inserting so a duplicate cannot replace a live cache.
-        let mut caches = perf_log!(sync_write_lock!(self.caches.entries));
-        assert!(!caches.contains_key(&key), "duplicate {key:?}/{cache_type}");
-        caches.insert(key.clone(), entry);
+    #[cfg(test)]
+    fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot { self.runtime.residency.caches_snapshot(descr) }
 
-        RegisteredCacheHandle { key, gate }
-    }
 
-    fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot {
-        perf_log!(self.caches.snapshot(), "{descr}")
-    }
-
-    async fn lock_cache_shared(entry: &Arc<CacheRegistryEntry>, ctx: &'static str) -> tokio::sync::OwnedRwLockReadGuard<()> {
-        async_perf_log!(async_read_owned_lock!(Arc::clone(&entry.gate), "{ctx}"), "{ctx}")
-    }
-
-    pub fn remove_cache(&self, key: &CacheKey) {
-        debug!("GlobalCtx::remove_cache: key={:?}", key);
-
-        assert!(
-            perf_log!(sync_write_lock!(self.caches.entries, "key={key:?}"))
-            .remove(key)
-            .is_some()
-        );
-
-        debug!("GlobalCtx::remove_cache: {:?} lock acquired/released, removed ", key);
-    }
+    pub fn remove_cache(&self, key: &CacheKey) { self.runtime.residency.remove_cache(key) }
 
     #[inline]
     pub fn global() -> &'static Self {
@@ -419,45 +564,17 @@ impl GlobalCtx {
     }
 
     pub fn device_count(&self) -> usize {
-        self.devices.len()
+        self.runtime.devices.len()
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
-    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
-        self.is_all_on_cpu[device_idx].load(Relaxed)
-    }
+    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool { self.runtime.residency.is_all_on_cpu(device_idx) }
 
-    pub async fn reset_all_on_cpu(&self, device_idx: usize) {
-        self.is_all_on_cpu[device_idx].store(false, Relaxed);
-    }
+    pub async fn reset_all_on_cpu(&self, device_idx: usize) { self.runtime.residency.reset_all_on_cpu(device_idx).await }
 
 
-    async fn debug_caches_snapshot(&self, device_idx: usize, descr: &str, maps: &CacheSnapshot) {
-        debug!("GlobalCtx::debug_caches: descr={descr:?}");
 
-        let mut total_gpu_mem = 0;
-        for (_cache_key, entry) in maps.iter() {
-            let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
-            info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
-            match track_await!(entry.purger.debug_gpu(device_idx)).await {
-                Ok(v) => total_gpu_mem += v,
-                Err(e) => log::error!("GlobalCtx::debug_gpu: failed with {e:?}"),
-            }
-        }
-
-        if !self.is_ipc {
-            info!(
-                "GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
-                thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
-            );
-        }
-    }
-
-    pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
-        let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
-        track_await!(self.debug_caches_snapshot(device_idx, descr, &maps)).await;
-    }
+    pub async fn debug_caches(&self, device_idx: usize, descr: &str) { self.runtime.residency.debug_caches(device_idx, descr).await }
 
     /// Keep only the listed output IDs in each identified cache on the device.
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
@@ -466,201 +583,56 @@ impl GlobalCtx {
         required_ids: &HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>,
         tho_device_idx: usize,
         descr: &str,
-    ) -> Result<(), ThoError> {
-        assert_ne!(tho_device_idx, 0);
-
-        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
-
-        let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
-
-        for (cache_key, entry) in maps.iter() {
-            let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
-            if !track_await!(entry.purger.has_gpu_data(tho_device_idx)).await {
-                debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} has no data on device_idx={tho_device_idx}, skipping");
-                collect_eta_record_completion(dump_eta_guard.id());
-                continue;
-            }
-
-            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
-            track_await!(entry.purger.purge_gpu(required_ids.get(cache_key).map(|v| *v), tho_device_idx, type_name)).await?;
-            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
-            collect_eta_record_completion(dump_eta_guard.id());
-        }
-
-        self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
-
-        #[cfg(tho_debug)]
-        {
-            track_await!(self.debug_caches(tho_device_idx, descr)).await;
-
-            self.cuda_actor(tho_device_idx).debug_worker().await?;
-        }
-
-        Ok(())
-    }
+    ) -> Result<(), ThoError> { self.runtime.residency.dump_all_to_cpu(required_ids, tho_device_idx, descr).await }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn drop_data_on_device<'a>(
         &'a self,
         tho_device_idx: usize,
         descr: &str,
-    ) -> Result<(), ThoError> {
-        assert_ne!(tho_device_idx, 0);
-        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr}");
-        let maps = self.caches_snapshot("GlobalCtx::drop_data_on_device: timed out waiting for caches read lock");
-
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
-        let mut failure = None;
-
-        for (_cache_key, entry) in maps.iter() {
-            let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
-            debug!("GlobalCtx::drop_data_on_device: type_name={type_name}");
-            match track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await {
-                Ok(_) => {
-                    debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
-                }
-                Err(e) => {
-                    warn!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
-                    // Finish invalidating the other caches, but do not resume
-                    // work with references whose invalidation failed.
-                    if failure.is_none() { failure = Some(e.context(format!("invalidating device {tho_device_idx} cache {type_name}"))); }
-                }
-            }
-
-            collect_eta_record_completion(dump_eta_guard.id());
-        }
-
-        if let Some(error) = failure { return Err(error); }
-        self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
-
-        Ok(())
-    }
+    ) -> Result<(), ThoError> { self.runtime.residency.drop_data_on_device(tho_device_idx, descr).await }
 
 
-    pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
-        debug!("GlobalCtx::purge_cpu: retain_last={retain_last}");
+    pub async fn purge_cpu(&self, retain_last: u64) { self.runtime.residency.purge_cpu(retain_last).await }
+
+    pub fn do_age(&self) { self.runtime.residency.do_age() }
+
+    pub fn cache_age(&self) -> u64 { self.runtime.residency.cache_age() }
 
 
-        let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
-
-
-        if purge_until > 0 {
-            let maps = self.caches_snapshot("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
-
-            #[cfg(tho_debug)]
-            track_await!(self.debug_caches_snapshot(1, "before purge_cpu", &maps)).await;
-
-            for (_cache_key, entry) in maps.iter() {
-                let type_name = entry.name.as_ref();
-                let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
-                let purged = track_await!(entry.purger.purge_cpu(purge_until)).await;
-                debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
-            }
-
-            #[cfg(tho_debug)]
-            track_await!(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
-        }
-
-        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
-    }
-
-    pub fn do_age(&self) {
-        self.cache_time.fetch_add(1, Relaxed);
-    }
-
-    pub fn cache_age(&self) -> u64 {
-        self.cache_time.load(Relaxed)
-    }
-
-
-    pub async fn shutdown(&self) {
-        // Drain accepted cleanup while actors are alive and cleanup is still enabled.
-        // A failed purger must not prevent the remaining actors from shutting down.
-        if let Err(error) = self.purger.shutdown().await {
-            error!("Got {error:#} while shutting down purger");
-        }
-        GLB_SHUTTING_DOWN.store(true, Relaxed);
-
-        for (i, actor) in self.devices.iter().enumerate().filter_map(|(i, device)| device.cuda_actor.as_ref().map(|actor| (i, actor))) {
-            if let Err(e) = actor.shutdown().await {
-                error!("Got {e} while shutting down actor {i}");
-            }
-        }
-    }
-
-    fn fail_process(error: ThoError) {
-        // Only local process-invalidating failures broaden the shutdown scope.
-        GLB_SHUTTING_DOWN.store(true, Relaxed);
-        for device in &Self::global().devices {
-            if let Some(gate) = device.runner.cuda_gate() {
-                gate.fail_process(error.clone());
-            }
-        }
-        PROCESS_FAILURE.send_if_modified(|failure| {
-            if failure.is_some() {
-                return false;
-            }
-            *failure = Some(error);
-            true
-        });
-    }
+    pub async fn shutdown(&self) { self.runtime.shutdown().await; }
 
     pub fn process_failure() -> Option<ThoError> {
-        PROCESS_FAILURE.borrow().clone()
+        GLOBAL_CTX.get().and_then(|ctx| ctx.runtime.process_failure())
     }
 
-    pub async fn wait_for_process_failure() -> ThoError {
-        let mut failure = PROCESS_FAILURE.subscribe();
-        loop {
-            if let Some(error) = failure.borrow_and_update().clone() { return error; }
-            if failure.changed().await.is_err() { return ThoError::new("process failure notifier closed"); }
-        }
-    }
+    pub async fn wait_for_process_failure() -> ThoError { Self::global().runtime.wait_for_process_failure().await }
+
 
     #[inline]
     pub fn is_shutting_down()->bool {
-        GLB_SHUTTING_DOWN.load(Relaxed)
+        GLOBAL_CTX.get().is_some_and(|ctx| ctx.runtime.failure.shutting_down.load(Relaxed))
     }
 
     //for tests and temporary fixes - use CudaActors for ipc/no ipc implementations
     pub fn is_ipc(&self) -> bool {
-        self.is_ipc
+        self.runtime.is_ipc
     }
 }
 
 impl GlobalCtx {
 
     // Forced inspection must yield while waiting for cache locks, including on current-thread runtimes.
-    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
-        let maps = self.caches_snapshot("GlobalCtx::is_all_on_cpu_force_check: timed out waiting for caches read lock");
-
-        for (_cache_key, entry) in maps.iter() {
-            let type_name = entry.name.as_ref();
-            let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
-            if track_await!(entry.purger.has_gpu_data(device_idx)).await {
-                debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
-                self.is_all_on_cpu[device_idx].store(false, Relaxed);
-                return false;
-            }
-        }
-
-        self.is_all_on_cpu[device_idx].store(true, Relaxed);
-        true
-    }
+    pub async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool { self.runtime.residency.is_all_on_cpu_force_check(device_idx).await }
 
     pub fn get_runner(&self, tho_device: usize) -> &SyncStageRunner {
-        debug!("GlobalCtx::get_executor: tho_device={tho_device} self.devices.len={}", self.devices.len());
-        &self.devices[tho_device].runner
+        debug!("GlobalCtx::get_executor: tho_device={tho_device} self.runtime.devices.len={}", self.runtime.devices.len());
+        &self.runtime.devices[tho_device].runner
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Arc<dyn CudaActorHandle> {
         let device:ThoDevice = device.into();
-        self.devices.get(device.tho_device_idx()).and_then(|device| device.cuda_actor.as_ref()).expect(&format!("No CudaActor for device={device:?}"))
+        self.runtime.devices.get(device.tho_device_idx()).and_then(|device| device.cuda_actor.as_ref()).expect(&format!("No CudaActor for device={device:?}"))
     }
 }
 
@@ -785,6 +757,12 @@ pub mod mock_global_ctx {
             self
         }
         pub fn with_register_cache(mut self) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_execution().returning(move |device| real.execution(device));
+            } else {
+                self.mock.expect_execution().returning(|_| super::DeviceExecutionCtx::cpu());
+            }
+
             // Each mock runtime owns its caches too; real-runtime mocks must
             // share the actual registry so GPU purging sees the same maps.
             let registry = self.real.map(|real| real.cache_registry()).unwrap_or_else(|| std::sync::Arc::new(super::CacheRegistry::default()));
@@ -882,7 +860,7 @@ pub mod mock_global_ctx {
             if let Some(real) = self.real {
                 self.mock.expect_is_ipc().times(0..).returning({
                     move || {
-                        real.is_ipc
+                        real.runtime.is_ipc
                     }
                 });
             } else {
@@ -1058,7 +1036,7 @@ impl MockGlobalCtx {
         } else { self.is_all_on_cpu(device_idx) }
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Arc<dyn CudaActorHandle> {
         // Tests using real CUDA actors must install a runtime that owns every requested device.
         mock_global_ctx::manual_method_real_ctx().expect("configure a real runtime for CUDA actor access").cuda_actor(device)
     }
@@ -1121,22 +1099,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_owned_runtimes_isolate_residency_and_cleanup() -> Result<(), ThoError> {
+        let first = super::Runtime::local(1)?;
+        let second = super::Runtime::local(1)?;
+        assert!(!Arc::ptr_eq(&first.residency().cache_registry(), &second.residency().cache_registry()));
+        first.shutdown().await;
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut ctx = RunCtxImpl::new_in(&second, 0, "owned runtime");
+        let completed = Arc::clone(&done);
+        ctx.add_purge_gpu_closure(Box::new(move || { let completed = Arc::clone(&completed); Box::pin(async move { completed.store(true, std::sync::atomic::Ordering::Relaxed); Ok(()) }) }));
+        drop(ctx);
+        second.shutdown().await;
+        assert!(done.load(std::sync::atomic::Ordering::Relaxed));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_shutdown_drains_purger_before_disabling_cleanup() -> Result<(), ThoError> {
         let runtime = GlobalCtx::new(1)?;
         let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let callback_completed = Arc::clone(&completed);
+        let owner = runtime.runtime();
         runtime.run_purge_gpu(vec![Box::new(move || {
             let completed = Arc::clone(&callback_completed);
+            let owner = Arc::clone(&owner);
             async move {
-                // Cleanup callbacks skip work after the global shutdown flag is set.
-                assert!(!GlobalCtx::is_shutting_down(), "accepted cleanup must drain before device teardown");
+                // Shutdown belongs to this owner, independently of any installed facade.
+                assert!(!owner.is_shutting_down(), "accepted cleanup must drain before device teardown");
                 completed.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
             }.boxed()
         })])?;
         tokio::time::timeout(Duration::from_secs(5), runtime.shutdown()).await?;
         assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(GlobalCtx::is_shutting_down());
+        assert!(runtime.runtime().is_shutting_down());
         assert!(runtime.run_purge_gpu(vec![]).is_err());
         Ok(())
     }

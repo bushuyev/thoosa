@@ -28,7 +28,7 @@ use rusqlite::{Connection, Error, OpenFlags, Transaction, params};
 use rusqlite::trace::TraceEvent;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
-use thoosa_shared::run_configs::{run_id, RunConfigId, RunId};
+use thoosa_shared::run_configs::{RunConfigId, RunId};
 use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
@@ -139,6 +139,10 @@ impl ExternalSqlWriter for SqlStore {
 
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
+    /// Bind this store session before saving configurations. Independent stores
+    /// may execute different runs concurrently without process-global identity.
+    fn bind_run(&self, _run_id: RunId) -> anyhow::Result<()> { anyhow::bail!("store does not support run sessions") }
+
     async fn save_import(&self, descr: String) -> anyhow::Result<u32>;
     async fn save_run(&self, descr: String) -> anyhow::Result<RunId>;
     async fn save_run_config<'a, 'b, 'c>(
@@ -316,6 +320,7 @@ pub enum LimitBy {
 //TODO move all prepared statements into init
 #[derive(Debug)]
 pub struct SqlStore {
+    run_id: std::sync::OnceLock<RunId>,
     writer: tokio_rusqlite::Connection,
     readers: Arc<Vec<tokio_rusqlite::Connection>>,
     conn_target: String,
@@ -566,6 +571,14 @@ impl ResourceStore for SqlStore {
 #[async_trait]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
+    fn bind_run(&self, run_id: RunId) -> anyhow::Result<()> {
+        match self.run_id.set(run_id) {
+            Ok(()) => Ok(()),
+            Err(id) if self.run_id.get() == Some(&id) => Ok(()),
+            Err(_) => anyhow::bail!("store is already bound to another run"),
+        }
+    }
+
     async fn save_import(&self, descr: String) -> anyhow::Result<u32> {
         self.with_writer_conn("save_import", move |conn| {
             let t = conn.transaction()?;
@@ -603,10 +616,11 @@ impl Store for SqlStore {
         let run_config_type = run_config_type.to_string();
         let descr = descr.to_string();
         debug!("SqlStore::save_run_config: input_run_config_id={input_run_config_id:?} run_config_type={run_config_type} descr={descr}");
+        let run_id = self.run_id();
         self.with_writer_conn("save_run_config", move |conn| {
             let t = conn.transaction().with_context(|| "start sqlite transaction")?;
 
-            t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params![run_config_type, descr, run_id()])?;
+            t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params![run_config_type, descr, run_id])?;
 
             let run_config_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
                 row.get::<usize, RunConfigId>(0)
@@ -853,11 +867,12 @@ impl Store for SqlStore {
     }
 
     async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> anyhow::Result<Vec<RunConfigId>> {
+        let run_id = self.run_id();
         self.with_reader_conn("list_run_configs", move |conn| {
             let run_configs = {
                 let mut stmt = conn.prepare("SELECT id FROM run_configs WHERE run_id=? AND descr=? AND type=?")?;
                 stmt.query_map(params![
-                   run_id(),
+                   run_id,
                    descr.as_str(),
                    type_
                ], |row| {
@@ -1289,6 +1304,8 @@ type CreateTablesFn = fn(&mut Connection) -> anyhow::Result<()>;
 
 //TODO move all prepare to init
 impl SqlStore {
+    pub fn run_id(&self) -> RunId { self.run_id.get().copied().unwrap_or(0) }
+
     fn trained_net_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrainedNetEntry> {
         Ok(TrainedNetEntry {
             id: row.get::<usize, u32>(0)?,
@@ -1700,6 +1717,7 @@ impl SqlStore {
             conn_target,
             conn_flags,
             rr: AtomicUsize::new(0),
+            run_id: std::sync::OnceLock::new(),
         })
     }
 
@@ -1726,6 +1744,7 @@ impl SqlStore {
             conn_target,
             conn_flags,
             rr: AtomicUsize::new(0),
+            run_id: std::sync::OnceLock::new(),
         })
     }
 
@@ -1771,6 +1790,7 @@ impl SqlStore {
             conn_target: uri,
             conn_flags,
             rr: AtomicUsize::new(0),
+            run_id: std::sync::OnceLock::new(),
         })
     }
 
@@ -3026,6 +3046,24 @@ mod error_tests {
         assert!(error.downcast_ref::<crate::tokio_rusqlite::PanicInfo>().is_some());
         assert!(format!("{error:#}").contains("fixture panic"));
         assert_eq!(store.with_writer_conn("after panic", |_| Ok(42)).await?, 42);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::{SqlStore, Store};
+
+    #[tokio::test]
+    async fn test_store_run_sessions_are_independent() -> anyhow::Result<()> {
+        let first = SqlStore::in_mem_(vec![]).await?;
+        let second = SqlStore::in_mem_(vec![]).await?;
+        first.bind_run(41)?;
+        second.bind_run(42)?;
+        assert_eq!(first.run_id(), 41);
+        assert_eq!(second.run_id(), 42);
+        assert!(first.bind_run(42).is_err());
+        first.bind_run(41)?;
         Ok(())
     }
 }

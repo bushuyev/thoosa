@@ -695,6 +695,29 @@ pub struct ApplyMotifNetInit {
 }
 
 impl ApplyMotifNetInit {
+    pub async fn install_on<C: RunCtx + 'static>(self, execution: thoosa_common::runner::global_ctx::DeviceExecutionCtx, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
+        let device: ThoDevice = execution.device_idx().into();
+        let id = self.inference_id();
+        let remote_init = self.clone();
+        let remote_ws = Arc::clone(&ws);
+        let installed = execution.install_stateful(
+            APPLY_MOTIF_NET_ENDPOINT, thoosa_common::ipc::endpoints::StageRecovery::RecreateFromInit,
+            || async move {
+                let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
+                let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load motif net from {:?}", self.motif_net_path)))?;
+                Ok(Arc::new(SyncApplyMotifNet::new_local(id, self.slice_step, params, net, self.channel, self.motif_id,
+                    #[cfg(test)] self.fail_if_size_bigger_than,
+                ).await?))
+            },
+            || async move {
+                let (params, _) = perf_log!(sync_read_lock!(remote_ws)).load_motif_net(&remote_init.motif_net_path, &device, remote_init.quantize, false)?;
+                let meta = MotifNetMeta::new(remote_init.motif_id, remote_init.channel, params);
+                Ok((Box::new(remote_init) as Box<dyn WorkerInput>, meta))
+            }, None,
+        ).await?;
+        Ok(Arc::new(installed))
+    }
+
     pub(super) fn inference_id(&self) -> SynKey {
         SynKey::new([
             mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet"),
@@ -740,33 +763,9 @@ where
     RC: RunCtx + Send + Sync + 'static,
 {
     async fn init(self, run_context: RC, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>) -> Result<Arc<DynSyncStageWithStateEnum<SyncApplyMotifNet<C>, MotifNetMeta>>, ThoError> {
-        let device: ThoDevice = run_context.tho_device_idx().into();
-        let id = self.inference_id();
-        if GlobalCtx::global().is_ipc() {
-            let (params, _net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, false)?;
-            let motif_meta = MotifNetMeta::new(self.motif_id, self.channel, params);
-
-            // A failed worker installation is retried with a fresh endpoint id by OOMHandler::new_stage.
-            Ok(Arc::new(DynSyncStageWithStateEnum::Proxy {
-                stage: Arc::new(ProxyStage::proxy_recreatable(APPLY_MOTIF_NET_ENDPOINT, Some(id.to_string()), device.tho_device_idx(), Box::new(self)).await?),
-                init: motif_meta,
-            }))
-        } else {
-            let (params, net) = perf_log!(sync_read_lock!(ws)).load_motif_net(&self.motif_net_path, &device, self.quantize, true)?;
-            let net = net.ok_or_else(|| ThoError::new(format!("workspace did not load motif net from {:?}", self.motif_net_path)))?;
-
-
-            Ok(Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(SyncApplyMotifNet::new_local(
-                id,
-                self.slice_step,
-                params,
-                net,
-                self.channel,
-                self.motif_id,
-                #[cfg(test)]
-                self.fail_if_size_bigger_than,
-            ).await?))))
-        }
+        // Compatibility adapter; callers with an owned runtime can install
+        // directly using the narrow execution handle.
+        self.install_on(GlobalCtx::global().execution(run_context.tho_device_idx()), ws).await
     }
 }
 

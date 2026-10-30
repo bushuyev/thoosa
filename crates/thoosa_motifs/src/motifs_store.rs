@@ -15,7 +15,7 @@ use mockall::mock;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Error, Transaction, params};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
-use thoosa_shared::run_configs::{RunConfigId, RunId, run_id};
+use thoosa_shared::run_configs::{RunConfigId, RunId};
 use thoosa_shared::val::Val;
 use thoosa_shared::*;
 use thoosa_store::{LimitBy, Store, SetCond, RunConfigEntry, TrainedNetsBy, RunConfigRow, RunConfigFilter, RunMotifEntry, TrainedNetEntry, TrainedNet, SqlStore, conds_to_q};
@@ -969,13 +969,14 @@ impl MotifsStore for SqlStore {
     async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> anyhow::Result<Vec<RunConfigId>> {
         let run_config_ids = run_config_ids.to_vec();
         debug!("select_all_motifs: run_config_ids={run_config_ids:?}");
+        let run_id = self.run_id();
         self.with_writer_conn("select_all_motifs", move |conn| {
             let t = conn.transaction()?;
             let mut selected_run_config_ids = Vec::with_capacity(run_config_ids.len());
 
 
             for input_run_config_id in run_config_ids {
-                t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params!["SelectMotifsRunConfig", "bypass", run_id()])?;
+                t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params!["SelectMotifsRunConfig", "bypass", run_id])?;
 
                 let selected_run_config_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
                     row.get::<usize, RunConfigId>(0)
@@ -1069,6 +1070,7 @@ impl MotifsStore for SqlStore {
     ) -> anyhow::Result<Vec<RunConfigId>> {
         let label = label.to_string();
 
+        let run_id = self.run_id();
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
             let r = conn.prepare(
                 "SELECT tn.run_config_id FROM trained_nets tn \
@@ -1079,7 +1081,7 @@ impl MotifsStore for SqlStore {
                     AND net_path LIKE ? \
                  ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
             )?.query_map(params![
-                run_id(),
+                run_id,
                 format!("{label}%")
             ], |row| {
                 Ok(row.get::<usize, u32>(0)?)
@@ -1645,7 +1647,7 @@ mod store_tests {
     use log::debug;
     use rusqlite::params;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
-    use thoosa_shared::run_configs::{RunConfigId, RUN_ID};
+    use thoosa_shared::run_configs::{RunConfigId};
     use thoosa_shared::val::Val;
     use thoosa_shared::{TensorIdSliceIdx, cdt_for_dir, MotifSlice};
     use super::{MotifsStore, create_motif_tables};
@@ -2061,7 +2063,7 @@ mod store_tests {
             test_dir.join("test_db.db3"),
         ).await?;
 
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = init_test_store(&store).await?;
 
@@ -2326,7 +2328,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_select_all_motifs_creates_bypass_selection_runs() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let first_find_run_config_id = store.save_run_config(None, &"FindMotifsRunConfig", "first", HashMap::new()).await?;
         let second_find_run_config_id = store.save_run_config(None, &"BucketingRunConfig", "second", HashMap::new()).await?;
@@ -2375,7 +2377,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_save_list_trained_nets() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let run_config_id = store.save_run_config(
             None,
@@ -2436,7 +2438,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_motifs_slices_filters_slice_run_config_ids() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = {
             let import_id = store.save_import("test".to_string()).await?;
@@ -2509,7 +2511,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_motif_slices_filters_slice_run_config_ids() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = {
             let import_id = store.save_import("test".to_string()).await?;
@@ -2622,7 +2624,7 @@ mod store_tests {
         let store = test_store_from_path(
             test_dir.join("test_db.db3"),
         ).await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let run_config_id = store.save_run_config(
             None,
@@ -2685,7 +2687,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_configs_page_and_by_ids() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let run_config_id_1 = store.save_run_config(None, &"first", "test", HashMap::new()).await?;
         let run_config_id_2 = store.save_run_config(None, &"second", "test", HashMap::new()).await?;
@@ -2706,7 +2708,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let root_run_config_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
         let select_run_config_id = store.save_run_config(Some(&[root_run_config_id]), &"SelectMotifsRunConfig", "alpha motif selection", HashMap::new()).await?;
@@ -2748,7 +2750,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_get_prev_run_config_id() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let input_run_config_id = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
         let run_config_id =
@@ -2781,7 +2783,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_input_run_config_ids_reads_large_sets_in_chunks() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let input_run_config_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
         let mut run_config_ids = Vec::with_capacity(1001);
@@ -2815,7 +2817,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_config_ids_with_outputs_reads_large_sets_in_chunks() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let mut parent_run_config_ids = Vec::with_capacity(1001);
         for idx in 0..1001 {
@@ -2957,7 +2959,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_respects_constraints() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         create_resources(&store, &[("res_a", 2048), ("res_b", 2048)]).await?;
 
@@ -3021,7 +3023,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_respects_min_distance() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         create_resources(&store, &[("res_main", 4096)]).await?;
 
@@ -3068,7 +3070,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_uses_input_len_adjuster() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         create_resources(&store, &[("res_main", 2000)]).await?;
 
@@ -3138,7 +3140,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_falls_back_to_other_resources() -> anyhow::Result<()> {
         let store = test_store().await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         create_resources(&store, &[("res_main", 220), ("res_other", 500)]).await?;
 
@@ -3258,7 +3260,7 @@ mod fs_store_tests {
     use std::fs;
     use std::path::Path;
     use thoosa_shared::{TensorIdSliceIdx, cdt_for_dir};
-    use thoosa_shared::run_configs::RUN_ID;
+
     use super::MotifsStore;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3268,7 +3270,7 @@ mod fs_store_tests {
         fs::create_dir_all(&test_dir)?;
 
         let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
 
@@ -3304,7 +3306,7 @@ mod fs_store_tests {
         fs::create_dir_all(&test_dir)?;
 
         let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
 
@@ -3350,7 +3352,7 @@ mod fs_store_tests {
         fs::create_dir_all(&test_dir)?;
 
         let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
 
@@ -3393,7 +3395,7 @@ mod fs_store_tests {
         fs::create_dir_all(&test_dir)?;
 
         let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_ids = super::store_tests::init_test_store(&store).await?;
 
@@ -3433,7 +3435,7 @@ mod fs_store_tests {
         fs::create_dir_all(&test_dir)?;
 
         let store = super::store_tests::test_store_from_path(test_dir.join("main_store.db3")).await?;
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let _resource_ids = super::store_tests::init_test_store(&store).await?;
 

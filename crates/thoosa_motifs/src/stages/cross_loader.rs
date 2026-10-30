@@ -378,11 +378,11 @@ where
             let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
             for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
-                info!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?}");
+                debug!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?}");
 
                 GlobalCtx::global().cuda_activity_gate(1).expect("no gate").wait_if_paused().await?;
 
-                info!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?} waited");
+                debug!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?} waited");
 
                 let t_1 = match track_await!(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await {
                     Ok(v) => v,
@@ -390,12 +390,7 @@ where
                         let is_resetting = matches!(e,  ThoError::CudaBeingRecovered);
                         warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
 
-                        // if is_resetting {
-                        //     GlobalCtx::global().cuda_activity_gate(1).expect("no gate").wait_if_paused().await?;
-                        //     continue 'inner;
-                        // } else {
-                            return Err(e);
-                        // }
+                        return Err(e);
                     }
                 };
                 let t_1_len = t_1.size().dim_1();
@@ -1358,7 +1353,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::resource::{Resource, ResourceStats};
-    use thoosa_shared::run_configs::RUN_ID;
+
     use thoosa_common::runner::sync_stage::ConsumeResult;
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir};
     use thoosa_store::SqlStore;
@@ -1736,7 +1731,7 @@ mod tests {
         let ws = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir, WsConfigs::new(1, 1000, 32000))?));
         let store_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).store_path().to_path_buf());
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::from_path_(&store_path).await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()

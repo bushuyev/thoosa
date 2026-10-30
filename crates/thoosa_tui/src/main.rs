@@ -3735,7 +3735,7 @@ mod tests {
     use interprocess::local_socket::ListenerOptions;
     use thoosa_motifs::motifs_store::MockMotifsStore;
     use tokio::io::AsyncWriteExt;
-    use thoosa_shared::run_configs::RUN_ID;
+
 
     #[test]
     fn test_value_to_string_all_variants() {
@@ -3822,7 +3822,7 @@ mod tests {
     async fn test_apply_search_from_popup_filters_visible_rows() ->anyhow::Result<()>{
         // The TUI displays motif rows, so its test store must include the motif schema and trait boundary.
         let store: Arc<dyn MotifsStore> = Arc::new(SqlStore::in_mem_(vec![thoosa_store::create_tables, thoosa_motifs::motifs_store::create_motif_tables]).await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let alpha_run_config_id = store.save_run_config(None, "select_motifs", "first alpha", HashMap::new()).await.unwrap();
         let _beta_run_config_id = store.save_run_config(None, "train_motif_nets", "second beta", HashMap::new()).await.unwrap();

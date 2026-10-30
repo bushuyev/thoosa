@@ -1149,7 +1149,7 @@ mod tests {
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{RUN_ID, RunConfig, RunConfigId};
+    use thoosa_shared::run_configs::{RunConfig, RunConfigId};
     use thoosa_shared::test_utils::TestSignalKind;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_shared::traits::RunCtx;
@@ -1570,7 +1570,7 @@ mod tests {
             thoosa_store::create_tables,
             create_motif_tables
         ]).await?);
-        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+        store.bind_run(store.save_run("test".into()).await?)?;
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>> = Arc::new(RwLock::new(crate::motifs_ws::new_motifs_workspace(test_dir.clone(), WsConfigs::new(2, 1000, 32000))?));

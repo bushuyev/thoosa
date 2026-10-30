@@ -35,7 +35,11 @@ impl CpuStateCheckpoint {
 
 // Retain state owners and CUDA admission through cancellation and copy completion.
 pub(crate) async fn checkpoint_operation<T: Send + 'static>(device: usize, future: impl Future<Output = Result<T, ThoError>> + Send + 'static) -> Result<T, ThoError> {
-    let activity = GlobalCtx::global().cuda_activity_gate(device).map(|gate| thoosa_shared::CudaActivityScope::for_operation(&gate)).transpose()?;
+    checkpoint_operation_on(GlobalCtx::global().cuda_activity_gate(device), future).await
+}
+
+async fn checkpoint_operation_on<T: Send + 'static>(gate: Option<Arc<thoosa_shared::CudaActivityGate>>, future: impl Future<Output = Result<T, ThoError>> + Send + 'static) -> Result<T, ThoError> {
+    let activity = gate.map(|gate| thoosa_shared::CudaActivityScope::for_operation(&gate)).transpose()?;
     tokio::spawn(async move {
         match activity { Some(activity) => activity.run(future).await, None => future.await }
     }).await.context("checkpoint task failed")?
@@ -58,12 +62,12 @@ where
     St::Out: WorkerStageOutput + DeserializeOwned + 'static,
 {
     pub(crate) async fn save_cpu_checkpoint(self: Arc<Self>) -> Result<CpuStateCheckpoint, ThoError> {
-        checkpoint_operation(self.tho_device_idx, async move {
+        checkpoint_operation_on(Some(self.actor.activity_gate()), async move {
             let _execution = self.execution.write().await;
             let mut state = self.state.lock().await;
             // Training checkpoints belong to the owner-managed session, never a replacement endpoint.
             self.load_gpu_inner(self.tho_device_idx, self.worker_id, &mut state).await?;
-            let actor = GlobalCtx::global().cuda_actor(self.tho_device_idx);
+            let actor = &self.actor;
             let mut dump = actor.purge_stage_state(self.stage_id.clone(), self.endpoint_name.to_string(), self.worker_id).await?;
             let export = dump.export.take().ok_or_else(|| ThoError::new("checkpoint export lacks acknowledgement"))?;
             let checkpoint = CpuStateCheckpoint::from_dump(dump)?;
@@ -73,11 +77,10 @@ where
     }
 
     pub(crate) async fn restore_cpu_checkpoint(self: Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>) -> Result<(), ThoError> {
-        checkpoint_operation(self.tho_device_idx, async move {
+        checkpoint_operation_on(Some(self.actor.activity_gate()), async move {
             let _execution = self.execution.write().await;
             let mut state = self.state.lock().await;
-            let actor = GlobalCtx::global().cuda_actor(self.tho_device_idx);
-            let actor = (actor.as_ref() as &dyn Any).downcast_ref::<CudaIPCActorHandle>().ok_or_else(|| ThoError::new("checkpoint requires IPC actor"))?;
+            let actor = &self.actor;
             // Discard the failed module and any newer offload; restore matching
             // metadata before uploading tensors from the persistent checkpoint.
             actor.reset_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), checkpoint.info()?).await?;

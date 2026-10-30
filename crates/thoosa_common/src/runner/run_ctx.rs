@@ -27,13 +27,17 @@ type PurgeGpuClosure = Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + 
 #[derive(Default)]
 struct CacheAreaCleanup {
     closures: Mutex<Vec<PurgeGpuClosure>>,
+    purger: Option<Arc<crate::runner::purger::Purger>>,
 }
 
 impl Drop for CacheAreaCleanup {
     fn drop(&mut self) {
         let closures = std::mem::take(self.closures.get_mut());
         if !closures.is_empty() {
-            if let Err(error) = GlobalCtx::global().run_purge_gpu(closures) {
+            // Explicit sessions keep their cleanup owner alive through the last
+            // cache-area branch. The facade remains for legacy context callers.
+            let result = match &self.purger { Some(purger) => purger.run_purge_gpu(closures), None => GlobalCtx::global().run_purge_gpu(closures) };
+            if let Err(error) = result {
                 error!("cache-area cleanup submission failed: {error:?}");
             }
         }
@@ -52,6 +56,7 @@ pub struct RunCtxImpl {
 
     purge_gpu_closures:Option<SharedPurgeGpuClosures>,
     pending_purge_gpu_closures: Vec<PurgeGpuClosure>,
+    residency: Option<Arc<crate::runner::global_ctx::ResidencyService>>,
     branches:AtomicU32//for unique branch ids, never decreased
 }
 
@@ -74,6 +79,17 @@ impl WithId for RunCtxImpl {
 }
 
 impl RunCtxImpl {
+    pub fn new_in(runtime: &crate::runner::global_ctx::Runtime, device: usize, name: &str) -> Self {
+        let mut ctx = Self::new(device, name);
+        ctx.set_residency(runtime.residency());
+        ctx
+    }
+
+    fn set_residency(&mut self, residency: Arc<crate::runner::global_ctx::ResidencyService>) {
+        self.purge_gpu_closures = Some(Arc::new(CacheAreaCleanup { closures: Mutex::new(vec![]), purger: Some(residency.cleanup()) }));
+        self.residency = Some(residency);
+    }
+
     pub fn new(tho_device_idx: usize, _id: &str,) -> Self {
 
         // mono_key only retains the diagnostic name in debug builds.
@@ -92,6 +108,7 @@ impl RunCtxImpl {
             purge_gpu_closures: Some(Arc::new(CacheAreaCleanup::default())),
             pending_purge_gpu_closures: vec![],
             max_other_parallel: MAX_PARALLEL,
+            residency: None,
             branches: AtomicU32::new(0)
         }
     }
@@ -129,7 +146,8 @@ impl RunCtx for RunCtxImpl {
 
         let mut branched_ctx= if with_new_cache_area {
 
-            let branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
+            if let Some(residency) = &self.residency { branched_ctx.set_residency(Arc::clone(residency)); }
 
             debug!("RunCtxImpl::branch: branch_name={:?}", branched_ctx.id);
 
@@ -139,6 +157,7 @@ impl RunCtx for RunCtxImpl {
         } else {
             let mut branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
 
+            branched_ctx.residency = self.residency.clone();
             branched_ctx.purge_gpu_closures = self.purge_gpu_closures.as_ref().map(|v| Arc::clone(v));
 
             branched_ctx
