@@ -100,6 +100,8 @@ impl ThoCudaContext {
     #[allow(dead_code)]
     ///synchronizes device   (cuCtxSynchronize), use stream.synchronize
     pub fn synchronize(&self) -> Result<(), ThoError> {
+        // Synchronize this context even when the caller last selected another device.
+        self.bind_to_thread()?;
         unsafe { check_cuda_status(tho_cu_ctx_synchronize(), "cuCtxSynchronize") }
     }
 
