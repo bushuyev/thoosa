@@ -1480,7 +1480,7 @@ where
     C: RunCtx + 'static,
 {
     find_motifs_run_config_id: RunConfigId,
-    channel_trackers: Vec<Arc<RwLock<SimpleMotifTracker<'static>>>>,
+    channel_trackers: Vec<Arc<RwLock<SimpleMotifTracker>>>,
     store: Arc<dyn MotifsStore>,
     _ctx: PhantomData<C>,
 }
