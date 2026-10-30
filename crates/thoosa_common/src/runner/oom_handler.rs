@@ -1148,7 +1148,7 @@ where
         let input = self.input.take().expect("ConsumeRunnerRetryAdapter::run: missing input");
         let runner = &self.runner;
 
-        let run_result = match track_await!(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO why not panic_to_err_async?
+        let run_result = match track_await!(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO use panic_to_err_async?
             runner(task, input, selector, device_idx, run_ctx, retry)
         }))).await
         {
@@ -1894,8 +1894,8 @@ mod tests {
                 _ = received => {}
             }
             let executor = super::oom_executor(1);
-            let ticket = executor.request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
-            assert!(matches!(run.await.unwrap_err().what(), ThoError::ContextReset));
+            let ticket = executor.request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
+            assert!(matches!(run.await.unwrap_err().what(), ThoError::CudaBeingRecovered));
             executor.cuda_gate().unwrap().wait_for_pause_to_finish(ticket).await.unwrap();
             executor.submit(0, async { Ok(()) }, None).await.unwrap();
         }).await.expect("an old OOM chain must unwind instead of surviving recovery");

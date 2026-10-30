@@ -1,4 +1,4 @@
-use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::CachePurger;
 use log::{debug, error, info, warn};
 #[allow(unused_imports)]
 use mockall::automock;
@@ -80,7 +80,7 @@ impl CacheKey {
 struct CacheRegistryEntry {
     name: Arc<str>,
     map: Option<Arc<dyn Any + Send + Sync>>,
-    purger: Arc<dyn FuturesRunnerMapPurger>,
+    purger: Arc<dyn CachePurger>,
     gate: Arc<AsyncRwLock<()>>,
 }
 
@@ -319,11 +319,11 @@ impl GlobalCtx {
 
     #[cfg(test)]
     pub async fn restart_cuda_device(&self, device: usize) -> Result<(), ThoError> {
-        let ticket = self.get_runner(device).request_cuda_reset(ThoError::ContextReset)?;
+        let ticket = self.get_runner(device).request_cuda_reset(ThoError::CudaBeingRecovered)?;
         // Admitted callers must release their activity before the independent
         // coordinator can drain. Waiting here would wait on the caller itself.
         if thoosa_shared::CudaActivityScope::current().is_some() {
-            return Err(ThoError::ContextReset);
+            return Err(ThoError::CudaBeingRecovered);
         }
         if let Some(ticket) = ticket {
             self.get_runner(device).cuda_gate().expect("CUDA device").wait_for_pause_to_finish(ticket).await?;
@@ -362,7 +362,7 @@ impl GlobalCtx {
         Arc::clone(&self.caches)
     }
 
-    pub fn register_cache(&self, cache: (String, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {//TODO rename DataPurger?
+    pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle {
         debug!("GlobalCtx::register_cache: cache={}", cache.0);
         let cache_type = cache.1.type_name();
         let name: Arc<str> = cache.0.into();
@@ -1116,13 +1116,13 @@ mod tests {
     use crate::ws::mock_ws_simp;
 
     use thoosa_shared::comp_id::SynKey;
-    use crate::runner::purge::FuturesRunnerMapPurger;
+    use crate::runner::purge::CachePurger;
 
     mockall::mock! {
         #[derive(Debug)]
         ResetPurger {}
         #[async_trait::async_trait]
-        impl FuturesRunnerMapPurger for ResetPurger {
+        impl CachePurger for ResetPurger {
             async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError>;
         }
     }
@@ -1412,7 +1412,7 @@ mod tests {
         for device in 1..3 {
             assert!(Arc::ptr_eq(&mock.cuda_activity_gate(device).unwrap(), mock.get_runner(device).cuda_gate().unwrap()));
         }
-        let ticket = mock.get_runner(1).request_cuda_reset(ThoError::ContextReset).unwrap().unwrap();
+        let ticket = mock.get_runner(1).request_cuda_reset(ThoError::CudaBeingRecovered).unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(2), first.wait_for_pause_to_finish(ticket)).await.unwrap().unwrap();
         assert_eq!(first.device_generation().0, 1);
         assert_eq!(second.device_generation().0, 0);

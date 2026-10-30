@@ -47,7 +47,7 @@ use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use thoosa_common::ipc::worker_msg::WorkerInput;
 #[cfg(test)]
 use thoosa_common::ipc::wraps::WorkerWrapperWithState;
-use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::runner::purge::CachePurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
@@ -160,7 +160,7 @@ where
             } else {
                 Arc::new(DynSyncStageWithStateEnum::Local(Arc::new(Self::new_local(init)?)))
             };
-            let _registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn FuturesRunnerMapPurger>));
+            let _registration = GlobalCtx::global().register_cache((stage.stage_id(), Arc::clone(&stage) as Arc<dyn CachePurger>));
 
             Ok(stage)
 
@@ -767,7 +767,7 @@ where
 }
 
 #[async_trait]
-impl <C> FuturesRunnerMapPurger for SyncFreqFilter<C>
+impl <C> CachePurger for SyncFreqFilter<C>
 where
     C:RunCtx,
     Self:Send + Sync

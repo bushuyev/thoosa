@@ -58,7 +58,7 @@ impl PendingRequests {
         request.worker_id.check(self.worker)?;
         let mut state = self.state.lock();
         if state.exited {
-            return Err(ThoError::ContextReset);
+            return Err(ThoError::CudaBeingRecovered);
         }
         if !shutdown && let Some(error) = &state.closed { return Err(error.clone()); }
         if state.requests.contains_key(&request.request_id) { return Err(ThoError::new("duplicate worker request identity")); }
@@ -73,7 +73,7 @@ impl PendingRequests {
 
     pub fn retain_until_reply(&self, id: u64, owner: KeepAlive) -> Result<(), ThoError> {
         let mut state = self.state.lock();
-        let request = state.requests.get_mut(&id).ok_or(ThoError::ContextReset)?;
+        let request = state.requests.get_mut(&id).ok_or(ThoError::CudaBeingRecovered)?;
         // Serialization must not drop invocation tensor references while the
         // worker is still reading them. Preserve any existing copy allocation too.
         request.keepalive = Some(Box::new((request.keepalive.take(), owner)));
@@ -81,12 +81,12 @@ impl PendingRequests {
     }
 
     pub fn transport_failed(&self, error: ThoError) {
-        self.close(ThoError::ContextReset.context(format!("worker transport failed: {error}")));
+        self.close(ThoError::CudaBeingRecovered.context(format!("worker transport failed: {error}")));
         self.failed.cancel();
     }
 
     pub fn failure(&self) -> ThoError {
-        self.state.lock().closed.clone().unwrap_or(ThoError::ContextReset)
+        self.state.lock().closed.clone().unwrap_or(ThoError::CudaBeingRecovered)
     }
 
     pub fn complete(&self, response: CudaWorkerMsgOut) -> Result<(), ThoError> {
@@ -167,12 +167,12 @@ mod tests {
         rx.recv().await.unwrap();
         drop(response);
         let reserved = tx.reserve().await.unwrap();
-        pending.close(ThoError::ContextReset);
+        pending.close(ThoError::CudaBeingRecovered);
         let (reply, _) = oneshot::channel();
         assert!(pending.enqueue(reserved, CudaWorkerMsgIn::new(worker(), 2, Operation::Debug), reply, None, false).is_err());
         assert!(rx.try_recv().is_err());
         assert!(weak.upgrade().is_some(), "cancelled callers cannot free worker storage");
-        pending.exited(ThoError::ContextReset);
+        pending.exited(ThoError::CudaBeingRecovered);
         assert!(weak.upgrade().is_none());
     }
 
@@ -195,7 +195,7 @@ mod tests {
             if transport_failure {
                 pending.transport_failed(ThoError::new("socket closed"));
                 assert!(storage_weak.upgrade().is_some() && request_weak.upgrade().is_some());
-                pending.exited(ThoError::ContextReset);
+                pending.exited(ThoError::CudaBeingRecovered);
             } else {
                 pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: OpResult::Ok(None) }).unwrap();
             }
@@ -217,7 +217,7 @@ mod tests {
         assert!(pending.failed.is_cancelled());
         assert!(pending.failure().needs_cuda_restart());
         assert!(weak.upgrade().is_some());
-        pending.exited(ThoError::ContextReset);
+        pending.exited(ThoError::CudaBeingRecovered);
         assert!(weak.upgrade().is_none());
     }
 
@@ -237,7 +237,7 @@ mod tests {
         assert!(pending.failed.is_cancelled());
         assert!(pending.failure().is_cuda_recovery_failed() && !pending.failure().needs_cuda_restart());
         assert!(weak.upgrade().is_some());
-        pending.exited(ThoError::ContextReset);
+        pending.exited(ThoError::CudaBeingRecovered);
         assert!(weak.upgrade().is_none());
     }
 
@@ -249,10 +249,10 @@ mod tests {
         let weak = Arc::downgrade(&storage);
         let (reply, response) = oneshot::channel();
         pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker(), 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
-        pending.quarantine(ThoError::ContextReset);
+        pending.quarantine(ThoError::CudaBeingRecovered);
         assert!(response.await.unwrap().is_err());
         assert!(weak.upgrade().is_some());
-        pending.exited(ThoError::ContextReset);
+        pending.exited(ThoError::CudaBeingRecovered);
         assert!(weak.upgrade().is_none());
     }
 }

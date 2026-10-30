@@ -22,7 +22,7 @@ use thoosa_common::nets::nodes::LossFp;
 use thoosa_common::nets::tho_varstore::ThoTrainModule;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::purge::FuturesRunnerMapPurger;
+use thoosa_common::runner::purge::CachePurger;
 use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
@@ -74,7 +74,7 @@ where
 
 // Auto traits also check the captured input transform, rather than bypassing its bounds.
 #[async_trait]
-impl <F, DI, DO, C> FuturesRunnerMapPurger for TrainStep<F, DI, DO, C>
+impl <F, DI, DO, C> CachePurger for TrainStep<F, DI, DO, C>
 where
     DI:Dims,
     DO:Dims,

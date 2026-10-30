@@ -2,7 +2,7 @@ use crate::copy_ctx::{HandleCtx, run_cuda_stage};
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::worker_msg::WorkerInput;
-use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::CachePurger;
 use crate::tho_device::ThoDevice;
 use futures_util::{FutureExt};
 use futures_util::future::BoxFuture;
@@ -167,7 +167,7 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
@@ -183,7 +183,7 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
@@ -206,7 +206,7 @@ where
 impl <Co, St, I, O>SyncStageIpcWrapper for WorkerWrapperWithState<Co, St, I, O>
 where
     Co: IpcCodec,
-    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
@@ -238,7 +238,7 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + FuturesRunnerMapPurger + Debug + Send + Sync + 'static,
+    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,

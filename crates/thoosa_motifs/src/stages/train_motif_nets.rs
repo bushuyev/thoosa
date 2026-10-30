@@ -27,7 +27,7 @@ use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, Pro
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
+use thoosa_common::runner::oom_handler::{run_ctx_adjuster, Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_shared::traits::MaxParallelCtx;
 
@@ -52,6 +52,7 @@ use thoosa_common::nets::common_nets::{OptConfig, StftRunConfig};
 use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::resources::SavableResult;
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
@@ -1244,7 +1245,7 @@ where
         if !matches!(motif_size.len(), 2 | 3) {
             return Err(ThoError::new(format!("SplitMotifIntoTrainValid: unsupported motif tensor rank={} size={motif_size:?}", motif_size.len())));
         }
-        let num_validation_slices = ((num_motif_slices as f32 * 0.2) as i64).max(1);
+        let num_validation_slices = ((num_motif_slices as f32 * 0.2) as i64).max(1);//TODO config
         let split = num_motif_slices - num_validation_slices;
         debug!("SplitMotifIntoTrainValid::do_run: id={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", input.id);
 
@@ -1255,8 +1256,8 @@ where
 
         Ok(SplitMotifIntoTrainValidOutput {
             id: input.id.clone(),
-            train_motifs: ThoTensor::new(SynKey::new([mono_key!("train_motifs", "split")]), train_motifs)?,
-            valid_motifs: ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?,
+            train_motifs: ThoTensor::new(input.motif.motif().id() + mono_key!("train_motifs", "split"), train_motifs)?,
+            valid_motifs: ThoTensor::new(input.motif.motif().id() + mono_key!("valid_motifs", "split"), valid_motifs)?,
             num_motif_slices: u32::try_from(num_motif_slices).context("SplitMotifIntoTrainValid: invalid motif slice count")?,
         })
     }
@@ -1328,8 +1329,17 @@ where
 
         debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
         let input = Arc::new(SyncMotifBatchInputWrapper::new(motif_id.clone(), motifs, random_slices, num_slices, descr.to_string()));
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-        let output = track_await!(oom_handler.run(&self.sync_motif_batch, input, ctx.branch(false), NoContexts)).await?;
+
+
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
+            Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
+        ], None);
+        let output = track_await!(oom_handler.run(
+            &self.sync_motif_batch,
+            input,
+            ctx.branch(false),
+            WithRunCtxContext::new(MaxParallelAdjustContextImpl::new())
+        )).await?;
         Ok(output.into_parts())
     }
 
@@ -1505,14 +1515,14 @@ mod tests {
         let store = MockMotifsStoreBuilder::new()
             .with_list_selected_motifs([(vec![2], Ok(HashMap::from([(2, vec![vec![(10, 1.0), (11, 1.0)]])])) )])
             .with_list_output_run_config_ids([(2, Ok(vec![]))])
-            .with_list_motif_slices(10, Some(vec![2]), None, None, Err(ThoError::ContextReset))
-            .with_list_motif_slices(11, Some(vec![2]), None, None, Err(ThoError::ContextReset))
+            .with_list_motif_slices(10, Some(vec![2]), None, None, Err(ThoError::CudaBeingRecovered))
+            .with_list_motif_slices(11, Some(vec![2]), None, None, Err(ThoError::CudaBeingRecovered))
             .build();
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
         let stage = Arc::new(TrainMotifNets::new(loader, &ws, &store, cosine_net_run_configs(), 10, None).await?);
         let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![2] }, Arc::new(OptConfig::new(3, 2)), None);
         let error = stage.run(input, mock_run_ctx::default(1)).await.unwrap_err();
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         Ok(())
     }
 

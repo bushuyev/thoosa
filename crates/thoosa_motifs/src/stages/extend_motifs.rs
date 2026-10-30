@@ -414,7 +414,7 @@ where
         motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
         resources: Arc<Vec<Resource>>,
         channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>>,
-        max_batch: i64, //TODO rename max chunk size
+        max_chunk_size: i64,
         _total_size: usize,
         mut ctx: C,
     ) -> Result<(), ThoError> {
@@ -434,7 +434,7 @@ where
             t_1_batch.push(t_0);
             t_1_batch_resources.push(resource_0.clone());
 
-            if t_1_batch_dim_0_size < max_batch && i_0 < num_resources - 1 {
+            if t_1_batch_dim_0_size < max_chunk_size && i_0 < num_resources - 1 {
                 continue;
             }
 

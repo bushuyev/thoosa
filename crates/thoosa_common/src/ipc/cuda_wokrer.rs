@@ -1302,7 +1302,7 @@ mod generation_tests {
         ] {
             let stale: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, worker_id);
             for consume in [false, true] {
-                assert!(matches!(stale.ref_to_tensor(&tensors, consume).unwrap_err().what(), ThoError::ContextReset));
+                assert!(matches!(stale.ref_to_tensor(&tensors, consume).unwrap_err().what(), ThoError::CudaBeingRecovered));
                 assert!(tensors.tensors.lock().contains_key(&42), "stale consume must not remove the replacement tensor");
             }
         }

@@ -157,7 +157,7 @@ where
 // for the requested metric/aggr and then used to build a threshold mask in ClcResourcesMotifsDist matches.
 // Finally, each motif is scored by configured criteria and kept only if every configured criterion
 // satisfies its own minimum threshold.
-pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
+pub struct SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,

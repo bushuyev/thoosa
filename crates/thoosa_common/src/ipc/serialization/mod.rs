@@ -4,7 +4,7 @@ pub mod json;
 use serde::{Deserialize, Serialize};
 
 
-pub trait ToFromBytes { //TODO rename
+pub trait ToFromBytes {
     fn to_bytes<T>(value: &T) -> anyhow::Result<Vec<u8>>
     where
         T: Serialize + ?Sized;

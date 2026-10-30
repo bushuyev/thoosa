@@ -296,7 +296,7 @@ mod tests {
         let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
         let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("maintenance must not run after a fatal report")), None, Some(Arc::new(move |failure| { failure_tx.send(failure).unwrap(); })));
         let (_held, pending) = oneshot::channel();
-        let ticket = coordinator.request(gate.device_generation(), ThoError::ContextReset, || Ok(pending)).unwrap().unwrap();
+        let ticket = coordinator.request(gate.device_generation(), ThoError::CudaBeingRecovered, || Ok(pending)).unwrap().unwrap();
         let error = coordinator.request(gate.device_generation(), fatal(), drained).unwrap_err();
         assert!(error.is_cuda_recovery_failed());
         assert!(failure_rx.recv().await.unwrap().is_cuda_recovery_failed());
@@ -312,7 +312,7 @@ mod tests {
     async fn test_local_maintenance_still_rebuilds_and_failed_retirement_stays_closed() {
         let gate = Arc::new(CudaActivityGate::new(1));
         let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| Box::pin(async { Ok(()) })), None, Some(Arc::new(|_| panic!("healthy maintenance cannot fail the process"))));
-        let ticket = coordinator.request(gate.device_generation(), ThoError::ContextReset, drained).unwrap().unwrap();
+        let ticket = coordinator.request(gate.device_generation(), ThoError::CudaBeingRecovered, drained).unwrap().unwrap();
         gate.wait_for_pause_to_finish(ticket).await.unwrap();
         let mut coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("cannot reload an unreaped worker")), Some(Arc::new(|_, _| Box::pin(async { Err(ThoError::new("reap failed")) }))), None);
         Arc::get_mut(&mut coordinator).unwrap().drain_timeout = Duration::from_millis(10);

@@ -305,11 +305,11 @@ impl<O: Clone> Future for CachedFuture<O> {
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         if self.invalidated.load(Ordering::Acquire) {
-            return std::task::Poll::Ready(Err(ThoError::ContextReset));
+            return std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered));
         }
         let result = std::pin::Pin::new(&mut self.inner).poll(cx);
         if self.invalidated.load(Ordering::Acquire) {
-            std::task::Poll::Ready(Err(ThoError::ContextReset))
+            std::task::Poll::Ready(Err(ThoError::CudaBeingRecovered))
         } else { result }
     }
 }

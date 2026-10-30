@@ -84,11 +84,11 @@ impl CudaActivityScope {
             return Err(ThoError::CudaRecoveryFailed(Arc::clone(failure)));
         }
         if state.generation != lease.generation {
-            return Err(ThoError::ContextReset);
+            return Err(ThoError::CudaBeingRecovered);
         }
         if let Some(ticket) = lease.reset {
             if !matches!(state.recovery, CudaRecoveryState::Recovering { .. }) || state.cycle != ticket.cycle {
-                return Err(ThoError::ContextReset);
+                return Err(ThoError::CudaBeingRecovered);
             }
         }
         Ok(())
@@ -123,7 +123,7 @@ impl CudaActivityScope {
             return Ok(scope.clone());
         }
         Self::try_enter(gate)?.map(|scope| scope.with_inherited(inherited)).ok_or_else(|| {
-            ThoError::new_with_cause("CUDA operation interrupted by context reset", ThoError::ContextReset)
+            ThoError::new_with_cause("CUDA operation interrupted by context reset", ThoError::CudaBeingRecovered)
         })
     }
 
@@ -160,11 +160,11 @@ mod tests {
         let permit = tx.try_reserve().unwrap();
         let job = Box::new(42);
         let address = job.as_ref() as *const i32;
-        let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+        let pause = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         assert!(rx.try_recv().is_err()); // Reset has already drained this queue.
 
         let (rejected, error) = gate.try_enqueue(permit, job).unwrap_err();
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         assert_eq!(rejected.as_ref() as *const i32, address, "rejection must retain the original job");
         assert!(rx.try_recv().is_err());
         assert_eq!(tx.capacity(), 1, "rejection must release the reserved channel slot");
@@ -193,13 +193,13 @@ mod tests {
                     }
                 });
                 start.wait();
-                let pause = gate.request_pause(ThoError::ContextReset).unwrap();
+                let pause = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
                 let purged = rx.try_recv().ok();
                 match enqueue.join().unwrap() {
                     Ok(()) => assert_eq!(purged, Some(42)),
                     Err((job, error)) => {
                         assert_eq!(job, 42);
-                        assert!(matches!(error.what(), ThoError::ContextReset));
+                        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
                         assert_eq!(purged, None);
                     }
                 }
@@ -214,14 +214,14 @@ mod tests {
         let gate = CudaActivityGate::new(1);
         let (tx, mut rx) = mpsc::channel(1);
         gate.try_enqueue(tx.try_reserve().unwrap(), 1).unwrap();
-        let first = gate.request_pause(ThoError::ContextReset).unwrap();
+        let first = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         assert_eq!(rx.try_recv().unwrap(), 1, "jobs accepted before pause remain visible to purge");
         gate.finish_pause(first);
-        let second = gate.request_pause(ThoError::ContextReset).unwrap();
+        let second = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
         gate.finish_pause(first);
         let (job, error) = gate.try_enqueue(tx.try_reserve().unwrap(), 2).unwrap_err();
         assert_eq!(job, 2);
-        assert!(matches!(error.what(), ThoError::ContextReset));
+        assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
         gate.finish_pause(second);
         gate.try_enqueue(tx.try_reserve().unwrap(), 3).unwrap();
         assert_eq!(rx.try_recv().unwrap(), 3);
@@ -271,7 +271,7 @@ mod tests {
         assert!(matches!(gate.recovery_state(), CudaRecoveryState::Failed(_)));
         assert!(gate.is_paused() && !gate.is_recovering());
         assert_eq!(gate.device_generation(), CudaDeviceGeneration(0));
-        assert!(gate.request_pause(ThoError::ContextReset).unwrap_err().is_cuda_recovery_failed());
+        assert!(gate.request_pause(ThoError::CudaBeingRecovered).unwrap_err().is_cuda_recovery_failed());
         assert!(gate.wait_until_paused().await.unwrap_err().is_cuda_recovery_failed());
         let (tx, mut rx) = mpsc::channel(1);
         let (job, error) = gate.try_enqueue(tx.try_reserve().unwrap(), 42).unwrap_err();
@@ -377,7 +377,7 @@ mod tests {
         gate.finish_pause(ticket);
         let next = gate.request_pause(original_failure()).unwrap();
         escaped.run(async {
-            assert!(matches!(CudaActivityScope::for_operation(&gate).unwrap_err().what(), ThoError::ContextReset));
+            assert!(matches!(CudaActivityScope::for_operation(&gate).unwrap_err().what(), ThoError::CudaBeingRecovered));
         }).await;
         gate.finish_pause(next);
     }
