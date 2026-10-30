@@ -92,16 +92,8 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=LIBTORCH");
 
-    rerun_if_changed("src-cpp/CMakeLists.txt");
-    rerun_if_changed("src-cpp/stream.cpp");
-    rerun_if_changed("src-cpp/memcpy.cpp");
-    rerun_if_changed("src-cpp/context.cpp");
-    rerun_if_changed("src-cpp/device_stats.cpp");
-    rerun_if_changed("src-cpp/errors.cpp");
-    rerun_if_changed("src-cpp/errors.h");
-    rerun_if_changed("src-cpp/optimizers.cpp");
-    rerun_if_changed("src-cpp/optimizers.h");
-    rerun_if_changed("src-cpp/shared_arena_allocator.cpp");
+    // Watch every native source and header, including newly added files.
+    rerun_if_changed("src-cpp");
 }
 
 fn copy_file(src: impl AsRef<Path>, dst: impl AsRef<Path>) {
