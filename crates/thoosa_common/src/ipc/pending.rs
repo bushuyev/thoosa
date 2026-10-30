@@ -211,7 +211,8 @@ mod tests {
         let weak = Arc::downgrade(&storage);
         let (reply, response) = oneshot::channel();
         pending.enqueue(tx.reserve().await.unwrap(), CudaWorkerMsgIn::new(worker(), 1, Operation::Debug), reply, Some(Box::new(storage)), false).unwrap();
-        pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: ThoError::Cuda { action: CudaAction::NeedsRestart, msg: "failed synchronization".into() }.into() }).unwrap();
+        // Use the constructor so injected CUDA errors capture their backtrace.
+        pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "failed synchronization".into()).into() }).unwrap();
         assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
         assert!(pending.failed.is_cancelled());
         assert!(pending.failure().needs_cuda_restart());

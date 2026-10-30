@@ -1082,7 +1082,8 @@ mod tests {
     }
 
     fn fatal_consume_error() -> ThoError {
-        ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "consume stream illegal address".into() }
+        // Use the constructor so injected CUDA errors capture their backtrace.
+        thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::NeedsRestart, "consume stream illegal address".into())
     }
 
     #[tokio::test]
@@ -1226,7 +1227,7 @@ mod tests {
         let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         for selected in [false, true] {
             for fatal_sync in [false, true] {
-                let fatal = || ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "illegal address".into() };
+                let fatal = || thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::NeedsRestart, "illegal address".into());
                 let (execution, sync) = if fatal_sync { (Ok(TestOutput::new(1.)), Err(fatal())) } else { (Err(fatal()), Err(ThoError::oom())) };
                 let (stage, _) = mock_runnable::build([execution]);
                 let actor = MockCudaActorHandleBuilder { sync_result: sync }.build();

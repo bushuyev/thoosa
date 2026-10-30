@@ -1619,10 +1619,8 @@ mod tests {
     fn needs_restart_error() -> ThoError {
         ThoError::new_with_cause(
             "needs restart",
-            ThoError::Cuda {
-                action: CudaAction::NeedsRestart,
-                msg: "reset me".into(),
-            },
+            // Use the constructor so injected CUDA errors capture their backtrace.
+            thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "reset me".into()),
         )
     }
 

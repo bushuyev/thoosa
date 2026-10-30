@@ -762,7 +762,8 @@ use crate::tch_error::tch_result;
             let calls = Arc::new(AtomicUsize::new(0));
             let attempts = Arc::clone(&calls);
             let failure = ThoError::CudaRecoveryFailed(Arc::new(thoosa_shared::CudaRecoveryFailure {
-                original: ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "original worker failure".into() },
+                // Use the constructor so injected CUDA errors capture their backtrace.
+                original: thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::NeedsRestart, "original worker failure".into()),
                 recovery: Some(ThoError::new("replacement failed")),
             }));
             let error: ThoError = opt_train(

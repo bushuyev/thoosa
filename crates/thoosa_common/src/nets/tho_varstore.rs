@@ -23,7 +23,7 @@ use tch::nn::{Optimizer, OptimizerConfig, VarStore};
 use tch::{Device, Tensor, nn, no_grad};
 #[cfg(test)]
 use tch::Kind;
-use thoosa_shared::{MoveToDevice, ThoError, panic_to_err};
+use thoosa_shared::{panic_to_err, tho_error, MoveToDevice, ThoError};
 use thoosa_shims::stream::ThoCudaStream;
 use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamParamStateSnapshot, AdamWOptimizerSnapshot, SgdGroupSnapshot, SgdOptimizerSnapshot, SgdParamStateSnapshot, adam_snapshot, adam_w_snapshot, restore_adam_snapshot, restore_adam_w_snapshot, restore_sgd_snapshot, sgd_snapshot};
 use tokio::task::JoinSet;
@@ -442,8 +442,11 @@ where
         // Preserve allocation failures exposed as panics by tch without allowing
         // the generic executor to replay a batch against mutated training state.
         let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {
-            ThoError::from(anyhow::Error::new(cause).context(ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, msg: "training allocation failed".into() }))
-        } else { cause };
+            ThoError::from(anyhow::Error::new(cause).context(tho_error::cuda_error(thoosa_shared::CudaAction::HandleOOM, "training allocation failed".into())))
+
+        } else {
+            cause
+        };
         ThoError::TrainingSessionFailed(Arc::new(thoosa_shared::TrainingSessionFailure { original: cause, recovery: None }))
     }
 

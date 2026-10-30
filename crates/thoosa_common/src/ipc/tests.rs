@@ -246,7 +246,8 @@ mod tests {
             let value = tch_result(input.t_ref().f_double_value(&[0, 0]))?;
             // Exercise a fatal worker reply without poisoning the test GPU.
             if value == -2.0 {
-                return Err(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "injected fatal worker error".into() });
+                // Use the constructor so injected CUDA errors capture their backtrace.
+                return Err(thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::NeedsRestart, "injected fatal worker error".into()));
             }
             if value < 0.0 {
                 return Err(ThoError::new("consume test failure"));

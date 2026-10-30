@@ -419,23 +419,38 @@ pub enum DataErrorKind {
     // The stage still does not fit into GPU memory after all OOM adjustments; callers must opt in to skipping it.
     OOMHandlingFailed,
 }
+pub mod tho_error {
 
-// Only failures that affect application control flow have dedicated variants.
-#[derive(Debug, Clone)]
-pub enum ThoError {
-    Data { kind: DataErrorKind, msg: String },
-    Cuda { action: CudaAction, msg: String },
-    CudaRecoveryFailed(Arc<CudaRecoveryFailure>),//TODO rename to GpuRestartFailed
-    TrainingSessionFailed(Arc<TrainingSessionFailure>),
-    AdjusterFailed,
-    // Shared futures require Clone; sharing keeps the original source and backtrace intact.
-    Anyhow(Arc<anyhow::Error>),
-    NotFound(Option<String>),
-    // Missing execution infrastructure cannot be treated as an incompatible data item.
-    MissingEndpoint(String),
-    SyncStageRunner(SyncStageRunnerError),
-    ContextReset,// TODO rename to GpuBeingRestarted. It's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
+    use std::sync::Arc;
+    use crate::{backtrace_head_lines, CudaAction, CudaRecoveryFailure, DataErrorKind, SyncStageRunnerError, TrainingSessionFailure};
+
+    // Only failures that affect application control flow have dedicated variants.
+    #[derive(Debug, Clone)]
+    pub enum ThoError {
+        Data { kind: DataErrorKind, msg: String },
+        Cuda { action: CudaAction, msg: String, backtrace:String /*TODO add tho_debug value to enable */ },
+        CudaRecoveryFailed(Arc<CudaRecoveryFailure>), //TODO rename to GpuRestartFailed
+        TrainingSessionFailed(Arc<TrainingSessionFailure>),
+        AdjusterFailed,
+        // Shared futures require Clone; sharing keeps the original source and backtrace intact.
+        Anyhow(Arc<anyhow::Error>),
+        NotFound(Option<String>),
+        // Missing execution infrastructure cannot be treated as an incompatible data item.
+        MissingEndpoint(String),
+        SyncStageRunner(SyncStageRunnerError),
+        ContextReset, // TODO rename to GpuBeingRestarted. It's appeared impossible to implement ContextReset properly. This error duplicates CudaRecoveryFailed - error happened during CudaWOrker restart
+    }
+
+    pub fn cuda_error(action: CudaAction, msg: String) -> ThoError {
+        ThoError::Cuda {
+            action,
+            msg,
+            backtrace: backtrace_head_lines(10)
+        }
+    }
 }
+
+pub use tho_error::ThoError;
 
 /// Keep both failures typed: terminal recovery must not be classified as another
 /// restart request or an OOM just because its original cause was one.
@@ -486,7 +501,7 @@ impl From<SyncStageRunnerError> for ThoError {
 impl Display for ThoError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Cuda { action, msg } => write!(f, "CUDA {action:?}: {msg}"),
+            Self::Cuda { action, msg, backtrace } => write!(f, "CUDA {action:?}: {msg}\n{backtrace}"),
             Self::CudaRecoveryFailed(failure) => {
                 write!(f, "CUDA recovery failed; original error: {:#}", failure.original)?;
                 if let Some(error) = &failure.recovery {
@@ -553,7 +568,7 @@ impl ThoError {
 
     // for injecting recoverable failures in stage and runner tests.
     pub fn oom() -> Self {
-        Self::Cuda { action: CudaAction::HandleOOM, msg: "out of memory".into() }
+        Self::Cuda { action: CudaAction::HandleOOM, msg: "out of memory".into(), backtrace: "".to_string() }
     }
 
     pub fn is_oom(&self) -> bool {
@@ -693,7 +708,7 @@ impl From<anyhow::Error> for ThoError {
 }
 
 fn cuda_cause(action: CudaAction, msg: impl Into<String>) -> ThoError {
-    ThoError::Cuda { action, msg: msg.into() }
+    tho_error::cuda_error(action, msg.into())
 }
 
 pub fn last_trace_line(backtrace: &Backtrace) -> Option<String> {

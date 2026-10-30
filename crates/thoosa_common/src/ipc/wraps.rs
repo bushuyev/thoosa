@@ -472,7 +472,8 @@ mod tests {
                     let mut handle = MockHandleCtx::new();
                     handle.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
                     handle.expect_on_after_run().times(1).return_once(move || {
-                        if fatal_sync { Err(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "stateless sync failure".into() }) } else { Ok(()) }
+                        // Use the constructor so injected CUDA errors capture their backtrace.
+                        if fatal_sync { Err(thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::NeedsRestart, "stateless sync failure".into())) } else { Ok(()) }
                     });
                     // Exercise the actual worker dispatch boundary for both
                     // borrowed and consuming endpoints, without CUDA timing.
@@ -503,7 +504,7 @@ mod tests {
                     // This is the execution body used by the erased IPC wrapper;
                     // a real mutex detects an early unlock even after failure.
                     assert!(during_sync.try_lock().is_err(), "worker state unlocked before stream synchronization");
-                    if sync_fails { Err(ThoError::Cuda { action: thoosa_shared::CudaAction::NeedsRestart, msg: "worker synchronization".into() }) } else { Ok(()) }
+                    if sync_fails { Err(thoosa_shared::tho_error::cuda_error(thoosa_shared::CudaAction::NeedsRestart, "worker synchronization".into())) } else { Ok(()) }
                 });
                 let result = std::panic::AssertUnwindSafe(run_worker_stage_with_state(&stage, &input, &tensors, &device, &ctx, &mut handle)).catch_unwind().await;
                 assert_eq!(*state.try_lock().expect("worker state must unlock after synchronization"), 1);
