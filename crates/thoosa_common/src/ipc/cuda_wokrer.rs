@@ -172,7 +172,7 @@ where
             }
         }
     };
-    debug!("cuda_wokrer::serve_worker_requests: shutdown_request_id={shutdown_request_id:?}");
+    info!("cuda_wokrer::serve_worker_requests: worker is shutting down shutdown_request_id={shutdown_request_id:?}");
     drop(reader_abort);
     // Reap the cancelled reader, rather than leaving even its cleanup detached.
     let _ = reader_task.await;
@@ -194,7 +194,7 @@ where
     drop(reply_tx);
     writer_task.await.context("worker response writer task failed")??;
 
-    debug!("worker is shutting down");
+    info!("worker is existing");
     // unsafe {
     //     libc::_exit(0);
     // }

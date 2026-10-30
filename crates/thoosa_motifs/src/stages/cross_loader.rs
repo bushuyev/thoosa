@@ -318,11 +318,6 @@ where
             Err(e) => {
                 let is_resetting = matches!(e,  ThoError::ContextReset);
                 warn!("CrossLoader::run_loaded_batch: got error  find_motifs_run_config_id={} needs_cuda_ctx_reset={} {e:?}", self.find_motifs_run_config_id, is_resetting);
-
-                if is_resetting {
-
-                    // return Err(e)
-                }
             }
         };
 
