@@ -1,5 +1,5 @@
 use std::fs;
-use chrono::Utc;
+
 
 fn main() {
     let libtorch = std::env::var("LIBTORCH")
@@ -22,8 +22,11 @@ fn main() {
     println!("cargo:rustc-env=THO_DEBUG_PLOTS_PREFIXES={debug_plots_prefixes}");
 
     println!("cargo:rustc-env=CARGO_TARGET_DIR=target"); //https://stackoverflow.com/a/73543282/656449 - avoid rebuild all deps
-    //TODO write to OUT_DIR + include!(concat!(env!("OUT_DIR"), "/version.rs"));
-    fs::write("src/version.rs", format!("pub const VERSION:&'static str = \"{}\";", Utc::now())).expect("Unable to write file");
+    // Explicit build IDs are reproducible; the package version is the stable default.
+    println!("cargo:rerun-if-env-changed=THOOSA_BUILD_VERSION");
+    let version = std::env::var("THOOSA_BUILD_VERSION").unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
+    let path = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("version.rs");
+    fs::write(path, format!("pub const VERSION: &str = {version:?};")).expect("write generated version");
 }
 
 pub fn parse_debug_plots_rustflags(encoded_rustflags: Option<&str>) -> (&'static str, String) {
