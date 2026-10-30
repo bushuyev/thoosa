@@ -1,7 +1,7 @@
 use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
 use crate::motif_tho_tensor::MotifThoTensor;
 use crate::motifs_store::MotifsStore;
-use crate::train_nets::{FinalNetParams, LabelNetParams, MotifNetParams};
+use crate::train_nets::FinalNetParams;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::FutureExt;
@@ -16,47 +16,59 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use tch::Device::Cuda;
 use tch::Kind::Float;
-use tch::{IndexOp, Tensor};
+use tch::Tensor;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::dims::{Batch, Slice};
+use thoosa_common::dims::{Batch};
+#[cfg(test)]
+use thoosa_common::dims::Slice;
 use thoosa_common::nets::batches::BatchLengths;
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
 use thoosa_common::nets::nodes::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::common::DropIf;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap, ThoDataRef};
+#[cfg(test)]
+use thoosa_common::runner::common::cachable::SelectRef;
 use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
+#[cfg(test)]
+use thoosa_common::runner::oom_handler::NoContexts;
+#[cfg(test)]
+use thoosa_common::runner::oom_handler::NoRunCtxAdjuster;
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_common::runner::tmp_cache::TmpCached;
-use thoosa_common::tch_error::{tch_error, tch_result};
+use thoosa_common::tch_error::tch_error;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::{SynKey, hashmap_as_vec};
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DebugId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
-use thoosa_store::{Store, TrainedNet, TrainedNetsBy};
+use thoosa_store::{TrainedNet, TrainedNetsBy};
 use tokio::sync::MutexGuard;
 
-use crate::stages::apply_motif_nets::{APPLY_MOTIF_NET_ENDPOINT, ApplyMotifNets, STACK_APPLIED_MOTIF_NETS_ENDPOINT, StackAppliedMotifNets, StackAppliedMotifNetsInput, SyncApplyMotifNet};
+use crate::stages::apply_motif_nets::{ApplyMotifNets};
+#[cfg(test)]
+use crate::stages::apply_motif_nets::APPLY_MOTIF_NET_ENDPOINT;
+#[cfg(test)]
+use crate::stages::apply_motif_nets::SyncApplyMotifNet;
+#[cfg(test)]
 use crate::stages::load_motif_net::MotifNetMeta;
 use crate::stages::stage_ids::APPLY_LABEL_NET;
+#[cfg(test)]
 use crate::stages::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, DynSyncStageWithStateEnum, ProxyStage};
-use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::serialization::json::{JsonIpcCodec};
+#[cfg(test)]
+use thoosa_common::ipc::serialization::json::IpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
@@ -572,9 +584,9 @@ where
     }
 }
 
-pub fn stack_applied_label_nets_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn stack_applied_label_nets_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
-        let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>() else {
+        let Ok(_init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>() else {
             return Err(ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"));
         };
         Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
@@ -796,7 +808,9 @@ where
     C: RunCtx + 'static,
 {
     id: SynKey,
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     label: String,
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     train_label_net_run_config_id: RunConfigId,
     // Inference state is acquired once per sync run instead of being copied in every input.
     net: tokio::sync::Mutex<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
@@ -812,7 +826,7 @@ where
         self.net.lock().await.has_gpu_data(device_idx)
     }
 
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         let mut guard = self.net.lock().await;
         if guard.has_gpu_data(device_idx) {
             *guard = guard.copy_to_device(0).await?;
@@ -893,7 +907,7 @@ where
     }
 }
 
-pub fn apply_label_net_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn apply_label_net_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<ApplyLabelNetInit>() else {
             return Err(ThoError::new("ApplyLabelNet endpoint received invalid initializer"));
@@ -901,7 +915,7 @@ pub fn apply_label_net_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn 
         let init = *init;
         debug!("apply_net_stage_2_endpoint_init: init={init:?}");
 
-        let (run_config_id, params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
+        let (_run_config_id, _params, net) = perf_log!(sync_read_lock!(ws)).load_label_net( //TODO in IPC mode this is needed only to get motif_width from  params. Add util to load params without module
                &init.label_net_path,
                &tho_device,
                init.quantize,
@@ -980,7 +994,7 @@ where
         debug!("ApplyLabelNet::do_run_with_state: id={:?} input={:?}", self.id, input);
         let out_id = self.out_id(input.id());
         let input = input.input.as_ref();
-        let num_motifs = input.data().size()[0] as usize;
+        let _num_motifs = input.data().size()[0] as usize;
         let batch_input: ThoTensor<ChannelsMotifsData, DebugId> = input.data().t_ref().unsqueeze(0).into();//TODO unsqueeze is for dummy batch dimension, batching should be done in ApplyLabelNets
 
         // Label nets receive one length per chunk, so use the longest motif row to keep every real score while shorter rows remain zero-padded.
@@ -1044,13 +1058,12 @@ mod tests {
     }
     use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
     use crate::motifs_store::MockMotifsStoreBuilder;
-    use crate::stages::apply_label_nets::{ApplyLabelNet, ApplyLabelNetInput, ApplyLabelNets, logit, sigmoid};
+    use crate::stages::apply_label_nets::{ApplyLabelNets, logit};
     use crate::stages::apply_motif_nets::ApplyMotifNets;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::stft::SyncStftSelector;
     use crate::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, TrainMotifNetRunConfig};
-    use log::LevelFilter::{Trace, Warn};
-    use log::{debug, set_max_level, trace};
+    use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -1058,17 +1071,15 @@ mod tests {
     use tch::Kind::Float;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::data_with_extra::DataWithExtra;
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::{Batch, Slice};
     use thoosa_common::nets::batches::BatchLengths;
     use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, LinLenNetParams, ThoModuleWithStore};
     use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
-    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef, ThoDataRef};
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::runner::sync_stage::StageWithState;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::{assert_close, to_vec_f32};
@@ -1094,16 +1105,16 @@ mod tests {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
                     let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                        let batch = t.size()[0];
+                        let _batch = t.size()[0];
                         // let out = Tensor::f_ones(&[batch, 1], (Kind::Float, t.device()))?
-                        let out = t.f_mean_dim(1,  true, Float )?.f_mul_scalar_(k)?;;
+                        let out = t.f_mean_dim(1,  true, Float )?.f_mul_scalar_(k)?;
 
                         debug!("const_motif_net: k={k} t=\n{t} \nout={out}");
                         Ok(out)
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<Batch<Slice>, MotifProbability>>)
                 });
-                let mut vs = VarStore::new(device);
+                let vs = VarStore::new(device);
                 let module = builder(&vs.root()).expect("const_motif_net builder");
                 ThoModuleWithStore::with_factory(
                     SynKey::new([mono_key!(format!("const_motif_net_{k}"), "const_motif_net")]),
@@ -1113,50 +1124,6 @@ mod tests {
                 )
             }),
         )
-    }
-
-    fn sum_label_net(
-        motif_nets: u32,
-        slices_len: u32,
-        k: f64,
-        device: Device,
-    ) -> (
-        Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
-        Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>,
-    ) {
-        (
-            Box::new(move || {
-                LabelNetParams::new(
-                    motif_nets,
-                    LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 1)),
-                )
-            }),
-            Box::new(move || {
-                let k = k;
-                let builder = Arc::new(move |_path: &nn::Path| {
-                    let module = ThoClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                        let out = sum_label_t(k, t)?;
-                        Ok(out)
-                    })));
-                    Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
-                });
-                let mut vs = VarStore::new(device);
-                let module = builder(&vs.root()).expect("sum_label_net builder");
-                ThoModuleWithStore::with_factory(
-                    SynKey::new([mono_key!(format!("sum_label_net_{k}"), "sum_label_net")]),
-                    module,
-                    vs,
-                    Some(builder),
-                )
-            }),
-        )
-    }
-
-    fn sum_label_t(k: f64, t: &Tensor) -> Result<Tensor, ThoError> {
-        let sum = tch_result(t.f_sum_dim_intlist(&[1, 2][..], false, None))?;
-        let mut sum = tch_result(sum.f_unsqueeze(1))?;
-        let out = tch_result(sum.f_mul_scalar_(k))?;
-        Ok(out)
     }
 
     fn weighted_label_net(
@@ -1185,7 +1152,7 @@ mod tests {
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
-                let mut vs = VarStore::new(device);
+                let vs = VarStore::new(device);
                 let module = builder(&vs.root()).expect("weighted_label_net builder");
                 ThoModuleWithStore::with_factory(
                     SynKey::new([mono_key!(format!("weighted_label_net_{key_weights:?}"), "weighted_label_net")]),

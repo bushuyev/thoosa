@@ -1,57 +1,39 @@
-use thoosa_common::tch_error::tch_result;
 use std::cmp::min;
 use async_trait::async_trait;
-use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
 use thoosa_shared::traits::MaxParallelCtx;
 
-use futures_util::{StreamExt, future::BoxFuture};
-use log::{debug, error, info, trace, warn};
+use futures_util::future::BoxFuture;
+use log::{debug, info, warn};
 use rand::random;
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
-use std::io::Write;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Instant, SystemTime};
 use tch::Device;
-use tch::Kind::Float;
-use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::cuda_utils::{cuda_mem, maybe_cuda_mem};
-use thoosa_common::dims::{Batch, Dims, ThoBatch};
+use thoosa_common::dims::Dims;
 use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
-use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
-use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, WithCommonTrainingRunConfig, opt_train};
+use thoosa_common::nets::batches::AsyncDataBatch;
+use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig, WithCommonTrainingRunConfig, opt_train};
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
-use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepInputSelector, TrainStepInputWrapper, TrainStepOutput, TrainStepXFn};
+use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::{TrainListener, optimizer_mem_size};
+use thoosa_common::utils::TrainListener;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
-use thoosa_shared::CopyToDevice;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
-use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
+use thoosa_shared::hyperparameter::FieldName;
+use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, OutId, RunCtx, Stage, WithId};
-use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{ThoError, panic_to_err};
-use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
+use thoosa_shared::traits::{Adjustable, AsyncStage, RunCtx, Stage};
+use thoosa_shared::val::NamedVal;
+use thoosa_shared::ThoError;
+use thoosa_shared::now_ms;
 use tracing::Instrument;
 
 #[derive(Debug, CpuData)]
@@ -392,7 +374,7 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
-    fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
+    fn run(self: Arc<Self>, _input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
 
         let run_config_source = Arc::clone(&self.run_config_source);
         let tho_device_idx = ctx.tho_device_idx();
@@ -450,14 +432,12 @@ use crate::tch_error::tch_result;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tch::Tensor;
     use tch::kind::FLOAT_CUDA;
-    use tch::nn::{AdamW, LinearConfig, OptimizerConfig, VarStore};
+    use tch::nn::{AdamW, LinearConfig};
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::nets::batches::BatchLengths;
     use thoosa_common::nets::batches::mock_async_data_batch;
     use thoosa_common::nets::nodes::{ThoModule, my_linear};
-    use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::MockRunCtx;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::{AsyncStage, RunCtx};
@@ -467,22 +447,18 @@ use crate::tch_error::tch_result;
     use futures::FutureExt;
     use futures_util::future::BoxFuture;
     use log::debug;
-    use mockall::PredicateBoxExt;
-    use parking_lot::Mutex;
     use thoosa_common::stages::train_step::{TrainStep, TrainStepXFn};
     #[allow(unused_imports)]
     use thoosa_common::nets::common_nets::CommonTrainingRunConfig;
     #[allow(unused_imports)]
     use thoosa_common::nets::common_nets::{AdamWRangeOrValue, WithCommonTrainingRunConfig};
     use thoosa_common::ipc::proxy::DynSyncStageWithStateEnum;
-    use thoosa_common::nets::common_nets::{CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetParams, LinLenNetParams, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgs, SelfAttentionNetParams, opt_train};
+    use thoosa_common::nets::common_nets::{CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue, opt_train};
     use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::mono_key;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::MonoMetrics;
     use thoosa_shared::{RangeOrValue, ThoError};
@@ -980,12 +956,12 @@ use crate::tch_error::tch_result;
                 .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream())
                 .finish(),
         );
-        let mut ctx = mock_run_ctx::default(1);
+        let ctx = mock_run_ctx::default(1);
 
         let validation_step = 10;
         let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, (), _>> = Arc::new(
             TrainNet::new(
-                move |c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
+                move |_c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
                 Arc::new(DummyTrainStepFactory),
                 Arc::clone(&opt_config),
                 Arc::clone(&run_config),
@@ -996,7 +972,7 @@ use crate::tch_error::tch_result;
         );
 
 
-        let output = train_net
+        let _output = train_net
             .run(
                 Arc::new(TrainNetInput::new()),
                 ctx,
@@ -1006,7 +982,7 @@ use crate::tch_error::tch_result;
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
         let grid_runs = run_config.grid_to_vals()?.len();
         let train_iters = epochs_count;
-        let valid_iters = (train_iters + 9) / 10;
+        let _valid_iters = (train_iters + 9) / 10;
 
         let expected_train_streams = grid_runs * opt_config.opt_max_evals as usize * epochs_count as usize;
         let expected_valid_streams = expected_train_streams / validation_step as usize + epochs_count as usize;

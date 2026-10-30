@@ -2,7 +2,6 @@ use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::motifs_ws::{MotifsWorkspace, MotifsWsMockBuilder};
 use std::time::Duration;
-use tch::Device;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::run_ctx::RunCtxImpl;

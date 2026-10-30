@@ -1,5 +1,4 @@
 use crate::cuda_utils::{CopyBufferPool, PinnedHostBuffer, copy_d2h, copy_d2h_to_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device};
-use crate::dims::Dims;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
@@ -7,24 +6,26 @@ use crate::tho_tensor::ThoTensor;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+#[cfg(test)]
 use futures_util::future::BoxFuture;
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use std::any::Any;
 use std::backtrace::Backtrace;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
+#[cfg(test)]
 use std::future::Future;
-use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
-use std::sync::atomic::Ordering::{AcqRel, Acquire};
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_common::runner::sync_stage::ConsumeResult;
-use thoosa_shared::traits::{Named, ThoSelector};
-use thoosa_shared::traits::{RunCtx, Stage};
+use thoosa_shared::traits::ThoSelector;
+#[cfg(test)]
+use thoosa_shared::traits::RunCtx;
+#[cfg(test)]
+use thoosa_shared::traits::Stage;
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{CudaActivityGate, CudaActivityScope, CudaDeviceGeneration, ThoError};
 use thoosa_shims::context::ThoCudaContext;
@@ -32,13 +33,10 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::oneshot::Sender;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
-use tracing::error;
 use tub::{Guard, Pool};
-use thoosa_shared::ipc_types::H2DTensorKey;
 use crate::ipc::proxy::StageStateDump;
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult};
 
-static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
 enum CudaLocalActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, activity: CudaActivityScope, respond_to: Sender<Result<Tensor, ThoError>>},
@@ -101,7 +99,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Ok(())
     }
 
-    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
+    async fn purge_stage_state(&self, _stage_id: Option<String>, _endpoint_name: String, _worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
         unreachable!()
     }
 
@@ -109,7 +107,7 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         unreachable!()
     }
 
-    async fn drop_tho_tensor(&self, key:u64, worker_id: crate::ipc::worker_msg::CudaWorkerId)-> Result<(), ThoError>
+    async fn drop_tho_tensor(&self, _key:u64, _worker_id: crate::ipc::worker_msg::CudaWorkerId)-> Result<(), ThoError>
     {
         Ok(())
     }
@@ -254,7 +252,7 @@ impl dyn CudaActorHandle + '_ {
         } else {
             None
         };
-        let has_selector = selector.is_some();
+        let _has_selector = selector.is_some();
         let borrowed = SelectRef::select_ref(&input, to_device_idx, selector).await?;//syncs copy stream
 
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} borrowed={borrowed:?}");
@@ -800,7 +798,7 @@ impl CopyCtx {
         Ok(())
     }
 
-    fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize, total_mem: usize) -> usize {
+    fn clc_buff_size(_cuda_device: usize, mem_k: f64, buffs: usize, total_mem: usize) -> usize {
 
         let init_type = Int64;
 
@@ -1007,7 +1005,7 @@ mod tests {
     impl ConsumeData for TestInput {
         type O = Self;
 
-        fn consume<R: Send, F, P>(self, to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
+        fn consume<R: Send, F, P>(self, _to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
         where
             F: FnOnce(Self, P) -> ConsumeResult<Self, R> + Send,
             P: RunCtx,

@@ -1,12 +1,9 @@
-#[cfg(test)]
-use std::ops::Range;
 use async_trait::async_trait;
 use log::debug;
 use thoosa_shared::{CopyToDevice, ThoError};
 #[cfg(test)]
-use thoosa_shared::copy_mode::CpuOrGpu;
-#[cfg(test)]
 use thoosa_shared::traits::{Data, DummyWithId as DummyCachableId, MockData, MockWithId, Select, WithId};
+#[cfg(test)]
 use thoosa_shared::traits::RangeSelector;
 
 #[derive(Debug, Clone)]

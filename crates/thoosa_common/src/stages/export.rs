@@ -11,7 +11,6 @@ use std::sync::Arc;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Data;
@@ -309,7 +308,6 @@ fn copy_dir_all(source: &Path, target: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::copy_net_path;
     use std::path::PathBuf;
-    use thoosa_shared::ThoError;
 
     #[test]
     fn test_copy_net_path_copies_model_file() -> anyhow::Result<()> {

@@ -1,40 +1,30 @@
 use thoosa_common::tch_error::tch_result;
 use crate::distance::MaskMaker::{Le, LocalMin};
-use async_trait::async_trait;
 use log::{debug, trace};
-use parking_lot::RwLock;
-use std::any::Any;
-use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::{DivAssign, Range};
+use std::ops::Range;
 use std::sync::Arc;
 use tch::Device::Cpu;
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::ChannelsData;
 use crate::dims::ChannelsMotifsDists;
-use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::DropIf;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_cpu_data_derive::CpuData;
 use crate::stages::cross_batch_clc::{UnfoldParams, unfold_and_cat};
 use crate::stages::dists_tracker::{DistsMask, DistsMaskType};
 use crate::stages::slices_iter::{ResourceSlices, SlicesIter};
 use crate::stages::stacked_moitfs_loader::StackedMotifsOutput;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 pub struct ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -108,7 +98,7 @@ where
     ) -> Result<Self::Out, ThoError> {
         debug!("ClcResourcesMotifsDist::do_run: input={input:?}");
 
-        let device_idx = ctx.tho_device_idx();
+        let _device_idx = ctx.tho_device_idx();
 
         let unfold_params = UnfoldParams::new(
             1,
@@ -132,7 +122,7 @@ where
             .iter()
             .zip(batch_1_sizes.into_iter())
             .zip(input.resource_offsets.iter().copied())
-            .map(|((resource_id, size), offset)| ResourceSlices::new(*resource_id, size as usize))
+            .map(|((resource_id, size), _offset)| ResourceSlices::new(*resource_id, size as usize))
             .collect::<Vec<_>>();
 
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
@@ -225,6 +215,7 @@ where
 
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     id: SynKey,
     batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resource_ids: Vec<ResourceId>,

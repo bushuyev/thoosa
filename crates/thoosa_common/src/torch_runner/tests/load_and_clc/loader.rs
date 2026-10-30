@@ -3,7 +3,7 @@ use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use crate::ipc::serialization::json::{JsonIpcCodec};
 use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
@@ -13,30 +13,24 @@ use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::torch_runner::tests;
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStageOutput, MulK};
 use crate::torch_runner::tests::load_and_clc::{SYNC_TEST_TENSOR_LOADER_ENDPOINT, kind_from_worker_name, kind_to_worker_name};
-use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
 use crate::utils::lin_for_size;
 use crate::ws::Workspace;
-use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::future::BoxFuture;
 use log::debug;
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, DebugId, Stage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MonoMetrics, OutId, RunCtx, DebugId, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_shared::{CopyToDevice, ThoError, mono_key};
-use tokio::sync::Mutex;
+use thoosa_shared::{ThoError, mono_key};
 use thoosa_shared::ipc_types::WorkerOutput;
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -341,7 +335,7 @@ impl WorkerOutput for ThoTensor<LoadedTensor, SynKey> {}
 #[typetag::serde(name = "ThoTensor_LoadedTensor_Input")]
 impl WorkerInput for ThoTensor<LoadedTensor, SynKey> {}
 
-pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_test_tensor_loader_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncTestTensorLoaderInit>().expect("SyncTestTensorLoader endpoint received an unexpected initializer type");

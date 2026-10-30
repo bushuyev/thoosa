@@ -10,16 +10,14 @@ use crate::nets::nodes::InitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
 use crate::tho_tensor::{TensorInitRef, ThoTensor};
 use crate::utils::*;
 use core::fmt;
-use log::{debug, error, info, trace};
+use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::ptr;
 use std::sync::Arc;
 use tch::Kind::Float;
-use tch::kind::FLOAT_CPU;
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LayerNormConfig, LinearConfig, ModuleT, Path, batch_norm1d,
 };
@@ -27,11 +25,9 @@ use tch::nn::{ConvConfig, Module};
 use tch::{Kind, TchError, Tensor, nn};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::DebugId;
 use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shims::quantized_linear::FastQuantizedLinear;
-use torch_sys::C_tensor;
 
 #[derive(Debug)]
 pub struct ThoSequential<DI: Dims, DO: Dims> {
@@ -837,7 +833,7 @@ impl ThoCosineConv1d {
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv1d {
-    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
+    fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
        Ok(self.forward(&x_in.as_ref())?.into())
     }
 }
@@ -1655,18 +1651,17 @@ mod tch_tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use crate::dims::{AnyDims, Batch, Dims};
+    use crate::dims::{AnyDims, Batch};
     use crate::nets::batches::BatchLengths;
     use crate::nets::builder::SeqBuilder;
     use crate::nets::builder::{Node, clc_conv1d_out};
     use crate::nets::common_nets::ThoModuleWithStore;
-    use crate::nets::nodes::{InitDummy, InitMode, ThoLinear, ThoModule, valid_time_mask};
+    use crate::nets::nodes::{ThoLinear, ThoModule, valid_time_mask};
     use tch::Device::Cpu;
     use tch::Kind::{Bool, Float};
     use tch::kind::FLOAT_CPU;
     use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, VarStore};
     use tch::{Device, IndexOp, Kind, Tensor, nn};
-    use thoosa_shared::ThoError;
     use thoosa_shims::quantized_linear::FastQuantizedLinear;
     use torch_sys::C_tensor;
 
@@ -2052,7 +2047,7 @@ mod tch_tests {
         let weight_scale = scalar_f32(symmetric_i8_scale(&weight));
         let weight_zero_point = scalar_i64(0);
 
-        let packed_weight = call_generated_1(|out| unsafe {
+        let _packed_weight = call_generated_1(|out| unsafe {
             torch_sys::c_generated::atg__wrapped_linear_prepack(
                 out,
                 as_mut_c_tensor(&weight),

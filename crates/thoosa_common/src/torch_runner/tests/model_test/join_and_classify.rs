@@ -7,7 +7,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::{AsyncStage, CachableIdTr, OutId, RunCtx, Stage, WithId};
 
 use crate as thoosa_common;
-use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
+use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;

@@ -1,4 +1,3 @@
-use thoosa_common::tch_error::tch_result;
 use clap::ValueEnum;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -11,7 +10,6 @@ use thoosa_common::stages::convert_precision::{
     PrecisionModelType,
 };
 use thoosa_common::ws::NET_WEIGHTS_FILE;
-use thoosa_shared::ThoError;
 use thoosa_shared::run_configs::RunConfigId;
 
 use crate::motifs_ws::MotifsWorkspace;
@@ -174,7 +172,7 @@ mod tests {
         let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
-        let (_, params, loaded_module) = ws.read().load_label_net(&net_id, &Device::Cpu, false, true)?;
+        let (_, _params, loaded_module) = ws.read().load_label_net(&net_id, &Device::Cpu, false, true)?;
         let variables = loaded_module.expect("loaded_module").var_store().variables();
         assert!(!variables.is_empty());
         for tensor in variables.values() {

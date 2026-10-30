@@ -1,28 +1,21 @@
 use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
-use crate::runner::global_ctx::GlobalCtx;
-use crate::tho_device::ThoDevice;
 use anyhow::Context as _;
-use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use log::debug;
 use std::ffi::c_void;
-use std::ops::Add;
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
 use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
-use thoosa_shared::{cuda_cause_from_error_code, os_thread_id};
-use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{CudaActivityScope, FuturesOrdering, ThoError, collect_futures_with_progress};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
-use thoosa_shims::stream::{CUDA_SUCCESS, ThoCudaStream, ThoStreamGuard};
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::task::{JoinError, spawn_blocking};
 use tokio_utils::Pool;
-use torch_sys::at_grad_set_enabled;
 use tub::Guard;
 
 // One contiguous byte range in the source/destination tensor.
@@ -149,26 +142,6 @@ pub fn tensor_mem_size(init_type: Kind, size: &[i64]) -> usize {//TODO rename to
     size.iter().fold(1, |a, v| a * (*v as usize)) * init_type.elt_size_in_bytes()
 }
 
-fn ensure_copy_d2h_source_is_device_memory(src_ptr: usize) -> Result<(), ThoError> {
-    let mut is_device_memory = 0i32;
-    let result = unsafe {
-        thoosa_shims::memcpy::tho_cu_pointer_is_device_memory(
-            &mut is_device_memory,
-            src_ptr as thoosa_shims::memcpy::CuDevicePtr,
-        )
-    };
-
-
-    check_cuda_status(result, "cuPointerGetAttribute")?;
-
-    if is_device_memory == 0 {
-        return Err(ThoError::new(format!(
-            "copy_d2h_from_ptr expected CUDA device memory but src_ptr={src_ptr} is not device memory"
-        )));
-    }
-
-    Ok(())
-}
 
 #[allow(dead_code)]
 pub fn speed_gib_per_s(bytes: u64, time_ms: u64) -> f64 {
@@ -239,7 +212,7 @@ struct CopyStorage {
 
 enum CopyAllocation {
     Tensor(Tensor),
-    External(Box<dyn Send>),
+    External(#[expect(dead_code, reason = "Owns the external allocation until all copy chunks finish.")] Box<dyn Send>),
 }
 
 impl CopyStorage {
@@ -711,14 +684,7 @@ mod tests {
     use crate::tch_error::tch_result;
     use crate::copy_ctx::CopyCtx;
     use crate::cuda_utils::{
-        PinnedHostBuffer,
-        copy_d2h,
-        copy_h2d,
-        cuda_mem,
-        equal_bytes,
-        pack_bits_bool,
-        speed_gb_per_s,
-        unpack_bits_u8,
+        PinnedHostBuffer, copy_d2h, copy_h2d, cuda_mem, equal_bytes, pack_bits_bool, speed_gb_per_s, unpack_bits_u8,
     };
     use crate::dims::AnyDims;
     use crate::runner::global_ctx::GlobalCtx;
@@ -1188,8 +1154,7 @@ pub fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod transfer_lifetime_tests {
     use super::*;
-    use futures_util::FutureExt;
-    use std::sync::Weak;
+        use std::sync::Weak;
 
     #[test]
     fn test_d2h_batches_coalesce_small_tensors_and_split_large_ones() -> Result<(), ThoError> {

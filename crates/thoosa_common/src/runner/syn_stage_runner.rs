@@ -1,22 +1,16 @@
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
-    fmt::{Debug, Formatter},
-    future::Future,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+    collections::{BTreeMap, HashMap, VecDeque}, fmt::{Debug, Formatter}, future::Future, pin::Pin, sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering}, Arc,
     },
 };
 
+#[cfg(test)]
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use futures::FutureExt;
-use futures_util::future::BoxFuture;
-use log::{error, info};
+use log::error;
 use parking_lot::{Mutex, RwLock};
 use tokio::{
-    sync::{mpsc, oneshot, watch},
-    task::{JoinHandle, JoinSet},
+    sync::{mpsc, oneshot, watch}, task::{JoinHandle, JoinSet},
 };
 use tracing::{debug, warn, Instrument};
 
@@ -1617,14 +1611,9 @@ mod tests {
     use futures_util::{StreamExt, TryStreamExt};
     use std::{
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc,
-        },
-        time::Duration,
+            atomic::{AtomicBool, AtomicUsize, Ordering}, Arc,
+        }, time::Duration,
     };
-    use std::io::Write;
-    use std::sync::atomic::Ordering::Relaxed;
-    use torch_sys::IntListOption;
     use thoosa_shared::CudaAction;
 
     fn needs_restart_error() -> ThoError {

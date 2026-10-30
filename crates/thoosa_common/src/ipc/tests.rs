@@ -1,52 +1,20 @@
-use thoosa_common::tch_error::tch_result;
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
-use crate::ipc::cuda_wokrer::CudaWorker;
-use crate::ipc::wraps::SyncStageIpcWrapper;
-use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
-use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
-use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
-use crate::runner::run_ctx::RunCtxImpl;
-use crate::runner::test::FailUntil::NaxParallel;
-use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
 // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
 // use crate::runner::test::FailUntil::NaxParallel;
-use crate::runner::test_utils::parse_numeric_part;
-use crate::tho_device::ThoDevice;
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
-use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 // use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 // use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
 // use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
 // use crate::torch_runner::tests::model_test::common::ModelTestId;
-use crate::utils::lin_for_size;
-use log::{LevelFilter, debug, info, warn};
-use serde::de::Unexpected::Option;
-use std::collections::HashMap;
+use log::{debug, info};
 use std::ffi::OsString;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::atomic::Ordering::Acquire;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tch::Device::Cuda;
-use tch::Kind::Float;
-use tch::{Device, Tensor};
-use thoosa_named_derive::Named;
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::perf_logging::{PERF, format_perf_map};
 use thoosa_shared::test_utils::init_test_logging;
-use thoosa_shared::tracked_await::track_await;
-use thoosa_common::runner::sync_stage::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
-use thoosa_shared::{ThoError, mono_key, panic_to_err_async};
+use thoosa_shared::{ThoError, panic_to_err_async};
 use thoosa_shims::context::ThoCudaContext;
-use tokio::sync::Notify;
-use tokio::task;
-use tokio::task::{JoinSet, coop};
-use tracing::field::debug;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -158,7 +126,6 @@ async fn run_ipc_main(main_f: impl Future<Output = Result<(), ThoError>>, shutdo
 
 
 pub async fn init_ipc_test(module:&str) -> Result<impl GlobalCtxMockGuard, ThoError> {
-    use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
     let module = module.split_once("::").map(|(_, module)| module).unwrap_or("");
     let test_name = format!("{module}::{}", get_test_name());
@@ -194,59 +161,49 @@ mod tests {
     use crate::ipc::cuda_wokrer::{AllTensors, CudaWorker, InitFn};
     use crate::ipc::worker_msg::{DebugOutput, OpResult, WorkerInput};
     use crate::ipc::wraps::SyncStageIpcWrapper;
-    use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
     use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
     use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
     use crate::runner::run_ctx::RunCtxImpl;
-    use crate::runner::test::FailUntil::NaxParallel;
     use crate::runner::test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     // use crate::runner::test::FailUntil::NaxParallel;
     use crate::runner::test_utils::parse_numeric_part;
     use crate::tho_device::ThoDevice;
-    use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+    use crate::tho_tensor::ThoTensor;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
-    use crate::torch_runner::tests::load_and_clc::loader::{LoadedTensor, SyncTestTensorLoader};
+    use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::torch_runner::tests::load_and_clc::{LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT, do_real_oom_dump_and_split, mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init};
     use crate::torch_runner::tests::model_test::common::ModelTestId;
     use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
     use futures_util::FutureExt;
-    use futures_util::future::{BoxFuture, join_all};
+    use futures_util::future::BoxFuture;
     use log::{LevelFilter, debug, info};
     use parking_lot::RwLock;
-    use serde::de::Unexpected::Option;
     use std::any::Any;
     use std::collections::HashMap;
-    use std::ffi::OsString;
     use std::sync::Arc;
     use std::sync::atomic::Ordering::Acquire;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::time::Instant;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::{Device, Tensor};
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::tracked_await::track_await;
     use thoosa_common::runner::sync_stage::ConsumeResult;
     use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
     use thoosa_common::runner::sync_stage::{SyncStage};
-    use thoosa_shared::{ThoError, mono_key, os_thread_id};
+    use thoosa_shared::{ThoError, mono_key};
     use tokio::task::JoinSet;
-    use tracing::field::debug;
 
     use crate::cuda_utils::cuda_mem;
-    use crate::dims::AnyDims;
     use crate::utils::lin_for_size;
     use crate::ws::{Workspace, mock_ws_simp};
     use thoosa_named_derive::Named;
-    use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::perf_logging::{PERF, format_perf_map};
-    use thoosa_shims::context::ThoCudaContext;
 
     fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) ->Result<(), ThoError>{
         let self_k = parse_numeric_part(resource).unwrap_or(1.0);
@@ -339,7 +296,7 @@ mod tests {
         })
     }
 
-    fn sync_consume_test_endpoint_init<'a>(tage_id: std::option::Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+    fn sync_consume_test_endpoint_init<'a>(_tage_id: std::option::Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
         use futures_util::FutureExt;
         async move {
             // This stage has no initializer fields, but still uses the typed install message.
@@ -361,7 +318,7 @@ mod tests {
     impl ConsumeData for ConsumeTestInput {
         type O = ThoTensor<LoadedTensor, SynKey>;
 
-        fn consume<R: Send, F, P>(self, to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
+        fn consume<R: Send, F, P>(self, _to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send
         where
             F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
             P: RunCtx,
@@ -642,7 +599,7 @@ mod tests {
             tasks.spawn(async move {
                 debug!("run_load_and_clc_ipc_cuda_worker: spawned resource={resource:?}");
 
-                let input_id = SynKey::new([mono_key!(resource, "resource key")]);
+                let _input_id = SynKey::new([mono_key!(resource, "resource key")]);
                 let self_k = parse_numeric_part(resource).unwrap_or(1.0);
                 let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu)?;
 
@@ -788,7 +745,7 @@ mod tests {
             module_path!(),
             async {
                 let tho_device_idx = 1;
-                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                let _cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                 async {
                     const MUL_K: f64 = 2.;
                     let size = [3, 140];
@@ -953,7 +910,7 @@ mod tests {
             module_path!(),
             async {
                 let tho_device_idx = 1;
-                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                let _cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                 async {
                     const MUL_K: f64 = 2.;
                     let size = [3, 100];
@@ -1089,16 +1046,13 @@ mod tests {
 
     mod composite_input {
         use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-        use crate::runner::global_ctx::GlobalCtx;
         use crate::tho_device::ThoDevice;
         use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ProxyABClcSyncStage, SYNC_AB_CLC_ENDPOINT, sync_ab_clc_endpoint_init};
         use crate::torch_runner::tests::composite_input::{ab_clc_sync_with_selector, run_ab_clc_with_stage};
         use crate::ws::mock_ws_simp;
-        use log::debug;
         use parking_lot::RwLock;
         use std::collections::HashMap;
         use std::sync::Arc;
-        use tch::Device::Cuda;
         use thoosa_shared::ThoError;
 
         fn sync_ab_clc_endpoint_inits() -> HashMap<String, InitFn> {
@@ -1142,7 +1096,7 @@ mod tests {
                 module_path!(),
                 async {
                     let sync_stage = Arc::new(ProxyABClcSyncStage::new(1).await?);
-                    let sync_stage_calls = Arc::clone(&sync_stage);
+                    let _sync_stage_calls = Arc::clone(&sync_stage);
                     let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
 
                     ab_clc_sync_with_selector(ab_stage).await
@@ -1170,7 +1124,7 @@ mod tests {
 
                     let t_cpu = Tensor::rand(&[n, DIM_1], FLOAT_CPU);
                     let t_cuda = t_cpu.to_device(Cuda(0));
-                    let t_cpu = t_cuda.to_device(Cpu);
+                    let _t_cpu = t_cuda.to_device(Cpu);
 
                     Ok::<(), ThoError>(())
                 }.boxed()
@@ -1195,7 +1149,7 @@ mod tests {
             async move {
                 let t_cpu = ThoTensor::new((), Tensor::rand(&[n, DIM_1], FLOAT_CPU))?;
                 let t_cuda = GlobalCtx::global().cuda_actor(1).copy(t_cpu, 1.into()).await?;
-                let t_cpu = GlobalCtx::global().cuda_actor(1).copy(t_cuda, 0.into()).await?;
+                let _t_cpu = GlobalCtx::global().cuda_actor(1).copy(t_cuda, 0.into()).await?;
 
                 Ok::<(), ThoError>(())
             }.boxed()
@@ -1220,7 +1174,7 @@ mod tests {
                        async move {
                            let t_cpu = ThoTensor::new((), Tensor::rand(&[n, DIM_1], FLOAT_CPU))?;
                            let t_cuda = GlobalCtx::global().cuda_actor(1).copy(t_cpu, 1.into()).await?;
-                           let t_cpu = GlobalCtx::global().cuda_actor(1).copy(t_cuda.shallow_clone(), 0.into()).await?;
+                           let _t_cpu = GlobalCtx::global().cuda_actor(1).copy(t_cuda.shallow_clone(), 0.into()).await?;
                            drop(t_cuda);
                            // GlobalCtx::global().cuda_actor(1).drop_tho_tensor(t_cuda.ref_key().ok_or_else(||ThoError::new(format!("Not a ref tensor: {t:?}")))?).await?;
 
@@ -1245,11 +1199,11 @@ mod tests {
     const DIM_1:i64 = 10000;
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="heavy_test_concurrent_copy"))]
-    async fn heavy_test_concurrent_copy<F>(descr:&str, test_f:Arc<F>)->Result<(), ThoError>
+    async fn heavy_test_concurrent_copy<F>(_descr:&str, test_f:Arc<F>)->Result<(), ThoError>
     where
         F:Fn(i64)->BoxFuture<'static, Result<(), ThoError>> + Send + Sync + 'static
     {
-        let (free_mem, total_mem) = cuda_mem();
+        let (free_mem, _total_mem) = cuda_mem();
         info!("heavy_test_concurrent_copy: free_mem={free_mem}");
 
         let elts = free_mem / Float.elt_size_in_bytes() / DIM_1 as usize;
@@ -1266,7 +1220,7 @@ mod tests {
 
             // Fill initial batch.
             for _ in 0..16 {
-                let Some(item) = iter.next() else {
+                let Some(_item) = iter.next() else {
                     break;
                 };
 
@@ -1280,7 +1234,7 @@ mod tests {
                 out.push(value);
 
                 // One slot became free: spawn one more.
-                if let Some(item) = iter.next() {
+                if let Some(_item) = iter.next() {
                     set.spawn(test_f(dim_0));
                 }
             }

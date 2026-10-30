@@ -1,63 +1,58 @@
+#[cfg(test)]
 use thoosa_common::tch_error::tch_result;
-use crate::find::FindMotifsSavableResult;
 use crate::motifs_store::MotifsStore;
 #[cfg(test)]
-use crate::stages::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
-use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
-use crate::stages::tensor_loader::RawTensorLoader;
+use crate::stages::cross_batch_clc::CrossBatchFn;
+use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossUnfoldClcOutput};
 use crate::stages::prepare_cross_batch::{PrepareCrossBatch, PreparedCrossBatch};
 use async_trait::async_trait;
+#[cfg(test)]
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, info, warn};
 use mockall_double::double;
-use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::{AddAssign, Range};
+use std::ops::Range;
 use std::sync::Arc;
 use std::vec;
+#[cfg(test)]
 use tch::Device::Cpu;
-use tch::{IndexOp, Tensor};
-use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
 use thoosa_common::ipc::proxy::DynSyncStageEnum;
+#[cfg(test)]
 use thoosa_common::resources::Simple;
 use thoosa_common::stages::freq_filter::ChannelsDataSelector;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::{CopyToDevice, ThoError, debug_id};
+use thoosa_shared::applicables_runner::{Input};
+#[cfg(test)]
+use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::resource::{Resource, ResourcesConfig};
+use thoosa_shared::ThoError;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::stages::dists_tracker::DistsMask;
 use crate::stages::slices_iter::SlicesIter;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::mono_key;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, Named, OutId, RunCtx, Select, ThoSelector, WithId};
-use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage};
+use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, OutId, RunCtx, ThoSelector, WithId};
+use thoosa_shared::traits::{AsyncStage, Stage};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use tokio::task::JoinHandle;
-use thoosa_store::Store;
-use tracing::Instrument;
-use thoosa_common::stages::train_net::retry_training_after_cuda_reset;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrossUnfoldClcOutputMergeMode {
@@ -167,6 +162,7 @@ where
     chunk_size: usize,
     on_batch_done: Box<dyn Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send>,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send>,
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     output_merge_mode: CrossUnfoldClcOutputMergeMode,
     step:u32,
     pd: PhantomData<(ResC, R, C)>,
@@ -292,7 +288,7 @@ where
                 ),
             ),
         )).await {
-            Ok(mut cross_clc_output) => {
+            Ok(cross_clc_output) => {
                 debug!("CrossLoader::run_loaded_batch: cross_clc_output={cross_clc_output:?}");
 
                 // Only CPU outputs may wait for the previous consumer. Keep
@@ -346,7 +342,7 @@ where
     ) -> Result<(), ThoError> {
         debug!("CrossLoader::run_inner_batches: t_0_batch={t_0_batch:?} skip_0_i={skip_0_i}");
 
-        let prepared_outer = if let Some(stage) = &self.prepare_outer {
+        let _prepared_outer = if let Some(stage) = &self.prepare_outer {
             let prepared_cache = Arc::new(TmpCached::new("discovery_outer_batch").await);
 
             let input = Arc::new(CrossInputSelectorWrap::new(
@@ -386,7 +382,7 @@ where
             let mut t_1_batch_len = 0;
             let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
-            'inner: for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
+            for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
                 info!("CrossLoader::run_inner_batches: i_1={i_1:?} resource_1={resource_1:?}");
 
                 GlobalCtx::global().cuda_activity_gate(1).expect("no gate").wait_if_paused().await?;
@@ -660,6 +656,7 @@ struct CrossInputSelectorWrap {
     batch_1:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resources_0: Vec<Arc<Resource>>,
     resources_1: Vec<Arc<Resource>>,
+    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     cache_area: CacheArea,
     prepared_outer: Option<Arc<TmpCachedEntry<PreparedCrossBatch>>>,
 }
@@ -1344,32 +1341,27 @@ mod tests {
     use crate::stages::tensor_loader::mock_tensor_loader;
     // use thoosa_common::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
-    use log::LevelFilter::{Debug, Info};
-    use log::{debug, set_max_level};
+    use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
-    use tch::Device::Cuda;
-    use tch::Kind::{Float, Uint8};
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use std::time::Duration;
+    use tch::kind::FLOAT_CPU;
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::copy_ctx::CopyCtx;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::ws::{FsWorkspace, WsConfigs};
+    use thoosa_common::ws::WsConfigs;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::perf_logging::set_perf_log_level;
     use thoosa_shared::resource::{Resource, ResourceStats};
     use thoosa_shared::run_configs::RUN_ID;
     use thoosa_common::runner::sync_stage::ConsumeResult;
@@ -1377,7 +1369,6 @@ mod tests {
     use thoosa_store::SqlStore;
     use tokio::task::yield_now;
     use tokio::time::sleep;
-    use tracing::subscriber::NoSubscriber;
 
     #[ctor::ctor]
     fn init() {
@@ -1537,11 +1528,11 @@ mod tests {
             resources_1.clone(),
             ca.clone()
         );
-        let mut cross_loader_adjuster = CrossLoaderAdjuster::new();
+        let _cross_loader_adjuster = CrossLoaderAdjuster::new();
 
-        let mut selector = CrossInputSelector::default();
+        let _selector = CrossInputSelector::default();
 
-        let mut run_ctx = RunCtxImpl::new(1, "test");
+        let _run_ctx = RunCtxImpl::new(1, "test");
         let data = SelectRef::select_ref(&input, 1, None).await?;
 
         assert_eq!(data.tensors().len(), 4);
@@ -1601,7 +1592,7 @@ mod tests {
         };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 4));
 
-        let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
+        let _run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
@@ -1675,7 +1666,7 @@ mod tests {
         };
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 3));
 
-        let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
+        let _run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
@@ -2021,7 +2012,7 @@ mod tests {
             |batch|{
                 async {Ok(batch)}.boxed()
             },
-            |p| {
+            |_p| {
                 async {
                     // cross_loader.receiver;
                     Ok(())

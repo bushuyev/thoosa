@@ -10,7 +10,6 @@ use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::math::sg_smoothing_coeffs;
-use thoosa_shared::ThoError;
 use thoosa_digest_id::DigestHash;
 
 pub trait InputFilterLengthAdjuster {

@@ -1,6 +1,6 @@
-use crate::dims::{LabelProbability, LabelsProbabilities, MotifProbability};
+use crate::dims::{LabelProbability, LabelsProbabilities};
 use crate::motifs_store::MotifsStore;
-use crate::stages::apply_label_nets::{APPLY_LABEL_NET_ENDPOINT, ApplyLabelNetInit, ApplyLabelNets, MotifNetsOutput};
+use crate::stages::apply_label_nets::ApplyLabelNets;
 use crate::stages::cross_loader::ResourcesConfigInput;
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -10,7 +10,7 @@ use futures_util::future::try_join_all;
 use futures_util::stream::BoxStream;
 use log::Level::{Debug as DebugLevel, Trace};
 use log::{debug, info, log_enabled, trace};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -18,22 +18,18 @@ use std::future::ready;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU32, Ordering};
-use thoosa_common::dims::{ChannelsData, Slice};
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use thoosa_common::tch_error::tch_result;
 
-use crate::stages::stft::SyncStftSelector;
-use tch::Device::{Cpu, Cuda};
-use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
-use tch::{Kind, Reduction, Tensor};
+use tch::nn::AdamW;
+use tch::{Kind, Tensor};
 use thoosa_common::dims::{Batch, ThoBatch};
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
-use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::nets::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::stages::train_step::{TrainStep, TrainStepInput, TrainStepXFn};
 
@@ -46,37 +42,28 @@ use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::{WorkerWrapper, WorkerWrapperWithState};
 use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, OptConfig};
-use thoosa_common::nets::tho_varstore::{ModConfig, ThoOptimizers, ThoTrainModule};
+use thoosa_common::nets::tho_varstore::{ModConfig, ThoTrainModule};
 use thoosa_common::resources::{Logits, NetResources, SavableResult};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
-use thoosa_common::runner::purge::FuturesRunnerMapPurger;
-use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
-use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
-use thoosa_store::Store;
-use tracing::field::debug;
 
 pub const TRAIN_FINAL_STEP_ENDPOINT: &str = "TrainFinalStep";
 
@@ -93,6 +80,7 @@ where
     label_loader: Arc<LL>,
     num_label_nets: u32,
     // label_net_run_config_ids: Vec<RunConfigId>,
+    #[expect(dead_code, reason = "Retains the shared owner for the lifetime of this stage or input.")]
     ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
     store: Arc<dyn MotifsStore>,
     opt_config: Arc<OptConfig>,
@@ -179,7 +167,7 @@ impl SavableResult for TrainFinalNetOutput {
 
     type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
+    async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
         // Report success only after persistence completes, using the actual saved run ID.
         Ok(vec![track_await!(self.result.save(store, ws, ())).await?])
     }
@@ -414,7 +402,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for SyncLogitsBatchOutput{}
 
-pub fn sync_logits_batch_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_logits_batch_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let stage:SyncLogitsBatch<WokerRunCtx> = SyncLogitsBatch::new_local().await?;
 
@@ -685,7 +673,7 @@ impl std::borrow::Borrow<TrainStepInput<LabelProbability, LabelsProbabilities>> 
     }
 }
 
-fn train_final_step_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+fn train_final_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     async move {
         let Ok(init) = (init as Box<dyn std::any::Any>).downcast::<TrainFinalStepIpcInit>() else {
             return Err(ThoError::new("TrainFinalStep endpoint received invalid initializer"));
@@ -776,7 +764,7 @@ pub fn train_final_step_endpoint_inits() -> HashMap<String, MotifsInitFn> {
 mod tests {
     use crate::dims::{ChannelsMotifsData, LabelProbability};
     use crate::motifs_store::{MockMotifsStoreBuilder, MotifsStore, create_motif_tables};
-    use crate::stages::apply_motif_nets::{motif_sum_net_, motif_test_net_};
+    use crate::stages::apply_motif_nets::motif_sum_net_;
     use crate::stages::cross_loader::ResourcesConfigInput;
     use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
     use crate::stages::tensor_loader::mock_tensor_loader;
@@ -784,7 +772,6 @@ mod tests {
     use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use crate::train_nets::{FinalNetArgs, FinalNetArgsFields, FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
     use crate::train_nets::{LabelNetParams, LabelNetTypeParams};
-    use log::LevelFilter::{Debug, Trace};
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -793,20 +780,18 @@ mod tests {
     use tch::Device::Cpu;
     use tch::nn::{self, VarStore};
     use tch::{Device, Kind, Tensor};
-    use thoosa_common::dims::{Batch, Slice};
+    use thoosa_common::dims::Batch;
     use thoosa_common::nets::batches::BatchLengths;
-    use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, ConvNetParams, LinLenNetParams, OptConfig, ThoModuleWithStore};
+    use thoosa_common::nets::common_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, LinLenNetParams, OptConfig, ThoModuleWithStore};
     use thoosa_common::nets::nodes::{ThoClosureModule, ThoModule};
     use thoosa_common::resources::{Logits, NetResources, SavableResult};
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::tch_error::tch_result;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::reset_print_options;
-    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
+    use thoosa_common::ws::WsConfigs;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -836,7 +821,7 @@ mod tests {
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
-                let mut vs = VarStore::new(device);
+                let vs = VarStore::new(device);
                 let module = builder(&vs.root()).expect("const_label_net builder");
                 ThoModuleWithStore::with_factory(SynKey::new([mono_key!(format!("const_label_net_{k}"), "const_label_net")]), module, vs, Some(builder))
             }),
@@ -1029,7 +1014,7 @@ mod tests {
         let saved_ids = SavableResult::save(&mut output, &store, &ws, ()).await?;
         assert_eq!(saved_ids, vec![3]);
         let run_config_id = saved_ids[0];
-        let run_config_values = store.list_run_config_values(run_config_id).await?;
+        let _run_config_values = store.list_run_config_values(run_config_id).await?;
         let trained_nets = store.list_trained_nets(TrainedNetsBy::RunConfigIds(vec![run_config_id]), None, None).await?;
 
         assert_eq!(vec![TrainedNet { id: 1, run_config_id, net_path: PathBuf::from(format!("3")), loss: 0.125 }], trained_nets);
@@ -1084,7 +1069,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         &mut self,
         store: &Arc<dyn MotifsStore>,
         ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        p: Self::P<'_>
+        _p: Self::P<'_>
     ) -> anyhow::Result<u32> {
         // The constructor uses this exact order for feature positions; persist it with the weights.
         self.final_node_params.set_label_feature_schema(self.train_label_nets_run_config_ids.clone())?;

@@ -1,4 +1,4 @@
-use log::{debug, error, trace};
+use log::{debug, trace};
 use mockall::automock;
 use rayon::iter::ParallelIterator;
 use rayon::iter::IntoParallelIterator;

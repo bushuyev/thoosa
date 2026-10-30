@@ -3,8 +3,6 @@ use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use log::LevelFilter;
 use parking_lot::RwLock;
-use thoosa_shared::ThoError;
-use thoosa_shared::traits::RunCtx;
 use crate::ws::Workspace;
 
 #[async_trait]

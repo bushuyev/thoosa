@@ -307,7 +307,7 @@ impl Node {
                 kw_time, kh_freq,
                 a, b,
                 init,
-                init_mode
+                init_mode: _init_mode
             } => Box::new(ThoCosineConv2d::new(
                 &(vs / path),
                 kh_freq,

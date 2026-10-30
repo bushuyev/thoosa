@@ -18,6 +18,7 @@ use thoosa_shared::tracked_await::track_await;
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct CollectEtaProgressSocketServer {
+    #[cfg_attr(not(test), expect(dead_code, reason = "Tests inspect the retained socket name."))]
     name: Name<'static>,
     shutdown_tx: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,

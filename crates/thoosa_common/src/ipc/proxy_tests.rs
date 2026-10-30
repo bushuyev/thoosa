@@ -1,36 +1,28 @@
 use thoosa_common::tch_error::tch_result;
-use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
+use crate::ipc::serialization::json::JsonIpcCodec;
+use crate::ipc::worker_msg::WorkerInput;
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
 use crate::runner::common::cachable::{BorrowRef, ThoDataRef};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::Workspace;
-use futures_util::future::{BoxFuture, FutureExt, ready};
-use futures_util::{StreamExt, ready};
+use futures_util::future::{BoxFuture, FutureExt};
 use log::debug;
-use mockall::PredicateBoxExt;
-use parking_lot::{Mutex, RwLock};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::{Arc, LazyLock};
-use tch::Tensor;
+use std::sync::Arc;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, SyncStage};
+use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, WithId};
+use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_shared::{CopyToDevice, ThoError};
 use tracing::field::debug;
 use thoosa_shared::ipc_types::WorkerOutput;
@@ -147,7 +139,7 @@ pub struct TestRunCtx;//corresponds to RunCtxImpl
 impl Named for TestRunCtx {}
 
 impl MaxParallelCtx for TestRunCtx{
-    fn set_max_other_parallel(&mut self, permit: u8) {}
+    fn set_max_other_parallel(&mut self, _permit: u8) {}
 
     fn max_other_parallel(&self) -> u8 { 0 }
 }
@@ -165,14 +157,14 @@ impl RunCtx for TestRunCtx {
         1
     }
 
-    fn branch(&mut self, with_new_cache_area: bool) -> Self
+    fn branch(&mut self, _with_new_cache_area: bool) -> Self
     where
         Self: Sized
     {
         TestRunCtx
     }
 
-    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
+    fn add_purge_gpu_closure(&mut self, _cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }
 
@@ -248,7 +240,7 @@ where
 const TEST_ENDPOINT: &str = "TestStage";
 
 
-pub fn test_simp_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn test_simp_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     debug!("test_simp_init_2: 0");
     let init: Box<dyn Any> = init;
 
@@ -268,26 +260,38 @@ pub fn test_simp_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, w
 
 
 mod tests {
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
-    use crate::ipc::proxy_tests::{TEST_ENDPOINT, TestOutputA, TestStageInitA, test_simp_init};
+    #[cfg(test)]
+    use crate::ipc::cuda_wokrer::CudaWorker;
+    #[cfg(test)]
+    use crate::ipc::cuda_wokrer::InitFn;
+    use crate::ipc::proxy_tests::{TestStageInitA};
+    #[cfg(test)]
+    use crate::ipc::proxy_tests::TEST_ENDPOINT;
+    #[cfg(test)]
+    use crate::ipc::proxy_tests::test_simp_init;
     use crate::ipc::proxy_tests::{TestInputA, TestRunCtx, TestStageA};
+    #[cfg(test)]
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
+    #[cfg(test)]
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    #[cfg(test)]
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
-    use log::{debug, info};
+    #[cfg(test)]
+    use crate::ws::mock_ws_simp;
+    use log::{debug};
+    #[cfg(test)]
+    use log::info;
+    #[cfg(test)]
     use parking_lot::RwLock;
+    #[cfg(test)]
     use std::collections::HashMap;
     use std::sync::Arc;
-    use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::Tensor;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::kind::FLOAT_CPU;
     use thoosa_shared::ThoError;
-    use thoosa_common::runner::sync_stage::SyncStage;
-    use tracing::field::debug;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

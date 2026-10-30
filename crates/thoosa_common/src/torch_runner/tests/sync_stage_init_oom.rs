@@ -1,10 +1,8 @@
 use async_trait::async_trait;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{RwLock};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Stage};
 use thoosa_common::runner::sync_stage::{SyncStage};
@@ -12,7 +10,7 @@ use thoosa_shared::ThoError;
 
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::DynSyncStageEnum;
-use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
+use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, SyncStageInit, WithRunCtxContext, run_ctx_adjuster};
 use crate::runner::run_ctx::RunCtxImpl;

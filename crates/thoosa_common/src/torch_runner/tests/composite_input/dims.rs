@@ -1,5 +1,5 @@
 use thoosa_shared::traits::MonoMetrics;
-use crate::dims::{ChannelsData, Dims};
+use crate::dims::{Dims};
 
 #[derive(Clone, Debug)]
 pub struct AStageOutputDims;

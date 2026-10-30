@@ -1,8 +1,6 @@
 use log::trace;
-use crate::tch_error::tch_result;
-use tch::{Device, Kind, Tensor};
+use tch::{Kind, Tensor};
 use tch::Device::Cpu;
-use thoosa_shared::ThoError;
 
 
 pub struct BoolTensorIterator<'a> {

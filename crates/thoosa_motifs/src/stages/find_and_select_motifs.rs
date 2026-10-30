@@ -2,9 +2,7 @@
 use anyhow::Context as _;
 use crate::motifs_store::MotifsStore;
 
-use crate::cli::run_plot;
 use crate::find::FixedFindMotifsConfig;
-use crate::fragments::{DataBy, PlotDataArgs, Resolution};
 use crate::stages::cross_loader::ResourcesConfigInput;
 use crate::stages::find_motifs::FindMotifsStage;
 use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SelectMotifsSavableResult};
@@ -16,28 +14,21 @@ use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tch::Device::Cpu;
 use thoosa_common::nets::common_nets::OptConfig;
 use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::resources::{SavableResult, Simple};
-use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, MaxParallelCtx};
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
-use thoosa_shared::val::{NamedRange, NamedVal, Val};
+use thoosa_shared::val::NamedVal;
 use thoosa_shared::{FuturesOrdering, ResourceType, ThoError, collect_futures_with_progress, panic_to_err_async, parse_resources};
-use thoosa_store::Store;
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
@@ -110,8 +101,8 @@ impl SavableResult for FindAndSelectMotifsResult {
     async fn save(
         &mut self,
         store: &Arc<dyn MotifsStore>,
-        ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
-        p: Self::P<'_>
+        _ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>,
+        _p: Self::P<'_>
     ) -> anyhow::Result<Vec<u32>> {
 
 
@@ -191,8 +182,8 @@ impl FindAndSelectMotifsStage {
         find_resources: &ResourceType,
         select_resources: &ResourceType,
         fixed_find_motifs_config: FixedFindMotifsConfig,
-        max_chunk_size: i64,
-        device_idx: usize,
+        _max_chunk_size: i64,
+        _device_idx: usize,
         mut ctx: C
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
         let find_input = Arc::new(track_await!(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).await?);
@@ -278,7 +269,7 @@ impl FindAndSelectMotifsStage {
         fixed_find_motifs_config: &FixedFindMotifsConfig,
         max_chunk_size: i64,
         device_idx: usize,
-        grid_idx: usize,
+        _grid_idx: usize,
         ctx: &mut C,
     ) -> (FindAndSelectEvalMetrics, f32) {
         let mut run_config: FindAndSelectMotifsRunConfig = match [const_vals, grid_vals, opt_vals].concat().into_iter().try_into() {
@@ -418,7 +409,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                     }
                 }
             });
-        let mut indexed_best_configs = track_await!(collect_futures_with_progress(
+        let indexed_best_configs = track_await!(collect_futures_with_progress(
             futures,
             grid_runs_len,
             FuturesOrdering::Unordered,

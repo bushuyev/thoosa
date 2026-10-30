@@ -1,5 +1,4 @@
 #![allow(non_camel_case_types)]
-use thoosa_common::tch_error::tch_result;
 use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 
@@ -14,30 +13,27 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use crate::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
+use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
-use thoosa_common::ws::Workspace;
 use thoosa_cpu_data_derive::CpuData;
 use crate::stages::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta};
-use crate::stages::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
+use crate::stages::motif_stats::{MotifStats, MotifStatsInput};
 use crate::stages::select_motifs::{SelectMotifsInput, SelectMotifsOutputMode, clc_constraint_metrics};
 use crate::stages::stage_ids::SELECT_BUCKETS;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Stage};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
-use thoosa_store::Store;
 
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, CpuData)]
@@ -278,7 +274,7 @@ where
     async fn load_resources_for_selection(
         input: &Arc<SelectMotifsInput>,
         store: &Arc<dyn MotifsStore>,
-        mut ctx: C,
+        _ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
 

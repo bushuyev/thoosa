@@ -1,11 +1,9 @@
-use thoosa_common::tch_error::tch_result;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use log::{debug, error, info, warn};
 #[allow(unused_imports)]
 use mockall::automock;
 use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
-use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::syn_stage_runner::SyncStageRunner;
 use crate::runner::cuda_recovery::CudaRecoveryCoordinator;
 use crate::runner::purger::Purger;
@@ -18,19 +16,15 @@ use mockall::Any as _;
 use crate::runner::common::cachable::{CachedPurgeOutput, StageCache};
 use thoosa_shared::traits::{Named, Stage, WithId};
 use std::fmt::Debug;
-use std::future::ready;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{CudaActivityGate, ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_write_lock};
-use thoosa_shims::context::ThoCudaContext;
 use tokio::sync::RwLock as AsyncRwLock;
-use tracing::Instrument;
 use thoosa_shims::arena::{shared_arena_dup_fd, shared_arena_init};
 
 pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
@@ -47,6 +41,7 @@ pub struct GlobalCtx {
     purger: Purger,
 
     is_ipc: bool,
+    #[expect(dead_code, reason = "Keeps the shared arena fd owned until the runtime is dropped.")]
     arena_fd:Option<OwnedFd> //TODO needed in IPC mode only
 }
 
@@ -316,6 +311,7 @@ impl GlobalCtx {
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
+    #[expect(dead_code, reason = "mockall generates the owned-runner expectation from this method.")]
     fn mock_runner(&self, device: usize) -> &SyncStageRunner {
         // Keep the generated mock's owned runner separate from real delegation.
         self.get_runner(device)
@@ -913,7 +909,7 @@ pub mod mock_global_ctx {
                 });
             } else {
                 let _ = self.mock.expect_is_all_on_cpu().times(0..)
-                    .returning(move |device_idx, force| is_all_on_cpu);
+                    .returning(move |_device_idx, _force| is_all_on_cpu);
             }
 
             self
@@ -959,8 +955,7 @@ pub mod mock_global_ctx {
             is_ipc: bool,
         ) -> impl GlobalCtxMockGuard {
             use crate::runner::global_ctx::{
-                MockGlobalCtx,
-                mock_global_ctx,
+                MockGlobalCtx, mock_global_ctx,
             };
 
             debug!("install_global_ctx_mock: use_real_ctx={use_real_ctx} is_ipc={is_ipc}");
@@ -1097,32 +1092,25 @@ mod tests {
     use crate as thoosa_common;
     use crate::dims::AnyDims;
     use crate::runner::common::cachable::{DevicesWrap, SelectRef};
-    use crate::runner::global_ctx::CopyCtx;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::run_ctx::RunCtxImpl;
     use crate::runner::tmp_cache::TmpCached;
     use crate::tho_tensor::ThoTensor;
-    use futures_util::{FutureExt, StreamExt, TryStreamExt};
+    use futures_util::{FutureExt};
     use log::debug;
-    use parking_lot::{Condvar, Mutex, RwLock};
-    use rand::{RngExt, rng};
+    use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::future;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
-    use tch::Device::{Cpu, Cuda};
-    use tch::Kind::Float;
-    use tch::{Device, Tensor};
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use std::time::Duration;
+    use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::RangeSelector;
     use thoosa_shared::traits::RunCtx;
-    use thoosa_shims::context::ThoCudaContext;
-    use tokio::task::spawn_blocking;
-    use tracing::Instrument;
-    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::tests::run_ipc_test;
     use crate::tho_device::ThoDevice;
     use crate::ws::mock_ws_simp;
@@ -1464,7 +1452,7 @@ mod tests {
         tmp_cache.insert(t_cuda.to_types(777u32)?);
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
-        let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
+        let root_ctx = RunCtxImpl::new(1, "root_ctx");
 
         let sum_0 = {
             let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;

@@ -1,20 +1,17 @@
 use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
-use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use crate::ipc::serialization::json::{JsonIpcCodec};
 use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
-use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep};
-use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
 use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, OOMHandler};
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-use crate::torch_runner::tests::composite_input::dims::{ABDims, AStageOutputDims, BStageOutputDims};
+use crate::torch_runner::tests::composite_input::dims::{AStageOutputDims, BStageOutputDims};
 use crate::torch_runner::tests::composite_input::loader_a::{AStage, AStageInput, AStageOutput};
 use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput, BStageOutput};
 use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_STAGE_ID};
@@ -22,20 +19,16 @@ use crate::ws::Workspace;
 use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::future::BoxFuture;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{RwLock};
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
-use tch::{Kind, Tensor};
 use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, SyncStage};
@@ -97,7 +90,7 @@ impl WorkerOutput for ABClcStageOutput {}
 
 #[async_trait]
 impl thoosa_shared::CopyToDevice for ABClcStageOutput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
         Ok(Self {
             id: self.id.clone(),
             value: self.value,
@@ -159,6 +152,7 @@ where
 
 #[derive(Debug)]
 pub struct ABClcSyncStageInputWrapper {
+    #[expect(dead_code, reason = "Retains stored metadata and its existing construction and diagnostic representation.")]
     id:SynKey,
     a_out:Arc<DevicesWrap<AStageOutput>>,
     b_out:Arc<DevicesWrap<BStageOutput>>
@@ -262,7 +256,7 @@ where
         let a_out = Arc::clone(&self.a_stage).run_cached(Arc::clone(&input.from_a), ctx.branch(false)).await?;
         let b_out = Arc::clone(&self.b_stage).run_cached(Arc::clone(&input.from_b), ctx.branch(false)).await?;
 
-        let out_id = self.ab_clc_sync.out_id(input.id());
+        let _out_id = self.ab_clc_sync.out_id(input.id());
 
 
         let input = Arc::new(ABClcSyncStageInputWrapper::new(a_out, b_out));
@@ -302,12 +296,6 @@ impl<'a> ABClcSyncStageIpcInputRef<'a> {
     }
 }
 
-#[derive(Deserialize)]
-struct ABClcSyncStageIpcInput {
-    id: SynKey,
-    from_a: AStageOutput,
-    from_b: BStageOutput,
-}
 
 #[derive(Debug, Named)]
 pub struct ABClcSyncStage {
@@ -391,15 +379,6 @@ pub struct ABClcSyncStageInput<'a> {
 impl WorkerInput for ABClcSyncStageInput<'static> {}
 
 impl <'a> ABClcSyncStageInput<'a> {
-    pub(super) fn new(from_a: &'a AStageOutput, from_b: &'a BStageOutput) -> Self {
-
-        Self {
-            id: from_a.id() + from_b.id(),
-            from_a: ThoDataRef::Borrowed(from_a),
-            from_b: ThoDataRef::Borrowed(from_b)
-        }
-    }
-
     fn from_data_refs(from_a: ThoDataRef<'a, AStageOutput>, from_b: ThoDataRef<'a, BStageOutput>) -> Self {
         Self { id: from_a.as_ref().id() + from_b.as_ref().id(), from_a, from_b }
     }
@@ -526,7 +505,7 @@ impl AsyncStageDispatch<ProxyABClcSyncStage> for ProxyABClcSyncStage {
     }
 }
 
-pub fn sync_ab_clc_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn sync_ab_clc_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.

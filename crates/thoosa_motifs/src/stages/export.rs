@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use thoosa_common::stages::export::{ExportStore, ExportWorkspace};
 use thoosa_common::ws::WsConfigs;
-use thoosa_shared::ThoError;
 use thoosa_shared::run_configs::RunConfigId;
 
 use crate::motifs_store::MotifsStore;

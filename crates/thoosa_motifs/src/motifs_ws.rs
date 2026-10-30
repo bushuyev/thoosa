@@ -15,7 +15,7 @@ use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, VarStore
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ToJsonFile;
-use thoosa_shared::{ThoError, cdt_for_dir, mono_key, panic_to_err, recurse_files};
+use thoosa_shared::{cdt_for_dir, mono_key, recurse_files};
 
 const MOTIFS_MODELS: &str = "motifs";
 const LABELS_MODELS: &str = "labels";
@@ -195,11 +195,12 @@ impl MotifsWorkspace for FsWorkspace {
     fn load_label_net(&self, net_path: &Path, device: &Device, quantize: bool, load_net: bool) -> anyhow::Result<(RunConfigId, LabelNetParams, Option<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>)> {
         let base_path = resolve_net_base_path(&self.labels_nets_path()?, net_path);
         let (model_path, params_path) = net_files_from_base(&base_path)?;
-        let label = if nested_weights(&model_path) { model_path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|s| s.to_str()) } else { model_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) }.ok_or_else(|| anyhow::anyhow!("load_label_net: can't parse label from {base_path:?}"))?;
+        // Keep path validation in release builds even though only debug keys retain the label.
+        let _label = if nested_weights(&model_path) { model_path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|s| s.to_str()) } else { model_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) }.ok_or_else(|| anyhow::anyhow!("load_label_net: can't parse label from {base_path:?}"))?;
         let run_config_id = net_path_to_run_config_id(&model_path);
         let params = LabelNetParams::from_file(&params_path)?;
         let params_for_builder = params.clone();
-        let module = load_net.then(|| ThoModuleWithStore::load(mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path.clone(), *device, quantize)).transpose()?;
+        let module = load_net.then(|| ThoModuleWithStore::load(mono_key!(run_config_id, format!("Label_model_{_label}_{run_config_id}")).into(), move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path), model_path.clone(), *device, quantize)).transpose()?;
         Ok((run_config_id, params, module))
     }
 

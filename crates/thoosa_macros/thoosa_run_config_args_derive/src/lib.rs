@@ -40,6 +40,17 @@ fn token_stream_contains_ident(tokens: &TokenStream2, ident: &str) -> bool {
     })
 }
 
+fn display_pattern(variant: &TokenStream2) -> TokenStream2 {
+    // Display only uses the variant name; type tokens must not become unused pattern bindings.
+    let variant: syn::Variant = syn::parse2(variant.clone()).expect("generated field variant");
+    let ident = variant.ident;
+    match variant.fields {
+        syn::Fields::Unit => quote! { #ident },
+        syn::Fields::Unnamed(_) => quote! { #ident(..) },
+        syn::Fields::Named(_) => quote! { #ident { .. } },
+    }
+}
+
 fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
     let target_struct_ident = &ast.ident;
@@ -110,7 +121,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             if let Some(inner_ty) = get_option_inner_ty(&field_type) {//is Option
                                 if let Some(vec_inner_ty) = get_vec_inner_ty(&inner_ty) {
                                     a.has_vec_indexes = true;
-                                    let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+                                    let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
                                     if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                         a.range_or_value_fields.push(quote! {
@@ -225,7 +236,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         #field_ident:Option<#inner_ty>,
                                     });
 
-                                    let field_ident_str = field_ident.to_string();
+                                    let _field_ident_str = field_ident.to_string();
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident => {
                                             self.#field_ident = Some(thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?);
@@ -282,7 +293,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                             } else {
                                 if let Some(vec_inner_ty) = get_vec_inner_ty(&field_type) {
                                     a.has_vec_indexes = true;
-                                    let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+                                    let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
                                     if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                         a.range_or_value_fields.push(quote! {
@@ -384,7 +395,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                         #field_ident:Option<#field_type>,
                                     });
 
-                                    let field_ident_str = field_ident.to_string();
+                                    let _field_ident_str = field_ident.to_string();
                                     a.builder_add_val_match_cases.push(quote! {
                                         #fields_enum_ident::#camel_field_ident => {
                                             self.#field_ident = Some(thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?);
@@ -454,8 +465,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
                                 });
 
-                                let field_type_str = field_type.to_token_stream().to_string();
-                                let field_ident_str = field_ident.to_string();
+                                let _field_type_str = field_type.to_token_stream().to_string();
+                                let _field_ident_str = field_ident.to_string();
                                 a.builder_add_val_match_cases.push(quote! {
                                     #fields_enum_ident::#camel_field_ident => {
                                         let v:#inner_ty = thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?;
@@ -477,8 +488,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                     const_params.push(thoosa_shared::val::NamedVal::from((append(#fields_enum_ident::#camel_field_ident), self.#field_ident.clone().into())));
                                 });
 
-                                let field_type_str = field_type.to_token_stream().to_string();
-                                let field_ident_str = field_ident.to_string();
+                                let _field_type_str = field_type.to_token_stream().to_string();
+                                let _field_ident_str = field_ident.to_string();
                                 a.builder_add_val_match_cases.push(quote! {
                                     #fields_enum_ident::#camel_field_ident => {
                                         let v:#field_type = thoosa_shared::anyhow::Context::with_context(val.try_into(), || format!("invalid configuration field {path:?}"))?;
@@ -516,7 +527,8 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     let enum_fields_for_display = if is_empty_struct {
                         quote! { Self::#empty_marker_ident => f.write_str("") }
                     } else {
-                        quote! { #( Self::#enum_fields => { write!(f, #field_names)})* }
+                        let display_patterns = enum_fields.iter().map(display_pattern);
+                        quote! { #( Self::#display_patterns => { write!(f, #field_names)})* }
                     };
                     let builder_add_val_match_cases = if is_empty_struct {
                         quote! { let _ = (path, val); }
@@ -762,10 +774,11 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                     #target_struct_ident::#variant_ident(<#variant_ty as std::default::Default>::default())
                 }
             });
+            let display_patterns = enum_fields.iter().map(display_pattern);
             (
                 quote! { #(# range_or_value_fields)* },
                 quote! { #(# enum_fields,)* },
-                quote! { #(Self::#enum_fields => { write!(f, #field_names)})* },
+                quote! { #(Self::#display_patterns => { write!(f, #field_names)})* },
                 quote! {  match self {#(# add_range_or_value_calls)* }},
                 quote! {enum},
                 quote! { #(# builder_fields)* },

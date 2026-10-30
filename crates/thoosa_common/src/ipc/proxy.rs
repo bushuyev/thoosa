@@ -1,10 +1,9 @@
 use thoosa_common::tch_error::tch_result;
 use crate::copy_ctx::CudaActorHandle;
-use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::endpoints::{EndpointRegistration, StageRecovery};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use crate::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
-use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgIn, CudaWorkerMsgOut, OpResult, Operation, WorkerInput};
+use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult, WorkerInput};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::purge::FuturesRunnerMapPurger;
 use crate::tho_tensor::ThoTensor;
@@ -16,22 +15,18 @@ use log::{debug, error, warn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::mem;
 use std::string::ToString;
 use std::sync::{Arc, LazyLock};
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use parking_lot::RwLock;
 use tch::Tensor;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, RunCtx, Stage, WithId};
 use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
-use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLockReadGuard};
+use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use thoosa_shared::ipc_types::{H2DTensorKey, WorkerOutput};
 
 #[derive(Debug)]
@@ -49,7 +44,7 @@ where
 
     {
         *guard = match  &mut *guard {
-            StageState::Ready(state) => {
+            StageState::Ready(_state) => {
                 panic!("unexpected state");
             },
             StageState::OffLoaded(keys) => {
@@ -701,7 +696,7 @@ where
         // Advertise typed state execution without exposing ThoTrainModule to the common runner.
         match self {
             Self::Local(_) => Some(self),
-            Self::Proxy { stage,.. } => Some(self),
+            Self::Proxy { stage: _stage,.. } => Some(self),
         }
     }
 }
@@ -723,7 +718,7 @@ where
                 //TODO add semaphore with single permit
                 StageWithState::pre_run(stage.as_ref(), to_device_idx)
             },
-            Self::Proxy { stage, init,.. } => {
+            Self::Proxy { stage, init: _init,.. } => {
                 let stage = Arc::clone(&stage);
                 async move {
                     debug!("SyncStage>::pre_run: stage={stage:?}");
@@ -810,7 +805,7 @@ where
             DynSyncStageWithStateEnum::Local(local) => {
                 local.purge_gpu(ids_to_keep, tho_device_idx, name).await
             }
-            DynSyncStageWithStateEnum::Proxy { stage, init, } => {
+            DynSyncStageWithStateEnum::Proxy { stage, init: _init, } => {
                Arc::clone(stage).purge_gpu(ids_to_keep, tho_device_idx, name).await?;
                 Ok(())
             }

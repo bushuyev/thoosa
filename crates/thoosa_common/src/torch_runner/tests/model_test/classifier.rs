@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tch::{Kind, Tensor, nn, nn::OptimizerConfig};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::traits::{Adjustable, OutId, RunCtx, Stage, WithId};
 use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, SyncStage};
 use thoosa_shared::{CopyToDevice, ThoError};
 
@@ -19,7 +19,6 @@ use crate::ipc::serialization::json::JsonIpcCodec;
 use crate::ipc::worker_msg::{WorkerInput};
 use crate::ipc::wraps::SyncStageIpcWrapper;
 use crate::ipc::wraps::WorkerWrapper;
-use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::FailUntil;
@@ -275,7 +274,7 @@ impl WorkerOutput for ThoTensor<ClsOut, ModelTestId> {}
 #[typetag::serde(name = "ThoTensor_ABData_ModelTestId_Input")]
 impl WorkerInput for ThoTensor<ABData, ModelTestId> {}
 
-pub(crate) fn sync_classifier_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn Workspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub(crate) fn sync_classifier_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     let init: Box<dyn std::any::Any> = init;
     let init = init.downcast::<SyncClassifierStageInit>().expect("SyncClassifierStage endpoint received an unexpected initializer type");

@@ -2,7 +2,7 @@ use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx::RunCtxImpl;
-use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStage, ABClcSyncStageInput, ABClcSyncStageInputWrapperSelector};
+use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput, ABClcSyncStageInputWrapperSelector};
 // use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
 use crate::torch_runner::tests::composite_input::loader_a::{AStageInput, AStageOutput};
 use crate::torch_runner::tests::composite_input::loader_b::{BStageInput, BStageOutput};
@@ -118,7 +118,7 @@ where
     S:  thoosa_common::runner::sync_stage::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
     for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
-    let mut run_ctx = RunCtxImpl::new(1, "root");
+    let run_ctx = RunCtxImpl::new(1, "root");
     let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
     let ab_clc_sync = Arc::clone(&ab_stage.ab_clc_sync); //Arc::new(ABClcSyncStage::new());

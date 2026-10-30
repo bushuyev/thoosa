@@ -40,7 +40,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             if let Some(vec_inner_ty) = get_vec_inner_ty(&inner_ty) {
                                 let field_idx_fmt = format!("{}{{}}", field_name_path);
                                 let field_prefix_fmt = format!("{}{{}}.", field_name_path);
-                                let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+                                let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
                                 // Indexed entries alone cannot distinguish an absent vector from a present empty one.
                                 let length_key = format!("{}__len", field_name_path);
@@ -170,7 +170,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             if let Some(vec_inner_ty) = get_vec_inner_ty(&field.ty) {
                                 let field_idx_fmt = format!("{}{{}}", field_name_path);
                                 let field_prefix_fmt = format!("{}{{}}.", field_name_path);
-                                let vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
+                                let _vec_inner_ty_str = vec_inner_ty.to_token_stream().to_string();
 
                                 if has_attr(field, "config_scalar") || is_primitive(&vec_inner_ty) {
                                     chains_in_to_properties.push(quote! {

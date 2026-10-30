@@ -12,54 +12,44 @@ use crate::stages::find_motifs_run_config::{FindMotifsRunConfig, Metrics};
 use crate::stages::motif_loader::{MotifLoaderInput, MotifMeta, load_random_slices};
 use crate::stages::slices_stats::{metric_quantiles_for_motif, metric_scalar_for_motif};
 use crate::stages::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
-use crate::stages::stft::SyncStftSelector;
 use async_trait::async_trait;
 use cached_derive::Cached;
-use futures_util::future::{BoxFuture, try_join_all};
-use log::{debug, info};
+use futures_util::future::BoxFuture;
+use log::debug;
 use parking_lot::RwLock;
 use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::{IndexOp, Tensor};
-use thoosa_common::copy_ctx;
 use thoosa_common::data_with_extra::DataWithExtra;
-use thoosa_common::dims::{ChannelsData, Dims};
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::instance_cache::InstanceCache;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::proxy::{DynSyncStageEnum, ProxyStage};
-use thoosa_common::ipc::serialization::json::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::serialization::json::JsonIpcCodec;
 use thoosa_common::ipc::worker_msg::WorkerInput;
 use thoosa_common::ipc::wraps::SyncStageIpcWrapper;
 use thoosa_common::ipc::wraps::WorkerWrapper;
-use thoosa_common::resources::Simple;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoStageAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
-use thoosa_common::runner::run_ctx::RunCtxImpl;
+use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_common::runner::sync_stage::SyncStage;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
-use thoosa_common::ws::Workspace;
-use thoosa_cpu_data_derive::CpuData;
 use thoosa_named_derive::Named;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::MaxParallelCtx;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoError, mono_key};
-use thoosa_store::Store;
 use tracing::error;
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
@@ -201,14 +191,6 @@ enum MotifStatsCalcInputData<'a> {
 }
 
 impl<'a> MotifStatsCalcInput<'a> {
-    fn from_managed(id: SynKey, motif: &'a LoadedMotif, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
-        Self { id, data: MotifStatsCalcInputData::Managed(ThoDataRef::Borrowed(motif)), metrics, quantiles }
-    }
-
-    fn from_motifs(id: SynKey, motifs: Vec<&'a LoadedMotif>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
-        Self { id, data: MotifStatsCalcInputData::Motifs(motifs.into_iter().map(ThoDataRef::Borrowed).collect()), metrics, quantiles }
-    }
-
     fn from_data_refs(id: SynKey, data: MotifStatsCalcInputData<'a>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
         Self { id, data, metrics, quantiles }
     }
@@ -298,32 +280,6 @@ impl MotifStatsCalcInputWrapper {
 
     fn from_motifs(id: SynKey, motifs: Vec<Arc<DevicesWrap<LoadedMotif>>>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
         Self { id, data: MotifStatsCalcInputDataWrapper::Motifs(motifs), metrics, quantiles }
-    }
-
-    async fn with_calc_input<'a, R, F, P, FF>(&'a self, run_ctx: P, do_run: F) -> Result<R, ThoError>
-    where
-        for<'f> F: FnOnce(&MotifStatsCalcInput<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        let id = self.id.clone();
-        let metrics = self.metrics.clone();
-        let quantiles = self.quantiles.clone();
-        let to_device_idx = run_ctx.tho_device_idx();
-
-        match &self.data {
-            MotifStatsCalcInputDataWrapper::Managed(motif) => {
-                let motif = SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>).await?;
-                let input = MotifStatsCalcInput::from_managed(id, motif.as_ref(), metrics, quantiles);
-                track_await!(do_run(&input, &run_ctx)).await
-            }
-            MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
-                let motif_refs = try_join_all(motifs.iter().map(|motif| SelectRef::select_ref(motif, to_device_idx, None::<SyncStftSelector>))).await?;
-                let motifs = motif_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
-                let input = MotifStatsCalcInput::from_motifs(id, motifs, metrics, quantiles);
-                track_await!(do_run(&input, &run_ctx)).await
-            }
-        }
     }
 
 }
@@ -985,7 +941,7 @@ where
 #[typetag::serde]
 impl WorkerOutput for MotifStatsOutput{}
 
-pub fn motif_stats_sync_stage_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_sync_stage_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // WorkerStageInput owns decoded motifs while the generic shared wrapper runs the calculation.
@@ -1107,7 +1063,7 @@ where
     }
 }
 
-pub fn motif_stats_consume_stage_endpoint_init<'a>(stage_id:Option<String>, init: Box<dyn WorkerInput>, ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, all_cuda_tensors: &'a AllTensors, tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
+pub fn motif_stats_consume_stage_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
         // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.
@@ -1512,11 +1468,9 @@ mod tests {
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::{Tensor, kind::FLOAT_CPU};
-    use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
-    use thoosa_common::ws::mock_ws_simp;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::traits::AsyncStage;
     use thoosa_store::RunConfigRow;

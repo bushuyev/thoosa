@@ -1,18 +1,17 @@
 use thoosa_common::tch_error::tch_result;
-use crate::tho_tensor::{KeyHolder, ThoTensor, ThoTensorInner};
+use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use anyhow::Context as _;
-use async_trait::async_trait;
 use log::{debug, trace};
 use std::cmp::min;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Deref, Range};
-use std::sync::Arc;
+use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use thoosa_named_derive::Named;
+#[cfg(test)]
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, DebugId, ThoSelector};
-use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::ThoError;
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;

@@ -1,20 +1,24 @@
-use crate::runner::common::cachable::{CachedPurgeOutput, DevicesWrap};
+use crate::runner::common::cachable::{CachedPurgeOutput};
+#[cfg(test)]
+use crate::runner::common::cachable::DevicesWrap;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures_util::{StreamExt, TryStreamExt};
-use futures_util::future::{BoxFuture, Shared};
+use futures_util::{StreamExt};
 use futures_util::stream;
 use log::{debug, info, trace, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
+#[cfg(test)]
 use std::sync::Arc;
 use dashmap::mapref::multiple::RefMulti;
 use mockall::Any;
-use thoosa_shared::{tracked_await, CopyToDevice};
+#[cfg(test)]
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
-use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::traits::{CachableIdTr, Data};
+use thoosa_shared::traits::{CachableIdTr};
+#[cfg(test)]
+use thoosa_shared::traits::Data;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::tracked_await::track_await;
 
@@ -75,15 +79,15 @@ where
 
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO rename to CachePurger
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+    async fn has_gpu_data(&self, _device_idx: usize) -> bool {
         false
     }
 
     async fn purge_gpu(
         &self,
-        ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
-        device_idx: usize,
-        name: &str,
+        _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
+        _device_idx: usize,
+        _name: &str,
     ) -> Result<(), ThoError> {
         Ok(())
     }
@@ -91,8 +95,8 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO rename to CachePu
     // Recovery removes only the failed device's data; healthy replicas survive.
     async fn drop_gpu(
         &self,
-        device_idx: usize,
-        name: &str,
+        _device_idx: usize,
+        _name: &str,
     ) -> Result<(), ThoError> {
         Ok(())
     }
@@ -105,7 +109,7 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO rename to CachePu
         Ok(0)
     }
 
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
+    async fn purge_cpu(&self, _purge_until: u64) -> usize {
         0
     }
 }
@@ -322,12 +326,11 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use dashmap::DashMap;
-    use futures_util::future::{BoxFuture, FutureExt, ready};
+    use futures_util::future::{FutureExt, ready};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{CachableIdTr, DummyWithId as DummyCachableId, WithId};
-    use thoosa_shared::copy_mode::CpuOrGpu;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[tokio::test]

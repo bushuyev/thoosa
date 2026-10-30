@@ -4,7 +4,6 @@ use serde::de::Error as DeError;
 use serde::ser::{Error as SerError, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Kind;
-use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
@@ -174,12 +173,10 @@ mod tests {
     use log::debug;
     use serde::{Deserialize, Serialize};
     use tch::Kind;
-    use tracing::field::debug;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use crate::dims::AnyDims;
     use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
@@ -197,7 +194,7 @@ mod tests {
 
         debug!("cuda_tensor={cuda_tensor:?}");
 
-        let ThoTensorInner::Ref { key, size, kind, selector } = cuda_tensor.inner else {
+        let ThoTensorInner::Ref { key, size, kind, selector: _selector } = cuda_tensor.inner else {
             panic!("should be ref");
         };
 
@@ -212,7 +209,7 @@ mod tests {
         // let cuda_tensor:ThoTensor<AnyDims, ()> =  postcard::from_bytes::<ThoTensor<AnyDims, ()>>(&cuda_tensor_bytes).unwrap();
 
 
-        let ThoTensorInner::Ref { key, size, kind, selector } = cuda_tensor.inner else {
+        let ThoTensorInner::Ref { key, size, kind, selector: _selector } = cuda_tensor.inner else {
             panic!("should be ref");
         };
 
@@ -247,7 +244,7 @@ mod tests {
 
         impl StageWrapper for StageA{}
         impl StageA {
-            pub fn new(init:StageAInit) -> Self {
+            pub fn new(_init:StageAInit) -> Self {
                 Self {}
             }
         }
@@ -260,16 +257,13 @@ mod tests {
         }
 
         impl StageBInit {
-            pub fn new(value: u32) -> Self {
-                Self { value }
-            }
-        }
+                    }
 
         #[derive(Debug)]
         struct StageB {}
         impl StageWrapper for StageB{}
         impl StageB {
-            pub fn new(init:StageBInit) -> Self {
+            pub fn new(_init:StageBInit) -> Self {
                 Self {}
             }
         }
@@ -295,7 +289,7 @@ mod tests {
             Box::new(StageB::new(*init_b)) as Box<dyn StageWrapper>
         }
 
-        let mut endpoint_inits = HashMap::from([
+        let endpoint_inits = HashMap::from([
             (
                 "test_a".to_string(),
                 Box::new(test_a_init) as Box<dyn Fn(Box<dyn WorkerInput>)->Box<dyn StageWrapper>>
@@ -318,13 +312,13 @@ mod tests {
 
         assert_eq!(msg.request_id, msg_de.request_id);
 
-        let Operation::InstallStage{ endpoint_name: key, stage_id, init_data } = msg.operation else {
+        let Operation::InstallStage{ endpoint_name: key, stage_id: _stage_id, init_data } = msg.operation else {
             panic!("wrong operation");
         };
 
         assert_eq!("test_a".to_string(), key);
 
-        let mut stage_a_init = endpoint_inits.get(&key).unwrap();
+        let stage_a_init = endpoint_inits.get(&key).unwrap();
 
         let stage_a = stage_a_init(init_data);
 
