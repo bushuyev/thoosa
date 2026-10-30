@@ -1031,7 +1031,6 @@ pub mod mock_global_ctx {
         build_with_params(MockGlobalCtxBuildParams::default(), false)
     }
 
-    pub static mut USE_REAL_CTX:bool = false;
     static MANUAL_METHOD_REAL_CTX: std::sync::OnceLock<parking_lot::RwLock<Option<&'static GlobalCtx>>> = std::sync::OnceLock::new();
 
     pub fn set_manual_method_real_ctx(real: Option<&'static GlobalCtx>) {
