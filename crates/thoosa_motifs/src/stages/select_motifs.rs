@@ -456,7 +456,7 @@ pub mod tests {
     use tch::{Kind, Tensor};
     use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::resources::Simple;
     use thoosa_common::utils::reset_print_options;
     use thoosa_properties_map::ToHashmap;
@@ -662,7 +662,7 @@ pub mod tests {
         log::set_max_level(LevelFilter::Info);
         reset_print_options();
         GlobalCtx::init_devices(2)?;
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        // Runtime selection is owned by the installed mock registry.
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let ws = Arc::new(RwLock::new(crate::motifs_ws::mock_motifs_ws_simp(None, 1, 100, 1000)));
