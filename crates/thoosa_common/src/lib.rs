@@ -31,7 +31,7 @@ pub mod stages;
 pub mod commands;
 pub mod progress_socket;
 
-mod version;
+mod version { include!(concat!(env!("OUT_DIR"), "/version.rs")); }
 
 pub mod tch_error;
 pub mod instance_cache;
