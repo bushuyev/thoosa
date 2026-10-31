@@ -155,6 +155,8 @@ impl CudaRecoveryCoordinator {
                 debug!("CudaRecoveryCoordinator::run: drain_timeout e={e:?}");
                 // A wedged IPC operation holds its lease and shared buffers until
                 // the worker is dead. Retirement uses a separate control channel.
+                // Only a drain timeout retires early; after a normal drain the
+                // Restart control itself must retire the old worker.
                 let retire = self.retire.as_ref().ok_or_else(|| ThoError::new("CUDA activity did not drain before the recovery deadline"))?;
                 tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, retire(device, ticket)).await.map_err(|_| ThoError::new("CUDA worker retirement timed out"))??;
                 tokio::time::timeout(self.drain_timeout, &mut drain).await.map_err(|_| ThoError::new("CUDA activity did not drain after worker retirement"))??;
