@@ -1355,7 +1355,7 @@ mod transfer_lifetime_tests {
         // still retain potentially live storage and reject ordinary reuse.
         let drained = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom()));
         let error = completion.finish(drained).unwrap_err();
-        assert!(error.is_cuda_recovery_failed() && !error.needs_cuda_restart());
+        assert!(error.is_cuda_recovery_failed() && !error.needs_cuda_recovery());
         drop(completion);
         assert!(weak.upgrade().is_some(), "unknown completion must not release storage");
         assert!(tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().is_err());

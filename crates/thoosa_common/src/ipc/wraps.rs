@@ -478,7 +478,7 @@ mod tests {
                     // Exercise the actual worker dispatch boundary for both
                     // borrowed and consuming endpoints, without CUDA timing.
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_worker_stage(&stage, Box::new(()), consume, &tensors, &device, &ctx, &mut handle)));
-                    if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_restart()); }
+                    if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_recovery()); }
                     else if outcome == 2 { assert!(result.is_err()); }
                     else if outcome == 1 { assert!(result.unwrap().unwrap_err().is_oom()); }
                     else { assert!(result.unwrap().is_ok()); }
@@ -509,7 +509,7 @@ mod tests {
                 let result = std::panic::AssertUnwindSafe(run_worker_stage_with_state(&stage, &input, &tensors, &device, &ctx, &mut handle)).catch_unwind().await;
                 assert_eq!(*state.try_lock().expect("worker state must unlock after synchronization"), 1);
                 if sync_fails {
-                    assert!(result.unwrap().unwrap_err().needs_cuda_restart());
+                    assert!(result.unwrap().unwrap_err().needs_cuda_recovery());
                 } else if outcome == 2 {
                     assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"worker submission panic"));
                 } else if outcome == 1 {

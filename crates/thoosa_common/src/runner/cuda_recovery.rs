@@ -73,9 +73,9 @@ impl CudaRecoveryCoordinator {
         if generation != current {
             return Err(ThoError::new("CUDA recovery report refers to a future device generation"));
         }
-        debug!("CudaRecoveryCoordinator::request: needs_cuda_ctx_reset={:?} is_cuda_recovery_failed={:?} process_failure={:?} cycle={:?}", cause.needs_cuda_restart(), cause.is_cuda_recovery_failed(), self.process_failure.is_some(), cycle.deref());
+        debug!("CudaRecoveryCoordinator::request: needs_cuda_ctx_reset={:?} is_cuda_recovery_failed={:?} process_failure={:?} cycle={:?}", cause.needs_cuda_recovery(), cause.is_cuda_recovery_failed(), self.process_failure.is_some(), cycle.deref());
 
-        if (cause.needs_cuda_restart() || cause.is_cuda_recovery_failed()) && let Some(process_failure) = &self.process_failure {
+        if (cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed()) && let Some(process_failure) = &self.process_failure {
             // Local fatal errors or an unsuccessful stream drain invalidate the
             // process; neither can be repaired by resetting live LibTorch state.
             // Publish synchronously,
@@ -162,7 +162,7 @@ impl CudaRecoveryCoordinator {
         }
         debug!("CudaRecoveryCoordinator::run: calling restart_fn");
 
-        tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, CudaActivityScope::run_reset(&self.gate, ticket, async {
+        tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, CudaActivityScope::run_recovery(&self.gate, ticket, async {
             (self.restart_fn)(device).await
         })).await
         .map_err(|e| {
@@ -283,7 +283,7 @@ mod tests {
         let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
         let coordinator = CudaRecoveryCoordinator::with_backend(Arc::clone(&gate), Arc::new(|_| panic!("uncertain local completion must not reset live LibTorch")), None, Some(Arc::new(move |failure| { failure_tx.send(failure).unwrap(); })));
         let failure = crate::copy_ctx::complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::oom())).result.unwrap_err();
-        assert!(!failure.needs_cuda_restart());
+        assert!(!failure.needs_cuda_recovery());
         let error = coordinator.request(gate.device_generation(), failure, drained).unwrap_err();
         assert!(error.is_cuda_recovery_failed());
         assert!(failure_rx.recv().await.unwrap().is_cuda_recovery_failed());
@@ -438,7 +438,7 @@ mod tests {
                 }
                 let failure = gate.wait_if_paused().await.unwrap_err();
                 let ThoError::CudaRecoveryFailed(failure) = failure.what() else { panic!("terminal error lost") };
-                assert!(failure.original.needs_cuda_restart());
+                assert!(failure.original.needs_cuda_recovery());
                 assert!(failure.recovery.is_some());
                 assert_eq!(gate.device_generation(), generation);
                 assert!(gate.check_admission().unwrap_err().is_cuda_recovery_failed());

@@ -110,37 +110,69 @@ impl Runtime {
         static ARENA: OnceLock<Result<(), String>> = OnceLock::new();
         if let Err(error) = ARENA.get_or_init(|| {
             if unsafe { shared_arena_init(48 * 1024 * 1024 * 1024) } == 0 { Ok(()) } else { Err("shared_arena_init failed".into()) }
-        }) { anyhow::bail!("{error}"); }
+        }) {
+            anyhow::bail!("{error}");
+        }
+
         let raw_fd = unsafe { shared_arena_dup_fd() };
         anyhow::ensure!(raw_fd >= 0, "shared_arena_dup_fd failed");
         let arena_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
         let gates: Vec<_> = (1..num_devices).map(|i| Arc::new(CudaActivityGate::new(i))).collect();
+
         let residency = Arc::new(ResidencyService::new(num_devices, true, gates.first().cloned()));
-        let failure = Arc::new(RuntimeFailure { shutting_down: AtomicBool::new(false), failure: tokio::sync::watch::channel(None).0, gates: gates.clone() });
+
+        let failure = Arc::new(RuntimeFailure {
+            shutting_down: AtomicBool::new(false),
+            failure: tokio::sync::watch::channel(None).0,
+            gates: gates.clone()
+        });
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
             let ipc_actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
             let actor: Arc<dyn CudaActorHandle> = Arc::new(ipc_actor.clone());
             let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor), Arc::clone(&residency), Arc::clone(&failure), true);
-            devices.push(DeviceExecutionCtx { runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), cuda_actor: Some(actor), ipc_actor: Some(ipc_actor) });
+            devices.push(DeviceExecutionCtx {
+                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), cuda_actor: Some(actor), ipc_actor: Some(ipc_actor)
+            });
         }
         Ok(Arc::new(Self { devices, residency, failure, is_ipc: true, _arena_fd: Some(arena_fd) }))
     }
+
     fn recovery(gate: Arc<CudaActivityGate>, actor: Arc<dyn CudaActorHandle>, residency: Arc<ResidencyService>, failure: Arc<RuntimeFailure>, is_ipc: bool) -> Arc<CudaRecoveryCoordinator> {
         let restart_actor = Arc::clone(&actor);
         let restart_gate = Arc::clone(&gate);
-        CudaRecoveryCoordinator::with_backend(gate, Arc::new(move |device| {
-            let (actor, gate, residency) = (Arc::clone(&restart_actor), Arc::clone(&restart_gate), Arc::clone(&residency));
-            Box::pin(async move {
-                residency.drop_data_on_device(device, "recovery").await?;
-                actor.restart_backend(thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?).await
-            })
-        }), if is_ipc { Some(Arc::new(move |_, authority| { let actor = Arc::clone(&actor); Box::pin(async move { actor.retire_backend(authority).await }) })) } else { None },
-        if is_ipc { None } else { Some(Arc::new(move |error| {
-            failure.shutting_down.store(true, Relaxed);
-            for gate in &failure.gates { gate.fail_process(error.clone()); }
-            failure.failure.send_if_modified(|current| { if current.is_some() { false } else { *current = Some(error); true } });
-        })) })
+        CudaRecoveryCoordinator::with_backend(
+            gate,
+            Arc::new(move |device| {
+                let (actor, gate, residency) = (Arc::clone(&restart_actor), Arc::clone(&restart_gate), Arc::clone(&residency));
+                Box::pin(async move {
+                    residency.drop_data_on_device(device, "recovery").await?;
+                    actor.restart_backend(thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?).await
+                })
+            }),
+            if is_ipc {
+                Some(Arc::new(move |_, authority| {
+                    let actor = Arc::clone(&actor);
+                    Box::pin(async move { actor.retire_backend(authority).await })
+                }))
+            } else {
+                None
+            },
+            if is_ipc {
+                None
+            } else {
+                Some(Arc::new(move |error| {
+                    failure.shutting_down.store(true, Relaxed);
+                    for gate in &failure.gates { gate.fail_process(error.clone()); }
+                    failure.failure.send_if_modified(|current| {
+                        if current.is_some() { false } else {
+                            *current = Some(error);
+                            true
+                        }
+                    });
+                }))
+            },
+        )
     }
     pub fn is_shutting_down(&self) -> bool { self.failure.shutting_down.load(Relaxed) }
     pub fn process_failure(&self) -> Option<ThoError> { self.failure.failure.borrow().clone() }

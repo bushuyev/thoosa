@@ -426,7 +426,7 @@ where
         if let Err(cause) = committed {
             self.transaction_failed = true;
             self.ipc_export = None;
-            if cause.needs_cuda_restart() || cause.is_cuda_recovery_failed() { return Err(cause); }
+            if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() { return Err(cause); }
             return Err(Self::failed_epoch(cause));
         }
         Ok(output)
@@ -438,7 +438,7 @@ where
     }
 
     fn failed_epoch(cause: ThoError) -> ThoError {
-        if cause.needs_cuda_restart() || cause.is_cuda_recovery_failed() { return cause; }
+        if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() { return cause; }
         // Preserve allocation failures exposed as panics by tch without allowing
         // the generic executor to replay a batch against mutated training state.
         let cause = if matches!(cause.what(), ThoError::Anyhow(_)) && cause.is_retryable_oom() {

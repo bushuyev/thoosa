@@ -274,7 +274,7 @@ mod tests {
         let bytes = serde_json::to_vec(&error)?;
         let error: ThoError = serde_json::from_slice::<WorkerError>(&bytes)?.into();
         assert!(error.is_missing_endpoint());
-        assert!(!error.needs_cuda_restart(), "a missing endpoint is not another CUDA failure");
+        assert!(!error.needs_cuda_recovery(), "a missing endpoint is not another CUDA failure");
         Ok(())
     }
 
