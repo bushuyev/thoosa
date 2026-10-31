@@ -47,7 +47,7 @@ mod tests {
         ] {
             let source = anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model");
             let error = ThoError::from(source);
-            assert_eq!((error.is_oom(), error.needs_cuda_restart()), (oom, reset));
+            assert_eq!((error.is_oom(), error.needs_cuda_recovery()), (oom, reset));
             let ThoError::Anyhow(source) = &error else { panic!("expected original Torch error") };
             assert!(source.chain().any(|cause| cause.downcast_ref::<tch::TchError>().is_some()));
             assert!(format!("{error:#}").contains(message));
@@ -65,7 +65,7 @@ mod tests {
         ] {
             let error = tch_result::<()>(Err(tch::TchError::Torch(message.into()))).unwrap_err();
             let error = error.clone().context("run stage");
-            assert_eq!((error.is_retryable_oom(), error.needs_cuda_restart()), (oom, reset));
+            assert_eq!((error.is_retryable_oom(), error.needs_cuda_recovery()), (oom, reset));
             let ThoError::Anyhow(source) = &error else { panic!("expected original Torch error") };
             assert!(source.chain().any(|cause| cause.downcast_ref::<tch::TchError>().is_some()));
             assert!(format!("{error:#}").contains(message));

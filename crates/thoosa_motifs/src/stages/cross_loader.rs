@@ -1471,12 +1471,12 @@ mod tests {
 
         // Copy failures must escape append without retaining an incomplete partial.
         for cause in [ThoError::oom(), ThoError::CudaBeingRecovered] {
-            let expected = (cause.is_retryable_oom(), cause.needs_cuda_restart());
+            let expected = (cause.is_retryable_oom(), cause.needs_cuda_recovery());
             let result = MockTransferOutputBuilder::new().with_transfer_error(cause).build();
             let output = CrossUnfoldClcOutput::new(result, SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("test", "output").into());
             let mut builder = CrossUnfoldClcOutputBuilder::new(CrossUnfoldClcOutputMergeMode::CpuMerge);
             let error = builder.add_partial_output(output).await.unwrap_err();
-            assert_eq!((error.is_retryable_oom(), error.needs_cuda_restart()), expected);
+            assert_eq!((error.is_retryable_oom(), error.needs_cuda_recovery()), expected);
             assert!(builder.partials.is_empty());
         }
     }

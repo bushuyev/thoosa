@@ -221,12 +221,20 @@ impl Drop for RemoteAllocation {
         }
     }
 }
+
 impl KeyHolder {
     fn ownership(key: u64, worker: CudaWorkerId, release: Option<crate::ipc::cuda_process::TensorReleaseHandle>) -> Arc<RemoteAllocation> {
         static KEYS: OnceLock<Mutex<HashMap<(u64, CudaWorkerId, u64), std::sync::Weak<RemoteAllocation>>>> = OnceLock::new();
         let mut keys = KEYS.get_or_init(Default::default).lock();
-        let identity = (release.as_ref().map_or(0, |owner| owner.owner_id), worker, key);
-        if let Some(owner) = keys.get(&identity).and_then(std::sync::Weak::upgrade) { return owner; }
+
+        let identity = (
+            release.as_ref().map_or(0, |owner| owner.owner_id),
+            worker,
+            key
+        );
+        if let Some(owner) = keys.get(&identity).and_then(std::sync::Weak::upgrade) {
+            return owner;
+        }
         // Remove dead metadata as new references arrive; the registry owns no tensor.
         keys.retain(|_, owner| owner.strong_count() != 0);
         let owner = Arc::new(RemoteAllocation { key, worker, release, enabled: std::sync::atomic::AtomicBool::new(false) });
@@ -414,8 +422,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn new_ref(id: Id, key: u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, worker_id: CudaWorkerId) -> Self {
         let tho_device_idx = worker_id.device_idx;
 
-        // #[cfg(tho_debug)]
-        // let key_holder = if GlobalCtx::is_installed(){
         debug!("KeyHolder::new_ref: id={id:?} key={key} size={size:?} kind={kind:?} selector={selector:?} tho_device_idx={tho_device_idx:?}");
 
         let release = crate::ipc::cuda_process::TensorReleaseHandle::current().or_else(|| {

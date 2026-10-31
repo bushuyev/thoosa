@@ -836,7 +836,7 @@ impl CudaIPCActor {
     }
 
     async fn control(&mut self, control: BackendControl) -> bool {
-        info!("CudaIPCActor::control: control={control:?}");
+        debug!("CudaIPCActor::control: control={control:?}");
         match control {
             BackendControl::ReleaseEndpoint { stage_id, endpoint, worker_id } => {
                 if let Some(worker) = &self.spawned_state {
@@ -1204,7 +1204,9 @@ async fn send_request(tx: mpsc::Sender<CudaWorkerMsgIn>, pending: PendingRespons
 #[derive(Debug, Clone)]
 pub struct TensorReleaseHandle { control: mpsc::UnboundedSender<BackendControl>, pub(crate) owner_id: u64 }
 impl TensorReleaseHandle {
-    pub(crate) fn release(&self, key: u64, worker_id: CudaWorkerId) { let _ = self.control.send(BackendControl::ReleaseTensor { key, worker_id }); }
+    pub(crate) fn release(&self, key: u64, worker_id: CudaWorkerId) {
+        let _ = self.control.send(BackendControl::ReleaseTensor { key, worker_id });
+    }
     pub(crate) fn decoding<T>(&self, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<TensorReleaseHandle>);
         impl Drop for Restore { fn drop(&mut self) { DECODING_RELEASE.with(|slot| *slot.borrow_mut() = self.0.take()); } }
@@ -1448,7 +1450,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     #[cfg(test)]
     async fn restart(&self) -> Result<(), ThoError> {
-        crate::runner::global_ctx::GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
+        GlobalCtx::global().restart_cuda_device(self.tho_device_idx).await
     }
 
     async fn restart_backend(&self, authority: CudaActivityPauseTicket) -> Result<(), ThoError> {
@@ -1734,7 +1736,7 @@ mod tests {
             assert!(matches!(&received, ThoError::Cuda { action: received_action, .. } if *received_action == action));
             assert_eq!(received.is_oom(), action == CudaAction::HandleOOM);
             assert_eq!(received.is_retryable_oom(), action == CudaAction::HandleOOM);
-            assert_eq!(received.needs_cuda_restart(), action == CudaAction::NeedsRestart);
+            assert_eq!(received.needs_cuda_recovery(), action == CudaAction::NeedsRestart);
             let message = received.to_string();
             assert!(message.contains("worker request 42") && message.contains("job 27") && message.contains("forward model") && message.contains("device failure detail"));
         }
@@ -1751,7 +1753,7 @@ mod tests {
             let contextual = ThoError::from(anyhow::Error::new(tch::TchError::Torch(message.into())).context("forward model"));
             for error in [direct, contextual] {
                 let received = round_trip_worker_error(error.context("worker request"));
-                assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_restart()), (oom, oom, reset));
+                assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_recovery()), (oom, oom, reset));
                 assert!(received.to_string().contains(message));
             }
         }
@@ -1770,13 +1772,13 @@ mod tests {
         ] {
             let received = round_trip_worker_error(error.clone().context("worker operation"));
             assert_eq!(std::mem::discriminant(received.what()), std::mem::discriminant(error.what()));
-            assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_restart()), (error.is_oom(), error.is_retryable_oom(), error.needs_cuda_restart()));
+            assert_eq!((received.is_oom(), received.is_retryable_oom(), received.needs_cuda_recovery()), (error.is_oom(), error.is_retryable_oom(), error.needs_cuda_recovery()));
             assert_eq!(received.what().to_string(), error.to_string());
         }
 
         let received = round_trip_worker_error(ThoError::from(std::io::Error::other("CUDA out of memory")).context("read model"));
         assert!(matches!(received, ThoError::Anyhow(_)));
-        assert!(received.is_oom() && received.is_retryable_oom() && !received.needs_cuda_restart());
+        assert!(received.is_oom() && received.is_retryable_oom() && !received.needs_cuda_recovery());
         assert!(received.to_string().contains("read model") && received.to_string().contains("CUDA out of memory"));
     }
 
@@ -1788,7 +1790,7 @@ mod tests {
             let received = round_trip_worker_error(error.context("training failed"));
             assert!(received.is_oom());
             assert!(!received.is_retryable_oom());
-            assert!(!received.needs_cuda_restart());
+            assert!(!received.needs_cuda_recovery());
             assert!(format!("{received:#}").contains("out of memory"));
             let ThoError::TrainingSessionFailed(failure) = received.what() else { panic!("training failure classification was lost") };
             assert!(failure.original.is_oom());
@@ -1807,9 +1809,9 @@ mod tests {
             let error = ThoError::CudaRecoveryFailed(Arc::new(CudaRecoveryFailure { original, recovery }));
             let received = round_trip_worker_error(error.context("worker recovery"));
             assert!(received.is_cuda_recovery_failed());
-            assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_restart());
+            assert!(!received.is_oom() && !received.is_retryable_oom() && !received.needs_cuda_recovery());
             let ThoError::CudaRecoveryFailed(failure) = received.what() else { panic!("terminal error was lost") };
-            assert!(failure.original.needs_cuda_restart());
+            assert!(failure.original.needs_cuda_recovery());
             assert_eq!(failure.recovery.is_some(), has_recovery);
             assert!(received.to_string().contains("original stage") && received.to_string().contains("illegal address"));
             if let Some(recovery) = &failure.recovery {
@@ -2105,7 +2107,7 @@ mod tests {
             assert!(matches!(error, ThoError::Cuda { action: thoosa_shared::CudaAction::HandleOOM, .. }), "worker OOM action was not propagated: {error:?}");
             assert!(error.is_oom(), "worker OOM classification was lost: {error:?}");
             assert!(error.is_retryable_oom(), "worker OOM retryability was lost: {error:?}");
-            assert!(!error.needs_cuda_restart(), "ordinary worker OOM must not reset CUDA: {error:?}");
+            assert!(!error.needs_cuda_recovery(), "ordinary worker OOM must not reset CUDA: {error:?}");
 
 
             debug!("All ok");

@@ -417,7 +417,7 @@ mod tests {
             context.split_len = 50;
 
             let error = context.add_partial_output(MockTestOutput::new()).await.unwrap_err();
-            assert_eq!((error.is_retryable_oom(), error.needs_cuda_restart()), (oom, reset));
+            assert_eq!((error.is_retryable_oom(), error.needs_cuda_recovery()), (oom, reset));
             assert_eq!(context.done_to, 0);
             assert!(!context.all_done());
             let ThoError::Anyhow(source) = error else { panic!("expected original tensor error") };

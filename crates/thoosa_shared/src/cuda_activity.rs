@@ -123,7 +123,7 @@ impl CudaActivityScope {
             return Ok(scope.clone());
         }
         Self::try_enter(gate)?.map(|scope| scope.with_inherited(inherited)).ok_or_else(|| {
-            ThoError::new_with_cause("CUDA operation interrupted by context reset", ThoError::CudaBeingRecovered)
+            ThoError::new_with_cause("CUDA operation interrupted by Cuda recovery", ThoError::CudaBeingRecovered)
         })
     }
 
@@ -132,7 +132,7 @@ impl CudaActivityScope {
     }
 
     /// Cleanup is authorized only for this idle owned cycle, never another gate.
-    pub async fn run_reset<T, F: Future<Output = Result<T, ThoError>>>(gate: &Arc<CudaActivityGate>, ticket: CudaActivityPauseTicket, future: F) -> Result<T, ThoError> {
+    pub async fn run_recovery<T, F: Future<Output = Result<T, ThoError>>>(gate: &Arc<CudaActivityGate>, ticket: CudaActivityPauseTicket, future: F) -> Result<T, ThoError> {
         let generation = {
             let state = gate.state.lock();
             if let CudaRecoveryState::Failed(failure) = &state.recovery {
@@ -260,9 +260,9 @@ mod tests {
         assert_eq!(wakes.0.load(SeqCst), 2, "both registered waiters must be notified");
         for error in [admission.await.unwrap_err(), completion.await.unwrap_err(), gate.check_admission().unwrap_err()] {
             assert!(error.is_cuda_recovery_failed());
-            assert!(!error.is_oom() && !error.is_retryable_oom() && !error.needs_cuda_restart());
+            assert!(!error.is_oom() && !error.is_retryable_oom() && !error.needs_cuda_recovery());
             let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("terminal error was lost") };
-            assert!(failure.original.needs_cuda_restart());
+            assert!(failure.original.needs_cuda_recovery());
             assert!(failure.recovery.as_ref().unwrap().is_oom());
             assert!(error.to_string().contains("stage failed") && error.to_string().contains("replacement failed"));
         }
@@ -299,7 +299,7 @@ mod tests {
         first_gate.fail_pause(other, None);
         assert!(first_gate.is_recovering());
         assert!(first_gate.wait_for_pause_to_finish(other).await.is_err());
-        assert!(CudaActivityScope::run_reset::<(), _>(&first_gate, other, async { panic!("foreign reset ran") }).await.is_err());
+        assert!(CudaActivityScope::run_recovery::<(), _>(&first_gate, other, async { panic!("foreign reset ran") }).await.is_err());
         assert_eq!(first_gate.device_generation(), CudaDeviceGeneration(0));
 
         first_gate.finish_pause(first);
@@ -332,7 +332,7 @@ mod tests {
             let _child = CudaActivityScope::for_operation(&first).unwrap();
         }).await;
         let first_pause = first.request_pause(original_failure()).unwrap();
-        CudaActivityScope::run_reset(&first, first_pause, async {
+        CudaActivityScope::run_recovery(&first, first_pause, async {
             let _cleanup = CudaActivityScope::for_operation(&first)?;
             assert!(CudaActivityScope::for_operation(&second).is_err());
             Ok(())
@@ -373,7 +373,7 @@ mod tests {
         use super::CudaActivityScope;
         let gate = Arc::new(CudaActivityGate::new(1));
         let ticket = gate.request_pause(original_failure()).unwrap();
-        let escaped = CudaActivityScope::run_reset(&gate, ticket, async { Ok(CudaActivityScope::current().unwrap()) }).await.unwrap();
+        let escaped = CudaActivityScope::run_recovery(&gate, ticket, async { Ok(CudaActivityScope::current().unwrap()) }).await.unwrap();
         gate.finish_pause(ticket);
         let next = gate.request_pause(original_failure()).unwrap();
         escaped.run(async {
@@ -390,7 +390,7 @@ mod tests {
         assert!(matches!(wrapped.what(), ThoError::CudaRecoveryFailed(_)));
         let job = ThoError::from(SyncStageRunnerError::JobError { job_id: 7, inner: Box::new(wrapped) }).context("runner");
         assert!(job.is_cuda_recovery_failed());
-        assert!(!job.is_oom() && !job.is_retryable_oom() && !job.needs_cuda_restart());
+        assert!(!job.is_oom() && !job.is_retryable_oom() && !job.needs_cuda_recovery());
         assert!(std::error::Error::source(&error).unwrap().to_string().contains("stage failed"));
     }
 }

@@ -259,7 +259,7 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
                 let error = ThoError::from(observed_rx.await.unwrap());
                 debug!("test_stage_failure_is_reported_by_runner_ipc: error={error:?}");
                 assert!(error.to_string().contains("device-side assert triggered"), "stage reply was rewritten");
-                assert!(error.needs_cuda_restart());
+                assert!(error.needs_cuda_recovery());
                 assert!(gate.check_admission().is_ok(), "actor reported a stage failure before the runner");
                 if mode == "cancelled" {
                     caller.abort();
@@ -444,7 +444,7 @@ fn test_fatal_local_cuda_error_requests_process_shutdown_in_child() -> Result<()
                 }
                 "copy" => {
                     let source = tch_result(Tensor::f_from_slice(&[1f32]))?;
-                    assert!(tokio::task::spawn_blocking(poison_and_synchronize).await?.unwrap_err().needs_cuda_restart());
+                    assert!(tokio::task::spawn_blocking(poison_and_synchronize).await?.unwrap_err().needs_cuda_recovery());
                     global.cuda_actor(1).copy(source.into(), 1.into()).await.unwrap_err()
                 }
                 _ => panic!("unknown local failure path"),
@@ -452,7 +452,7 @@ fn test_fatal_local_cuda_error_requests_process_shutdown_in_child() -> Result<()
             assert!(error.is_cuda_recovery_failed(), "fatal local execution must be terminal: {error:#}");
             let failure = tokio::time::timeout(Duration::from_secs(2), GlobalCtx::wait_for_process_failure()).await?;
             let ThoError::CudaRecoveryFailed(failure) = failure.what() else { panic!("lost terminal failure") };
-            assert!(failure.original.needs_cuda_restart());
+            assert!(failure.original.needs_cuda_recovery());
             assert!(GlobalCtx::is_shutting_down());
             assert_eq!(global.cuda_activity_gate(1).unwrap().device_generation().0, 0);
             assert!(global.get_runner(1).submit(0, async { panic!("local device reopened"); #[allow(unreachable_code)] Ok(()) }, None).await.unwrap_err().is_cuda_recovery_failed());

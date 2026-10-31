@@ -520,7 +520,7 @@ impl Display for ThoError {
             Self::NotFound(what) => f.write_str(&format!("{what:?} not found")),
             Self::MissingEndpoint(key) => write!(f, "no initialized endpoint for endpoint_key={key}"),
             Self::SyncStageRunner(error) => Display::fmt(error, f),
-            Self::CudaBeingRecovered => f.write_str("context reset"),
+            Self::CudaBeingRecovered => f.write_str("Cuda is being recovered"),
         }
     }
 }
@@ -605,13 +605,13 @@ impl ThoError {
         }
     }
 
-    pub fn needs_cuda_restart(&self) -> bool {
+    pub fn needs_cuda_recovery(&self) -> bool {
         match self.what() {
             Self::Cuda { action: CudaAction::NeedsRestart, .. } => true,
-            Self::TrainingSessionFailed(failure) => failure.original.needs_cuda_restart() || failure.recovery.as_ref().is_some_and(Self::needs_cuda_restart),
-            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_restart(),
+            Self::TrainingSessionFailed(failure) => failure.original.needs_cuda_recovery() || failure.recovery.as_ref().is_some_and(Self::needs_cuda_recovery),
+            Self::SyncStageRunner(SyncStageRunnerError::JobError { inner, .. }) => inner.needs_cuda_recovery(),
             Self::Anyhow(anyhow) => {
-                let needs_reset = cuda_cause_from_msg(&anyhow.to_string()).needs_cuda_restart();
+                let needs_reset = cuda_cause_from_msg(&anyhow.to_string()).needs_cuda_recovery();
                 if needs_reset{
                     warn!("thoosa_shared::ThoError::needs_cuda_restart: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
@@ -2549,7 +2549,7 @@ mod shared_tests {
             let wrapped: ThoError = Err::<(), _>(job).context("run stage").unwrap_err().into();
             let shared = wrapped.clone().context("worker request");
             assert!(matches!(shared.what(), ThoError::SyncStageRunner(SyncStageRunnerError::JobError { job_id: 42, .. })));
-            assert_eq!((shared.is_oom(), shared.is_retryable_oom(), shared.needs_cuda_restart()), (oom, retryable, reset));
+            assert_eq!((shared.is_oom(), shared.is_retryable_oom(), shared.needs_cuda_recovery()), (oom, retryable, reset));
         }
 
         let error: ThoError = Err::<(), _>(ThoError::CudaBeingRecovered).context("cancel stage").unwrap_err().into();
@@ -2567,7 +2567,7 @@ mod shared_tests {
             let wrapped = job.context("training request").clone().context("worker reply");
             assert!(wrapped.is_oom(), "report the cause even though replay is forbidden");
             assert!(!wrapped.is_retryable_oom());
-            assert!(!wrapped.needs_cuda_restart());
+            assert!(!wrapped.needs_cuda_recovery());
             assert!(format!("{wrapped:#}").contains("out of memory"));
             assert!(anyhow::Error::new(error).chain().any(|cause| cause.downcast_ref::<ThoError>().is_some_and(ThoError::is_oom)));
         }
@@ -2579,19 +2579,19 @@ mod shared_tests {
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(error.is_oom(), "is_oom");
         assert!(error.is_retryable_oom(), "is_retryable_oom");
-        assert!(!error.needs_cuda_restart(), "needs_cuda_restart");
+        assert!(!error.needs_cuda_recovery(), "needs_cuda_restart");
 
         let error = ThoError::from(std::io::Error::other("CUDA error: illegal memory access"));
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(!error.is_oom(), "is_oom");
         assert!(!error.is_retryable_oom(), "is_retryable_oom");
-        assert!(error.needs_cuda_restart(), "needs_cuda_restart");
+        assert!(error.needs_cuda_recovery(), "needs_cuda_restart");
 
         let error:ThoError = anyhow::anyhow!("read failed").context("CUDA out of memory").into();
         assert!(matches!(error.what(), ThoError::Anyhow(_)));
         assert!(error.is_oom(), "is_oom");
         assert!(error.is_retryable_oom(), "is_retryable_oom");
-        assert!(!error.needs_cuda_restart(), "needs_cuda_restart");
+        assert!(!error.needs_cuda_recovery(), "needs_cuda_restart");
     }
 
 

@@ -641,9 +641,9 @@ impl SyncStageRunner {
             let is_oom = error.as_ref().is_some_and(|error| error.is_oom());
             let is_ok = error.is_none();
             if let Some(error) = error {
-                debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_restart(), error.is_cuda_recovery_failed());
+                debug!("SyncStageRunner::submit: needs_cuda_ctx_reset={} is_cuda_recovery_failed={} recovery={recovery:?}", error.needs_cuda_recovery(), error.is_cuda_recovery_failed());
 
-                if (error.needs_cuda_restart() || error.is_cuda_recovery_failed()) && let Some(recovery) = &recovery {
+                if (error.needs_cuda_recovery() || error.is_cuda_recovery_failed()) && let Some(recovery) = &recovery {
                     retry.clear_exclusive();
                     *error = Self::report_failure(recovery, &cmd_tx, generation.expect("CUDA generation"), error.clone()).err().unwrap_or_else(Self::context_reset_error);
                     // Preserve a consume failure's owned input for the adapter.
@@ -2605,9 +2605,9 @@ mod tests {
             release.notify_one();
             let error = submit.await.unwrap_err();
             assert!(error.is_cuda_recovery_failed());
-            assert!(!error.is_retryable_oom() && !error.needs_cuda_restart());
+            assert!(!error.is_retryable_oom() && !error.needs_cuda_recovery());
             let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("terminal error was lost") };
-            assert!(failure.original.needs_cuda_restart());
+            assert!(failure.original.needs_cuda_recovery());
             assert!(failure.recovery.as_ref().unwrap().is_oom());
             assert_eq!(owner.cuda_gate().unwrap().device_generation(), generation);
             assert!(owner.submit(0, async { Ok(()) }, None).await.unwrap_err().is_cuda_recovery_failed());

@@ -215,7 +215,7 @@ mod tests {
         pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: thoosa_shared::tho_error::cuda_error(CudaAction::NeedsRestart, "failed synchronization".into()).into() }).unwrap();
         assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
         assert!(pending.failed.is_cancelled());
-        assert!(pending.failure().needs_cuda_restart());
+        assert!(pending.failure().needs_cuda_recovery());
         assert!(weak.upgrade().is_some());
         pending.exited(ThoError::CudaBeingRecovered);
         assert!(weak.upgrade().is_none());
@@ -235,7 +235,7 @@ mod tests {
         pending.complete(CudaWorkerMsgOut { worker_id: worker(), request_id: 1, status: error.into() }).unwrap();
         assert!(matches!(response.await.unwrap().unwrap().status, OpResult::Failed(_)));
         assert!(pending.failed.is_cancelled());
-        assert!(pending.failure().is_cuda_recovery_failed() && !pending.failure().needs_cuda_restart());
+        assert!(pending.failure().is_cuda_recovery_failed() && !pending.failure().needs_cuda_recovery());
         assert!(weak.upgrade().is_some());
         pending.exited(ThoError::CudaBeingRecovered);
         assert!(weak.upgrade().is_none());

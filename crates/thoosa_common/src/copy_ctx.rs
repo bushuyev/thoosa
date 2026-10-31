@@ -291,7 +291,7 @@ fn finish_cuda_panic<T>(result: std::thread::Result<T>, sync: &Result<(), ThoErr
             Ok(()) => std::panic::resume_unwind(panic),
             // Fatal CUDA errors must still reach recovery. A nonfatal sync
             // error must not turn a host panic into a retryable OOM instead.
-            Err(error) if error.needs_cuda_restart() || error.is_cuda_recovery_failed() => {
+            Err(error) if error.needs_cuda_recovery() || error.is_cuda_recovery_failed() => {
                 let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("non-string panic payload");
                 Err(error.clone().context(format!("stage panicked before stream synchronization: {message}")))
             }
@@ -323,7 +323,7 @@ pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) 
             if sync.is_cuda_recovery_failed()
                 ||
                 (
-                    sync.needs_cuda_restart() && !original.is_cuda_recovery_failed() && !original.needs_cuda_restart()
+                    sync.needs_cuda_recovery() && !original.is_cuda_recovery_failed() && !original.needs_cuda_recovery()
                 )
             {
                 sync.context(format!("stage also failed: {original}"))
@@ -339,7 +339,7 @@ pub(crate) fn finish_cuda_error(original: ThoError, sync: Result<(), ThoError>) 
 // The captured lease generation prevents a late copy error restarting a successor.
 pub(crate) fn report_cuda_copy_result<T>(result: Result<T, ThoError>, gate: &Arc<CudaActivityGate>, generation: CudaDeviceGeneration) -> Result<T, ThoError> {
     result.map_err(|error| {
-        if error.needs_cuda_restart() || error.is_cuda_recovery_failed() {
+        if error.needs_cuda_recovery() || error.is_cuda_recovery_failed() {
             GlobalCtx::global()
                 .get_runner(gate.device_idx())
                 .request_cuda_reset_for_generation(generation, error)
@@ -543,13 +543,13 @@ pub(crate) fn complete_cuda_stream(result: Result<(), ThoError>, retry: impl FnO
         Ok(()) => return StreamCompletion { result: Ok(()), confirmed: true },
         Err(error) => error,
     };
-    if error.needs_cuda_restart() || error.is_cuda_recovery_failed() {
+    if error.needs_cuda_recovery() || error.is_cuda_recovery_failed() {
         return StreamCompletion { result: Err(error), confirmed: false };
     }
     match retry() {
         Ok(()) => StreamCompletion { result: Err(error), confirmed: true },
         Err(recovery) => {
-            let error = if recovery.needs_cuda_restart() || recovery.is_cuda_recovery_failed() {
+            let error = if recovery.needs_cuda_recovery() || recovery.is_cuda_recovery_failed() {
                 finish_cuda_error(error, Err(recovery))
             } else {
                 // Last resort: completion is still unknown, so ordinary reuse
@@ -705,6 +705,7 @@ impl Debug for CopyCtx {
 }
 
 impl CopyCtx {
+
     pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> Result<CopyCtx, ThoError> {
         // Standalone contexts (including IPC workers) own their admission state.
         // Local actors instead inject the gate shared with their stage runner.
@@ -985,7 +986,7 @@ mod tests {
                     }).catch_unwind().await;
                     assert_eq!(*state.try_lock().expect("state must unlock after synchronization"), 1);
                     if sync_fails {
-                        assert!(result.unwrap().unwrap_err().needs_cuda_restart());
+                        assert!(result.unwrap().unwrap_err().needs_cuda_recovery());
                     } else if outcome == 2 {
                         assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"stateful submission panic"));
                     } else if outcome == 1 {
@@ -1098,7 +1099,7 @@ mod tests {
             }.build();
             let ctx = crate::runner::common::mock_run_ctx::build().finish();
             let result = std::panic::AssertUnwindSafe(actor.consume_stage(stage, TestInput::new(1), 0, ctx)).catch_unwind().await;
-            if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_restart()); }
+            if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_recovery()); }
             else { assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"consume panic")); }
         }
     }
@@ -1113,8 +1114,8 @@ mod tests {
         let mut waiter = Box::pin(pool.acquire());
         assert!(futures::poll!(waiter.as_mut()).is_pending());
         // Inject an uncertain completion result without poisoning real CUDA.
-        assert!(failed.complete(Err(ThoError::from_cuda_error("injected synchronization failure", 700))).unwrap_err().needs_cuda_restart());
-        assert!(matches!(timeout(Duration::from_secs(3), waiter).await.unwrap(), Err(error) if error.needs_cuda_restart()));
+        assert!(failed.complete(Err(ThoError::from_cuda_error("injected synchronization failure", 700))).unwrap_err().needs_cuda_recovery());
+        assert!(matches!(timeout(Duration::from_secs(3), waiter).await.unwrap(), Err(error) if error.needs_cuda_recovery()));
         drop(failed);
         assert_eq!(pool.quarantined.lock().len(), 1);
         assert_eq!(pool.pool.remaining_capacity(), 0, "failed stream returned to ordinary reuse");
@@ -1132,20 +1133,20 @@ mod tests {
             let completion = complete_cuda_stream(Err(ThoError::from_cuda_error("first sync", code)), || Ok(()));
             assert!(completion.confirmed);
             let error = completion.result.unwrap_err();
-            assert!(!error.needs_cuda_restart() && !error.is_cuda_recovery_failed());
+            assert!(!error.needs_cuda_recovery() && !error.is_cuda_recovery_failed());
             assert_eq!(error.is_oom(), code == 2);
         }
         let completion = complete_cuda_stream(Err(ThoError::from_cuda_error("first sync", 700)), || panic!("fatal CUDA errors must not be retried"));
-        assert!(!completion.confirmed && completion.result.unwrap_err().needs_cuda_restart());
+        assert!(!completion.confirmed && completion.result.unwrap_err().needs_cuda_recovery());
         let completion = complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::from_cuda_error("drain", 700)));
-        assert!(!completion.confirmed && completion.result.unwrap_err().needs_cuda_restart());
+        assert!(!completion.confirmed && completion.result.unwrap_err().needs_cuda_recovery());
         let completion = complete_cuda_stream(Err(ThoError::oom()), || Err(ThoError::from_cuda_error("drain", 400)));
         assert!(!completion.confirmed);
         let error = completion.result.unwrap_err();
-        assert!(!error.needs_cuda_restart() && !error.is_retryable_oom());
+        assert!(!error.needs_cuda_recovery() && !error.is_retryable_oom());
         let ThoError::CudaRecoveryFailed(failure) = error.what() else { panic!("failed drain must retain its typed errors") };
         assert!(failure.original.is_oom());
-        assert!(!failure.recovery.as_ref().unwrap().needs_cuda_restart());
+        assert!(!failure.recovery.as_ref().unwrap().needs_cuda_recovery());
     }
 
     #[tokio::test]
@@ -1159,7 +1160,7 @@ mod tests {
         // The injected error takes the same second-drain path as a real error,
         // while CUDA itself stays healthy for subsequent execution.
         let error = stream.complete(Err(ThoError::oom())).unwrap_err();
-        assert!(error.is_oom() && !error.needs_cuda_restart());
+        assert!(error.is_oom() && !error.needs_cuda_recovery());
         assert!(pool.check().is_ok() && pool.quarantined.lock().is_empty());
         drop(stream);
         let mut next = timeout(Duration::from_secs(3), waiter).await.unwrap()?;
@@ -1174,7 +1175,7 @@ mod tests {
         for execution in [Ok(TestOutput::new(7.)), Err(ThoError::oom()), Err(fatal_consume_error())] {
             for synchronization in [Ok(()), Err(ThoError::oom()), Err(fatal_consume_error())] {
                 let preserves_input = execution.is_err();
-                let fatal = execution.as_ref().err().is_some_and(ThoError::needs_cuda_restart) || synchronization.as_ref().err().is_some_and(ThoError::needs_cuda_restart);
+                let fatal = execution.as_ref().err().is_some_and(ThoError::needs_cuda_recovery) || synchronization.as_ref().err().is_some_and(ThoError::needs_cuda_recovery);
                 let failed = execution.is_err() || synchronization.is_err();
                 let (stage, actor) = MockConsumeCallBuilder { panics: false, execution: execution.clone(), synchronization, setup_failure: None }.build();
                 let input = TestInput::new(3);
@@ -1199,7 +1200,7 @@ mod tests {
                     }
                 };
                 assert!(failed);
-                assert_eq!(error.needs_cuda_restart(), fatal);
+                assert_eq!(error.needs_cuda_recovery(), fatal);
                 assert_eq!(error.is_oom(), !fatal);
             }
         }
@@ -1238,7 +1239,7 @@ mod tests {
                 } else {
                     actor.run_stage(Arc::new(stage), input, 0, &ctx).await
                 };
-                assert!(result.unwrap_err().needs_cuda_restart(), "both entry points must surface the fatal error");
+                assert!(result.unwrap_err().needs_cuda_recovery(), "both entry points must surface the fatal error");
             }
         }
     }

@@ -843,7 +843,7 @@ where
                     Ok(result) => result,
                     Err(e) => {
                         warn!("opt_train failed with {e:?} on {run_config:?} ");
-                        if e.is_cuda_recovery_failed() || e.needs_cuda_restart() || matches!(e.what(), ThoError::CudaBeingRecovered) {
+                        if e.is_cuda_recovery_failed() || e.needs_cuda_recovery() || matches!(e.what(), ThoError::CudaBeingRecovered) {
                             *recovery_error_moved.write() = Some(e.clone());
                         }
                         *last_error_moved.write() = Some(e);
