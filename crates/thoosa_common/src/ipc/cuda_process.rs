@@ -472,8 +472,8 @@ impl CudaIPCActor {
             | CudaIPCActorMessage::ResetStageState { worker_id, activity, .. }
             | CudaIPCActorMessage::DropEndpoint { worker_id, activity, .. }
             | CudaIPCActorMessage::DebugWorker { worker_id, activity, .. } => Some((Some(*worker_id), activity)),
-            // Tensor destruction must also work while recovery drains activity;
-            // it needs only the live-worker identity check below, not admission.
+            // Tensor destruction needs no activity lease: the handler below
+            // acknowledges cleanup without IPC once recovery owns the worker.
             CudaIPCActorMessage::DropThoTensor { .. } => None,
         };
         if let Some((worker_id, activity)) = admission {
@@ -546,8 +546,9 @@ impl CudaIPCActor {
                 }
             }
             CudaIPCActorMessage::DropThoTensor { key, worker_id, respond_to } => {
-                // A delayed destructor must never delete a replacement worker's key.
-                if worker_id != self.worker().worker_id {
+                // Recovery will reclaim all worker tensors at process exit;
+                // queued destructors must also skip IPC and never target a replacement.
+                if self.gate.is_paused() || worker_id != self.worker().worker_id {
                     let _ = respond_to.send(Ok(()));
                     return Ok(());
                 }
@@ -852,6 +853,10 @@ impl CudaIPCActor {
                 }
             }
             BackendControl::ReleaseTensor { key, worker_id } => {
+                // Recheck after queueing: recovery may have started since Drop.
+                // Cache invalidation precedes retirement, so a worker can still
+                // be present even though its tensors will be reclaimed at exit.
+                if self.gate.is_paused() { return false; }
                 if let Some(worker) = &self.spawned_state {
                     if worker.worker_id == worker_id {
                         let request = CudaWorkerMsgIn::new(worker_id, self.next_id.fetch_add(1, Ordering::Relaxed), Operation::DropThoTensor { tensor_key: key });
@@ -859,6 +864,8 @@ impl CudaIPCActor {
                         // a hung worker must still be interruptible by retirement.
                         let result = async {
                             let permit = worker.tx.reserve().await.context("worker writer closed")?;
+                            // The writer may have been full when recovery began.
+                            if self.gate.is_paused() { return Ok(()); }
                             let (reply, _response) = oneshot::channel();
                             worker.pending.enqueue(permit, request, reply, None, false)
                         }.await;
@@ -882,6 +889,9 @@ impl CudaIPCActor {
                     // Fatal CUDA failures may prevent graceful shutdown. Reap
                     // the failed worker and propagate retirement errors before
                     // creating another process for the same device.
+                    // The coordinator sends Retire only after a drain timeout.
+                    // Normally this is the first retirement; after a successful
+                    // early retirement, spawned_state is None and this is a no-op.
                     self.retire(ThoError::CudaBeingRecovered).await?;
 
                     // A fresh primary context requires the old process to have
@@ -1200,11 +1210,15 @@ async fn send_request(tx: mpsc::Sender<CudaWorkerMsgIn>, pending: PendingRespons
 }
 
 /// A narrow release capability retained by remote resources. Drop only queues
-/// work; the owning actor drains releases before its queued shutdown command.
+/// work for a running worker; recovery reclaims its tensors by retiring it.
+/// The owning actor drains ordinary releases before its queued shutdown command.
 #[derive(Debug, Clone)]
-pub struct TensorReleaseHandle { control: mpsc::UnboundedSender<BackendControl>, pub(crate) owner_id: u64 }
+pub struct TensorReleaseHandle { control: mpsc::UnboundedSender<BackendControl>, gate: Arc<thoosa_shared::CudaActivityGate>, pub(crate) owner_id: u64 }
 impl TensorReleaseHandle {
     pub(crate) fn release(&self, key: u64, worker_id: CudaWorkerId) {
+        // Recovery pauses this gate before dropping cached tensors. Avoid even
+        // queueing their releases, and discard late drops from retired workers.
+        if self.gate.is_paused() || worker_id.device_idx != self.gate.device_idx() || worker_id.generation != self.gate.device_generation() { return; }
         let _ = self.control.send(BackendControl::ReleaseTensor { key, worker_id });
     }
     pub(crate) fn decoding<T>(&self, f: impl FnOnce() -> T) -> T {
@@ -1235,7 +1249,7 @@ impl CudaIPCActorHandle {
     }
 
     pub(crate) fn activity_gate(&self) -> Arc<thoosa_shared::CudaActivityGate> { Arc::clone(&self.gate) }
-    pub fn tensor_releaser(&self) -> TensorReleaseHandle { TensorReleaseHandle { control: self.control.clone(), owner_id: self.release_id } }
+    pub fn tensor_releaser(&self) -> TensorReleaseHandle { TensorReleaseHandle { control: self.control.clone(), gate: Arc::clone(&self.gate), owner_id: self.release_id } }
     pub(crate) async fn register_stage(&self, worker_id: CudaWorkerId, endpoint_name: String, stage_id: Option<String>, init_data: Box<dyn WorkerInput>) -> Result<Arc<EndpointRegistration>, ThoError> {
         let (respond_to, response) = oneshot::channel();
         self.sender.send(CudaIPCActorMessage::RegisterStage { worker_id, key: EndpointKey { endpoint_name, stage_id }, init_data, activity: self.activity_for(worker_id)?, respond_to }).await.context("CUDA actor channel closed")?;
@@ -1304,7 +1318,7 @@ impl CudaIPCActorHandle {
         let (control, controls) = mpsc::unbounded_channel();
         static NEXT_RELEASE_OWNER: AtomicU64 = AtomicU64::new(1);
         let release_id = NEXT_RELEASE_OWNER.fetch_add(1, Ordering::Relaxed);
-        let actor = CudaIPCActor::new(Arc::clone(&gate), cuda_worker_args, receiver, controls, arena_fd, Some(TensorReleaseHandle { control: control.clone(), owner_id: release_id })).await?;
+        let actor = CudaIPCActor::new(Arc::clone(&gate), cuda_worker_args, receiver, controls, arena_fd, Some(TensorReleaseHandle { control: control.clone(), gate: Arc::clone(&gate), owner_id: release_id })).await?;
         tokio::spawn(CudaIPCActor::run(actor));
 
         Ok(Self {
@@ -1483,9 +1497,9 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 
     async fn drop_tho_tensor(&self, key:u64, worker_id: CudaWorkerId) -> Result<(), ThoError> {
-        // Retired tensor keys are already gone. Do not acquire activity here:
-        // destructors must still release live-worker keys while recovery drains.
-        if !self.is_current_worker(worker_id) {
+        // Recovery reclaims all tensor keys when it retires the worker. Cleanup
+        // must neither queue more IPC nor acquire activity while recovery drains.
+        if self.gate.is_paused() || !self.is_current_worker(worker_id) {
             return Ok(());
         }
         debug!("CudaIPCActorHandle::drop_tho_tensor: key={key}");
@@ -1713,8 +1727,9 @@ mod tests {
     fn test_remote_release_retains_owner_and_runs_once_ipc() {
         use super::TensorReleaseHandle;
         let (control, mut commands) = mpsc::unbounded_channel();
-        let owner = TensorReleaseHandle { control, owner_id: 999999 };
-        let worker = crate::ipc::worker_msg::CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(7) };
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let worker = crate::ipc::worker_msg::CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+        let owner = TensorReleaseHandle { control, gate, owner_id: 999999 };
         let tensor: ThoTensor = owner.decoding(|| ThoTensor::new_ref((), 123, vec![1], Kind::Float, None, worker));
         let clone = tensor.clone_ref().unwrap();
         drop(tensor);
@@ -1722,6 +1737,37 @@ mod tests {
         std::thread::spawn(move || drop(clone)).join().unwrap();
         assert!(matches!(commands.try_recv().unwrap(), BackendControl::ReleaseTensor { key: 123, worker_id } if worker_id == worker));
         assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_remote_release_skips_recovering_and_retired_workers_ipc() {
+        use super::TensorReleaseHandle;
+        let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
+        let (control, mut commands) = mpsc::unbounded_channel();
+        let owner = TensorReleaseHandle { control, gate: Arc::clone(&gate), owner_id: 999998 };
+        let worker = crate::ipc::worker_msg::CudaWorkerId { device_idx: 1, generation: gate.device_generation() };
+        let tensor = |key, worker| -> ThoTensor { owner.decoding(|| ThoTensor::new_ref((), key, vec![1], Kind::Float, None, worker)) };
+        let cached = tensor(123, worker);
+        let retained = tensor(124, worker);
+
+        // Cache invalidation runs while the old worker generation is still
+        // current. Its last references must disappear without queueing cleanup.
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
+        drop(cached);
+        assert!(commands.try_recv().is_err(), "recovering worker releases must not be queued");
+        gate.finish_pause(ticket);
+        drop(retained);
+        assert!(commands.try_recv().is_err(), "retired worker releases must not be queued");
+
+        // The same release owner survives replacement, so fresh tensors must
+        // resume normal cleanup rather than retaining a permanent suppression flag.
+        let fresh = crate::ipc::worker_msg::CudaWorkerId { generation: gate.device_generation(), ..worker };
+        drop(tensor(125, fresh));
+        assert!(matches!(commands.try_recv().unwrap(), BackendControl::ReleaseTensor { key: 125, worker_id } if worker_id == fresh));
+        let ticket = gate.request_pause(ThoError::CudaBeingRecovered).unwrap();
+        gate.fail_pause(ticket, Some(ThoError::new("replacement failed")));
+        drop(tensor(126, fresh));
+        assert!(commands.try_recv().is_err(), "failed recovery must keep cleanup suppressed");
     }
 
     #[test]
@@ -1898,6 +1944,9 @@ mod tests {
 
         let old_tensor = || ThoTensor::new_ref((), 42, vec![1], Kind::Float, None, retired);
         let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
+        // Explicit cleanup must also avoid IPC before the old worker is retired.
+        handle.drop_tho_tensor(42, retired).await?;
+        assert!(receiver.try_recv().is_err(), "recovering worker cleanup must not be queued");
         gate.finish_pause(ticket);
 
         assert!(matches!(handle.copy(old_tensor(), 0usize.into()).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
