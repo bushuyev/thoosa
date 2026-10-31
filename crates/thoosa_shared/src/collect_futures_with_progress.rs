@@ -90,7 +90,7 @@ where
                     (error.data_error_kind().is_none() && original.data_error_kind().is_some()) ||
                     (error.is_cuda_recovery_failed() && !original.is_cuda_recovery_failed()) ||
                     (error.is_missing_endpoint() && !original.is_missing_endpoint() && !original.is_cuda_recovery_failed()) ||
-                    (error.needs_cuda_restart() && !original.needs_cuda_restart() && !original.is_cuda_recovery_failed() && !original.is_missing_endpoint())
+                    (error.needs_cuda_recovery() && !original.needs_cuda_recovery() && !original.is_cuda_recovery_failed() && !original.is_missing_endpoint())
                 });
                 if replace {
                     failure = Some(error.context(format!("{descr}: task at input index {idx} failed")));
@@ -475,7 +475,7 @@ mod tests {
             let failures = [ThoError::oom(), ThoError::from_cuda_error("fatal completion", 700)];
             let futures = failures.into_iter().map(|error| async move { Err::<(), _>(error) });
             let error = collect_futures_with_progress_with_limit(futures, 2, Arc::new(limit_rx), ordering, thoosa_shared::CollectionErrorPolicy::Propagate, "fatal precedence").await.unwrap_err();
-            assert!(error.needs_cuda_restart());
+            assert!(error.needs_cuda_recovery());
             assert!(!error.is_oom());
             assert!(error.to_string().contains("input index 1"));
         }

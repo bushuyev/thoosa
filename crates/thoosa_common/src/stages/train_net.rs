@@ -132,7 +132,7 @@ where
             }
         };
         match result {
-            Err(error) if matches!(error.what(), ThoError::CudaBeingRecovered) || error.needs_cuda_restart() => {
+            Err(error) if matches!(error.what(), ThoError::CudaBeingRecovered) || error.needs_cuda_recovery() => {
                 // The attempt has returned and released its stage/cache/batches.
                 // A reset is not a bad hyperparameter trial: rebuild all state
                 // on the replacement worker before publishing any loss to TPE.
@@ -307,7 +307,7 @@ where
                             }
                         }
                     }
-                    Err(error) if (error.is_oom() || error.is_retryable_oom()) && !error.needs_cuda_restart() && !error.is_cuda_recovery_failed() => {
+                    Err(error) if (error.is_oom() || error.is_retryable_oom()) && !error.needs_cuda_recovery() && !error.is_cuda_recovery_failed() => {
                         aborted_epochs += 1;
                         // Retrying a memory-constrained trial with the same extra
                         // resident batch can OOM even with exclusive GPU access.
