@@ -72,7 +72,42 @@ fn checkpoint(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(Vec<u8>,
 fn restore(module: &mut ThoTrainModule<AnyDims, AnyDims>, checkpoint: &(Vec<u8>, Vec<(String, Tensor)>)) -> Result<(), ThoError> {
     module.reset_state(serde_json::from_slice(&checkpoint.0)?)?;
     for (key, tensor) in &checkpoint.1 { module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?; }
+    module.prepare_state(0)?;
     module.ensure_training_usable()
+}
+
+#[test]
+fn test_import_defers_reconstruction_and_preserves_state_after_oom() -> Result<(), ThoError> {
+    let mut module = module(0)?;
+    module.training_transaction(accumulate)?;
+    let saved = checkpoint(&mut module)?;
+    let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let build_count = builds.clone();
+    let build = module.config.optimizer_builder;
+    module.config.optimizer_builder = Box::new(move |vs| {
+        if build_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { return Err(ThoError::oom().into()); }
+        build(vs)
+    });
+    module.reset_state(serde_json::from_slice(&saved.0)?)?;
+    let (key, tensor) = &saved.1[0];
+    module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?;
+    assert!(module.prepare_state(0).is_err(), "partial imports must not construct a module");
+    for (key, tensor) in &saved.1[1..] { module.set_state_tensor(key, tch_result(tensor.f_to_device_(Cpu, tensor.kind(), false, true))?, 0)?; }
+    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 0, "the last tensor import must not reconstruct the optimizer");
+    assert!(module.prepare_state(0).unwrap_err().is_retryable_oom());
+    assert!(module.ensure_training_usable().is_err());
+    // DumpToCpu needs to export complete imports after a reconstruction failure.
+    let exported = checkpoint(&mut module)?;
+    assert_eq!(exported.0, saved.0);
+    for ((key, actual), (expected_key, expected)) in exported.1.iter().zip(&saved.1) {
+        assert_eq!(key, expected_key);
+        assert!(tch_result(actual.f_equal(expected))?, "reconstruction failure changed {key}");
+    }
+    module.prepare_state(0)?;
+    module.ensure_training_usable()?;
+    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 2);
+    module.training_transaction(accumulate)?;
+    Ok(())
 }
 
 #[test]
