@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -205,25 +205,25 @@ where
         Ok(())
     }
 
-    pub(crate) async fn save_epoch_checkpoint(self: &Arc<Self>, device: usize) -> Result<Arc<CpuStateCheckpoint>, ThoError> {
+    pub(crate) async fn save_epoch_checkpoint(self: &Arc<Self>, tho_device_idx: usize/*it's current device, not a destination*/) -> Result<Arc<CpuStateCheckpoint>, ThoError> {
         let checkpoint = match self.as_ref() {
             Self::Proxy { stage, .. } => Arc::clone(stage).save_cpu_checkpoint().await?,
             Self::Local(stage) => {
                 let stage = Arc::clone(stage);
-                checkpoint_operation(device, async move {
+                checkpoint_operation(tho_device_idx, async move {
                     let mut module = stage.train_module.lock().await;
                     module.ensure_training_usable()?;
-                    module.move_to_device(device).await?;
+                    module.move_to_device(tho_device_idx).await?;
                     let info = module.state_info()?;
                     // Keep the module frozen through one batched transfer. Only
                     // pinned staging storage is reused; committed CPU tensors
                     // remain independent of live state and future checkpoints.
                     let keys = info.tensors.iter().map(|tensor| tensor.tensor_key.to_tensor_key()).collect::<Vec<_>>();
                     let sources = keys.iter().map(|key| module.state_tensor(key)).collect::<Result<Vec<_>, _>>()?;
-                    let copied = if device == 0 {
+                    let copied = if tho_device_idx == 0 {
                         sources.into_iter().map(|source| Ok(tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)).collect::<Result<Vec<_>, ThoError>>()?
                     } else {
-                        GlobalCtx::global().cuda_actor(device).copy_batch_to_cpu(sources).await?
+                        GlobalCtx::global().cuda_actor(tho_device_idx).copy_batch_to_cpu(sources).await?
                     };
                     let tensors = keys.into_iter().zip(copied).map(|(key, tensor)| Ok((key, ThoTensor::new((), tensor)?))).collect::<Result<_, ThoError>>()?;
                     CpuStateCheckpoint::new(info, tensors)
@@ -348,7 +348,11 @@ where
                 let chunk = input.select_batch((start..end).into())?;
                 let x = (self.x_f)(chunk.x()?);
                 let mut lengths = chunk.lengths.clone();
-                let predicted = module.module().tho_forward(&x, lengths.as_mut(), train)?;
+                let predicted = module.module().tho_forward(&x, lengths.as_mut(), train).map_err(|e|{
+                    warn!("TrainStep::do_run_with_state: error={e:?}");
+                    e
+                })?;
+
                 let loss = (self.loss_fn)(&predicted.as_ref(), &chunk.expected_y_ref()?.as_ref())?;
                 let weight = (end - start) as f64 / batch_len as f64;
                 weighted_loss += tch_result(loss.f_double_value(&[]))? * weight;

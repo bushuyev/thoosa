@@ -583,7 +583,7 @@ where
             futures,
             run_config_stages_len,
             FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort]),
+            thoosa_shared::CollectionErrorPolicy::SkipAll,
             "FindMotifsStage::run",
         )).await?;
 

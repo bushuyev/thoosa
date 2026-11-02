@@ -417,7 +417,7 @@ pub enum DataErrorKind {
     InputTooShort,
     EmptyTrainingClass,
     // The stage still does not fit into GPU memory after all OOM adjustments; callers must opt in to skipping it.
-    OOMHandlingFailed,
+    OOMHandlingFailed,//TODO this is not a DataErrorKind - move into ThoError or CollectionErrorPolicy variant
 }
 pub mod tho_error {
 

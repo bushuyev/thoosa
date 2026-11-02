@@ -63,7 +63,7 @@ struct RuntimeFailure {
 #[derive(Debug, Clone)]
 pub struct DeviceExecutionCtx {
     runner: Arc<SyncStageRunner>,
-    cuda_actor: Option<Arc<dyn CudaActorHandle>>,
+    cuda_actor: Option<Arc<dyn CudaActorHandle>>,//TODO there should be single actor
     ipc_actor: Option<CudaIPCActorHandle>,
 }
 
@@ -207,7 +207,7 @@ impl ResidencyService {
         Arc::clone(&self.caches)
     }
     pub fn register_cache(&self, cache: (String, Arc<dyn CachePurger>)) -> RegisteredCacheHandle {
-        debug!("GlobalCtx::register_cache: cache={}", cache.0);
+        debug!("ResidencyService::register_cache: cache={}", cache.0);
         let cache_type = cache.1.type_name();
         let name: Arc<str> = cache.0.into();
         let key = CacheKey::Named(Arc::clone(&name));
@@ -233,7 +233,7 @@ impl ResidencyService {
         async_perf_log!(async_read_owned_lock!(Arc::clone(&entry.gate), "{ctx}"), "{ctx}")
     }
     pub fn remove_cache(&self, key: &CacheKey) {
-        debug!("GlobalCtx::remove_cache: key={:?}", key);
+        debug!("ResidencyService::remove_cache: key={:?}", key);
 
         assert!(
             perf_log!(sync_write_lock!(self.caches.entries, "key={key:?}"))
@@ -241,7 +241,7 @@ impl ResidencyService {
             .is_some()
         );
 
-        debug!("GlobalCtx::remove_cache: {:?} lock acquired/released, removed ", key);
+        debug!("ResidencyService::remove_cache: {:?} lock acquired/released, removed ", key);
     }
     pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
         self.is_all_on_cpu[device_idx].load(Relaxed)
@@ -250,13 +250,13 @@ impl ResidencyService {
         self.is_all_on_cpu[device_idx].store(false, Relaxed);
     }
     async fn debug_caches_snapshot(&self, device_idx: usize, descr: &str, maps: &CacheSnapshot) {
-        debug!("GlobalCtx::debug_caches: descr={descr:?}");
+        debug!("ResidencyService::debug_caches: descr={descr:?}");
 
         let mut total_gpu_mem = 0;
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
             let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock")).await;
-            info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
+            info!("ResidencyService::debug_gpu: descr={descr} type_name={type_name}");
             match track_await!(entry.purger.debug_gpu(device_idx)).await {
                 Ok(v) => total_gpu_mem += v,
                 Err(e) => log::error!("GlobalCtx::debug_gpu: failed with {e:?}"),
@@ -265,7 +265,7 @@ impl ResidencyService {
 
         if !self.is_ipc {
             info!(
-                "GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
+                "ResidencyService::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
                 thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
             );
         }
@@ -282,7 +282,7 @@ impl ResidencyService {
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
 
-        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
+        debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
 
         let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
@@ -291,25 +291,25 @@ impl ResidencyService {
             let type_name = entry.name.as_ref();
             let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock")).await;
             if !track_await!(entry.purger.has_gpu_data(tho_device_idx)).await {
-                debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} has no data on device_idx={tho_device_idx}, skipping");
+                debug!("ResidencyService::dump_all_to_cpu: type_name={type_name} has no data on device_idx={tho_device_idx}, skipping");
                 collect_eta_record_completion(dump_eta_guard.id());
                 continue;
             }
 
-            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
+            debug!("ResidencyService::dump_all_to_cpu: type_name={type_name}");
             track_await!(entry.purger.purge_gpu(required_ids.get(cache_key).map(|v| *v), tho_device_idx, type_name)).await?;
-            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
+            debug!("ResidencyService::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
+        debug!("ResidencyService::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
 
         #[cfg(tho_debug)]
         {
             track_await!(self.debug_caches(tho_device_idx, descr)).await;
 
-            self.cuda_actor(tho_device_idx).debug_worker().await?;
+            GlobalCtx::global().cuda_actor(tho_device_idx).debug_worker().await?;
         }
 
         Ok(())
@@ -320,7 +320,7 @@ impl ResidencyService {
         descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
-        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr}");
+        info!("ResidencyService::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr}");
         let maps = self.caches_snapshot("GlobalCtx::drop_data_on_device: timed out waiting for caches read lock");
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
@@ -329,13 +329,13 @@ impl ResidencyService {
         for (_cache_key, entry) in maps.iter() {
             let type_name = entry.name.as_ref();
             let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::drop_data_on_device: timed out waiting for cache gate read lock")).await;
-            debug!("GlobalCtx::drop_data_on_device: type_name={type_name}");
+            debug!("ResidencyService::drop_data_on_device: type_name={type_name}");
             match track_await!(entry.purger.drop_gpu(tho_device_idx, type_name)).await {
                 Ok(_) => {
-                    debug!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} done");
+                    debug!("ResidencyService::drop_data_on_device: type_name={type_name} descr={descr} done");
                 }
                 Err(e) => {
-                    warn!("GlobalCtx::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
+                    warn!("ResidencyService::drop_data_on_device: type_name={type_name} descr={descr} failed with e={e:?}");
                     // Finish invalidating the other caches, but do not resume
                     // work with references whose invalidation failed.
                     if failure.is_none() { failure = Some(e.context(format!("invalidating device {tho_device_idx} cache {type_name}"))); }
@@ -347,12 +347,12 @@ impl ResidencyService {
 
         if let Some(error) = failure { return Err(error); }
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        info!("GlobalCtx::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
+        info!("ResidencyService::drop_data_on_device: tho_device_idx={tho_device_idx} descr={descr} done");
 
         Ok(())
     }
     pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
-        debug!("GlobalCtx::purge_cpu: retain_last={retain_last}");
+        debug!("ResidencyService::purge_cpu: retain_last={retain_last}");
 
 
         let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
@@ -368,14 +368,14 @@ impl ResidencyService {
                 let type_name = entry.name.as_ref();
                 let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock")).await;
                 let purged = track_await!(entry.purger.purge_cpu(purge_until)).await;
-                debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
+                debug!("ResidencyService::purge_cpu: purged {purged} from {type_name}");
             }
 
             #[cfg(tho_debug)]
             track_await!(self.debug_caches_snapshot(1, "after purge_cpu", &maps)).await;
         }
 
-        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
+        debug!("ResidencyService::purge_cpu: purge_until={purge_until} done");
     }
     pub fn do_age(&self) {
         self.cache_time.fetch_add(1, Relaxed);
@@ -390,7 +390,7 @@ impl ResidencyService {
             let type_name = entry.name.as_ref();
             let _cache_guard = track_await!(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
             if track_await!(entry.purger.has_gpu_data(device_idx)).await {
-                debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
+                debug!("ResidencyService::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
                 self.is_all_on_cpu[device_idx].store(false, Relaxed);
                 return false;
             }

@@ -16,6 +16,7 @@ use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_compl
 pub enum CollectionErrorPolicy {
     Propagate,
     SkipData(&'static [DataErrorKind]),
+    SkipAll
 }
 
 impl CollectionErrorPolicy {
@@ -23,6 +24,7 @@ impl CollectionErrorPolicy {
         match self {
             Self::Propagate => false,
             Self::SkipData(kinds) => error.data_error_kind().is_some_and(|kind| kinds.contains(&kind)),
+            Self::SkipAll => true
         }
     }
 }
@@ -79,7 +81,7 @@ where
         match result {
             Ok(value) => values.push(value),
             Err(error) if error_policy.skips(&error) => {
-                warn!("skipping incompatible data: descr={descr} index={idx} error={error:?}");
+                warn!("collect_futures_with_progress_with_limit: skipping error={error:?}  descr={descr} index={idx}");
             }
             Err(error) => {
                 warn!("collect_futures_with_progress_with_limit: error={error:?}");

@@ -845,6 +845,7 @@ impl CudaIPCActor {
                         let request = CudaWorkerMsgIn::new(worker_id, self.next_id.fetch_add(1, Ordering::Relaxed), Operation::DropStage { endpoint_name: endpoint, stage_id });
                         let result = async {
                             let permit = worker.tx.reserve().await.context("worker writer closed")?;
+                            if self.gate.is_paused() { return Ok(()); }//restart is in progress
                             let (reply, _response) = oneshot::channel();
                             worker.pending.enqueue(permit, request, reply, None, false)
                         }.await;
@@ -865,7 +866,7 @@ impl CudaIPCActor {
                         let result = async {
                             let permit = worker.tx.reserve().await.context("worker writer closed")?;
                             // The writer may have been full when recovery began.
-                            if self.gate.is_paused() { return Ok(()); }
+                            if self.gate.is_paused() { return Ok(()); }//restart is in progress
                             let (reply, _response) = oneshot::channel();
                             worker.pending.enqueue(permit, request, reply, None, false)
                         }.await;
@@ -873,7 +874,7 @@ impl CudaIPCActor {
                     }
                 }
             }
-            BackendControl::Retire { authority, respond_to } => {
+            BackendControl::Retire { authority, respond_to } => {//invoked from CudaRecoveryCoordinator::run
                 // A queued recovery command may outlive its coordinator cycle.
                 let result = match self.gate.check_recovery_authority(authority, false) {
                     Ok(()) => self.retire(ThoError::CudaBeingRecovered).await,
@@ -881,7 +882,7 @@ impl CudaIPCActor {
                 };
                 let _ = respond_to.send(result);
             }
-            BackendControl::Restart { authority, respond_to } => {
+            BackendControl::Restart { authority, respond_to } => {//invoked from CudaRecoveryCoordinator::run
                 let result = async {
                     // Recheck queued authority and drained activity before replacing CUDA state.
                     self.gate.check_recovery_authority(authority, true)?;
@@ -1527,7 +1528,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
         // supply a usable backup. Keep the adjuster failure distinct from a
         // destructor no-op, then let activity_for close the admission race.
         if !self.is_current_worker(worker_id) || self.gate.is_paused() {
-            return Err(ThoError::AdjusterFailed);//TODO add ThoError variant
+            return Err(ThoError::CudaBeingRecovered);
         }
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
