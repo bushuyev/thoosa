@@ -1335,7 +1335,7 @@ where
             #[cfg(tho_debug)]
             GlobalCtx::global().cuda_actor(device_idx).debug_worker().await?;
 
-            // Exhausted adjustments may exclude this data item, without making it retryable again.
+            // Exhausted adjustments may exclude this data item, without making it retryable again. TODO : it's not ThoError::Data - make ThoError::OOMHandlingFailed
             Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task")) })
         }
         Ok(o) => {

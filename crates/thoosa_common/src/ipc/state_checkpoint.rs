@@ -34,8 +34,8 @@ impl CpuStateCheckpoint {
 }
 
 // Retain state owners and CUDA admission through cancellation and copy completion.
-pub(crate) async fn checkpoint_operation<T: Send + 'static>(device: usize, future: impl Future<Output = Result<T, ThoError>> + Send + 'static) -> Result<T, ThoError> {
-    checkpoint_operation_on(GlobalCtx::global().cuda_activity_gate(device), future).await
+pub(crate) async fn checkpoint_operation<T: Send + 'static>(tho_device_idx: usize, future: impl Future<Output = Result<T, ThoError>> + Send + 'static) -> Result<T, ThoError> {
+    checkpoint_operation_on(GlobalCtx::global().cuda_activity_gate(tho_device_idx), future).await
 }
 
 async fn checkpoint_operation_on<T: Send + 'static>(gate: Option<Arc<thoosa_shared::CudaActivityGate>>, future: impl Future<Output = Result<T, ThoError>> + Send + 'static) -> Result<T, ThoError> {

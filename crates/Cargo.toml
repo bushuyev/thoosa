@@ -113,13 +113,11 @@ opt-level = 0
 #opt-level = 2
 #debug = "full"
 #overflow-checks = true
-[profile.release-opt1]
+
+[profile.release-debug]
 inherits = "release"
-debug = "full"
-opt-level = 1
+debug = "line-tables-only"
 strip = "none"
-lto = false
-panic = "unwind"
 
 [profile.final-release]
 inherits = "release"
