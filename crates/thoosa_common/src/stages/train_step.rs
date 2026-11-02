@@ -5,7 +5,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -22,6 +22,9 @@ use thoosa_common::nets::nodes::LossFp;
 use thoosa_common::nets::tho_varstore::ThoTrainModule;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, ThoDataRef};
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContext, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
+use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdjuster, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::runner::purge::CachePurger;
 use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
 use thoosa_common::tho_device::ThoDevice;
@@ -29,7 +32,7 @@ use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, RunCtx, Stage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MaxParallelCtx, RunCtx, Stage, ThoSelector, WithId};
 use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, panic_to_err};
 use tokio::sync::MutexGuard;
@@ -52,13 +55,38 @@ where
     device: ThoDevice,
     // Keep the module, optimizer, and VarStore under one state owner so none of
     // them crosses the local/IPC boundary independently.
-    train_module: tokio::sync::Mutex<ThoTrainModule<DI, DO>>,
+    train_module: tokio::sync::Mutex<TrainStepState<DI, DO>>,
     x_f: Arc<F>,
     loss_fn: LossFp,
     best_checkpoint_path: PathBuf,
     // A retry after reply/stream completion failure must not apply a committed batch twice.
     last_training_batch: std::sync::Mutex<Option<(u64, f32)>>,
     pd: PhantomData<C>,
+}
+
+struct TrainStepState<DI: Dims, DO: Dims> {
+    module: ThoTrainModule<DI, DO>,
+    // Retain the CPU source until preparation succeeds, including partial-copy OOMs.
+    pending_checkpoint: Option<Arc<CpuStateCheckpoint>>,
+}
+
+impl<DI: Dims, DO: Dims> TrainStepState<DI, DO> {
+    async fn checkpoint(&mut self) -> Result<Arc<CpuStateCheckpoint>, ThoError> {
+        if let Some(checkpoint) = &self.pending_checkpoint { return Ok(Arc::clone(checkpoint)); }
+        let info = self.module.state_info()?;
+        let keys = info.tensors.iter().map(|tensor| tensor.tensor_key.to_tensor_key()).collect::<Vec<_>>();
+        let sources = keys.iter().map(|key| self.module.state_tensor(key)).collect::<Result<Vec<_>, _>>()?;
+        // Inspect the actual source: an OOM purge may already have offloaded it.
+        let source_device = sources.first().map(|tensor| ThoDevice::try_from(tensor.device())).transpose()?.map_or(0, |device| device.tho_device_idx());
+        let copied = if source_device == 0 {
+            // CPU snapshots also need independent storage; training mutates live parameters.
+            sources.into_iter().map(|source| Ok(tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)).collect::<Result<Vec<_>, ThoError>>()?
+        } else {
+            GlobalCtx::global().cuda_actor(source_device).copy_batch_to_cpu(sources).await?
+        };
+        let tensors = keys.into_iter().zip(copied).map(|(key, tensor)| Ok((key, ThoTensor::new((), tensor)?))).collect::<Result<_, ThoError>>()?;
+        Ok(Arc::new(CpuStateCheckpoint::new(info, tensors)?))
+    }
 }
 
 impl <F, DI, DO, C> WithId for TrainStep<F, DI, DO, C>
@@ -82,24 +110,24 @@ where
     Self:Send + Sync
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.train_module.lock().await.has_gpu_data(device_idx)
+        self.train_module.lock().await.module.has_gpu_data(device_idx)
     }
 
     async fn purge_gpu(&self, _ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         info!("TrainStep::purge_gpu");
-        // Moving the complete state together preserves optimizer snapshots when
-        // the OOM handler evicts this stage from a GPU.
+        // This also handles partially restored state: its retained CPU checkpoint
+        // is authoritative, so no live optimizer is needed to free GPU tensors.
         let mut guard = self.train_module.lock().await;
-        if guard.has_gpu_data(device_idx) {
-            guard.opt().zero_grad();
-            guard.move_to_device(0).await?;
+        if guard.module.has_gpu_data(device_idx) {
+            guard.pending_checkpoint = Some(guard.checkpoint().await?);
+            guard.module.drop_gpu(device_idx)?;
         }
         Ok(())
     }
 
     async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("TrainStep::drop_gpu");
-        self.train_module.lock().await.drop_gpu(device_idx)
+        self.train_module.lock().await.module.drop_gpu(device_idx)
     }
 
     async fn purge_cpu(&self, _purge_until: u64) -> usize {
@@ -133,7 +161,7 @@ where
         Ok((Self {
             id: Self::next_id(),
             device,
-            train_module: tokio::sync::Mutex::new(train_module),
+            train_module: tokio::sync::Mutex::new(TrainStepState { module: train_module, pending_checkpoint: None }),
             x_f,
             loss_fn,
             best_checkpoint_path,
@@ -157,13 +185,23 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    pub(crate) async fn run_once(self: &Arc<Self>, input: TmpCachedEntry<TrainStepInput<DI, DO>>, ctx: C, max_other_parallel: usize) -> Result<TrainStepOutput, ThoError> {
-        let stage = Arc::clone(self);
-        let device = ctx.tho_device_idx();
-        // Admission/throttling belongs to the runner; this invocation is never replayed.
-        GlobalCtx::global().get_runner(device).submit(max_other_parallel, async move {
-            GlobalCtx::global().cuda_actor(device).run_stage(stage, input, device, &ctx).await
-        }, None).await
+    pub(crate) async fn run_once(self: &Arc<Self>, input: TmpCachedEntry<TrainStepInput<DI, DO>>, mut ctx: C, max_other_parallel: usize) -> Result<TrainStepOutput, ThoError>
+    where C: MaxParallelCtx + Adjustable {
+        let input = Arc::new(input);
+        let mut required_inputs = HashMap::new();
+        input.add_required_ids(&mut required_inputs);
+        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+        let mut parallel = MaxParallelAdjustContextImpl::new();
+        *parallel.max_other_parallel_mut() = max_other_parallel.try_into().map_err(|_| ThoError::new("training parallelism exceeds u8"))?;
+        ctx.set_max_other_parallel(parallel.max_other_parallel());
+        // Retry preparation with the same request and protected input. A failed
+        // training transaction remains non-retryable and aborts the whole epoch.
+        OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![
+            Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
+            Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("train_step"))),
+        ], None).run(self, Arc::clone(&input), ctx, WithRunCtxContext::new(
+            MaxParallelAndDumpToCpuAdjustableContex::new(parallel, DumpToCpuContextImpl::new(&required_ids)),
+        )).await
     }
 
     pub(crate) async fn run_batches(
@@ -174,7 +212,8 @@ where
         max_other_parallel: usize,
         prefetch: bool,
         mut on_completed: impl FnMut(f32) + Send,
-    ) -> Result<(), ThoError> {
+    ) -> Result<(), ThoError>
+    where C: MaxParallelCtx + Adjustable {
         let cache = Arc::new(TmpCached::new("prepared_training_batches").await);
         // Cache synchronously when preparation finishes: a ready future must
         // never hold raw tensors while the other half of the join is pending.
@@ -206,57 +245,39 @@ where
     }
 
     pub(crate) async fn save_epoch_checkpoint(self: &Arc<Self>, tho_device_idx: usize/*it's current device, not a destination*/) -> Result<Arc<CpuStateCheckpoint>, ThoError> {
-        let checkpoint = match self.as_ref() {
-            Self::Proxy { stage, .. } => Arc::clone(stage).save_cpu_checkpoint().await?,
+        match self.as_ref() {
+            Self::Proxy { stage, .. } => Ok(Arc::new(Arc::clone(stage).save_cpu_checkpoint().await?)),
             Self::Local(stage) => {
                 let stage = Arc::clone(stage);
                 checkpoint_operation(tho_device_idx, async move {
-                    let mut module = stage.train_module.lock().await;
-                    module.ensure_training_usable()?;
-                    module.move_to_device(tho_device_idx).await?;
-                    let info = module.state_info()?;
-                    // Keep the module frozen through one batched transfer. Only
-                    // pinned staging storage is reused; committed CPU tensors
-                    // remain independent of live state and future checkpoints.
-                    let keys = info.tensors.iter().map(|tensor| tensor.tensor_key.to_tensor_key()).collect::<Vec<_>>();
-                    let sources = keys.iter().map(|key| module.state_tensor(key)).collect::<Result<Vec<_>, _>>()?;
-                    let copied = if tho_device_idx == 0 {
-                        sources.into_iter().map(|source| Ok(tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)).collect::<Result<Vec<_>, ThoError>>()?
-                    } else {
-                        GlobalCtx::global().cuda_actor(tho_device_idx).copy_batch_to_cpu(sources).await?
-                    };
-                    let tensors = keys.into_iter().zip(copied).map(|(key, tensor)| Ok((key, ThoTensor::new((), tensor)?))).collect::<Result<_, ThoError>>()?;
-                    CpuStateCheckpoint::new(info, tensors)
-                }).await?
+                    stage.train_module.lock().await.checkpoint().await
+                }).await
             }
-        };
-        Ok(Arc::new(checkpoint))
+        }
     }
 
-    pub(crate) async fn restore_epoch_checkpoint(self: &Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>, device: usize) -> Result<(), ThoError> {
+    pub(crate) async fn schedule_epoch_restore(self: &Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>, device: usize) -> Result<(), ThoError> {
         match self.as_ref() {
-            Self::Proxy { stage, .. } => Arc::clone(stage).restore_cpu_checkpoint(checkpoint).await,
+            Self::Proxy { stage, .. } => Arc::clone(stage).schedule_cpu_restore(checkpoint).await,
             Self::Local(stage) => {
                 let stage = Arc::clone(stage);
                 checkpoint_operation(device, async move {
-                    let mut module = stage.train_module.lock().await;
-                    module.reset_state(checkpoint.info()?)?;
+                    let mut state = stage.train_module.lock().await;
+                    state.module.reset_state(checkpoint.info()?)?;
+                    state.pending_checkpoint = Some(checkpoint);
                     *stage.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
-                    for (key, tensor) in &checkpoint.tensors {
-                        let source = tch_result(tensor.as_ref().f_alias())?;
-                        let restored = copy_state_tensor(source, device).await?;
-                        module.set_state_tensor(key, restored, device)?;
-                    }
-                    module.ensure_training_usable()
+                    // GPU copies and reconstruction run only inside the next OOM attempt.
+                    Ok(())
                 }).await
             }
         }
     }
 
     /// Acknowledgement means the state owner has published the checkpoint in either mode.
-    pub async fn checkpoint(self: &Arc<Self>, ctx: &C) -> Result<(), ThoError> {
-        let device = ctx.tho_device_idx();
-        GlobalCtx::global().cuda_actor(device).run_stage(self.clone(), TrainStepInput::checkpoint()?, device, ctx).await?;
+    pub async fn checkpoint(self: &Arc<Self>, ctx: C, max_other_parallel: usize) -> Result<(), ThoError>
+    where C: MaxParallelCtx + Adjustable {
+        let cache = Arc::new(TmpCached::new("training_checkpoint_command").await);
+        self.run_once(cache.insert_guarded(TrainStepInput::checkpoint()?), ctx, max_other_parallel).await?;
         Ok(())
     }
 }
@@ -299,31 +320,45 @@ where
     fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
         async move {
             let mut guard = self.train_module.lock().await;
-            guard.ensure_training_usable()?;
-            guard.move_to_device(to_device_idx).await?;
-            Ok(Some(MutexGuard::map(guard, |v|v)))
+            if let Some(checkpoint) = guard.pending_checkpoint.clone() {
+                // Restart partial imports from immutable CPU storage on every attempt.
+                guard.module.reset_state(checkpoint.info()?)?;
+                for (key, tensor) in &checkpoint.tensors {
+                    let source = tch_result(tensor.as_ref().f_alias())?;
+                    let restored = copy_state_tensor(source, to_device_idx).await?;
+                    guard.module.set_state_tensor(key, restored, to_device_idx)?;
+                }
+                guard.module.prepare_state(to_device_idx)?;
+                guard.pending_checkpoint = None;
+            } else {
+                guard.module.prepare_state(to_device_idx)?;
+            }
+            guard.module.ensure_training_usable()?;
+            guard.module.move_to_device(to_device_idx).await?;
+            Ok(Some(MutexGuard::map(guard, |state| &mut state.module)))
         }.boxed()
     }
 
     fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::runner::sync_stage::StageStateInfo, ThoError>> {
-        async move { self.train_module.lock().await.state_info() }.boxed()
+        async move { self.train_module.lock().await.module.state_info() }.boxed()
     }
 
     fn reset_state(&self, info: thoosa_common::runner::sync_stage::StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
         async move {
-            let mut module = self.train_module.lock().await;
-            module.reset_state(info)?;
+            let mut state = self.train_module.lock().await;
+            state.module.reset_state(info)?;
+            state.pending_checkpoint = None;
             *self.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
             Ok(())
         }.boxed()
     }
 
     fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
-        async move { self.train_module.lock().await.state_tensor(&tensor_id) }.boxed()
+        async move { self.train_module.lock().await.module.state_tensor(&tensor_id) }.boxed()
     }
 
     fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
-        async move { self.train_module.lock().await.set_state_tensor(&tensor_id, tensor, device) }.boxed()
+        async move { self.train_module.lock().await.module.set_state_tensor(&tensor_id, tensor, device) }.boxed()
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]

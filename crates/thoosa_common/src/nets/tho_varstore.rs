@@ -139,8 +139,13 @@ where
     config:ModConfig<DI, DO>,
     opt_state:OptSnapshot<DI, DO>,
     ipc_export: Option<TrainingState>,
-    transaction_failed: bool
+    training_status: TrainingStatus,
 }
+
+// A failed training update requires an explicit checkpoint reset. An incomplete
+// authorized restore, unlike a failed update, may be retried by stage preparation.
+#[derive(Debug, PartialEq, Eq)]
+enum TrainingStatus { Usable, Failed, Restoring }
 
 #[derive(Debug)]
 enum OptSnapshot<DI, DO>
@@ -178,6 +183,29 @@ struct TrainingState {
     variables: VarStoreState,
     tensors: StateTensors,
     optimizer: OptimizerSnapshot,
+}
+
+impl TrainingState {
+    fn capture(vs: &VarStore, snapshot: &OptimizerSnapshot) -> Result<Self, ThoError> {
+        let mut tensors = StateTensors::default();
+        let variables = VarStoreState::capture(vs, &mut tensors)?;
+        let optimizer = snapshot.map_tensors(0, |key, tensor| {
+            tensors.insert(key.to_owned(), tch_result(tensor.f_detach())?)?;
+            Ok(Tensor::new())
+        })?;
+        Ok(Self { variables, tensors, optimizer })
+    }
+
+    fn export(&self) -> Result<Self, ThoError> {
+        // Complete imports must remain exportable if reconstruction OOMs. These
+        // aliases stay frozen by the stage/export lock until copying completes.
+        let mut tensors = StateTensors::default();
+        for info in self.tensors.info().tensors {
+            let key = info.tensor_key.to_tensor_key();
+            tensors.insert(key.clone(), self.tensors.get(&key)?)?;
+        }
+        Ok(Self { variables: self.variables.clone(), tensors, optimizer: OptimizerMetadata::capture(&self.optimizer).into_snapshot() })
+    }
 }
 
 impl OptimizerSnapshot {
@@ -227,7 +255,7 @@ where
             config,
             opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
             ipc_export: None,
-            transaction_failed: false,
+            training_status: TrainingStatus::Usable,
         })
     }
 
@@ -305,19 +333,16 @@ where
     }
 
     fn capture_state(&self) -> Result<TrainingState, ThoError> {
-        let (vs, snapshot) = match &self.opt_state {
-            OptSnapshot::Opt { opt, vs, .. } => (vs, unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? }),
-            _ => return Err(ThoError::new("training state is not ready for IPC export")),
-        };
-        let mut tensors = StateTensors::default();
-        let variables = VarStoreState::capture(vs, &mut tensors)?;
-        // Separate scalar metadata from tensor storage so checkpoint restoration
-        // recovers options, absent-state markers, and counters from the same epoch.
-        let optimizer = snapshot.map_tensors(0, |key, tensor| {
-            tensors.insert(key.to_owned(), tch_result(tensor.f_detach())?)?;
-            Ok(Tensor::new())
-        })?;
-        Ok(TrainingState { variables, tensors, optimizer })
+        if self.training_status == TrainingStatus::Failed { self.ensure_training_usable()?; }
+        match &self.opt_state {
+            OptSnapshot::Opt { opt, vs, .. } => {
+                let snapshot = unsafe { self.config.opt_config.snapshot(opt.as_raw_c_optimizer(), ThoDevice::try_from(vs.device())?.tho_device_idx())? };
+                TrainingState::capture(vs, &snapshot)
+            }
+            // Saving CPU-offloaded state must not rebuild it on the GPU first.
+            OptSnapshot::Snapshot { cpu_snap, vs } => TrainingState::capture(vs, cpu_snap),
+            OptSnapshot::Offloaded(state) => state.export(),
+        }
     }
 
     pub fn state_info(&mut self) -> Result<StageStateInfo, ThoError> {
@@ -334,7 +359,7 @@ where
         let metadata = (metadata as Box<dyn std::any::Any>).downcast::<TrainingMetadata>().map_err(|_| ThoError::new("invalid training checkpoint metadata"))?;
         // Replace the entire failed state; never export or reuse partial optimizer updates.
         self.ipc_export = None;
-        self.transaction_failed = true;
+        self.training_status = TrainingStatus::Restoring;
         self.opt_state = OptSnapshot::Offloaded(TrainingState { variables: metadata.variables, tensors, optimizer: metadata.optimizer.into_snapshot() });
         Ok(())
     }
@@ -347,6 +372,8 @@ where
     pub fn drop_gpu(&mut self, device: usize) -> Result<(), ThoError> {
         if !self.has_gpu_data(device) { return Ok(()); }
         if let OptSnapshot::Offloaded(state) = &mut self.opt_state {
+            // Export aliases would otherwise retain imported GPU allocations.
+            self.ipc_export = None;
             state.tensors.clear();
             return Ok(());
         }
@@ -366,15 +393,30 @@ where
         let OptSnapshot::Offloaded(state) = &mut self.opt_state else {
             return Err(ThoError::new("training state is already loaded"));
         };
-        state.tensors.set(key, tensor, device)?;
-        if state.tensors.complete() {
-            let vs = state.variables.restore(&state.tensors, device)?;
-            let module = (self.config.net)(&vs)?;
-            let opt = (self.config.optimizer_builder)(&vs)?;
-            let snapshot = state.optimizer.map_tensors(device, |key, _| state.tensors.get(key))?;
-            unsafe { self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?; }
-            self.opt_state = OptSnapshot::Opt { opt, vs, module };
-            self.transaction_failed = false;
+        state.tensors.set(key, tensor, device)
+    }
+
+    pub(crate) fn prepare_state(&mut self, device: usize) -> Result<(), ThoError> {
+        if self.training_status == TrainingStatus::Failed { return self.ensure_training_usable(); }
+        if let OptSnapshot::Offloaded(state) = &self.opt_state {
+            if !state.tensors.complete() { return Err(ThoError::new("training state is offloaded or incompletely restored")); }
+            // Reconstruction belongs to pre_run, inside the OOM-managed attempt.
+            // Keep the complete imported tensors until every allocation succeeds.
+            let stream = match Device::from(ThoDevice::from(device)) {
+                Device::Cuda(index) => Some(ThoCudaStream::current(index as i32)?),
+                _ => None,
+            };
+            let restored = panic_to_err!({
+                let vs = state.variables.restore(&state.tensors, device)?;
+                let module = (self.config.net)(&vs)?;
+                let opt = (self.config.optimizer_builder)(&vs)?;
+                let snapshot = state.optimizer.map_tensors(device, |key, _| state.tensors.get(key))?;
+                unsafe { self.config.opt_config.restore_snapshot(&snapshot, opt.as_raw_c_optimizer())?; }
+                Ok::<_, ThoError>(OptSnapshot::Opt { opt, vs, module })
+            });
+            self.opt_state = finish_cuda_run(restored, stream.as_ref().map_or(Ok(()), |stream| complete_cuda_stream(stream.synchronize(), || stream.synchronize()).result))?;
+            self.ipc_export = None;
+            self.training_status = TrainingStatus::Usable;
         }
         Ok(())
     }
@@ -412,7 +454,7 @@ where
         let output = match accumulated {
             Ok(output) => output,
             Err(error) => {
-                self.transaction_failed = true;
+                self.training_status = TrainingStatus::Failed;
                 return Err(Self::failed_epoch(error));
             }
         };
@@ -424,7 +466,7 @@ where
             Ok::<_, ThoError>(())
         }), synchronize());
         if let Err(cause) = committed {
-            self.transaction_failed = true;
+            self.training_status = TrainingStatus::Failed;
             self.ipc_export = None;
             if cause.needs_cuda_recovery() || cause.is_cuda_recovery_failed() { return Err(cause); }
             return Err(Self::failed_epoch(cause));
@@ -433,7 +475,7 @@ where
     }
 
     pub(crate) fn ensure_training_usable(&self) -> Result<(), ThoError> {
-        if self.transaction_failed { return Err(ThoError::new("training session invalidated; restore an epoch checkpoint before reuse")); }
+        if self.training_status != TrainingStatus::Usable { return Err(ThoError::new("training session invalidated; restore an epoch checkpoint before reuse")); }
         Ok(())
     }
 

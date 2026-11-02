@@ -29,7 +29,8 @@ impl CpuStateCheckpoint {
 
     fn restore_dump(&self) -> Result<StageStateDump, ThoError> {
         let tensors = self.tensors.iter().map(|(key, tensor)| Ok((key.clone(), ThoTensor::new((), tch_result(tensor.as_ref().f_alias())?)?))).collect::<Result<_, ThoError>>()?;
-        Ok(StageStateDump::new(None, tensors))
+        // Deferred/offloaded checkpoints must retain optimizer and VarStore metadata.
+        Ok(StageStateDump::new(self.info()?.scalars, tensors))
     }
 }
 
@@ -64,28 +65,41 @@ where
     pub(crate) async fn save_cpu_checkpoint(self: Arc<Self>) -> Result<CpuStateCheckpoint, ThoError> {
         checkpoint_operation_on(Some(self.actor.activity_gate()), async move {
             let _execution = self.execution.write().await;
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
+            // CPU-only saves still belong to this training session's worker generation.
+            self.worker_id.check(self.actor.worker_id()?)?;
+            if let Some(state) = state.as_ref() {
+                // Snapshot CPU-offloaded state directly; saving must not allocate GPU memory.
+                let scalars = serde_json::from_slice(&serde_json::to_vec(&state.scalars)?)?;
+                let tensors = state.tensors.iter().map(|(key, tensor)| {
+                    let source = tensor.as_ref();
+                    Ok((key.clone(), ThoTensor::new((), tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)?))
+                }).collect::<Result<_, ThoError>>()?;
+                return CpuStateCheckpoint::from_dump(StageStateDump::new(scalars, tensors));
+            }
             // Training checkpoints belong to the owner-managed session, never a replacement endpoint.
-            self.load_gpu_inner(self.tho_device_idx, self.worker_id, &mut state).await?;
             let actor = &self.actor;
             let mut dump = actor.purge_stage_state(self.stage_id.clone(), self.endpoint_name.to_string(), self.worker_id).await?;
             let export = dump.export.take().ok_or_else(|| ThoError::new("checkpoint export lacks acknowledgement"))?;
             let checkpoint = CpuStateCheckpoint::from_dump(dump)?;
+            // commit=false releases export bookkeeping while preserving live GPU state.
             export.keep_live().await?;
             Ok(checkpoint)
         }).await
     }
 
-    pub(crate) async fn restore_cpu_checkpoint(self: Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>) -> Result<(), ThoError> {
+    pub(crate) async fn schedule_cpu_restore(self: Arc<Self>, checkpoint: Arc<CpuStateCheckpoint>) -> Result<(), ThoError> {
         checkpoint_operation_on(Some(self.actor.activity_gate()), async move {
             let _execution = self.execution.write().await;
             let mut state = self.state.lock().await;
             let actor = &self.actor;
+            let dump = checkpoint.restore_dump()?;
             // Discard the failed module and any newer offload; restore matching
             // metadata before uploading tensors from the persistent checkpoint.
             actor.reset_stage_state(self.worker_id, self.endpoint_name.to_string(), self.stage_id.clone(), checkpoint.info()?).await?;
-            *state = Some(Box::new(checkpoint.restore_dump()?));
-            self.load_gpu_inner(self.tho_device_idx, self.worker_id, &mut state).await
+            *state = Some(Box::new(dump));
+            // Upload and worker pre_run reconstruction belong to the next OOM-managed invocation.
+            Ok(())
         }).await
     }
 }

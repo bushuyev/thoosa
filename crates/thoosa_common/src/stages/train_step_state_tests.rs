@@ -35,14 +35,24 @@ impl std::borrow::Borrow<TrainStepInput<AnyDims, AnyDims>> for WireInput {
 }
 
 async fn local_step<C: RunCtx>(optimizer: u8, device: ThoDevice, checkpoint: PathBuf) -> Result<TestStep<C>, ThoError> {
+    let restore_failures = checkpoint.with_extension("restore-oom");
     let config: ThoOptimizers = match optimizer {
         0 => nn::Adam::default().amsgrad(true).into(),
         1 => nn::AdamW::default().amsgrad(true).into(),
         _ => nn::Sgd { momentum: 0.9, dampening: 0., wd: 0.01, nesterov: true }.into(),
     };
     let (step, ()) = TrainStep::new_local(device, move |(), device| async move {
-        let config = ModConfig::new(config, |vs| {
+        let config = ModConfig::new(config, move |vs| {
             let initialize = vs.variables().is_empty();
+            // A file lets the same injected model-construction failure run in
+            // the real worker process, after tensor import has completed.
+            if !initialize && restore_failures.exists() {
+                let remaining: usize = std::fs::read_to_string(&restore_failures)?.parse()?;
+                if remaining > 0 {
+                    std::fs::write(&restore_failures, (remaining - 1).to_string())?;
+                    return Err(ThoError::oom().into());
+                }
+            }
             let mut builder = SeqBuilder::new(3, None)?;
             let module = builder.linear_s(1, "output")?.end_seq()?.build_tch_module(&vs.root())?;
             if initialize {
@@ -157,7 +167,7 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
     let error = pipeline.run_batches(source, ctx.branch(false), true, 32, true, |_| panic!("failed or speculative batch was committed")).await.unwrap_err();
     assert!(error.is_oom());
     assert!(drained.load(std::sync::atomic::Ordering::SeqCst), "rollback can race an undrained producer");
-    pipeline.restore_epoch_checkpoint(saved, 1).await?;
+    pipeline.schedule_epoch_restore(saved, 1).await?;
     let actual = GlobalCtx::global().cuda_actor(1).run_stage(pipeline.clone(), input(false)?, 1, &ctx).await?.loss;
     let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
     assert!((actual - expected).abs() < 1e-6, "failed epoch changed committed state");
@@ -333,7 +343,9 @@ async fn round_trips() -> Result<(), ThoError> {
         for cycle in 0..5 {
             // Save before/after lazy optimizer initialization, then discard both
             // successful updates and a failed invocation from the next epoch.
+            let was_loaded = restored.has_gpu_data(1).await;
             let saved = restored.save_epoch_checkpoint(1).await?;
+            assert_eq!(restored.has_gpu_data(1).await, was_loaded, "saving must neither purge nor reload training state");
             for _ in 0..2 { actor.run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
             // Capture multiple later epochs while retaining the recovery point.
             // Staging-buffer reuse must not overwrite saved parameters/moments.
@@ -346,10 +358,24 @@ async fn round_trips() -> Result<(), ThoError> {
             let cache = Arc::new(TmpCached::new("failed_epoch_batch").await);
             let error = restored.run_once(cache.insert_guarded(failed), RunCtxImpl::new(1, "epoch failure"), 0).await.unwrap_err();
             assert!(error.is_oom());
-            restored.restore_epoch_checkpoint(Arc::clone(&saved), 1).await?;
+            restored.schedule_epoch_restore(Arc::clone(&saved), 1).await?;
+            assert!(!restored.has_gpu_data(1).await, "scheduling rollback must not allocate GPU state");
+            let pending = restored.save_epoch_checkpoint(1).await?;
+            assert_eq!(serde_json::to_value(pending.info()?.scalars)?, serde_json::to_value(saved.info()?.scalars)?, "deferred saves must preserve optimizer metadata");
+            assert!(!restored.has_gpu_data(1).await, "saving deferred state must not upload it");
+            if let DynSyncStageWithStateEnum::Local(stage) = restored.as_ref() {
+                // Model a copy failure after the first restored tensor. Purging
+                // must release partial imports without requiring a live optimizer.
+                let (key, tensor) = saved.tensors.iter().next().unwrap();
+                let source = tch_result(tensor.as_ref().f_alias())?;
+                let partial = copy_state_tensor(source, 1).await?;
+                stage.train_module.lock().await.module.set_state_tensor(key, partial, 1)?;
+                assert!(restored.has_gpu_data(1).await);
+            }
             // The checkpoint survives a restore and unrelated CPU purge.
             restored.purge_gpu(None, 1, "checkpoint retained through purge").await?;
-            restored.restore_epoch_checkpoint(saved, 1).await?;
+            assert!(!restored.has_gpu_data(1).await);
+            restored.schedule_epoch_restore(saved, 1).await?;
             let train = cycle > 0;
             let expected = actor.run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
             let actual = actor.run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss;
@@ -389,11 +415,66 @@ async fn round_trips() -> Result<(), ThoError> {
         let actual = actor.run_stage(split.clone(), uneven_input(false)?, 1, &ctx).await?.loss;
         assert!((actual - expected).abs() < 1e-5, "split updates differ: {actual} vs {expected}");
         // A final validation has no later training call to trigger checkpointing.
-        split.checkpoint(&ctx).await?;
+        split.checkpoint(RunCtxImpl::new(1, "checkpoint"), 32).await?;
         let saved_loss = checkpoint_loss(checkpoint.path())?;
         assert!((saved_loss - actual).abs() < 1e-5, "checkpoint does not match final validation: {saved_loss} vs {actual}");
     }
     Ok(())
+}
+
+async fn restore_oom_round_trip() -> Result<(), ThoError> {
+    let global = GlobalCtx::global();
+    let checkpoint = thoosa_shared::tmp_file::TmpFile::new(format!("/tmp/train-restore-oom-{}.safetensors", std::process::id()));
+    let failure_file = thoosa_shared::tmp_file::TmpFile::new(checkpoint.path().with_extension("restore-oom"));
+    let restored = step(0, "restore-oom".into(), checkpoint.path().to_owned()).await?;
+    let reference = step(0, "restore-oom-reference".into(), PathBuf::from("/tmp/unused-restore-oom-reference")).await?;
+    let registered = global.register_cache((restored.stage_id(), restored.clone() as Arc<dyn CachePurger>));
+    let reference_registered = global.register_cache((reference.stage_id(), reference.clone() as Arc<dyn CachePurger>));
+    let mut ctx = RunCtxImpl::new(1, "restore OOM");
+    let cache = Arc::new(TmpCached::new("restore OOM input").await);
+    restored.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?;
+    reference.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?;
+    let saved = restored.save_epoch_checkpoint(1).await?;
+    restored.schedule_epoch_restore(Arc::clone(&saved), 1).await?;
+    // The initial and max-parallel attempts fail, forcing DumpToCpu. If the
+    // epoch's exclusive cap were reset to 32, this would succeed without dumping.
+    std::fs::write(failure_file.path(), "2")?;
+    let actual = restored.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?.loss;
+    assert_eq!(std::fs::read_to_string(failure_file.path())?, "0");
+    assert!(!reference.has_gpu_data(1).await, "reconstruction OOM did not reach DumpToCpu");
+    let expected = reference.run_once(cache.insert_guarded(input(true)?), ctx.branch(false), 0).await?.loss;
+    assert!((actual - expected).abs() < 1e-6, "restoration retries changed the training update");
+    let actual = restored.run_once(cache.insert_guarded(input(false)?), ctx.branch(false), 0).await?.loss;
+    let expected = reference.run_once(cache.insert_guarded(input(false)?), ctx.branch(false), 0).await?.loss;
+    assert!((actual - expected).abs() < 1e-6, "restoration retries applied an update twice");
+    // The checkpoint command itself can be the first invocation after rollback.
+    restored.schedule_epoch_restore(saved, 1).await?;
+    std::fs::write(failure_file.path(), "2")?;
+    restored.checkpoint(ctx, 0).await?;
+    assert!(checkpoint.path().exists());
+    assert_eq!(std::fs::read_to_string(failure_file.path())?, "0");
+    global.remove_cache(registered.key());
+    global.remove_cache(reference_registered.key());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_train_restore_oom_local() -> Result<(), ThoError> {
+    let global = GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(90), restore_oom_round_trip()).await?;
+    global.shutdown().await;
+    result
+}
+
+#[test]
+fn test_train_restore_oom_ipc() -> Result<(), ThoError> {
+    crate::ipc::tests::run_ipc_test(module_path!(), async {
+        tokio::time::timeout(std::time::Duration::from_secs(90), restore_oom_round_trip()).await?
+    }, async |sock| {
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
+        CudaWorker::run_worker(sock, &ws, HashMap::from([(ENDPOINT.into(), Box::new(endpoint_init) as InitFn)]), 1usize.into()).await
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -452,7 +533,7 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             let input = uneven_input(true)?;
             let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
             let selected = wrapper.select_ref(0, Some((0..2).into())).await?;
-            let mut state = split.train_module.lock().await;
+            let mut state = MutexGuard::map(split.train_module.lock().await, |state| &mut state.module);
             let saved_info = state.state_info()?;
             let mut saved_tensors = Vec::new();
             for tensor in &saved_info.tensors {
@@ -466,8 +547,9 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             assert!(!error.is_retryable_oom());
             state.reset_state(saved_info)?;
             for (key, tensor) in saved_tensors { state.set_state_tensor(&key, tensor, 0)?; }
+            state.prepare_state(0)?;
             let actual = split.clone().do_run_with_state(selected.as_ref(), &mut state, &ctx)?.loss;
-            let mut full_state = full.train_module.lock().await;
+            let mut full_state = MutexGuard::map(full.train_module.lock().await, |state| &mut state.module);
             let expected = full.clone().do_run_with_state(&input, &mut full_state, &ctx)?.loss;
             // Replaying a committed request (for example after lost acknowledgement)
             // returns its previous result without a second optimizer update.
@@ -480,7 +562,7 @@ async fn test_train_transaction_cpu() -> Result<(), ThoError> {
             assert!((actual - expected).abs() < 1e-5, "optimizer={optimizer}, cycle={cycle}: update differs after retry");
 
         }
-        let mut state = split.train_module.lock().await;
+        let mut state = MutexGuard::map(split.train_module.lock().await, |state| &mut state.module);
         let valid = split.clone().do_run_with_state(&uneven_input(false)?, &mut state, &ctx)?.loss;
         split.clone().do_run_with_state(&TrainStepInput::checkpoint()?, &mut state, &ctx)?;
         assert!((checkpoint_loss(checkpoint.path())? - valid).abs() < 1e-5, "final checkpoint differs from validation");
