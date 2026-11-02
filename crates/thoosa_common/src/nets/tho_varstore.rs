@@ -492,7 +492,7 @@ where
             };
 
             self.opt_state = OptSnapshot::Snapshot {
-                cpu_snap:clone_owned_optimizer_snapshot_to(cuda_snapshot, thoosa_common::tho_device::ThoDevice::from(0usize)).await?,
+                cpu_snap:clone_owned_optimizer_snapshot_to(cuda_snapshot, ThoDevice::from(0usize)).await?,
                 vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
             };
 

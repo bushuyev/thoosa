@@ -435,7 +435,7 @@ where
     C: RunCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-
+        debug!("SyncLogitsBatch::do_run: input={input:?}");
         if input.outputs.is_empty() {
             return Err(ThoError::new("SyncLogitsBatch: empty outputs"));
         }
@@ -443,7 +443,10 @@ where
             .map(|output| output.as_ref().t_ref().f_flatten(0, 1))
             .collect::<Result<Vec<_>, _>>())?;
 
-        let x = tch_result(tch_result(Tensor::f_stack(x_values.as_slice(), 0))?.f_squeeze())?;
+        let x = tch_result(tch_result(Tensor::f_stack(x_values.as_slice(), 0))?.f_squeeze_dim(-1))?;
+
+        debug!("SyncLogitsBatch::do_run: x={x:?}");
+
         let device = input.outputs[0].as_ref().t_ref().device();
 
         let y_values = input.labels.iter().map(|labels| {
@@ -567,7 +570,7 @@ where
                 let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
                     (loader.output_cache_key(), &dyn_refs_set)
                 ]);
-                let stage = SyncLogitsBatch::<C>::new(1.into()).await?;
+                let stage = SyncLogitsBatch::<C>::new(ctx_for_batch.tho_device_idx().into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -767,7 +770,7 @@ mod tests {
     use crate::stages::train_label_nets::TrainLabelNetRunConfig;
     use crate::train_nets::{FinalNetArgs, FinalNetArgsFields, FinalNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields};
     use crate::train_nets::{LabelNetParams, LabelNetTypeParams};
-    use log::debug;
+    use log::{debug, LevelFilter};
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -826,7 +829,7 @@ mod tests {
     //all nets sum up their inputs and final net classifies odd/even
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_train_final_net_smoke() -> Result<(), ThoError> {
-        // log::set_max_level(Trace);
+        log::set_max_level(LevelFilter::Trace);
         reset_print_options();
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
