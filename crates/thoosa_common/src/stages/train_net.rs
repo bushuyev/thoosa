@@ -262,7 +262,8 @@ where
             let mut aborted_epochs = 0;
             for idx in 0..epochs {
                 // An epoch commits only after training, scheduled validation, and
-                // checkpoint publication all succeed. No batch is retried in place.
+                // checkpoint publication all succeed. Failed updates are never replayed;
+                // OOMHandler may retry preparation before an update starts.
                 let epoch_result = async {
                     let batches = batch.train_batch_stream(ctx.branch(false));
                     let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
@@ -283,7 +284,7 @@ where
                     let checkpoint = train_step.save_epoch_checkpoint(ctx.tho_device_idx()).await?;
                     if valid_loss.is_some_and(|loss| loss < best_valid_loss - min_delta) {
                         // Best-model publication remains explicit, including the last epoch.
-                        train_step.checkpoint(&ctx).await?;
+                        train_step.checkpoint(ctx.branch(false), max_other_parallel).await?;
                     }
                     Ok::<_, ThoError>((checkpoint, valid_loss))
                 }.await;
@@ -307,20 +308,20 @@ where
                             }
                         }
                     }
-                    Err(error) if (error.is_oom() || error.is_retryable_oom()) && !error.needs_cuda_recovery() && !error.is_cuda_recovery_failed() => {
+                    Err(error) if (error.is_oom() || error.is_retryable_oom() || matches!(error.what(), ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, .. })) && !error.needs_cuda_recovery() && !error.is_cuda_recovery_failed() => {
                         aborted_epochs += 1;
                         // Retrying a memory-constrained trial with the same extra
                         // resident batch can OOM even with exclusive GPU access.
                         prefetch = false;
                         // Restoration replaces the entire module/optimizer and its
                         // acknowledgement state. Failed epochs never affect patience.
-                        train_step.restore_epoch_checkpoint(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
-                        warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
                         // Apply the user's per-epoch reduction on success and failure alike.
                         if max_other_parallel == 0 {
                             return Err(error.context("training epoch ran out of memory with exclusive runner access"));
                         }
+                        train_step.schedule_epoch_restore(Arc::clone(&recovery_checkpoint), ctx.tho_device_idx()).await?;
                         max_other_parallel /= 2;
+                        warn!("TrainNet: discarded epoch={idx} after OOM; completed={completed_epochs} aborted={aborted_epochs} next_max_other_parallel={max_other_parallel} error={error:#}");
 
                     }
                     Err(error) => return Err(error),
@@ -626,7 +627,11 @@ use crate::tch_error::tch_result;
         Box::new(move |_ctx, _rc| ready(Ok(Arc::clone(&batch))).boxed())
     }
 
-    fn oom_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>, ThoBatch<DummyY>), ThoError>> {
+    fn oom_stream(exhausted: bool) -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>, ThoBatch<DummyY>), ThoError>> {
+        if exhausted {
+            // Exhausted preparation has a distinct typed error but the same epoch policy.
+            return futures_util::stream::once(ready(Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: "preparation retries exhausted".into() }))).boxed();
+        }
         // Failure originates inside TrainStep after forward, not in the loader.
         let input = (|| {
             let x = tch_result(Tensor::f_zeros([1, 1, 1], (tch::Kind::Float, tch::Device::Cpu)))?;
@@ -782,7 +787,7 @@ use crate::tch_error::tch_result;
     async fn test_train_net_discards_oom_epochs_and_continues() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2)?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
-        for fail_validation in [false, true] {
+        for (fail_validation, exhausted) in [(false, false), (true, false), (false, true), (true, true)] {
             for failed_epoch in [0, 1] {
                 let train_calls = Arc::new(AtomicUsize::new(0));
                 let valid_calls = Arc::new(AtomicUsize::new(0));
@@ -792,10 +797,10 @@ use crate::tch_error::tch_result;
                 let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
                     .with_train_stream_calls(Arc::clone(&train_calls), move |_| {
                         let current = train_epoch.fetch_add(1, Ordering::SeqCst);
-                        if !fail_validation && current == failed_epoch { make_stream().chain(oom_stream()).boxed() } else { make_stream() }
+                        if !fail_validation && current == failed_epoch { make_stream().chain(oom_stream(exhausted)).boxed() } else { make_stream() }
                     })
                     .with_valid_stream_calls(Arc::clone(&valid_calls), move |_| {
-                        if fail_validation && valid_epoch.load(Ordering::SeqCst) - 1 == failed_epoch { oom_stream() } else { make_stream() }
+                        if fail_validation && valid_epoch.load(Ordering::SeqCst) - 1 == failed_epoch { oom_stream(exhausted) } else { make_stream() }
                     }).finish());
                 let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
                 let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
@@ -815,7 +820,7 @@ use crate::tch_error::tch_result;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let calls = Arc::new(AtomicUsize::new(0));
         let batch = Arc::new(mock_async_data_batch::build::<DummyX, DummyY, MockRunCtx>()
-            .with_train_stream_calls(Arc::clone(&calls), |_| oom_stream()).finish());
+            .with_train_stream_calls(Arc::clone(&calls), |_| oom_stream(false)).finish());
 
         let configs = thoosa_shared::run_configs::OptRunConfigs::new(thoosa_shared::run_configs::GridRunConfigs::new(thoosa_shared::run_configs::ConstConfigs::new(Vec::<thoosa_shared::val::NamedVal<DummyRunConfigFields>>::new()), vec![]), vec![]);
         let factory: TestBatchFactory = Box::new(move |_, _| ready(Ok(Arc::clone(&batch))).boxed());
