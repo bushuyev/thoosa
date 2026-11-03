@@ -63,21 +63,47 @@ struct RuntimeFailure {
 #[derive(Debug, Clone)]
 pub struct DeviceExecutionCtx {
     runner: Arc<SyncStageRunner>,
-    cuda_actor: Option<Arc<dyn CudaActorHandle>>,//TODO there should be single actor
-    ipc_actor: Option<CudaIPCActorHandle>,
+    actor_handle: CudaActorHandleEnum
 }
 
 impl DeviceExecutionCtx {
     fn cpu() -> Self {
-        Self { runner: Arc::new(SyncStageRunner::new_cpu(1024)), cuda_actor: None, ipc_actor: None }
+        Self {
+            runner:
+            Arc::new(SyncStageRunner::new_cpu(1024)),
+            actor_handle:CudaActorHandleEnum::None
+        }
     }
-    pub fn ipc_actor(&self) -> Result<CudaIPCActorHandle, ThoError> {
-        self.ipc_actor.clone().ok_or_else(|| ThoError::new("stage installation requires an IPC backend"))
+
+    pub fn ipc_actor(&self) -> Result<Arc<CudaIPCActorHandle>, ThoError> {
+        match &self.actor_handle {
+            CudaActorHandleEnum::Ipc(handle) => Ok(Arc::clone(&handle)),
+            _=>{
+                Err(ThoError::new("stage installation requires an IPC backend"))
+            }
+        }
     }
-    pub(crate) fn ipc_backend(&self) -> Option<CudaIPCActorHandle> { self.ipc_actor.clone() }
-    
+
+    pub fn actor(&self) -> Result<Arc<dyn CudaActorHandle>, ThoError> {
+        match &self.actor_handle {
+            CudaActorHandleEnum::Local(handle) => Ok(Arc::clone(&handle) as Arc<dyn CudaActorHandle>),
+            CudaActorHandleEnum::Ipc(handle) =>  Ok(Arc::clone(&handle) as Arc<dyn CudaActorHandle>),
+            CudaActorHandleEnum::None => {
+                Err(ThoError::new("Dummy handle"))
+            }
+        }
+    }
+
+
     pub fn device_idx(&self) -> usize { self.runner.cuda_gate().map_or(0, |gate| gate.device_idx()) }
     pub fn runner(&self) -> &SyncStageRunner { &self.runner }
+}
+
+#[derive(Debug, Clone)]
+pub enum CudaActorHandleEnum {
+    Local(Arc<CudaLocalActorHandle>),
+    Ipc(Arc<CudaIPCActorHandle>),
+    None//dummy CPU
 }
 
 /// One command's identity and lifetime. Services can be shared deliberately,
@@ -96,9 +122,12 @@ impl Runtime {
         let failure = Arc::new(RuntimeFailure { shutting_down: AtomicBool::new(false), failure: tokio::sync::watch::channel(None).0, gates: gates.clone() });
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
-            let actor: Arc<dyn CudaActorHandle> = Arc::new(CudaLocalActorHandle::new(Arc::clone(&gate))?);
-            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor), Arc::clone(&residency), Arc::clone(&failure), false);
-            devices.push(DeviceExecutionCtx { runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), cuda_actor: Some(actor), ipc_actor: None });
+            let actor = Arc::new(CudaLocalActorHandle::new(Arc::clone(&gate))?);
+            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor) as Arc<dyn CudaActorHandle>, Arc::clone(&residency), Arc::clone(&failure), false);
+            devices.push(DeviceExecutionCtx {
+                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)),
+                actor_handle: CudaActorHandleEnum::Local(Arc::clone(&actor))
+            });
         }
         Ok(Arc::new(Self { devices, residency, failure, is_ipc: false, _arena_fd: None }))
     }
@@ -129,10 +158,10 @@ impl Runtime {
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
             let ipc_actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
-            let actor: Arc<dyn CudaActorHandle> = Arc::new(ipc_actor.clone());
-            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor), Arc::clone(&residency), Arc::clone(&failure), true);
+            let actor = Arc::new(ipc_actor.clone());
+            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor) as Arc<dyn CudaActorHandle>, Arc::clone(&residency), Arc::clone(&failure), true);
             devices.push(DeviceExecutionCtx {
-                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), cuda_actor: Some(actor), ipc_actor: Some(ipc_actor)
+                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), actor_handle: CudaActorHandleEnum::Ipc(Arc::clone(&actor))
             });
         }
         Ok(Arc::new(Self { devices, residency, failure, is_ipc: true, _arena_fd: Some(arena_fd) }))
@@ -191,7 +220,7 @@ impl Runtime {
         if let Err(error) = self.residency.purger.shutdown().await { error!("purger shutdown failed: {error:#}"); }
         self.failure.shutting_down.store(true, Relaxed);
         for device in &self.devices {
-            if let Some(actor) = &device.ipc_actor {
+            if let Some(actor) = &device.ipc_actor().ok() {
                 if let Err(error) = actor.shutdown().await { error!("actor shutdown failed: {error:#}"); }
             }
         }
@@ -662,9 +691,9 @@ impl GlobalCtx {
         &self.runtime.devices[tho_device].runner
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Arc<dyn CudaActorHandle> {
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> Arc<dyn CudaActorHandle> {
         let device:ThoDevice = device.into();
-        self.runtime.devices.get(device.tho_device_idx()).and_then(|device| device.cuda_actor.as_ref()).expect(&format!("No CudaActor for device={device:?}"))
+        self.runtime.devices.get(device.tho_device_idx()).and_then(|device| device.actor().ok()).expect(&format!("No CudaActor for device={device:?}"))
     }
 }
 
@@ -1068,7 +1097,7 @@ impl MockGlobalCtx {
         } else { self.is_all_on_cpu(device_idx) }
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Arc<dyn CudaActorHandle> {
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> Arc<dyn CudaActorHandle> {
         // Tests using real CUDA actors must install a runtime that owns every requested device.
         mock_global_ctx::manual_method_real_ctx().expect("configure a real runtime for CUDA actor access").cuda_actor(device)
     }

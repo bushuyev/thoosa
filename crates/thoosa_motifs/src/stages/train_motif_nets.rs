@@ -1811,8 +1811,8 @@ mod tests {
                     init: (),
                 };
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                let input = train_input(cuda_actor).await?;
-                let input_0 = train_input(cuda_actor).await?;
+                let input = train_input(&Arc::clone(&cuda_actor)).await?;
+                let input_0 = train_input(&Arc::clone(&cuda_actor)).await?;
                 let train_step = Arc::new(train_step);
                 let ctx = RunCtxImpl::new(1, "train_step_ipc");
                 // let before = train_step.clone().do_run(&input, &ctx)?;

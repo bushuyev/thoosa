@@ -126,7 +126,7 @@ where
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
     // Validate the IPC backend once; operations and cleanup retain its owner handle.
-    actor: CudaIPCActorHandle,
+    actor: Arc<CudaIPCActorHandle>,
     pd:PhantomData<St>,
     endpoint_name:&'static str,
     // Each proxy keeps the id used at installation so invocations reach its own worker-side state.
@@ -300,7 +300,7 @@ where
     // Backend installation passes the actor explicitly; compatibility constructors
     // resolve the installed runtime only once, before entering this boundary.
     pub(crate) async fn install_on(
-        ipc_actor: CudaIPCActorHandle,
+        ipc_actor: Arc<CudaIPCActorHandle>,
         endpoint_name: &'static str,
         stage_id: Option<String>,
         tho_device_idx: usize,
