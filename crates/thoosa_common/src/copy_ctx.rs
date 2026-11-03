@@ -90,10 +90,6 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     // It must neither request a new cycle nor change admission state.
     async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError>;
 
-    async fn retire_backend(&self, _authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError> {
-        Err(ThoError::new("this CUDA backend cannot terminate active work"))
-    }
-
     //TODO remove
     async fn purge_stage_state(&self, _stage_id: Option<String>, _endpoint_name: String, _worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
         unreachable!()

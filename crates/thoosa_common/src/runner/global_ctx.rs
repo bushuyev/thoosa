@@ -123,10 +123,13 @@ impl Runtime {
         let mut devices = vec![DeviceExecutionCtx::cpu()];
         for gate in gates {
             let actor = Arc::new(CudaLocalActorHandle::new(Arc::clone(&gate))?);
-            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor) as Arc<dyn CudaActorHandle>, Arc::clone(&residency), Arc::clone(&failure), false);
+            let handle_enum = CudaActorHandleEnum::Local(Arc::clone(&actor));
+
+            let recovery = Self::recovery(Arc::clone(&gate), handle_enum.clone(), Arc::clone(&residency), Arc::clone(&failure));
+
             devices.push(DeviceExecutionCtx {
                 runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)),
-                actor_handle: CudaActorHandleEnum::Local(Arc::clone(&actor))
+                actor_handle: handle_enum
             });
         }
         Ok(Arc::new(Self { devices, residency, failure, is_ipc: false, _arena_fd: None }))
@@ -159,37 +162,46 @@ impl Runtime {
         for gate in gates {
             let ipc_actor = CudaIPCActorHandle::new(Arc::clone(&gate), cuda_worker_args.clone(), arena_fd.try_clone()?).await?;
             let actor = Arc::new(ipc_actor.clone());
-            let recovery = Self::recovery(Arc::clone(&gate), Arc::clone(&actor) as Arc<dyn CudaActorHandle>, Arc::clone(&residency), Arc::clone(&failure), true);
+            let handle_enum = CudaActorHandleEnum::Ipc(Arc::clone(&actor));
+            let recovery = Self::recovery(Arc::clone(&gate), handle_enum.clone(), Arc::clone(&residency), Arc::clone(&failure));
+
             devices.push(DeviceExecutionCtx {
-                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), actor_handle: CudaActorHandleEnum::Ipc(Arc::clone(&actor))
+                runner: Arc::new(SyncStageRunner::new_with_recovery(1024, recovery)), actor_handle: handle_enum
             });
         }
         Ok(Arc::new(Self { devices, residency, failure, is_ipc: true, _arena_fd: Some(arena_fd) }))
     }
 
-    fn recovery(gate: Arc<CudaActivityGate>, actor: Arc<dyn CudaActorHandle>, residency: Arc<ResidencyService>, failure: Arc<RuntimeFailure>, is_ipc: bool) -> Arc<CudaRecoveryCoordinator> {
-        let restart_actor = Arc::clone(&actor);
+    fn recovery(gate: Arc<CudaActivityGate>, actor: CudaActorHandleEnum, residency: Arc<ResidencyService>, failure: Arc<RuntimeFailure>) -> Arc<CudaRecoveryCoordinator> {
+        let restart_actor = actor.clone();
         let restart_gate = Arc::clone(&gate);
         CudaRecoveryCoordinator::with_backend(
             gate,
             Arc::new(move |device| {
-                let (actor, gate, residency) = (Arc::clone(&restart_actor), Arc::clone(&restart_gate), Arc::clone(&residency));
+                let (actor, gate, residency) = (restart_actor.clone(), Arc::clone(&restart_gate), Arc::clone(&residency));
                 Box::pin(async move {
                     residency.drop_data_on_device(device, "recovery").await?;
-                    actor.restart_backend(thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?).await
+                    let authority = thoosa_shared::CudaActivityScope::recovery_ticket(&gate)?;
+                    match actor {
+                        CudaActorHandleEnum::Local(actor) => actor.restart_backend(authority).await,
+                        CudaActorHandleEnum::Ipc(actor) => actor.restart_backend(authority).await,
+                        CudaActorHandleEnum::None => Err(ThoError::new("CPU device has no CUDA backend to recover")),
+                    }
                 })
             }),
-            if is_ipc {
-                Some(Arc::new(move |_, authority| {
-                    let actor = Arc::clone(&actor);
-                    Box::pin(async move { actor.retire_backend(authority).await })
-                }))
-            } else {
-                None
+            // Only IPC owns a worker process that can be retired before draining.
+            match &actor {
+                CudaActorHandleEnum::Ipc(actor) => {
+                    let actor = Arc::clone(actor);
+                    Some(Arc::new(move |_, authority| {
+                        let actor = Arc::clone(&actor);
+                        Box::pin(async move { actor.retire_backend(authority).await })
+                    }))
+                }
+                CudaActorHandleEnum::Local(_) | CudaActorHandleEnum::None => None,
             },
-            if is_ipc {
-                None
-            } else {
+            // Local CUDA failure affects this process; IPC failure is contained in its worker.
+            if matches!(actor, CudaActorHandleEnum::Local(_)) {
                 Some(Arc::new(move |error| {
                     failure.shutting_down.store(true, Relaxed);
                     for gate in &failure.gates { gate.fail_process(error.clone()); }
@@ -200,6 +212,8 @@ impl Runtime {
                         }
                     });
                 }))
+            } else {
+                None
             },
         )
     }
