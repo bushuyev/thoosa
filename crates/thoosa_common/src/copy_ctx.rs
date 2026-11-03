@@ -104,18 +104,6 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         unreachable!()
     }
 
-    //TODO remove
-    async fn drop_endpoint(&self, _stage_id: Option<String>, _endpoint_name: String, _worker_id: crate::ipc::worker_msg::CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
-        unreachable!()
-    }
-
-    //TODO remove
-    async fn drop_tho_tensor(&self, _key:u64, _worker_id: crate::ipc::worker_msg::CudaWorkerId)-> Result<(), ThoError>
-    {
-        Ok(())
-    }
-
-
     async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError>;
