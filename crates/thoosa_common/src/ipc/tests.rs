@@ -275,6 +275,10 @@ mod tests {
             self.consume_input(input)
         }
 
+
+    }
+
+    impl crate::runner::sync_stage::ConsumingStage for SyncConsumeTestStage {
         fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
             match self.consume_input(&input) {
                 Ok(output) => ConsumeResult::Ok(output),
@@ -301,7 +305,7 @@ mod tests {
         use futures_util::FutureExt;
         async move {
             // This stage has no initializer fields, but still uses the typed install message.
-            Ok(Box::new(crate::ipc::wraps::WorkerWrapper::<crate::ipc::serialization::json::JsonIpcCodec, _, _, _>::new(Arc::new(SyncConsumeTestStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+            Ok(Box::new(crate::ipc::wraps::WorkerWrapper::<crate::ipc::serialization::json::JsonIpcCodec, _, _, _>::new_both(Arc::new(SyncConsumeTestStage::new()), std::marker::PhantomData)) as Box<dyn SyncStageIpcWrapper>)
         }.boxed()
     }
 
@@ -376,14 +380,13 @@ mod tests {
                 };
                 for _ in 0..2 {
                     let actor = Arc::clone(&actor);
-                    let old_output = actor.run_stage(retained.clone(), Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "before reset")).await?;
+                    let old_output = GlobalCtx::global().execution(1).run_stage(retained.clone(), Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "before reset")).await?;
                     let owner_managed = Arc::new(new_sync_consume_test_stage(1).await?);
                     let generation = gate.device_generation();
                     let fatal = ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("fatal", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[-2.0f32, 1.0]))?.f_view([1, 2]))?)?;
                     let fatal_stage = owner_managed.clone();
-                    let actor_to_move = Arc::clone(&actor);
                     let result = runner.submit(1, async move {
-                        actor_to_move.run_stage(fatal_stage, Arc::new(DevicesWrap::wrap(fatal)), 1, &RunCtxImpl::new(1, "fatal reply")).await
+                        GlobalCtx::global().execution(1).run_stage(fatal_stage, Arc::new(DevicesWrap::wrap(fatal)), 1, &RunCtxImpl::new(1, "fatal reply")).await
                     }, None).await;
                     assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered));
                     tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("endpoint recovery timed out")??;
@@ -395,7 +398,7 @@ mod tests {
                     // Only new invocations of opted-in endpoints can bind to the
                     // replacement. Old tensor keys and mutable sessions stay stale.
                     assert!(matches!(Arc::clone(&actor).copy(old_output.strip_types(), 0usize.into()).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
-                    assert!(matches!(actor.run_stage(owner_managed, Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "stale owner")).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
+                    assert!(matches!(GlobalCtx::global().execution(1).run_stage(owner_managed, Arc::new(DevicesWrap::wrap(input()?)), 1, &RunCtxImpl::new(1, "stale owner")).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
                     // Concurrent first use must share one install; a duplicate
                     // would fail with the worker's existing-endpoint check.
                     let outputs = futures::future::try_join_all((0..8).map(|_| {
@@ -403,7 +406,7 @@ mod tests {
                         let input = input();
                         let actor_to_move = Arc::clone(&actor);
                         async move {
-                            let output = actor_to_move.run_stage(stage, Arc::new(DevicesWrap::wrap(input?)), 1, &RunCtxImpl::new(1, "after reset")).await?;
+                            let output = GlobalCtx::global().execution(1).run_stage(stage, Arc::new(DevicesWrap::wrap(input?)), 1, &RunCtxImpl::new(1, "after reset")).await?;
                             actor_to_move.copy(output.strip_types(), 0usize.into()).await
                         }
                     })).await?;
@@ -434,9 +437,8 @@ mod tests {
                     let generation = gate.device_generation();
                     let stage = Arc::new(new_sync_consume_test_stage(1).await?);
                     let input = ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("restart", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[-2.0f32, 1.0]))?.f_view([1, 2]))?)?;
-                    let actor_to_move = Arc::clone(&actor);
                     let result = runner.submit(1, async move{
-                        actor_to_move.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "fatal worker reply")).await
+                        GlobalCtx::global().execution(1).run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "fatal worker reply")).await
                     }, None).await;
                     assert!(matches!(result.unwrap_err().what(), ThoError::CudaBeingRecovered), "a fatal stage reply must request device recovery");
                     tokio::time::timeout(std::time::Duration::from_secs(20), gate.wait_if_paused()).await.context("fatal worker restart timed out")??;
@@ -446,9 +448,8 @@ mod tests {
                     // a fresh stage, then copy its result out of the new worker.
                     let stage = Arc::new(new_sync_consume_test_stage(1).await?);
                     let input = ThoTensor::<LoadedTensor, SynKey>::new(mono_key!("restarted", "input").into(), tch_result(tch_result(Tensor::f_from_slice(&[3.0f32, 4.0]))?.f_view([1, 2]))?)?;
-                    let actor_to_move = Arc::clone(&actor);
                     let output = runner.submit(1, async move {
-                        actor_to_move.run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "restarted worker")).await
+                        GlobalCtx::global().execution(1).run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "restarted worker")).await
                     }, None).await?;
                     let output = actor.copy(output.strip_types(), 0usize.into()).await?;
                     assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 6.0);
@@ -493,13 +494,12 @@ mod tests {
                         let stage = Arc::clone(&stage);
                         jobs.spawn(async move {
                             let actor = GlobalCtx::global().cuda_actor(1);
-                            let actor_to_move = Arc::clone(&actor);
                             let output = GlobalCtx::global().get_runner(1).submit(12, async move {
                                 let ctx = RunCtxImpl::new(1, "async dispatch");
                                 match index % 3 {
-                                    0 => Arc::clone(&actor_to_move).run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &ctx).await,
-                                    1 => actor_to_move.run_stage_with_select(stage, Arc::new(DevicesWrap::wrap(input)), None, 1, &ctx).await,
-                                    _ => match actor_to_move.consume_stage(stage, ConsumeTestInput::new(input), 1, ctx).await? {
+                                    0 => GlobalCtx::global().execution(1).run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &ctx).await,
+                                    1 => GlobalCtx::global().execution(1).run_stage_with_select(stage, Arc::new(DevicesWrap::wrap(input)), None, 1, &ctx).await,
+                                    _ => match GlobalCtx::global().execution(1).consume_stage(stage, ConsumeTestInput::new(input), 1, ctx).await? {
                                         ConsumeResult::Ok(output) => Ok(output),
                                         ConsumeResult::Failed { error, .. } => Err(error),
                                     },
@@ -817,7 +817,6 @@ mod tests {
                     .collect::<Vec<_>>();
 
                 let tho_device_idx = 1;
-                let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                 async {
                     const MUL_K: f64 = 2.;
                     let size = [3, 100];
@@ -857,7 +856,7 @@ mod tests {
                         false,
                     ).await?;
 
-                    let msg = cuda_actor.debug_worker().await?;
+                    let msg = GlobalCtx::global().execution(tho_device_idx).ipc_actor()?.debug_worker().await?;
                     debug!("test_load_and_clc_oom_dump_to_cpu_and_splits_tensor_ipc: msg={msg:?}");
 
                     let OpResult::Ok(Some(debug_data)) = msg.status else {

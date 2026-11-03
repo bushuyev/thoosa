@@ -8,7 +8,7 @@ use crate::copy_ctx::{complete_cuda_stream, finish_cuda_run};
 use crate::nets::builder::{Node, SeqBuilder};
 use crate::nets::nodes::ThoModule;
 use crate::nets::state_transfer::{StateTensors, VarStoreState};
-use thoosa_common::runner::sync_stage::StageStateInfo;
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 #[cfg(test)]

@@ -4,7 +4,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
-use thoosa_common::runner::sync_stage::StageStateInfo;
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_shared::{tho_error, CudaAction, SyncStageRunnerError, ThoError};
 
 /// Numeric tensor and endpoint IDs are only meaningful in their originating

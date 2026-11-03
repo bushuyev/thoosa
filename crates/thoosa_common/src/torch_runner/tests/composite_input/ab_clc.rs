@@ -1,3 +1,6 @@
+use thoosa_common::runner::execution::{StageExecution, ExecutionContext};
+use std::future::Future;
+use std::borrow::Borrow;
 use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
@@ -31,7 +34,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, SyncStage};
+use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{ThoError, mono_key};
 use thoosa_shared::ipc_types::WorkerOutput;
 use tracing::debug;
@@ -102,7 +105,7 @@ impl thoosa_shared::CopyToDevice for ABClcStageOutput {
 #[derive(Debug, Named, Cached)]
 pub struct ABClcStage<S = ABClcSyncStage>
 where
-    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+    S: thoosa_common::runner::execution::StageExecution + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
@@ -125,7 +128,7 @@ impl ABClcStage {
 
 impl<S> ABClcStage<S>
 where
-    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+    S: thoosa_common::runner::execution::StageExecution + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
@@ -141,7 +144,7 @@ where
 
 impl<S> OutId for ABClcStage<S>
 where
-    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+    S: thoosa_common::runner::execution::StageExecution + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
@@ -234,7 +237,7 @@ impl Adjustable for ABClcSyncStageInputWrapperSelector {}
 
 impl<S> Stage for ABClcStage<S>
 where
-    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+    S: thoosa_common::runner::execution::StageExecution + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
@@ -246,7 +249,7 @@ where
 
 impl<S> AsyncStage for ABClcStage<S>
 where
-    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+    S: thoosa_common::runner::execution::StageExecution + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
@@ -483,27 +486,9 @@ impl Stage for ProxyABClcSyncStage {
     type Out = ABClcStageOutput;
 }
 
-impl SyncStage for ProxyABClcSyncStage {
-    // Instrumentation must not turn a remote invocation back into a sync call.
-    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> { Some(self) }
 
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Arc::clone(&self.stage).do_run(input, ctx)
-    }
-}
 
-impl AsyncStageDispatch<ProxyABClcSyncStage> for ProxyABClcSyncStage {
-    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a ABClcSyncStageInput<'i>, ctx: &'a RunCtxImpl) -> BoxFuture<'a, Result<ABClcStageOutput, ThoError>> {
-        stage.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        AsyncStageDispatch::run(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx)
-    }
 
-    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: ABClcSyncStageInput<'i>, ctx: RunCtxImpl) -> BoxFuture<'a, ConsumeResult<ABClcSyncStageInput<'i>, ABClcStageOutput>> {
-        stage.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        AsyncStageDispatch::consume(stage.stage.as_ref(), Arc::clone(&stage.stage), input, ctx)
-    }
-}
 
 pub fn sync_ab_clc_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn Workspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
@@ -511,4 +496,14 @@ pub fn sync_ab_clc_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn Wo
         // The shared wrapper decodes both borrowed tensor inputs into worker-owned values.
         Ok(Box::new(WorkerWrapper::new(Arc::new(ABClcSyncStage::new()), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
+}
+
+impl StageExecution for ProxyABClcSyncStage {
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin({
+        self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Arc::clone(&self.stage).execute(input, execution, ctx)
+            })
+    }
 }

@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+use thoosa_common::runner::sync_stage::ConsumingStage;
 use crate::motifs_store::MotifsStore;
 use thoosa_common::tch_error::tch_result;
 
@@ -603,7 +604,7 @@ impl WorkerOutput for SyncMotifLoaderOutput{}
 pub fn sync_motif_loader_endpoint_init<'a>(_stage_id:Option<String>, _init: Box<dyn WorkerInput>, _ws: Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _all_cuda_tensors: &'a AllTensors, _tho_device:&'a ThoDevice) -> BoxFuture<'a, Result<Box<dyn SyncStageIpcWrapper>, ThoError>> {
     use futures_util::FutureExt;
     async move {
-        Ok(Box::new(WorkerWrapper::new(Arc::new(SyncMotifLoader::<RunCtxImpl>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::new_both(Arc::new(SyncMotifLoader::<RunCtxImpl>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -657,6 +658,13 @@ where
         ))
     }
 
+
+}
+
+impl<C> ConsumingStage for SyncMotifLoader<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
     fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
         match  self.do_run(&input, &ctx) {
             Ok(r) => ConsumeResult::Ok(r),

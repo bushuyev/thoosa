@@ -1,4 +1,8 @@
 #![allow(unexpected_cfgs)]
+use thoosa_common::ipc::state_transfer::StateTransfer;
+use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
+use std::borrow::Borrow;
+use thoosa_common::runner::sync_stage::PrepareStage;
 use crate::motifs_store::MotifsStore;
 use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::tch_error::tch_result;
@@ -59,7 +63,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, Se
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoStageAdjuster, NoopRunnableContext, OOMHandler, SyncStageInit, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
+use thoosa_common::runner::sync_stage::{StageWithState, SyncStage};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
@@ -1185,12 +1189,29 @@ where
     type Out = MotifThoTensor<MotifProbability>;
 }
 
-impl <C> SyncStage for SyncApplyMotifNet<C> where
+impl <C> StageExecution for SyncApplyMotifNet<C> where
     C: RunCtx + 'static
 {
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(execute_stateful(self, input, execution, ctx))
+    }
+}
 
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        Some(self)
+impl<C> PrepareStage for SyncApplyMotifNet<C>
+where
+    C: RunCtx  + 'static,
+{
+    type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut motif_net = self.motif_net.lock().await;
+            motif_net.data.ensure_ready()?;
+            if motif_net.tho_device_idx() != to_device_idx {
+                *motif_net = motif_net.copy_to_device(to_device_idx).await?;
+            }
+            Ok(MutexGuard::map(motif_net, |v|v))
+        }.boxed()
     }
 }
 
@@ -1198,32 +1219,6 @@ impl<C> StageWithState for SyncApplyMotifNet<C>
 where
     C: RunCtx  + 'static,
 {
-    type S = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
-        async move {
-            let mut motif_net = self.motif_net.lock().await;
-            motif_net.data.ensure_ready()?;
-            if motif_net.tho_device_idx() != to_device_idx {
-                *motif_net = motif_net.copy_to_device(to_device_idx).await?;
-            }
-            Ok(Some(MutexGuard::map(motif_net, |v|v)))
-        }.boxed()
-    }
-
-    // The module owns the transfer schema and releases all parameter aliases.
-    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::runner::sync_stage::StageStateInfo, ThoError>> {
-        async move { self.motif_net.lock().await.data.state_info() }.boxed()
-    }
-
-    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
-        async move { self.motif_net.lock().await.data.state_tensor(&tensor_id) }.boxed()
-    }
-
-    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
-        async move { self.motif_net.lock().await.data.set_state_tensor(&tensor_id, tensor, device) }.boxed()
-    }
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncApplyMotifNet::run"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, motif_net: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = motif_net.extra().motif_id();
@@ -1245,6 +1240,21 @@ where
         debug!("SyncApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
 
         Ok(out.into())
+    }
+}
+
+impl<C> StateTransfer for SyncApplyMotifNet<C>
+where
+    C: RunCtx  + 'static,
+{
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::ipc::state_transfer::StageStateInfo, ThoError>> {
+        async move { self.motif_net.lock().await.data.state_info() }.boxed()
+    }
+    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move { self.motif_net.lock().await.data.state_tensor(&tensor_id) }.boxed()
+    }
+    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move { self.motif_net.lock().await.data.set_state_tensor(&tensor_id, tensor, device) }.boxed()
     }
 }
 

@@ -1,3 +1,10 @@
+use crate::copy_ctx::LocalCudaExecution;
+use thoosa_common::ipc::state_transfer::CheckpointRestore;
+use thoosa_common::ipc::state_transfer::StateTransfer;
+use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
+use std::future::Future;
+use std::borrow::Borrow;
+use thoosa_common::runner::sync_stage::PrepareStage;
 use thoosa_common::tch_error::tch_result;
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt};
@@ -33,7 +40,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MaxParallelCtx, RunCtx, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
+use thoosa_common::runner::sync_stage::{StageWithState};
 use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, mono_key, panic_to_err};
 use tokio::sync::MutexGuard;
 use tokio::task::coop::cooperative;
@@ -82,7 +89,7 @@ impl<DI: Dims, DO: Dims> TrainStepState<DI, DO> {
             // CPU snapshots also need independent storage; training mutates live parameters.
             sources.into_iter().map(|source| Ok(tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)).collect::<Result<Vec<_>, ThoError>>()?
         } else {
-            GlobalCtx::global().cuda_actor(source_device).copy_batch_to_cpu(sources).await?
+            GlobalCtx::global().execution(source_device).local_actor()?.copy_batch_to_cpu(sources).await?
         };
         let tensors = keys.into_iter().zip(copied).map(|(key, tensor)| Ok((key, ThoTensor::new((), tensor)?))).collect::<Result<_, ThoError>>()?;
         Ok(Arc::new(CpuStateCheckpoint::new(info, tensors)?))
@@ -294,20 +301,20 @@ where
     type Out = TrainStepOutput;
 }
 
-impl<F, DI, DO, C> SyncStage for TrainStep<F, DI, DO, C>
+impl<F, DI, DO, C> StageExecution for TrainStep<F, DI, DO, C>
 where
     DI: Dims,
     DO: Dims,
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        // The common runner acquires and restores the whole mutable training state.
-        Some(self)
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(execute_stateful(self, input, execution, ctx))
     }
 }
 
-impl<F, DI, DO, C> StageWithState for TrainStep<F, DI, DO, C>
+impl<F, DI, DO, C> PrepareStage for TrainStep<F, DI, DO, C>
 where
     DI: Dims,
     DO: Dims,
@@ -315,9 +322,8 @@ where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
     type S = ThoTrainModule<DI, DO>;
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::pre_run"))]
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut guard = self.train_module.lock().await;
             if let Some(checkpoint) = guard.pending_checkpoint.clone() {
@@ -335,32 +341,18 @@ where
             }
             guard.module.ensure_training_usable()?;
             guard.module.move_to_device(to_device_idx).await?;
-            Ok(Some(MutexGuard::map(guard, |state| &mut state.module)))
+            Ok(MutexGuard::map(guard, |state| &mut state.module))
         }.boxed()
     }
+}
 
-    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::runner::sync_stage::StageStateInfo, ThoError>> {
-        async move { self.train_module.lock().await.module.state_info() }.boxed()
-    }
-
-    fn reset_state(&self, info: thoosa_common::runner::sync_stage::StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
-        async move {
-            let mut state = self.train_module.lock().await;
-            state.module.reset_state(info)?;
-            state.pending_checkpoint = None;
-            *self.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
-            Ok(())
-        }.boxed()
-    }
-
-    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
-        async move { self.train_module.lock().await.module.state_tensor(&tensor_id) }.boxed()
-    }
-
-    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
-        async move { self.train_module.lock().await.module.set_state_tensor(&tensor_id, tensor, device) }.boxed()
-    }
-
+impl<F, DI, DO, C> StageWithState for TrainStep<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, train_module: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         train_module.ensure_training_usable()?;
@@ -410,6 +402,42 @@ where
         } else {
             panic_to_err!(tch::no_grad(|| calculate(train_module)))
         }
+    }
+}
+
+impl<F, DI, DO, C> StateTransfer for TrainStep<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::ipc::state_transfer::StageStateInfo, ThoError>> {
+        async move { self.train_module.lock().await.module.state_info() }.boxed()
+    }
+    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move { self.train_module.lock().await.module.state_tensor(&tensor_id) }.boxed()
+    }
+    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move { self.train_module.lock().await.module.set_state_tensor(&tensor_id, tensor, device) }.boxed()
+    }
+}
+
+impl<F, DI, DO, C> CheckpointRestore for TrainStep<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    fn reset_state(&self, info: thoosa_common::ipc::state_transfer::StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move {
+            let mut state = self.train_module.lock().await;
+            state.module.reset_state(info)?;
+            state.pending_checkpoint = None;
+            *self.last_training_batch.lock().or_else(|_| Err(ThoError::new("training acknowledgement state poisoned")))? = None;
+            Ok(())
+        }.boxed()
     }
 }
 

@@ -1,3 +1,4 @@
+use thoosa_common::runner::execution::StageExecution;
 use thoosa_common::tch_error::tch_result;
 use crate as thoosa_common;
 use crate::dims::{Dims, LocalSelect};
@@ -231,11 +232,8 @@ impl AsyncStage for TestTensorLoader {
         let sync_loader = Arc::clone(&self.sync_loader);
 
         // This async test loader can target a worker even when it bypasses OOMHandler.
-        let r = if let Some(remote) = sync_loader.as_async() {
-            remote.run(Arc::clone(&sync_loader), &input, &ctx).await?
-        } else {
-            sync_loader.do_run(&input, &ctx)?
-        };
+        let execution = GlobalCtx::global().execution(ctx.tho_device_idx());
+        let r = sync_loader.execute(async { Ok(&input) }, &execution.execution_context(), &ctx).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(r)))
 

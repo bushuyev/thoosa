@@ -1,3 +1,5 @@
+use std::{borrow::Borrow, future::Future};
+use crate::runner::execution::{StageExecution, ConsumingExecution, ExecutionContext};
 use thoosa_common::tch_error::tch_result;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::endpoints::{EndpointRegistration, StageRecovery};
@@ -8,8 +10,6 @@ use crate::runner::purge::CachePurger;
 use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
 use anyhow::Context as _;
-use futures_util::FutureExt;
-use futures_util::future::BoxFuture;
 use log::{debug, warn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -24,8 +24,9 @@ use std::sync::atomic::Ordering::Relaxed;
 use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{AsyncStageDispatch, ConsumeResult, ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
-use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
+use thoosa_common::runner::sync_stage::{ConsumeResult, ConsumingStage, StageWithState};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
+use tokio::sync::{Mutex, MutexGuard};
 use thoosa_shared::ipc_types::{H2DTensorKey, WorkerOutput};
 
 #[derive(Debug)]
@@ -120,7 +121,7 @@ impl <S> AsMut<S> for  StageState<S> {
 
 pub struct ProxyStage<St>
 where
-    St:SyncStage,
+    St:Stage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
 {
@@ -145,7 +146,7 @@ where
 
 impl<St> Debug for ProxyStage<St>
 where
-    St: SyncStage,
+    St: Stage,
     for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned + 'static,
 {
@@ -162,7 +163,7 @@ where
 
 impl <St> Stage for ProxyStage<St>
 where
-    St:SyncStage,
+    St:Stage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned  + 'static
 {
@@ -171,79 +172,51 @@ where
     type Out = St::Out;
 }
 
-
-
-impl<St> SyncStage for ProxyStage<St>
+impl<St> StageExecution for ProxyStage<St>
 where
-    St: SyncStage + Send + Sync + 'static,
+    St: StageExecution + Send + Sync + 'static,
     for<'a> St::In<'a>: WorkerStageInput + Serialize,
     St::Out: WorkerStageOutput + DeserializeOwned + 'static,
 {
-    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> { Some(self) }
-
-    // In IPC mode a synchronous call cannot safely wait for the worker. Actor helpers must
-    // select the async capability before installing a local stream context.
-    fn do_run<'a>(self: Arc<Self>, _: &Self::In<'a>, _: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        Err(ThoError::new("IPC stages require asynchronous actor dispatch"))
-    }
-
-    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
-        ConsumeResult::Failed { input, error: ThoError::new("IPC stages require asynchronous actor dispatch") }
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, _execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(async move {
+            let input = input.await?;
+            let refs = self.clone_refs(input.borrow())?;
+            Self::handle_rs(self.invoke(refs, ctx.tho_device_idx(), false).await?)
+        })
     }
 }
 
-impl<St> AsyncStageDispatch<ProxyStage<St>> for ProxyStage<St>
+impl<St> ConsumingExecution for ProxyStage<St>
 where
-    St: SyncStage + Send + Sync + 'static,
+    St: ConsumingStage + Send + Sync + 'static,
     for<'a> St::In<'a>: WorkerStageInput + Serialize,
     St::Out: WorkerStageOutput + DeserializeOwned + 'static,
 {
-    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a St::In<'i>, ctx: &'a St::Ctx) -> BoxFuture<'a, Result<St::Out, ThoError>> {
-        // Clone wire references before awaiting; the request retains their
-        // ownership until its response, independently of this borrowed caller.
-        let input = stage.clone_refs(input);
-
-        async move { Self::handle_rs(stage.invoke(input?, ctx.tho_device_idx(), false).await?) }.boxed()
-    }
-
-    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>
-    where St::In<'i>: Send + 'a,
-    {
-        let refs = stage.clone_refs(&input);
-        async move {
+    fn execute_consume<'a, 'i: 'a>(self: Arc<Self>, input: Self::In<'i>, _execution: &'a ExecutionContext<'_>, ctx: Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<ConsumeResult<Self::In<'i>, Self::Out>, ThoError>>
+    where Self: 'a, Self::In<'i>: Send + 'a, Self::Out: Send, Self::Ctx: 'a {
+        Box::pin(async move {
+            let refs = self.clone_refs(&input);
             let result = async move {
-                let refs = refs?;
-                Self::handle_rs(stage.invoke(refs, ctx.tho_device_idx(), true).await?)
+                Self::handle_rs(self.invoke(refs?, ctx.tho_device_idx(), true).await?)
             }.await;
-            match result {
+            Ok(match result {
                 Ok(output) => ConsumeResult::Ok(output),
                 Err(error) => ConsumeResult::Failed { input, error },
-            }
-        }.boxed()
+            })
+        })
     }
 }
 
-impl <St>StageWithState for ProxyStage<St>
-where
-    St:SyncStage + StageWithState + Send + Sync + 'static,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static
-{
-    type S = Option<Box<StageStateDump>>;
 
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<MappedMutexGuard<'_, Self::S>>, ThoError>> {
-        debug!("ProxyStage::pre_run: to_device_idx={to_device_idx}");
-        async {
-            let guard = self.state.lock().await;
-            Ok(Some(MutexGuard::map(guard, |v|v)))
 
-        }.boxed()
-    }
-}
+
+
 
 impl <St> ProxyStage<St>
 where
-    St:SyncStage,
+    St:Stage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
@@ -479,7 +452,7 @@ where
 
 impl <St> Drop for ProxyStage<St>
 where
-    St:SyncStage,
+    St:Stage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned
 {
@@ -494,7 +467,7 @@ where
 #[derive(Debug)]
 pub enum DynSyncStageEnum<St, Init=()>
 where
-    St:SyncStage,
+    St:Stage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
@@ -509,7 +482,7 @@ where
 
 impl <St, Init> Stage for DynSyncStageEnum<St, Init>
 where
-    St:SyncStage,
+    St:Stage,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
@@ -521,7 +494,7 @@ where
 
 impl<St, Init> Adjustable for DynSyncStageEnum<St, Init>
 where
-    St: SyncStage + Adjustable,
+    St: Stage + Adjustable,
     for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
     Init:Debug + Send + Sync + 'static
@@ -529,71 +502,50 @@ where
     // Preserve the local stage's adjustment marker across local/proxy dispatch.
 }
 
-impl<St, Init> AsyncStageDispatch<DynSyncStageEnum<St, Init>> for DynSyncStageEnum<St, Init>
-where
-    St: SyncStage + Send + Sync + 'static,
-    for<'a> St::In<'a>: WorkerStageInput + Serialize,
-    St::Out: WorkerStageOutput + DeserializeOwned + 'static,
-    Init: Debug + Send + Sync + 'static,
-{
-    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a St::In<'i>, ctx: &'a St::Ctx) -> BoxFuture<'a, Result<St::Out, ThoError>> {
-        match stage.as_ref() {
-            Self::Proxy { stage, .. } => AsyncStageDispatch::run(stage.as_ref(), Arc::clone(stage), input, ctx),
-            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
-        }
-    }
 
-    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>
-    where St::In<'i>: Send + 'a,
-    {
-        match stage.as_ref() {
-            Self::Proxy { stage, .. } => AsyncStageDispatch::consume(stage.as_ref(), Arc::clone(stage), input, ctx),
-            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
-        }
-    }
-}
 
-impl <St, Init> SyncStage for DynSyncStageEnum<St, Init>
+impl <St, Init> StageExecution for DynSyncStageEnum<St, Init>
 where
-    St:SyncStage + Send + Sync + 'static,
+    St: StageExecution + Send + Sync + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
-    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> {
-        match self { Self::Local(_) => None, Self::Proxy { .. } => Some(self) }
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(async move {
+            match self.as_ref() {
+                Self::Local(stage) => Arc::clone(stage).execute(input, execution, ctx).await,
+                Self::Proxy { stage, .. } => Arc::clone(stage).execute(input, execution, ctx).await,
+            }
+        })
     }
-
-
-
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),
-        }
-    }
-
-
-    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out>
-    where
-        Self: Sized,
-    {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).consume(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).consume(input, ctx),
-        }
-    }
-
 }
+
+impl <St, Init> ConsumingExecution for DynSyncStageEnum<St, Init>
+where
+    St: ConsumingStage + Send + Sync + 'static,
+    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
+    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
+    Init:Debug + Send + Sync + 'static
+{
+    fn execute_consume<'a, 'i: 'a>(self: Arc<Self>, input: Self::In<'i>, execution: &'a ExecutionContext<'_>, ctx: Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<ConsumeResult<Self::In<'i>, Self::Out>, ThoError>>
+    where Self: 'a, Self::In<'i>: Send + 'a, Self::Out: Send, Self::Ctx: 'a {
+        Box::pin(async move {
+            match self.as_ref() {
+                Self::Local(stage) => Arc::clone(stage).execute_consume(input, execution, ctx).await,
+                Self::Proxy { stage, .. } => Arc::clone(stage).execute_consume(input, execution, ctx).await,
+            }
+        })
+    }
+}
+
 
 
 #[derive(Debug)]
 pub enum DynSyncStageWithStateEnum<St, Init = ()>
 where
-    St: SyncStage + StageWithState,
+    St: Stage + StageWithState,
     for<'a> <St as Stage>::In<'a>: WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned + 'static,
     Init: Debug + Send + Sync + 'static,
@@ -607,7 +559,7 @@ where
 
 impl <St, Init> Stage for DynSyncStageWithStateEnum<St, Init>
 where
-    St:SyncStage+StageWithState,
+    St:Stage+StageWithState,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
@@ -619,7 +571,7 @@ where
 
 impl <St, Init> Adjustable for DynSyncStageWithStateEnum<St, Init>
 where
-    St: SyncStage + StageWithState + Adjustable,
+    St: Stage + StageWithState + Adjustable,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out: WorkerStageOutput + DeserializeOwned,
     Init:Debug + Send + Sync + 'static
@@ -627,108 +579,29 @@ where
     // Preserve the wrapped stage's adjustment capability across local/proxy dispatch.
 }
 
-impl<St, Init> AsyncStageDispatch<DynSyncStageWithStateEnum<St, Init>> for DynSyncStageWithStateEnum<St, Init>
-where
-    St: SyncStage + StageWithState + Send + Sync + 'static,
-    for<'a> St::In<'a>: WorkerStageInput + Serialize,
-    St::Out: WorkerStageOutput + DeserializeOwned + 'static,
-    Init: Debug + Send + Sync + 'static,
-{
-    fn run<'a, 'i: 'a>(&self, stage: Arc<Self>, input: &'a St::In<'i>, ctx: &'a St::Ctx) -> BoxFuture<'a, Result<St::Out, ThoError>> {
-        match stage.as_ref() {
-            Self::Proxy { stage, .. } => AsyncStageDispatch::run(stage.as_ref(), Arc::clone(stage), input, ctx),
-            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
-        }
-    }
 
-    fn consume<'a, 'i: 'a>(&self, stage: Arc<Self>, input: St::In<'i>, ctx: St::Ctx) -> BoxFuture<'a, ConsumeResult<St::In<'i>, St::Out>>
-    where St::In<'i>: Send + 'a,
-    {
-        match stage.as_ref() {
-            Self::Proxy { stage, .. } => AsyncStageDispatch::consume(stage.as_ref(), Arc::clone(stage), input, ctx),
-            Self::Local(_) => unreachable!("local stages do not advertise async dispatch"),
-        }
-    }
-}
 
-impl <St, Init> SyncStage for DynSyncStageWithStateEnum<St, Init>
+impl <St, Init> StageExecution for DynSyncStageWithStateEnum<St, Init>
 where
-    St: SyncStage + StageWithState + Send + Sync + 'static,
+    St: StageExecution + StageWithState + Send + Sync + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static
 {
-    fn as_async(&self) -> Option<&dyn AsyncStageDispatch<Self>> {
-        match self { Self::Local(_) => None, Self::Proxy { .. } => Some(self) }
-    }
-
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, &ctx),
-        }
-    }
-
-    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
-        match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).consume(input, ctx),
-            Self::Proxy { stage, .. } => Arc::clone(stage).consume(input, ctx),
-        }
-    }
-
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        // Advertise typed state execution without exposing ThoTrainModule to the common runner.
-        match self {
-            Self::Local(_) => Some(self),
-            Self::Proxy { stage: _stage,.. } => Some(self),
-        }
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(async move {
+            match self.as_ref() {
+                Self::Local(stage) => Arc::clone(stage).execute(input, execution, ctx).await,
+                Self::Proxy { stage, .. } => Arc::clone(stage).execute(input, execution, ctx).await,
+            }
+        })
     }
 }
+
 
 ///
-impl <St, Init> StageWithState for DynSyncStageWithStateEnum<St, Init>
-where
-    St:SyncStage+StageWithState+Send+Sync + 'static,
-    for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
-    <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
-    Init:Debug + Send + Sync + 'static
-{
-    type S = <St as StageWithState>::S;
 
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
-        match self {
-            Self::Local(stage) => {
-                //TODO add semaphore with single permit
-                StageWithState::pre_run(stage.as_ref(), to_device_idx)
-            },
-            Self::Proxy { stage, init: _init,.. } => {
-                let stage = Arc::clone(&stage);
-                async move {
-                    debug!("SyncStage>::pre_run: stage={stage:?}");
-
-                    // Restoration is part of do_run's endpoint lease; preparing it
-                    // here would leave an offload window before invocation.
-
-                    Ok(None)
-
-                }.boxed()
-            },
-        }
-    }
-
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: &mut Self::S, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
-            Self::Proxy { stage, .. } => {
-                Arc::clone(stage).do_run(input, ctx)
-            },
-        }
-    }
-}
 ///
 ///
 ///
@@ -770,7 +643,7 @@ impl StageStateDump {
 #[async_trait]
 impl <St, Init> CachePurger for DynSyncStageWithStateEnum<St, Init>
 where
-    St:SyncStage+StageWithState + CachePurger + 'static,
+    St:Stage+StageWithState + CachePurger + 'static,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static,
@@ -828,7 +701,7 @@ static EMPTY_STR: LazyLock<String> = LazyLock::new(|| String::from(""));
 
 impl <St, Init> DynSyncStageWithStateEnum<St, Init>
 where
-    St:SyncStage+StageWithState + WithId,
+    St:Stage+StageWithState + WithId,
     for <'a> <St as Stage>::In<'a>:WorkerStageInput + Serialize,
     <St as Stage>::Out:WorkerStageOutput + DeserializeOwned + 'static,
     Init:Debug + Send + Sync + 'static,
@@ -858,7 +731,7 @@ pub(crate) mod async_dispatch_tests {
 
     pub async fn assert_cancelled_invocation_holds_export_lease<St>(proxy: Arc<ProxyStage<St>>, input: Box<dyn WorkerInput>) -> Result<(), ThoError>
     where
-        St: SyncStage + Send + Sync + 'static,
+        St: Stage + Send + Sync + 'static,
         for<'a> St::In<'a>: WorkerStageInput + Serialize,
         St::Out: WorkerStageOutput + DeserializeOwned + 'static,
     {

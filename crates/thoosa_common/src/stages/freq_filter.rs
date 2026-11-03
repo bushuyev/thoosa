@@ -1,3 +1,8 @@
+use thoosa_common::ipc::state_transfer::StateTransfer;
+use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
+use std::future::Future;
+use std::borrow::Borrow;
+use thoosa_common::runner::sync_stage::PrepareStage;
 use thoosa_common::tch_error::tch_result;
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -26,7 +31,8 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoStageAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::{AsyncStage, OutId, Stage, ThoSelector};
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
+use thoosa_common::runner::sync_stage::{StageWithState};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 
 use thoosa_common::dims::{AnyMetrics, ChannelsData, Dims};
@@ -670,27 +676,22 @@ where
     type Out = ThoTensor<ChannelsData, SynKey>;
 }
 
-impl<C> SyncStage for SyncFreqFilter<C>
+impl<C> StageExecution for SyncFreqFilter<C>
 where
     C: RunCtx + 'static,
 {
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        // Expose the prepared filters to the runner so their device placement is handled before the synchronous call.
-        Some(self)
-    }
-
-    fn do_run<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        self.apply_tho_tensor(input_tensor)
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(execute_stateful(self, input, execution, ctx))
     }
 }
 
-impl<C> StageWithState for SyncFreqFilter<C>
+impl<C> PrepareStage for SyncFreqFilter<C>
 where
     C: RunCtx + 'static,
 {
     type S = Vec<PreparedFilter>;
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
         async move {
             let mut filters = self.filters.lock().await;
             // Restores arrive one tensor at a time and in arbitrary order. Do
@@ -706,10 +707,24 @@ where
                     }
                 }
             }
-            Ok(Some(MutexGuard::map(filters, |v|v)))
+            Ok(MutexGuard::map(filters, |v|v))
         }.boxed()
     }
+}
 
+impl<C> StageWithState for SyncFreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
+    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
+    }
+}
+
+impl<C> StateTransfer for SyncFreqFilter<C>
+where
+    C: RunCtx + 'static,
+{
     fn get_state_info(&self, _tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async move {
             let filters = self.filters.lock().await;
@@ -725,7 +740,6 @@ where
             Ok(StageStateInfo::new(tensors, None))
         }.boxed()
     }
-
     fn get_state_tensor(&self, _tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async move {
             let filters = self.filters.lock().await;
@@ -735,7 +749,6 @@ where
             Ok(tch_result(slot.ready()?.as_ref().f_alias())?)
         }.boxed()
     }
-
     fn set_state_tensor(&self, tho_device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async move {
             let mut filters = self.filters.lock().await;
@@ -749,10 +762,6 @@ where
             slot.tensor = Some(ThoTensor::new((), tensor)?);
             Ok(())
         }.boxed()
-    }
-    
-    fn do_run_with_state<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, filters: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        self.apply_tho_tensor_with_state(filters.as_slice(), input_tensor)
     }
 }
 
@@ -888,7 +897,6 @@ impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKe
 mod tests {
     use super::*;
     use crate::runner::common::cachable::SelectRef;
-    use crate::ipc::cuda_process::CudaIPCActorHandle;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::worker_msg::OpResult;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -908,14 +916,13 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::{StageHash};
-    use thoosa_common::runner::sync_stage::{SyncStage};
 
     #[tokio::test]
     async fn test_short_filter_input_is_explicit_data_error() -> Result<(), ThoError> {
         let input = ThoTensor::new(mono_key!("short", "input").into(), tch_result(Tensor::f_ones([1, 3], (tch::Kind::Float, tch::Device::Cpu)))?)?;
         let filters = vec![InputFilter::SavGolFilter(SavGolFilterParams { window_len: 7, poly_order: 2, stride: 1, padding: Padding::Zero(ZeroPadding {}) })];
         let stage = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(filters, 1, 100.0, 1, 0))?);
-        let error = stage.do_run(&input, &RunCtxImpl::new(0, "short input")).unwrap_err();
+        let error = stage.apply_tho_tensor(&input).unwrap_err();
         assert_eq!(error.data_error_kind(), Some(thoosa_shared::DataErrorKind::InputTooShort));
         Ok(())
     }
@@ -970,7 +977,6 @@ mod tests {
 
     async fn do_test_filter_state() -> Result<(), ThoError> {
         let global = GlobalCtx::global();
-        let actor = global.cuda_actor(1);
         let multiple = state_test_filters();
         let cases = [vec![], vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })], vec![multiple[0].clone()], multiple];
         for (case, configs) in cases.into_iter().enumerate() {
@@ -988,7 +994,7 @@ mod tests {
                 let input = state_test_input(cycle as f64 + 1.)?;
                 let expected = state_test_reference(&reference, &input)?;
                 let input = Arc::new(DevicesWrap::wrap(input));
-                let output = actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
+                let output = GlobalCtx::global().execution(1).run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
                 let output = output.copy_to_device(0).await?;
                 assert!(tch_result(output.as_ref().f_allclose(&expected, 1e-4, 1e-5, false))?, "filter output changed in case {case}, cycle {cycle}");
                 // A purge for another device must preserve this stage's state.
@@ -1002,8 +1008,7 @@ mod tests {
                 stage.purge_gpu(None, 1, "already offloaded").await?;
 
                 if global.is_ipc() && tensor_count > 0 {
-                    let ipc: &dyn Any = actor.as_ref();
-                    let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
+                    let ipc = GlobalCtx::global().execution(1).ipc_actor()?;
                     let input = state_test_input(1.)?.copy_to_device(1).await?;
                     // Bypass proxy pre_run: a worker invocation must fail until
                     // the parent restores state, proving worker storage was dropped.
@@ -1065,7 +1070,7 @@ mod tests {
                         global.dump_all_to_cpu(&HashMap::new(), 1, "before filter rebuild").await?;
                         // Exercise the retained proxy directly: new use must
                         // rebuild its kernels instead of uploading the old dump.
-                        let output = global.cuda_actor(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retained filter")).await?;
+                        let output = global.execution(1).run_stage(Arc::clone(&previous), Arc::clone(&input), 1, &RunCtxImpl::new(1, "retained filter")).await?;
                         let output = output.copy_to_device(0).await?;
                         assert!(tch_result(output.as_ref().f_allclose(&expected, 1e-4, 1e-5, false))?, "retained filter changed after reset");
                     }
@@ -1132,7 +1137,7 @@ mod tests {
         let stage = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(state_test_filters(), 2, 100., 7104, 0))?);
         let input = state_test_input(1.)?;
         let ctx = RunCtxImpl::new(0, "filter state restore");
-        let expected = Arc::clone(&stage).do_run(&input, &ctx)?;
+        let expected = Arc::clone(&stage).execute(async { Ok(&input) }, &ExecutionContext::Cpu, &ctx).await?;
         let info = stage.get_state_info(0).await?;
         assert_eq!(info.tensors.len(), 3);
         let mut tensors = Vec::new();
@@ -1149,7 +1154,7 @@ mod tests {
         for filter in stage.filters.lock().await.iter_mut() {
             if let Some(slot) = filter.tensor_mut() { slot.tensor = None; }
         }
-        assert!(StageWithState::pre_run(stage.as_ref(), 0).await.is_err());
+        assert!(PrepareStage::pre_run(stage.as_ref(), 0).await.is_err());
         assert!(stage.set_state_tensor(0, "unknown".into(), tch_result(Tensor::f_zeros([1], (Kind::Float, Device::Cpu)))?).await.is_err());
         let (key, tensor) = &tensors[0];
         assert!(stage.set_state_tensor(0, key.clone(), tch_result(tensor.f_to_kind(Kind::Double))?).await.is_err());
@@ -1160,9 +1165,9 @@ mod tests {
         while let Some((key, tensor)) = tensors.pop() {
             stage.set_state_tensor(0, key.clone(), tch_result(tensor.f_alias())?).await?;
             assert!(stage.set_state_tensor(0, key, tensor).await.is_err());
-            if !tensors.is_empty() { assert!(StageWithState::pre_run(stage.as_ref(), 0).await.is_err()); }
+            if !tensors.is_empty() { assert!(PrepareStage::pre_run(stage.as_ref(), 0).await.is_err()); }
         }
-        let mut state = StageWithState::pre_run(stage.as_ref(), 0).await?.unwrap();
+        let mut state = PrepareStage::pre_run(stage.as_ref(), 0).await?;
         let actual = Arc::clone(&stage).do_run_with_state(&input, &mut *state, &ctx)?;
         assert!(tch_result(actual.as_ref().f_allclose(&expected.as_ref(), 0., 0., false))?);
         Ok(())
@@ -1174,7 +1179,7 @@ mod tests {
         let input_t = tch_result(Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5]))?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })], 2, 100.0, 1, 1))?).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::MedianFilter(MedianFilterParams { window: 5 })], 2, 100.0, 1, 1))?).apply_tho_tensor(&input)?;
         let expected = median(&input.as_ref(), 5)?;
         let output_flat = tch_result(output.as_ref().f_view([-1]))?;
         let expected_flat = tch_result(expected.f_view([-1]))?;
@@ -1190,7 +1195,7 @@ mod tests {
         let input_t = tch_result(Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5]))?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0, 1) )?).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(SyncFreqFilterIpcInit::new(vec![InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0, 1) )?).apply_tho_tensor(&input)?;
         let expected = moving_average(&input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));

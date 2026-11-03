@@ -1,3 +1,5 @@
+use crate::ipc::state_transfer::{StateTransfer, CheckpointRestore};
+use crate::runner::sync_stage::{ConsumingStage, PrepareStage};
 use crate::copy_ctx::{HandleCtx, run_cuda_stage};
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::IpcCodec;
@@ -12,10 +14,9 @@ use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{RunCtx, Stage};
-use thoosa_common::runner::sync_stage::{ConsumeResult, StageStateInfo, StageWithState, SyncStage};
+use thoosa_common::runner::sync_stage::{ConsumeResult, StageWithState, SyncStage};
 #[cfg(test)]
 use tokio::sync::MappedMutexGuard;
 #[cfg(test)]
@@ -50,14 +51,15 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    S: SyncStage + Debug + Send + Sync + 'static,
+    S: Stage + Debug + Send + Sync + 'static,
     S: Stage<In<'static> = I, Out = O>,
     S::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput + 'static,
 {
     base:Arc<S>,
     pd:PhantomData<Co>,
+    execution: fn(&Self) -> WorkerExecution<'_>,
     inpf:InpF<I>
 }
 
@@ -66,11 +68,11 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    S: SyncStage + Debug + Send + Sync + 'static,
+    S: Stage + Debug + Send + Sync + 'static,
     S: Stage<In<'static> = I, Out = O>,
     S::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput + 'static,
 
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -85,15 +87,27 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    S: SyncStage + Debug + Send + Sync + 'static,
+    S: Stage + Debug + Send + Sync + 'static,
     S: Stage<In<'static> = I, Out = O>,
     S::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput + 'static,
 {
-    pub fn new(base: Arc<S>, pd: PhantomData<Co>) -> Self {
+    pub fn new(base: Arc<S>, pd: PhantomData<Co>) -> Self where S: SyncStage {
+        Self::with_execution(base, pd, |wrapper| WorkerExecution::Borrowed(wrapper))
+    }
+
+    pub fn new_consuming(base: Arc<S>, pd: PhantomData<Co>) -> Self where S: ConsumingStage {
+        Self::with_execution(base, pd, |wrapper| WorkerExecution::Consuming(wrapper))
+    }
+
+    pub fn new_both(base: Arc<S>, pd: PhantomData<Co>) -> Self where S: SyncStage + ConsumingStage {
+        Self::with_execution(base, pd, |wrapper| WorkerExecution::Both(wrapper, wrapper))
+    }
+
+    fn with_execution(base: Arc<S>, pd: PhantomData<Co>, execution: fn(&Self) -> WorkerExecution<'_>) -> Self {
         Self {
-            base, pd,
+            base, pd, execution,
             inpf: Box::new(|i| {
                 let a: &dyn WorkerInput = i;
                 let a: &dyn Any = a;
@@ -109,13 +123,54 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
+    S: Stage + Debug + Send + Sync + 'static,
+    S: Stage<In<'static> = I, Out = O>,
+    S::Ctx: WorkerWrapperCtx,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + WorkerOutput+ 'static,
+{
+    fn execution(&self) -> WorkerExecution<'_> { (self.execution)(self) }
+}
+
+impl <Co, S, I, O>WorkerKernel for WorkerWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
     S: SyncStage + Debug + Send + Sync + 'static,
     S: Stage<In<'static> = I, Out = O>,
     S::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + WorkerOutput+ 'static,
 {
+    fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
 
+    {
+        debug!("SyncStageIpcWrapper::do_run: input={input:?}");
+
+        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());
+        let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
+
+        let input_ref = (self.inpf)(input.as_ref());
+        let out = Arc::clone(&self.base).do_run(&input_ref.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
+
+        debug!("SyncStageIpcWrapper::do_run: out={out:?}");
+
+        Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
+    }
+}
+
+impl <Co, S, I, O>WorkerConsume for WorkerWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: ConsumingStage + Debug + Send + Sync + 'static,
+    S: Stage<In<'static> = I, Out = O>,
+    S::Ctx: WorkerWrapperCtx,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + WorkerOutput+ 'static,
+{
     fn consume(&self, input: Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::consume: input={input:?}");
 
@@ -135,24 +190,8 @@ where
             ConsumeResult::Failed { error, .. } => Err(error),
         }
     }
-
-    fn do_run(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>
-
-    {
-        debug!("SyncStageIpcWrapper::do_run: input={input:?}");
-
-        let worker_ctx = WokerRunCtx::new(run_ctx.tho_device_idx());
-        let stage_ctx = S::Ctx::from_worker_ctx(&worker_ctx);
-
-        let input_ref = (self.inpf)(input.as_ref());
-        let out = Arc::clone(&self.base).do_run(&input_ref.ref_to_tensor(all_cuda_tensors, false)?, &stage_ctx)?;
-
-        debug!("SyncStageIpcWrapper::do_run: out={out:?}");
-
-        Ok(Box::new(out.encode_from_worker(all_cuda_tensors, tho_device)?))
-    }
-
 }
+
 ///
 // A downstream crate can register its own wire type and lend the shared stage its
 // original input, without implementing WorkerInput for a foreign generic type.
@@ -167,14 +206,16 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
+    St: StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput + 'static,
 {
     base:Arc<St>,
     pd:PhantomData<Co>,
+    checkpoint: Option<Arc<dyn CheckpointRestore>>,
+    transfer: Option<Arc<dyn StateTransfer>>,
     input_ref: for<'a> fn(&'a dyn WorkerInput) -> Result<&'a I, ThoError>,
 }
 
@@ -183,39 +224,57 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
+    St: StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
+    O: WorkerStageOutput + WorkerOutput + 'static,
 {
-    pub fn new(base: Arc<St>, pd: PhantomData<Co>) -> Self {
-        Self { base, pd, input_ref: borrowed_worker_input::<I, I> }
+    pub fn new(base: Arc<St>, pd: PhantomData<Co>) -> Self where St: StateTransfer {
+        let transfer = Some(Arc::clone(&base) as Arc<dyn StateTransfer>);
+        Self { base, pd, checkpoint: None, transfer, input_ref: borrowed_worker_input::<I, I> }
+    }
+
+    /// Execution-only state need not implement tensor transport. It cannot be
+    /// exported by the residency protocol; its owner supplies its lifecycle.
+    pub fn new_execution_only(base: Arc<St>, pd: PhantomData<Co>) -> Self {
+        Self { base, pd, checkpoint: None, transfer: None, input_ref: borrowed_worker_input::<I, I> }
     }
 
     /// Accept a crate-owned WorkerInput wrapper that borrows the shared stage input.
     /// The proxy's input cloner must send W; only I materializes tensor references.
     pub fn new_with_input<W>(base: Arc<St>, pd: PhantomData<Co>) -> Self
     where
-        W: WorkerInput + Borrow<I>,
+        W: WorkerInput + Borrow<I>, St: StateTransfer,
     {
-        Self { base, pd, input_ref: borrowed_worker_input::<I, W> }
+        let transfer = Some(Arc::clone(&base) as Arc<dyn StateTransfer>);
+        Self { base, pd, checkpoint: None, transfer, input_ref: borrowed_worker_input::<I, W> }
     }
+    /// Checkpoint restoration is installed only for stages that implement it.
+    pub fn new_with_checkpoint_input<W>(base: Arc<St>, pd: PhantomData<Co>) -> Self
+    where W: WorkerInput + Borrow<I>, St: CheckpointRestore,
+    {
+        let checkpoint = Some(Arc::clone(&base) as Arc<dyn CheckpointRestore>);
+        let transfer = Some(Arc::clone(&base) as Arc<dyn StateTransfer>);
+        Self { base, pd, checkpoint, transfer, input_ref: borrowed_worker_input::<I, W> }
+    }
+
 }
 
 impl <Co, St, I, O>SyncStageIpcWrapper for WorkerWrapperWithState<Co, St, I, O>
 where
     Co: IpcCodec,
-    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
+    St: StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + WorkerOutput + 'static,
 {
-    fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
-        // Keep this endpoint's concrete training-module state behind the erased worker capability.
-        Some(self as &dyn ErasedWithState)
-    }
+    fn execution(&self) -> WorkerExecution<'_> { WorkerExecution::Stateful(self) }
+
+    fn checkpoint_restore(&self) -> Option<&dyn CheckpointRestore> { self.checkpoint.as_deref() }
+
+    fn state_transfer(&self) -> Option<&dyn StateTransfer> { self.transfer.as_deref() }
 
     fn purge(&self, tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>
     where
@@ -238,35 +297,27 @@ where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
-    St: SyncStage + StageWithState + CachePurger + Debug + Send + Sync + 'static,
+    St: StageWithState + CachePurger + Debug + Send + Sync + 'static,
     St: Stage<In<'static> = I, Out = O>,
     St::Ctx: WorkerWrapperCtx,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput +WorkerOutput + 'static,
 {
-    type S = <St as StageWithState>::S;
+    type S = <St as PrepareStage>::S;
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<tokio::sync::MappedMutexGuard<'a, Self::S>, ThoError>> {
         async {
-            Ok(StageWithState::pre_run(self.base.as_ref(), tho_device.tho_device_idx()).await?.expect("no state 2"))//TODO error?
+            PrepareStage::pre_run(self.base.as_ref(), tho_device.tho_device_idx()).await
         }.boxed()
     }
 
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {
-        StageWithState::get_state_info(self.base.as_ref(), tho_device.tho_device_idx())
-    }
 
-    fn reset_state(&self, info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
-        StageWithState::reset_state(self.base.as_ref(), info)
-    }
 
-    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String) -> BoxFuture<'a, Result<Tensor, ThoError>> {
-        StageWithState::get_state_tensor(self.base.as_ref(), tho_device.tho_device_idx(), tensor_id)
-    }
 
-    fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>> {
-        StageWithState::set_state_tensor(self.base.as_ref(), tho_device.tho_device_idx(), tensor_id, t)
-    }
+
+
+
+
 
     fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: &mut Self::S, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         debug!("SyncStageIpcWrapper::do_run_with_state: input={input:?}");
@@ -283,26 +334,44 @@ where
     }
 }
 
-///object-safe trait for running stages in CudaWorker
+/// The wire request is validated against installed capabilities before invoking
+/// a kernel. An endpoint cannot accidentally inherit an unsupported operation.
+pub enum WorkerExecution<'a> {
+    Borrowed(&'a dyn WorkerKernel),
+    Consuming(&'a dyn WorkerConsume),
+    Both(&'a dyn WorkerKernel, &'a dyn WorkerConsume),
+    Stateful(&'a dyn ErasedWithState),
+}
+
+impl WorkerExecution<'_> {
+    pub(crate) fn validate_request(&self, consume: bool) -> Result<(), ThoError> {
+        match (self, consume) {
+            (Self::Borrowed(_) | Self::Stateful(_), false) | (Self::Consuming(_), true) | (Self::Both(..), _) => Ok(()),
+            _ => Err(ThoError::new("request does not match the installed worker execution capability")),
+        }
+    }
+}
+
+pub trait WorkerKernel: Send + Sync + Debug {
+    fn do_run(&self, input: &Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
+}
+
+pub trait WorkerConsume: Send + Sync + Debug {
+    fn consume(&self, input: Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
+}
+
 pub trait SyncStageIpcWrapper: Send + Sync + Debug {
+    fn execution(&self) -> WorkerExecution<'_>;
+
     fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
-        None
+        match self.execution() { WorkerExecution::Stateful(state) => Some(state), _ => None }
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
-    fn do_run(&self, _input: &Box<dyn WorkerInput>, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
-        // A wrapper may support only one dispatch capability.
-        Err(ThoError::new("worker wrapper does not support borrowed execution"))
-    }
-    fn consume(&self, _input: Box<dyn WorkerInput>, _all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>{
-        Err(ThoError::new("worker wrapper does not support consuming execution"))
-    }
-    
-    fn purge(&self, _tho_device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>>//move to SyncStageIpcWrapperWithState
-    {
-        async move {
-            Ok(())
-        }.boxed()
+    fn checkpoint_restore(&self) -> Option<&dyn CheckpointRestore> { None }
+    fn state_transfer(&self) -> Option<&dyn StateTransfer> { None }
+
+    fn purge(&self, _device: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>> {
+        async { Ok(()) }.boxed()
     }
 }
 
@@ -312,13 +381,11 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 
     fn pre_run<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<tokio::sync::MappedMutexGuard<'a, Self::S>, ThoError>>;
 
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
 
-    fn reset_state(&self, _info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
-        Box::pin(async { Err(ThoError::new("stage does not support checkpoint restoration")) })
-    }
-    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
-    fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>>;
+
+
+
+
 
     fn do_run_with_state<'a>(&self, input: &Box<dyn WorkerInput>, all_cuda_tensors: &AllTensors, state: &mut Self::S, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
 }
@@ -326,25 +393,29 @@ pub trait SyncStageIpcWrapperWithState: SyncStageIpcWrapper {
 pub trait ErasedWithState: Sync + Debug {
 
     fn do_run_with_state<'a>(&'a self, input: &'a Box<dyn WorkerInput>, all_cuda_tensors: &'a AllTensors, tho_device: &'a ThoDevice, handle_ctx: &'a mut dyn HandleCtx, run_ctx: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>>;
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>>;
-    fn reset_state(&self, _info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
-        Box::pin(async { Err(ThoError::new("stage does not support checkpoint restoration")) })
-    }
-    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String) -> BoxFuture<'a, Result<Tensor, ThoError>>;
-    fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id:String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>>;
+
+
+
+
 }
 
 // Stateless execution shares the same error/panic boundary as stateful and local
 // execution, including synchronization after failed submissions.
 pub(crate) fn run_worker_stage(
-    stage: &dyn SyncStageIpcWrapper, input: Box<dyn WorkerInput>, consume: bool,
+    execution: WorkerExecution<'_>, input: Box<dyn WorkerInput>, consume: bool,
     all_cuda_tensors: &AllTensors, tho_device: &ThoDevice, run_ctx: &WokerRunCtx,
     handle_ctx: &mut dyn HandleCtx,
 ) -> Result<Box<dyn WorkerOutput>, ThoError> {
+    // Reject incompatible wire requests before acquiring a stream or touching
+    // input tensors. Stateful execution uses its own preparation boundary.
+    execution.validate_request(consume)?;
     let _guard = handle_ctx.sync_ctx()?;
     run_cuda_stage(|| {
-        if consume { stage.consume(input, all_cuda_tensors, tho_device, run_ctx) }
-        else { stage.do_run(&input, all_cuda_tensors, tho_device, run_ctx) }
+        match (execution, consume) {
+            (WorkerExecution::Borrowed(kernel) | WorkerExecution::Both(kernel, _), false) => kernel.do_run(&input, all_cuda_tensors, tho_device, run_ctx),
+            (WorkerExecution::Consuming(kernel) | WorkerExecution::Both(_, kernel), true) => kernel.consume(input, all_cuda_tensors, tho_device, run_ctx),
+            _ => Err(ThoError::new("request does not match the installed worker execution capability")),
+        }
     }, || handle_ctx.on_after_run())
 }
 
@@ -373,27 +444,13 @@ where
         }.boxed()
     }
 
-    fn get_state_info<'a>(&'a self, tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {
-        async move {
-            SyncStageIpcWrapperWithState::get_state_info(self, tho_device).await
-        }.boxed()
-    }
 
-    fn reset_state(&self, info: StageStateInfo) -> BoxFuture<'_, Result<(), ThoError>> {
-        SyncStageIpcWrapperWithState::reset_state(self, info)
-    }
 
-    fn get_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String) -> BoxFuture<'a, Result<Tensor, ThoError>> {
-        async move {
-            SyncStageIpcWrapperWithState::get_state_tensor(self, tho_device, tensor_id).await
-        }.boxed()
-    }
 
-    fn set_state_tensor<'a>(&'a self, tho_device: &'a ThoDevice, tensor_id: String, t:Tensor) -> BoxFuture<'a, Result<(), ThoError>> {
-        async move {
-            SyncStageIpcWrapperWithState::set_state_tensor(self, tho_device, tensor_id, t).await
-        }.boxed()
-    }
+
+
+
+
 }
 
 #[cfg(test)]
@@ -409,13 +466,15 @@ pub(crate) mod mock_stateful_worker {
     }
 
     impl SyncStageIpcWrapper for MockStatefulWorker {
-        fn as_with_state(&self) -> Option<&dyn ErasedWithState> { Some(self) }
-        fn do_run(&self, _: &Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
-            self.execute(&mut 0)
-        }
-        fn consume(&self, _: Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
-            self.execute(&mut 0)
-        }
+        fn execution(&self) -> WorkerExecution<'_> { WorkerExecution::Stateful(self) }
+    }
+
+    impl WorkerKernel for MockStatefulWorker {
+        fn do_run(&self, _: &Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> { self.execute(&mut 0) }
+    }
+
+    impl WorkerConsume for MockStatefulWorker {
+        fn consume(&self, _: Box<dyn WorkerInput>, _: &AllTensors, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> { self.execute(&mut 0) }
     }
 
     impl SyncStageIpcWrapperWithState for MockStatefulWorker {
@@ -426,9 +485,7 @@ pub(crate) mod mock_stateful_worker {
         fn do_run_with_state<'a>(&self, _: &Box<dyn WorkerInput>, _: &AllTensors, state: &mut usize, _: &ThoDevice, _: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
             self.execute(state)
         }
-        fn get_state_info<'a>(&'a self, _: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> { unreachable!("execution must not export state") }
-        fn get_state_tensor<'a>(&'a self, _: &'a ThoDevice, _: String) -> BoxFuture<'a, Result<Tensor, ThoError>> { unreachable!("execution must not export state") }
-        fn set_state_tensor<'a>(&'a self, _: &'a ThoDevice, _: String, _: Tensor) -> BoxFuture<'a, Result<(), ThoError>> { unreachable!("execution must not restore state") }
+
     }
 
     pub struct MockStatefulWorkerBuilder {
@@ -438,6 +495,12 @@ pub(crate) mod mock_stateful_worker {
     }
 
     impl MockStatefulWorkerBuilder {
+        pub fn build_without_execution() -> MockStatefulWorker {
+            let mut stage = MockStatefulWorker::new();
+            stage.expect_execute().times(0);
+            stage
+        }
+
         pub fn build(self) -> MockStatefulWorker {
             let mut stage = MockStatefulWorker::new();
             stage.expect_state().return_const(self.state);
@@ -460,6 +523,22 @@ mod tests {
     use crate::copy_ctx::MockHandleCtx;
     use crate::ipc::worker_msg::CudaWorkerId;
 
+    #[test]
+    fn test_worker_rejects_mismatched_execution_capability_before_stream_setup() {
+        let stage = MockStatefulWorkerBuilder::build_without_execution();
+        let tensors = AllTensors::new(CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) });
+        let device = ThoDevice::from(1usize);
+        let ctx = WokerRunCtx::new(1);
+        for consume in [false, true] {
+            let execution = if consume { WorkerExecution::Borrowed(&stage) } else { WorkerExecution::Consuming(&stage) };
+            let mut handle = MockHandleCtx::new();
+            handle.expect_sync_ctx().times(0);
+            handle.expect_on_after_run().times(0);
+            let error = run_worker_stage(execution, Box::new(()), consume, &tensors, &device, &ctx, &mut handle).unwrap_err();
+            assert!(!error.is_oom() && !error.needs_cuda_recovery());
+        }
+    }
+
     #[tokio::test]
     async fn test_stateless_worker_synchronizes_errors_and_panics() {
         let tensors = AllTensors::new(CudaWorkerId { device_idx: 1, generation: thoosa_shared::CudaDeviceGeneration(0) });
@@ -477,7 +556,7 @@ mod tests {
                     });
                     // Exercise the actual worker dispatch boundary for both
                     // borrowed and consuming endpoints, without CUDA timing.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_worker_stage(&stage, Box::new(()), consume, &tensors, &device, &ctx, &mut handle)));
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_worker_stage(WorkerExecution::Both(&stage, &stage), Box::new(()), consume, &tensors, &device, &ctx, &mut handle)));
                     if fatal_sync { assert!(result.unwrap().unwrap_err().needs_cuda_recovery()); }
                     else if outcome == 2 { assert!(result.is_err()); }
                     else if outcome == 1 { assert!(result.unwrap().unwrap_err().is_oom()); }

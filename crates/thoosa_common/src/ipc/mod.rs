@@ -22,3 +22,5 @@ mod pending;
 mod recovery_tests;
 
 pub mod tensor_info;
+
+pub mod state_transfer;

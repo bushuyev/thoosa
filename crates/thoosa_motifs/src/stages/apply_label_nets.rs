@@ -1,3 +1,8 @@
+use thoosa_common::ipc::state_transfer::StateTransfer;
+use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
+use std::borrow::Borrow;
+use thoosa_common::runner::sync_stage::PrepareStage;
+use thoosa_common::runner::sync_stage::ConsumingStage;
 use crate::dims::{ChannelsMotifsData, LabelProbability, MotifProbability};
 use crate::motif_tho_tensor::MotifThoTensor;
 use crate::motifs_store::MotifsStore;
@@ -38,7 +43,7 @@ use thoosa_common::runner::oom_handler::NoContexts;
 #[cfg(test)]
 use thoosa_common::runner::oom_handler::NoRunCtxAdjuster;
 use thoosa_common::runner::sync_stage::ConsumeResult;
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageWithState, SyncStage};
+use thoosa_common::runner::sync_stage::{StageWithState};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tch_error::tch_error;
 use thoosa_common::tho_device::ThoDevice;
@@ -588,7 +593,7 @@ pub fn stack_applied_label_nets_init<'a>(_stage_id:Option<String>, init: Box<dyn
         let Ok(_init) = (init as Box<dyn std::any::Any>).downcast::<StackAppliedLabelNetsInit>() else {
             return Err(ThoError::new("StackAppliedLabelNets endpoint received invalid initializer"));
         };
-        Ok(Box::new(WorkerWrapper::new(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::new_consuming(Arc::new(StackAppliedLabelNets::<WokerRunCtx>::new_local().await?), PhantomData::<JsonIpcCodec>)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -617,7 +622,7 @@ where
     type Out = MotifThoTensor<LabelProbability>;
 }
 
-impl<C> SyncStage for StackAppliedLabelNets<C>
+impl<C> ConsumingStage for StackAppliedLabelNets<C>
 where
     C: RunCtx + 'static,
 {
@@ -949,12 +954,30 @@ where
     type Out = MotifThoTensor<Batch<LabelProbability>>;//TODO it's Batch<LabelProbability>
 }
 
-impl<C> SyncStage for ApplyLabelNet<C>
+impl<C> StageExecution for ApplyLabelNet<C>
 where
     C: RunCtx + 'static,
 {
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        Some(self)
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(execute_stateful(self, input, execution, ctx))
+    }
+}
+
+impl<C> PrepareStage for ApplyLabelNet<C>
+where
+    C: RunCtx + 'static,
+{
+    type S = ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>;
+    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {
+        async move {
+            let mut net = self.net.lock().await;
+            net.ensure_ready()?;
+            if net.tho_device_idx() != to_device_idx {
+                *net = net.copy_to_device(to_device_idx).await?;
+            }
+            Ok(MutexGuard::map(net, |v|v))
+        }.boxed()
     }
 }
 
@@ -962,32 +985,6 @@ impl<C> StageWithState for ApplyLabelNet<C>
 where
     C: RunCtx + 'static,
 {
-    type S = ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>;
-
-    fn pre_run(&self, to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {
-        async move {
-            let mut net = self.net.lock().await;
-            net.ensure_ready()?;
-            if net.tho_device_idx() != to_device_idx {
-                *net = net.copy_to_device(to_device_idx).await?;
-            }
-            Ok(Some(MutexGuard::map(net, |v|v)))
-        }.boxed()
-    }
-
-    // The module owns the transfer schema and releases all parameter aliases.
-    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::runner::sync_stage::StageStateInfo, ThoError>> {
-        async move { self.net.lock().await.state_info() }.boxed()
-    }
-
-    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
-        async move { self.net.lock().await.state_tensor(&tensor_id) }.boxed()
-    }
-
-    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
-        async move { self.net.lock().await.set_state_tensor(&tensor_id, tensor, device) }.boxed()
-    }
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
     fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data().t_ref());
@@ -1007,6 +1004,21 @@ where
         debug!("ApplyLabelNet::do_run_with_state: id={:?} out={}", self.id, out.t_ref());
 
         ThoTensor::new(out_id, out.t()).map(Into::into)
+    }
+}
+
+impl<C> StateTransfer for ApplyLabelNet<C>
+where
+    C: RunCtx + 'static,
+{
+    fn get_state_info(&self, _device: usize) -> BoxFuture<'_, Result<thoosa_common::ipc::state_transfer::StageStateInfo, ThoError>> {
+        async move { self.net.lock().await.state_info() }.boxed()
+    }
+    fn get_state_tensor(&self, _device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
+        async move { self.net.lock().await.state_tensor(&tensor_id) }.boxed()
+    }
+    fn set_state_tensor(&self, device: usize, tensor_id: String, tensor: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
+        async move { self.net.lock().await.set_state_tensor(&tensor_id, tensor, device) }.boxed()
     }
 }
 

@@ -63,7 +63,7 @@ struct RuntimeFailure {
 #[derive(Debug, Clone)]
 pub struct DeviceExecutionCtx {
     runner: Arc<SyncStageRunner>,
-    actor_handle: CudaActorHandleEnum
+    pub(crate) actor_handle: CudaActorHandleEnum
 }
 
 impl DeviceExecutionCtx {
@@ -82,6 +82,18 @@ impl DeviceExecutionCtx {
                 Err(ThoError::new("stage installation requires an IPC backend"))
             }
         }
+    }
+
+    pub fn local_actor(&self) -> Result<Arc<CudaLocalActorHandle>, ThoError> {
+        match &self.actor_handle {
+            CudaActorHandleEnum::Local(actor) => Ok(Arc::clone(actor)),
+            _ => Err(ThoError::new("operation requires a local CUDA backend")),
+        }
+    }
+
+    pub async fn debug_worker(&self) -> Result<(), ThoError> {
+        if let CudaActorHandleEnum::Ipc(actor) = &self.actor_handle { actor.debug_worker().await?; }
+        Ok(())
     }
 
     pub fn actor(&self) -> Result<Arc<dyn CudaActorHandle>, ThoError> {
@@ -352,7 +364,7 @@ impl ResidencyService {
         {
             track_await!(self.debug_caches(tho_device_idx, descr)).await;
 
-            GlobalCtx::global().cuda_actor(tho_device_idx).debug_worker().await?;
+            GlobalCtx::global().execution(tho_device_idx).debug_worker().await?;
         }
 
         Ok(())
