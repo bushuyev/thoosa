@@ -84,19 +84,12 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
         Err(ThoError::new("this CUDA backend requires a state export for batched copies"))
     }
 
-    #[cfg(test)]
-    async fn restart(&self) -> Result<(), ThoError>;//shortcut bypassing SyncStageRunner
-
     // Backend work is called by GlobalCtx's coordinator hook after draining.
     // It must neither request a new cycle nor change admission state.
     async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError>;
 
     async fn retire_backend(&self, _authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError> {
         Err(ThoError::new("this CUDA backend cannot terminate active work"))
-    }
-
-    async fn shutdown(&self) -> Result<(), ThoError> {
-        Ok(())
     }
 
     //TODO remove
@@ -107,6 +100,9 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError>;
+
+    #[cfg(test)]
+    async fn restart(&self) -> Result<(), ThoError>;//shortcut bypassing SyncStageRunner
 }
 /// the methods here ensure that copy and exec streams are handled properly in consume/run_stage/run_*select cases in Local mode.
 /// In IPC modes the streams are handled in the CudaWorker so IPCHanldeCTx is empty.
