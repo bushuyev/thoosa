@@ -495,7 +495,7 @@ use crate::tch_error::tch_result;
                 let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
                 let old_tensor = actor.copy(tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?.into(), 1.into()).await?;
                 let old_key = old_tensor.ref_key().unwrap();
-                actor.purge_stage_state(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
+                ipc.purge_stage_state(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
                 actor.restart().await?;
 
                 let fresh_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
