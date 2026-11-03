@@ -75,9 +75,9 @@ impl DeviceExecutionCtx {
         self.ipc_actor.clone().ok_or_else(|| ThoError::new("stage installation requires an IPC backend"))
     }
     pub(crate) fn ipc_backend(&self) -> Option<CudaIPCActorHandle> { self.ipc_actor.clone() }
+    
     pub fn device_idx(&self) -> usize { self.runner.cuda_gate().map_or(0, |gate| gate.device_idx()) }
     pub fn runner(&self) -> &SyncStageRunner { &self.runner }
-    pub fn actor(&self) -> Option<Arc<dyn CudaActorHandle>> { self.cuda_actor.clone() }
 }
 
 /// One command's identity and lifetime. Services can be shared deliberately,
@@ -191,7 +191,7 @@ impl Runtime {
         if let Err(error) = self.residency.purger.shutdown().await { error!("purger shutdown failed: {error:#}"); }
         self.failure.shutting_down.store(true, Relaxed);
         for device in &self.devices {
-            if let Some(actor) = &device.cuda_actor {
+            if let Some(actor) = &device.ipc_actor {
                 if let Err(error) = actor.shutdown().await { error!("actor shutdown failed: {error:#}"); }
             }
         }

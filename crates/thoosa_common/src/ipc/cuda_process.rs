@@ -1379,6 +1379,12 @@ impl CudaIPCActorHandle {
         }
     }
 
+    pub async fn shutdown(&self) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.control.send(BackendControl::Shutdown { respond_to }).context("CUDA actor control channel closed")?;
+        recv.await.context("CUDA shutdown response channel closed")?
+    }
+
 }
 
 struct IPCHanldeCTx {
@@ -1445,12 +1451,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         let (respond_to, recv) = oneshot::channel();
         self.control.send(BackendControl::Retire { authority, respond_to }).context("CUDA actor control channel closed")?;
         recv.await.context("CUDA retirement response channel closed")?
-    }
-
-    async fn shutdown(&self) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.control.send(BackendControl::Shutdown { respond_to }).context("CUDA actor control channel closed")?;
-        recv.await.context("CUDA shutdown response channel closed")?
     }
 
     async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
