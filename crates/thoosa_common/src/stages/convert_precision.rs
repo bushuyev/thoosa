@@ -19,7 +19,7 @@ use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 
 use crate::utils::parse_run_config_ids_vec;
-use crate::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
+use crate::ws::{discover_nets, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ConvertPrecisionTarget {
@@ -175,6 +175,7 @@ where
 
 impl<N> Output for ConvertPrecisionOutput<N> where N: Debug {}
 
+//TODO it's not properly updated after introducing nets' "generations" in thoosa_common::ws::publish_net
 #[derive(Debug)]
 pub struct ConvertPrecisionStage<C, W, N>
 where
@@ -300,13 +301,17 @@ where
     W: Workspace + ?Sized,
     N: PrecisionModelType<W>,
 {
+    debug!("entries_for_path: path={path:?}");
     let model_types = N::all();
     let candidates = if path.is_absolute() {
         vec![path.to_path_buf()]
     } else {
         let mut candidates = vec![ws.models_path().join(path)];
         for net_type in model_types {
-            candidates.push(net_type.root(ws)?.join(path));
+            let net_type_root = net_type.root(ws)?;
+            debug!("entries_for_path: net_type_root={net_type_root:?}");
+
+            candidates.push(net_type_root.join(path));
         }
         candidates
     };
@@ -341,7 +346,7 @@ where
         entries.extend(
             recurse_files(&root, &|path| path.extension().and_then(|ext| ext.to_str()) == Some("safetensors"))?
                 .into_iter()
-                .filter_map(|weights_path| net_entry_from_base(*net_type, &weights_path)),
+                .filter_map(|weights_path| net_entry_from_base(ws, *net_type, &weights_path)),
         );
     }
     entries.dedup_entries()
@@ -355,10 +360,20 @@ where
     let mut entries = Vec::new();
     for concrete_type in net_type.concrete() {
         let root = concrete_type.root(ws)?;
+        debug!("entries_for_type: concrete_type={concrete_type:?} root={root:?}");
+
+        let vec = recurse_files(&root, &|path| {
+            let b = path.extension().and_then(|ext| ext.to_str()).map(|v| v.eq("safetensors")).unwrap_or(false);
+            debug!("entries_for_type: path={path:?} b={b}");
+            b
+        })?;
+
+        debug!("entries_for_type: vec={vec:?}");
+
         entries.extend(
-            recurse_files(&root, &|path| path.extension().and_then(|ext| ext.to_str()) == Some("safetensors"))?
+            vec
                 .into_iter()
-                .filter_map(|weights_path| net_entry_from_base(*concrete_type, &weights_path)),
+                .filter_map(|weights_path| net_entry_from_base(ws, *concrete_type, &weights_path.parent().unwrap())),
         );
     }
     entries.dedup_entries()
@@ -369,19 +384,32 @@ where
     W: Workspace + ?Sized,
     N: PrecisionModelType<W>,
 {
-    if !candidate.starts_with(net_type.root(ws)?) {
+    debug!("entry_from_candidate: candidate={candidate:?}");
+
+    let net_type_root = net_type.root(ws)?;
+    debug!("entry_from_candidate: net_type_root={net_type_root:?}");
+
+    if !candidate.starts_with(net_type_root) {
         return Ok(None);
     }
-    Ok(net_entry_from_base(net_type, candidate))
+    Ok(net_entry_from_base(ws, net_type, candidate))
 }
 
-fn net_entry_from_base<N>(net_type: N, base_path: &Path) -> Option<NetEntry<N>> {
-    let (weights_path, params_path) = net_files_from_base(base_path);
-    if weights_path.exists() && params_path.exists() {
-        Some(NetEntry { net_type, weights_path })
-    } else {
+fn net_entry_from_base<N, W>(ws: &W, net_type: N, base_path: &Path) -> Option<NetEntry<N>>
+where
+    W: Workspace + ?Sized
+{
+    debug!("net_entry_from_base: base_path={base_path:?}");
+
+    let nets = discover_nets(base_path).ok()?;
+    debug!("net_entry_from_base: nets={nets:?}");
+
+    if nets.is_empty() {
         None
+    } else {
+        Some(NetEntry { net_type, weights_path: nets[0].0.clone() })
     }
+
 }
 
 fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {

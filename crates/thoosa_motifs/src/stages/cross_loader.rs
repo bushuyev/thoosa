@@ -9,7 +9,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use mockall_double::double;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -1720,7 +1720,7 @@ mod tests {
         F:Fn((Vec<i64>, Option<Vec<i64>>))->DistsMaskType + Send + Sync + 'static
     {
         GlobalCtx::init_devices(2)?;
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let tensor_len = 10usize;
         let unfold_size = 2i64;

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cached_derive::Cached;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
