@@ -35,7 +35,6 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tub::{Guard, Pool};
 use crate::ipc::cuda_process::CudaIPCActorHandle;
-use crate::ipc::proxy::StageStateDump;
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult};
 
 
@@ -89,11 +88,6 @@ pub trait CudaActorHandle: Any/*TODO remove when is_ipc replaced with Enum*/ + D
     // Backend work is called by GlobalCtx's coordinator hook after draining.
     // It must neither request a new cycle nor change admission state.
     async fn restart_backend(&self, authority: thoosa_shared::CudaActivityPauseTicket) -> Result<(), ThoError>;
-
-    //TODO remove
-    async fn purge_stage_state(&self, _stage_id: Option<String>, _endpoint_name: String, _worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
-        unreachable!()
-    }
 
     async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
 

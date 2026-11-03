@@ -1200,6 +1200,32 @@ pub struct CudaIPCActorHandle {
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
+    pub(crate) async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
+        debug!("CudaIPCActorHandle::purge_stage_state: stage_id={stage_id:?} endpoint_name={endpoint_name:?} worker_id={worker_id:?} self.gate.device_generation={:?}, self.gate.is_paused={:?}", self.gate.device_generation(), self.gate.is_paused());
+        // A purge must export live state; a retired or paused worker cannot
+        // supply a usable backup. Keep the adjuster failure distinct from a
+        // destructor no-op, then let activity_for close the admission race.
+        if !self.is_current_worker(worker_id) || self.gate.is_paused() {
+            return Err(ThoError::CudaBeingRecovered);
+        }
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::PurgeStage {
+                worker_id,
+                endpoint_name,
+                stage_id,
+                activity: self.activity_for(worker_id)?,
+
+                respond_to,
+            }
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::purge_endpoint_bytes",
+            agg_perf="CudaIPCActorHandle::purge_endpoint_bytes",
+        )).await.context("CUDA actor channel closed")?;
+
+        recv.await.context("CUDA actor response channel closed")?
+    }
+
     pub(crate) async fn retire_backend(&self, authority: CudaActivityPauseTicket) -> Result<(), ThoError> {
         // Retirement needs the current recovery ticket but may precede draining:
         // killing a failed worker can be necessary to release pending activity.
@@ -1456,32 +1482,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-
-    async fn purge_stage_state(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<StageStateDump, ThoError> {
-        debug!("CudaIPCActorHandle::purge_stage_state: stage_id={stage_id:?} endpoint_name={endpoint_name:?} worker_id={worker_id:?} self.gate.device_generation={:?}, self.gate.is_paused={:?}", self.gate.device_generation(), self.gate.is_paused());
-        // A purge must export live state; a retired or paused worker cannot
-        // supply a usable backup. Keep the adjuster failure distinct from a
-        // destructor no-op, then let activity_for close the admission race.
-        if !self.is_current_worker(worker_id) || self.gate.is_paused() {
-            return Err(ThoError::CudaBeingRecovered);
-        }
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::PurgeStage {
-                worker_id,
-                endpoint_name,
-                stage_id,
-                activity: self.activity_for(worker_id)?,
-
-                respond_to,
-            }
-        ).instrument(tracing::debug_span!(
-            "CudaIPCActorHandle::purge_endpoint_bytes",
-            agg_perf="CudaIPCActorHandle::purge_endpoint_bytes",
-        )).await.context("CUDA actor channel closed")?;
-
-        recv.await.context("CUDA actor response channel closed")?
-    }
 
     async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
         let worker_id = self.worker_id()?;
