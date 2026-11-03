@@ -5,7 +5,7 @@ use tch::Kind;
 use thoosa_shared::ThoError;
 
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+use crate::runner::global_ctx::{GlobalCtx as RealGlobalCtx, GlobalCtx};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx::RunCtxImpl;
 use crate::runner::test::FailUntil;
@@ -93,11 +93,9 @@ pub(crate) async fn run_model_test_pipeline(
 
 #[tokio::test]
 async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
-    unsafe {
-        let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-    }
-    init_devices_once()?;
-    let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+
+    GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     run_model_test_pipeline(
         1,
@@ -114,11 +112,9 @@ async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
 
 #[tokio::test]
 async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> {
-    unsafe {
-        let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-    }
-    init_devices_once()?;
-    let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+
+    GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     run_model_test_pipeline(
         0,
@@ -140,12 +136,9 @@ async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> 
 
 #[tokio::test]
 async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
-    unsafe {
-        let _lib = libloading::Library::new("libtorch_cpu.so").expect("no libtorch_cpu.so");
-        let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-    }
-    init_devices_once()?;
-    let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+
+    GlobalCtx::init_devices(2)?;
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let files: Vec<(&'static str, f64)> = (0..16)
         .map(|i| {
