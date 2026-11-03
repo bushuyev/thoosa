@@ -751,7 +751,7 @@ where
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
             FuturesOrdering::Unordered,
-            thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort, thoosa_shared::DataErrorKind::OOMHandlingFailed]),
+            thoosa_shared::CollectionErrorPolicy::SkipAll,
             "train motif",
         )).await?;
 
