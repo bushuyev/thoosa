@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Stage};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::ThoError;
 
 use crate::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
@@ -46,7 +45,8 @@ impl Stage for ConstructorStage {
     type Out = ConstructorOutput;
 }
 
-impl SyncStage for ConstructorStage {}
+// Constructor retries require no execution capability. This stage deliberately
+// has none, so the test also prevents initialization from acquiring kernel bounds.
 
 #[derive(Clone, Debug)]
 struct ConstructorInit {

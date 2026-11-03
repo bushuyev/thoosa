@@ -35,8 +35,7 @@ use thoosa_shared::ipc_types::{H2DTensorKey, TensorKey, WorkerOutput};
 use thoosa_common::ipc::tensor_info::{IpcTensorKind, WorkerTensorInfoPayload};
 use thoosa_shared::perf_logging::{PERF, format_perf_map, init_tracing};
 use thoosa_shared::traits::{Data, Named, RunCtx, WithId};
-#[cfg(test)]
-use thoosa_common::runner::sync_stage::{StageStateInfo};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
@@ -66,8 +65,8 @@ async fn stage_state_operation(stages: &InstalledStages, operation: Operation, d
         return Ok(OpResult::Ok(None));
     }
     endpoint.check_state()?;
-    let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={key}")))?;
-    let mut state_info = with_state.get_state_info(&device).await?;
+    let with_state = endpoint.stage.state_transfer().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={key}")))?;
+    let mut state_info = with_state.get_state_info(device.tho_device_idx()).await?;
     // Installation owns routing identity; model state supplies tensor names.
     for tensor in &mut state_info.tensors {
         tensor.tensor_key = TensorKey::stage_state(&endpoint_name, stage_id.as_deref().unwrap_or(""), tensor.tensor_key.to_tensor_key());
@@ -239,6 +238,17 @@ impl InstalledEndpoint {
         // A failed purge or panicking invocation may leave partial state. Never
         // invoke or export it until an exclusive purge completes successfully.
         match self.state_failure.lock().as_ref() { Some(error) => Err(error.clone()), None => Ok(()) }
+    }
+
+    async fn reset_checkpoint(&self, info: StageStateInfo) -> Result<(), ThoError> {
+        // An incompatible request must not invalidate a healthy endpoint. Once
+        // restoration starts, cancellation must keep partial state unavailable.
+        let restore = self.stage.checkpoint_restore().ok_or_else(|| ThoError::new("endpoint has no checkpoint restore capability"))?;
+        let _lease = self.lease.write().await;
+        *self.state_failure.lock() = Some(ThoError::new("checkpoint restoration incomplete"));
+        restore.reset_state(info).await?;
+        *self.state_failure.lock() = None;
+        Ok(())
     }
 
     async fn purge(&self, device: ThoDevice) -> Result<(), ThoError> {
@@ -582,9 +592,9 @@ impl CudaWorker {
 
                         let _lease = endpoint.lease.write().await;
                         endpoint.check_state()?;
-                        endpoint.stage.as_with_state()
+                        endpoint.stage.state_transfer()
                             .ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?
-                            .set_state_tensor(&context.tho_device, tensor_id.clone(), cuda_t).await?;
+                            .set_state_tensor(context.tho_device.tho_device_idx(), tensor_id.clone(), cuda_t).await?;
 
                         TensorKey::StageState {
                             endpoint_name,
@@ -629,8 +639,8 @@ impl CudaWorker {
 
                             let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
 
-                            let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?;
-                            with_state.get_state_tensor(&context.tho_device, tensor_id.clone()).await
+                            let with_state = endpoint.stage.state_transfer().ok_or_else(|| ThoError::new(format!("no state for endpoint_key={endpoint_key}")))?;
+                            with_state.get_state_tensor(context.tho_device.tho_device_idx(), tensor_id.clone()).await
                         }
                     }?;
                     if source.kind() != kind.into() || source.size() != shape {
@@ -653,7 +663,7 @@ impl CudaWorker {
                     if export.as_ref().map(|export| export.id) != Some(export_id) {
                         return Err(ThoError::new("state batch does not belong to the active export"));
                     }
-                    let with_state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new("state batch requires a stateful endpoint"))?;
+                    let with_state = endpoint.stage.state_transfer().ok_or_else(|| ThoError::new("state batch requires a stateful endpoint"))?;
                     let mut ranges = Vec::new();
                     let mut keys = std::collections::HashSet::new();
                     // Validate the complete batch before obtaining sources or
@@ -672,7 +682,7 @@ impl CudaWorker {
                     let mut sources = Vec::with_capacity(destinations.len());
                     for destination in destinations {
                         let info = destination.info;
-                        let source = with_state.get_state_tensor(&context.tho_device, info.tensor_key.to_tensor_key()).await?;
+                        let source = with_state.get_state_tensor(context.tho_device.tho_device_idx(), info.tensor_key.to_tensor_key()).await?;
                         if source.kind() != info.kind.into() || source.size() != info.shape {
                             return Err(ThoError::new("state D2H source does not match destination metadata"));
                         }
@@ -723,6 +733,7 @@ impl CudaWorker {
                     let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
 
                     let endpoint = installed_endpoint(&context.installed_stages, &endpoint_key)?;
+                    endpoint.stage.execution().validate_request(consume)?;
                     let with_state = endpoint.stage.as_with_state();
                     // Stateful stages already serialize on their state mutex.
                     // Extend that exclusion through panic invalidation as well.
@@ -739,7 +750,7 @@ impl CudaWorker {
                         }
                         None => {
                             debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} no state");
-                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.as_ref(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
+                            panic_to_err!(crate::ipc::wraps::run_worker_stage(endpoint.stage.execution(), input, consume, &context.all_cuda_tensors, &context.tho_device, &run_ctx, &mut stream))
                         }
                     };
                     if let Err(e) = &result {
@@ -759,12 +770,7 @@ impl CudaWorker {
                 Operation::ResetStageState { endpoint_name, stage_id, info } => {
                     let key = cuda_process::endpoint_stage_key(endpoint_name, stage_id.as_ref());
                     let endpoint = installed_endpoint(&context.installed_stages, &key)?;
-                    let _lease = endpoint.lease.write().await;
-                    // Reset bypasses the failed-state guard: it destroys that state.
-                    *endpoint.state_failure.lock() = Some(ThoError::new("checkpoint restoration incomplete"));
-                    let state = endpoint.stage.as_with_state().ok_or_else(|| ThoError::new("checkpoint requires stateful stage"))?;
-                    state.reset_state(info).await?;
-                    *endpoint.state_failure.lock() = None;
+                    endpoint.reset_checkpoint(info).await?;
                     Ok(OpResult::Ok(None))
                 }
                 Operation::DropStage { endpoint_name, stage_id } => {
@@ -789,8 +795,8 @@ impl CudaWorker {
                     for entry in context.installed_stages.iter() {
                         info!("run_worker: key={:?} stage={:?}", entry.key(), entry.value());
                         if let Some(endpoint) = entry.value() {
-                            if let Some(stage_with_state) = endpoint.stage.as_with_state() {
-                                info!("run_worker: key={:?} state_info={:?}", entry.key(), stage_with_state.get_state_info(&context.tho_device).await?);
+                            if let Some(stage_with_state) = endpoint.stage.state_transfer() {
+                                info!("run_worker: key={:?} state_info={:?}", entry.key(), stage_with_state.get_state_info(context.tho_device.tho_device_idx()).await?);
                             }
                         }
 
@@ -1012,7 +1018,9 @@ mod mock_request_handler {
     mockall::mock! {
         #[derive(Debug)]
         pub StatelessEndpoint {}
-        impl SyncStageIpcWrapper for StatelessEndpoint {}
+        impl crate::ipc::wraps::WorkerKernel for StatelessEndpoint {
+            fn do_run(&self, input: &Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
+        }
     }
 
     mockall::mock! {
@@ -1023,8 +1031,13 @@ mod mock_request_handler {
         }
     }
 
+    impl SyncStageIpcWrapper for MockStatelessEndpoint {
+        fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> { crate::ipc::wraps::WorkerExecution::Borrowed(self) }
+    }
+
     impl SyncStageIpcWrapper for MockExportEndpoint {
-        fn as_with_state(&self) -> Option<&dyn crate::ipc::wraps::ErasedWithState> { Some(self) }
+        fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> { crate::ipc::wraps::WorkerExecution::Stateful(self) }
+        fn state_transfer(&self) -> Option<&dyn crate::ipc::state_transfer::StateTransfer> { Some(self) }
         fn purge(&self, _: ThoDevice) -> BoxFuture<'_, Result<(), ThoError>> {
             async move { self.purge_state() }.boxed()
         }
@@ -1032,11 +1045,14 @@ mod mock_request_handler {
 
     impl crate::ipc::wraps::ErasedWithState for MockExportEndpoint {
         fn do_run_with_state<'a>(&'a self, _: &'a Box<dyn WorkerInput>, _: &'a AllTensors, _: &'a ThoDevice, _: &'a mut dyn crate::copy_ctx::HandleCtx, _: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> { unreachable!("export metadata test") }
-        fn get_state_info<'a>(&'a self, _: &'a ThoDevice) -> BoxFuture<'a, Result<StageStateInfo, ThoError>> {
+    }
+
+    impl crate::ipc::state_transfer::StateTransfer for MockExportEndpoint {
+        fn get_state_info(&self, _: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
             async move { self.describe() }.boxed()
         }
-        fn get_state_tensor<'a>(&'a self, _: &'a ThoDevice, _: String) -> BoxFuture<'a, Result<Tensor, ThoError>> { unreachable!("export metadata test") }
-        fn set_state_tensor<'a>(&'a self, _: &'a ThoDevice, _: String, _: Tensor) -> BoxFuture<'a, Result<(), ThoError>> { unreachable!("export metadata test") }
+        fn get_state_tensor(&self, _: usize, _: String) -> BoxFuture<'_, Result<Tensor, ThoError>> { unreachable!("export metadata test") }
+        fn set_state_tensor(&self, _: usize, _: String, _: Tensor) -> BoxFuture<'_, Result<(), ThoError>> { unreachable!("export metadata test") }
     }
 
     pub struct MockExportEndpointBuilder {
@@ -1151,6 +1167,15 @@ mod request_tests {
             stage_state_operation(&stages, Operation::PurgeStage { endpoint_name: "stateful".into(), stage_id: None }, 1usize.into(), 8).await.unwrap();
             assert!(endpoint.check_state().is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_request_without_capability_preserves_endpoint_state() {
+        let stage = crate::ipc::wraps::mock_stateful_worker::MockStatefulWorkerBuilder::build_without_execution();
+        let endpoint = InstalledEndpoint::new(Arc::new(stage));
+        assert!(endpoint.reset_checkpoint(StageStateInfo::empty()).await.is_err());
+        assert!(endpoint.check_state().is_ok(), "rejected checkpoint request must leave the endpoint usable");
+        assert!(endpoint.lease.try_write().is_ok());
     }
 
     #[tokio::test]

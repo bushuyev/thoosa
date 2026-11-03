@@ -1,7 +1,7 @@
 use thoosa_common::tch_error::tch_result;
 use super::pending::{KeepAlive, PendingRequests};
 use super::endpoints::{EndpointEvent, EndpointKey, EndpointRegistration, EndpointRegistry};
-use crate::copy_ctx::{CudaActorHandle, HandleCtx};
+use crate::copy_ctx::{CudaActorHandle};
 use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::send_fd;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
@@ -39,7 +39,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use thoosa_common::ipc::tensor_info::WorkerTensorInfoPayload;
-use thoosa_common::runner::sync_stage::StageStateInfo;
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use crate::ipc::proxy::StageStateDump;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
@@ -1422,14 +1422,6 @@ impl CudaIPCActorHandle {
 
 }
 
-struct IPCHanldeCTx {
-
-}
-#[async_trait]
-impl HandleCtx for IPCHanldeCTx {
-
-}
-
 #[async_trait]
 impl CudaActorHandle for CudaIPCActorHandle {
 
@@ -1478,28 +1470,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.context("CUDA restart response channel closed")?
     }
 
-    async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
-        Ok(Box::new(IPCHanldeCTx{}))
-    }
 
 
-    async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
-        let worker_id = self.worker_id()?;
-        debug!("CudaIPCActorHandle::debug_worker");
 
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::DebugWorker {
-                activity: self.activity_for(worker_id)?,
-                worker_id,
-                respond_to,
-            }
-        )
-            .instrument(tracing::debug_span!("CudaIPCActorHandle::send_msg",agg_perf="CudaIPCActorHandle::install_stage_2",)).await
-            .context("CUDA actor channel closed")?;
 
-        recv.await.context("CUDA actor response channel closed")?
-    }
 
 }
 
@@ -2159,9 +2133,9 @@ mod tests {
             }
 
             // Release uses the control queue, which the actor drains before ordinary work.
-            let ipc = (cuda_actor.as_ref() as &dyn std::any::Any).downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let ipc = GlobalCtx::global().execution(1).ipc_actor()?;
             ipc.tensor_releaser().release(reff, cuda_ref.ref_worker_id().unwrap());
-            cuda_actor.debug_worker().await?;
+            GlobalCtx::global().execution(tho_device_idx).ipc_actor()?.debug_worker().await?;
 
             debug!("run_main: drop ok");
 
@@ -2351,5 +2325,25 @@ mod export_tests {
         assert!(!pending.failed.is_cancelled(), "failed commit must not retire an otherwise healthy worker");
         assert_eq!(gate.device_generation(), worker.generation);
         task.await.unwrap();
+    }
+}
+
+impl CudaIPCActorHandle {
+    pub async fn debug_worker(&self) -> Result<CudaWorkerMsgOut, ThoError> {
+        let worker_id = self.worker_id()?;
+        debug!("CudaIPCActorHandle::debug_worker");
+
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::DebugWorker {
+                activity: self.activity_for(worker_id)?,
+                worker_id,
+                respond_to,
+            }
+        )
+            .instrument(tracing::debug_span!("CudaIPCActorHandle::send_msg",agg_perf="CudaIPCActorHandle::install_stage_2",)).await
+            .context("CUDA actor channel closed")?;
+
+        recv.await.context("CUDA actor response channel closed")?
     }
 }

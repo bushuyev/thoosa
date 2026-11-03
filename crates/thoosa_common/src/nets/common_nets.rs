@@ -4,7 +4,7 @@ use crate::nets::batches::BatchLengths;
 use crate::nets::nodes::{BinaryHeadPool, ThoModule};
 use crate::nets::tho_varstore::clone_var_store_to;
 use crate::nets::state_transfer::{StateTensors, VarStoreState};
-use thoosa_common::runner::sync_stage::StageStateInfo;
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;

@@ -360,7 +360,7 @@ mod tests {
         };
         let ctx = TestRunCtx;
 
-        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+        let result = GlobalCtx::global().execution(1).run_stage(test_stage, input, 1, &ctx).await?;
 
         debug!("do_test_simp: result={result:?}");
 
@@ -396,7 +396,7 @@ mod tests {
                 };
                 let ctx = TestRunCtx;
 
-                let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await;
+                let result = GlobalCtx::global().execution(1).run_stage(test_stage, input, 1, &ctx).await;
                 debug!("result={result:?}");
                 let Err(e) = result else {
                     panic!("not an error");

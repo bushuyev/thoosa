@@ -1045,7 +1045,7 @@ fn train_label_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn Wo
             init.vs_path,
         ).await?;
         // Shared stateful dispatch keeps the module, optimizer, and VarStore in the worker.
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainLabelStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainLabelStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 

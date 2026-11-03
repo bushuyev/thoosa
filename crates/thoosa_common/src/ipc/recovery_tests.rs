@@ -75,10 +75,16 @@ fn poison_and_synchronize() -> Result<(), ThoError> {
 mockall::mock! {
     #[derive(Debug)]
     RecoveryEndpoint {}
-    impl SyncStageIpcWrapper for RecoveryEndpoint {
+    impl crate::ipc::wraps::WorkerKernel for RecoveryEndpoint {
         fn do_run(&self, input: &Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
+    }
+    impl crate::ipc::wraps::WorkerConsume for RecoveryEndpoint {
         fn consume(&self, input: Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError>;
     }
+}
+
+impl SyncStageIpcWrapper for MockRecoveryEndpoint {
+    fn execution(&self) -> crate::ipc::wraps::WorkerExecution<'_> { crate::ipc::wraps::WorkerExecution::Both(self, self) }
 }
 
 struct MockRecoveryEndpointBuilder;
@@ -171,9 +177,7 @@ fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), 
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(60), async {
             let global = GlobalCtx::global();
-            let actor = global.cuda_actor(1);
-            let actor: &dyn Any = actor.as_ref();
-            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let actor = global.execution(1).ipc_actor()?;
             let gate = global.cuda_activity_gate(1).unwrap();
             let dir = tempfile::tempdir()?;
             let started = dir.path().join("started").to_str().unwrap().to_owned();
@@ -231,11 +235,9 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(60), async {
             let global = GlobalCtx::global();
-            let actor = global.cuda_actor(1);
-            let actor: &dyn Any = actor.as_ref();
-            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let actor = global.execution(1).ipc_actor()?;
             let gate = global.cuda_activity_gate(1).unwrap();
-            let mut pid = install_and_probe(actor).await?;
+            let mut pid = install_and_probe(&actor).await?;
             for mode in ["install", "invoke", "consume", "cancelled"] {
                 let worker = actor.worker_id()?;
                 let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
@@ -277,7 +279,7 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
                 gate.wait_if_paused().await?;
                 assert_eq!(gate.device_generation().0, worker.generation.0 + 1);
                 assert!(!Path::new(&format!("/proc/{pid}")).exists());
-                pid = install_and_probe(actor).await?;
+                pid = install_and_probe(&actor).await?;
             }
             Ok::<_, ThoError>(())
         }).await?
@@ -292,16 +294,15 @@ fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoErro
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(60), async {
             let global = GlobalCtx::global();
-            let actor = global.cuda_actor(1);
-            let actor: &dyn Any = actor.as_ref();
-            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let actor = global.execution(1).ipc_actor()?;
             let gate = global.cuda_activity_gate(1).unwrap();
-            let pid = install_and_probe(actor).await?;
+            let pid = install_and_probe(&actor).await?;
             let generation = gate.device_generation();
             let mut attempts = 0;
             // Exercise the same trial boundary as TrainNet, with a real fatal
             // worker reply. The failed attempt must unwind before waiting.
             let next_pid = crate::stages::train_net::retry_training_after_cuda_reset(Some(Arc::clone(&gate)), || {
+                let actor = Arc::clone(&actor);
                 attempts += 1;
                 let first = attempts == 1;
                 async move {
@@ -310,7 +311,7 @@ fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoErro
                         submit_worker_request(async move { actor.invoke_stage(actor.worker_id()?, ENDPOINT.into(), Some(1.to_string()), input(RecoveryAction::Fatal), false).await }).await?;
                         panic!("fatal request succeeded");
                     }
-                    install_and_probe(actor).await
+                    install_and_probe(&actor).await
                 }
             }).await?;
             assert_eq!(attempts, 2);
@@ -330,11 +331,9 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(120), async {
             let global = GlobalCtx::global();
-            let actor = global.cuda_actor(1);
-            let actor: &dyn Any = actor.as_ref();
-            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let actor = global.execution(1).ipc_actor()?;
             let gate = global.cuda_activity_gate(1).unwrap();
-            let mut pid = install_and_probe(actor).await?;
+            let mut pid = install_and_probe(&actor).await?;
             for mode in ["install", "invoke", "consume", "cancelled", "copy", "poison"] {
                 let worker = actor.worker_id()?;
                 let dir = tempfile::tempdir()?;
@@ -383,7 +382,7 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
                 gate.wait_if_paused().await?;
                 assert_eq!(gate.device_generation().0, worker.generation.0 + 1, "one replacement per failed generation");
                 assert!(!Path::new(&format!("/proc/{pid}")).exists(), "replacement cannot precede old worker reaping");
-                let next_pid = install_and_probe(actor).await?;
+                let next_pid = install_and_probe(&actor).await?;
                 assert_ne!(pid, next_pid);
                 pid = next_pid;
                 assert!(GlobalCtx::process_failure().is_none(), "worker failure cannot terminate the parent process");
@@ -402,10 +401,8 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(50), async {
             let global = GlobalCtx::global();
-            let actor = global.cuda_actor(1);
-            let actor: &dyn Any = actor.as_ref();
-            let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
-            let pid = install_and_probe(actor).await?;
+            let actor = global.execution(1).ipc_actor()?;
+            let pid = install_and_probe(&actor).await?;
             let worker = actor.worker_id()?;
             let gate = global.cuda_activity_gate(1).unwrap();
             let failed_actor = actor.clone();

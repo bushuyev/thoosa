@@ -176,7 +176,7 @@ fn train_motif_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn Wo
             init.vs_path,
         ).await?;
         // Shared stateful dispatch leaves trainable motif-net state in the worker.
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainMotifStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainMotifStepInput>(Arc::new(train_step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1785,7 +1785,7 @@ mod tests {
                     (),
                     init.vs_path,
                 ).await?;
-                Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<TrainTestStepInput>(Arc::new(stage), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+                Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<TrainTestStepInput>(Arc::new(stage), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
             }.boxed()
         }
 
@@ -1816,17 +1816,17 @@ mod tests {
                 let train_step = Arc::new(train_step);
                 let ctx = RunCtxImpl::new(1, "train_step_ipc");
                 // let before = train_step.clone().do_run(&input, &ctx)?;
-                let before = cuda_actor.run_stage(Arc::clone(&train_step), input_0, ctx.tho_device_idx(), &ctx).await?;
+                let before = GlobalCtx::global().execution(1).run_stage(Arc::clone(&train_step), input_0, ctx.tho_device_idx(), &ctx).await?;
                 assert!(before.loss.is_finite());
 
                 // Reuse worker-owned tensor refs across training and validation to verify
                 // that adapting the wire input preserves both tensors and mutable state.
                 let training_input = TrainStepInput::new(input.x_ref()?.clone_ref()?, input.lengths.clone(), input.expected_y_ref()?.clone_ref()?, true);
                 // let trained = train_step.clone().do_run(&training_input, &ctx)?;
-                let trained = cuda_actor.run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), &ctx).await?;
+                let trained = GlobalCtx::global().execution(1).run_stage(Arc::clone(&train_step), training_input, ctx.tho_device_idx(), &ctx).await?;
                 assert!(trained.loss.is_finite());
                 // let after = train_step.do_run(&input, &ctx)?;
-                let after = cuda_actor.run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx).await?;
+                let after = GlobalCtx::global().execution(1).run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx).await?;
                 assert!(after.loss.is_finite());
                 assert!((after.loss - before.loss).abs() > f32::EPSILON, "training must update the worker's model: before={} after={}", before.loss, after.loss);
                 Ok(())

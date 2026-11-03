@@ -6,7 +6,7 @@ use std::future::Future;
 use serde::{Serialize, de::DeserializeOwned};
 use thoosa_shared::{ThoError, traits::Stage};
 use crate::ipc::{cuda_wokrer::{WorkerStageInput, WorkerStageOutput}, worker_msg::WorkerInput, endpoints::StageRecovery, proxy::{ProxyStage, DynSyncStageWithStateEnum}};
-use crate::runner::{global_ctx::DeviceExecutionCtx, sync_stage::{SyncStage, StageWithState}};
+use crate::runner::{global_ctx::DeviceExecutionCtx, sync_stage::StageWithState, execution::StageExecution};
 
 pub type InputCloner<S> = Arc<dyn for<'a> Fn(&<S as Stage>::In<'a>) -> Result<Box<dyn WorkerInput>, ThoError> + Send + Sync>;
 
@@ -16,7 +16,7 @@ impl DeviceExecutionCtx {
         local: L, remote: R, cloner: Option<InputCloner<S>>,
     ) -> Result<DynSyncStageWithStateEnum<S, I>, ThoError>
     where
-        S: SyncStage + StageWithState + Send + Sync + 'static,
+        S: StageExecution + StageWithState + Send + Sync + 'static,
         for<'a> S::In<'a>: WorkerStageInput + Serialize,
         S::Out: WorkerStageOutput + DeserializeOwned + 'static,
         I: Debug + Send + Sync + 'static,

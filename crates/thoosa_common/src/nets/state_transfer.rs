@@ -5,7 +5,7 @@ use tch::{Device, Kind, Tensor, nn::VarStore};
 use thoosa_shared::ThoError;
 use thoosa_shared::ipc_types::{TensorKey};
 use thoosa_common::ipc::tensor_info::{WorkerTensorInfoPayload};
-use thoosa_common::runner::sync_stage::StageStateInfo;
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use crate::tho_device::ThoDevice;
 use crate::cuda_utils::tensor_mem_size;
 use crate::tho_tensor::ThoTensor;
