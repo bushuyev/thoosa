@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::ThoError;
 use tokio::task::JoinSet;
 
@@ -102,7 +101,7 @@ where
 
         W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 
-        R: SyncStage + Adjustable + Send + Sync + 'static,
+        R: crate::runner::execution::StageExecution + Adjustable + Send + Sync + 'static,
         for<'i> <R as Stage>::In<'i>: Debug + Adjustable + Data,
         for<'a> <R as Stage>::In<'a>: WithId,
         R::Out: Send + Sync + 'static,

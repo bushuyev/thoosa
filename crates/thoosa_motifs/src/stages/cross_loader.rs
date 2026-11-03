@@ -1,3 +1,5 @@
+use thoosa_common::runner::execution::StageExecution;
+use thoosa_common::runner::sync_stage::ConsumingStage;
 #[cfg(test)]
 use thoosa_common::tch_error::tch_result;
 use crate::motifs_store::MotifsStore;
@@ -50,7 +52,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, MaxParallelCtx, OutId, RunCtx, ThoSelector, WithId};
 use thoosa_shared::traits::{AsyncStage, Stage};
-use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use tokio::task::JoinHandle;
 
@@ -144,9 +145,9 @@ where
     > + OutId + 'static,
 
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
 
-    RSV: for<'i> SyncStage<
+    RSV: for<'i> ConsumingStage<
         In<'i> = CrossUnfoldClcOutput<R>,
         Out = (),
         Ctx=C
@@ -174,8 +175,8 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     R: Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossLoader").finish()
@@ -188,8 +189,8 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
         find_motifs_run_config_id: RunConfigId, //fod logging
@@ -509,8 +510,8 @@ where
     C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
     type Ctx=C;
@@ -530,8 +531,8 @@ where
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
-    CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
-    RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
+    CLC: for<'i> StageExecution<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C> + Adjustable + Send + Sync + 'static,
+    RSV: for<'i> ConsumingStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossLoader::run"))]
@@ -1080,7 +1081,6 @@ pub mod mock_cross_loader_clc {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::{Adjustable, OutId, RunCtx, Stage, WithId};
-    use thoosa_common::runner::sync_stage::{SyncStage};
 
     type RunBatchFn<Out, C> = dyn for<'a> Fn(
         &CrossInput<'a, Arc<Resource>>,
@@ -1136,7 +1136,7 @@ pub mod mock_cross_loader_clc {
         type Out = CrossUnfoldClcOutput<Out>;
     }
 
-    impl<Out, C> SyncStage for MockCrossLoaderClc<Out, C>
+    impl<Out, C> thoosa_common::runner::sync_stage::SyncStage for MockCrossLoaderClc<Out, C>
     where
         Out: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,
@@ -1214,7 +1214,6 @@ pub mod mock_cross_loader_receiver {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_common::runner::sync_stage::ConsumeResult;
     use thoosa_shared::traits::{RunCtx, Stage};
-    use thoosa_common::runner::sync_stage::{SyncStage};
 
     trait CrossLoaderReceiverMockApi<In, C>
     where
@@ -1251,7 +1250,7 @@ pub mod mock_cross_loader_receiver {
         type Out = ();
     }
 
-    impl<In, C> SyncStage for MockCrossLoaderReceiver<In, C>
+    impl<In, C> thoosa_common::runner::sync_stage::ConsumingStage for MockCrossLoaderReceiver<In, C>
     where
         In: Input + Output + Send + Debug + 'static,
         C: RunCtx + 'static,

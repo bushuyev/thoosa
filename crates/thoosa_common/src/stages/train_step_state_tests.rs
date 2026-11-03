@@ -1,7 +1,6 @@
 use thoosa_common::tch_error::tch_result;
 use super::*;
 use crate::dims::AnyDims;
-use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
 use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage};
 use crate::ipc::serialization::json::JsonIpcCodec;
@@ -81,7 +80,7 @@ fn endpoint_init<'a>(_id: Option<String>, init: Box<dyn WorkerInput>, _ws: Arc<R
         let init: Box<dyn std::any::Any> = init;
         let Ok(init) = init.downcast::<Init>() else { return Err(ThoError::new("invalid training state test initializer")); };
         let step = local_step::<WokerRunCtx>(init.optimizer, *device, init.checkpoint).await?;
-        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_input::<WireInput>(Arc::new(step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapperWithState::<JsonIpcCodec, _, _, _>::new_with_checkpoint_input::<WireInput>(Arc::new(step), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -127,7 +126,7 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
     assert!(wrapped.is_all_on_cpu().await, "queued batch must be visible to OOM offload");
     drop(wrapped);
     let actual = pipeline.run_once(entry, ctx.branch(false), 0).await?.loss;
-    let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference.clone(), input(true)?, 1, &ctx).await?.loss;
+    let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(true)?, 1, &ctx).await?.loss;
     assert!((actual - expected).abs() < 1e-6, "offloaded batch did not reload correctly");
     assert!(cache_alive.upgrade().is_none(), "consumed batch retained its temporary cache");
 
@@ -141,7 +140,7 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
             pipeline.run_batches(source, ctx.branch(false), train, 32, prefetch, |loss| actual.push(loss)).await?;
             assert_eq!(actual.len(), 4);
             for actual in actual {
-                let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
+                let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
                 assert!((actual - expected).abs() < 1e-6, "prefetch={prefetch}, train={train}: batch order or update changed");
             }
         }
@@ -168,8 +167,8 @@ async fn prepared_batch_round_trips() -> Result<(), ThoError> {
     assert!(error.is_oom());
     assert!(drained.load(std::sync::atomic::Ordering::SeqCst), "rollback can race an undrained producer");
     pipeline.schedule_epoch_restore(saved, 1).await?;
-    let actual = GlobalCtx::global().cuda_actor(1).run_stage(pipeline.clone(), input(false)?, 1, &ctx).await?.loss;
-    let expected = GlobalCtx::global().cuda_actor(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
+    let actual = GlobalCtx::global().execution(1).run_stage(pipeline.clone(), input(false)?, 1, &ctx).await?.loss;
+    let expected = GlobalCtx::global().execution(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
     assert!((actual - expected).abs() < 1e-6, "failed epoch changed committed state");
 
     // Cancellation must drop the pending producer instead of leaving a spawned
@@ -259,7 +258,7 @@ fn test_prepared_batches_retry_after_worker_reset_ipc() -> Result<(), ThoError> 
             let reference = step(0, "reset-reference".into(), PathBuf::from("/tmp/unused-reset-reference")).await?;
             assert_eq!(losses.len(), 3);
             for actual in losses {
-                let expected = GlobalCtx::global().cuda_actor(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss;
+                let expected = GlobalCtx::global().execution(1).run_stage(Arc::clone(&reference), input(true)?, 1, &RunCtxImpl::new(1, "reset reference")).await?.loss;
                 assert!((actual - expected).abs() < 1e-6, "replacement trial changed batch order or optimizer updates");
             }
             Ok(())
@@ -332,7 +331,6 @@ async fn test_prepared_batches_overlap_and_bound() -> Result<(), ThoError> {
 
 async fn round_trips() -> Result<(), ThoError> {
     let global = GlobalCtx::global();
-    let actor = global.cuda_actor(1);
     let ctx = RunCtxImpl::new(1, "train state round trip");
     for optimizer in 0..3 {
         let id = format!("restored-{optimizer}");
@@ -346,7 +344,7 @@ async fn round_trips() -> Result<(), ThoError> {
             let was_loaded = restored.has_gpu_data(1).await;
             let saved = restored.save_epoch_checkpoint(1).await?;
             assert_eq!(restored.has_gpu_data(1).await, was_loaded, "saving must neither purge nor reload training state");
-            for _ in 0..2 { actor.run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
+            for _ in 0..2 { GlobalCtx::global().execution(1).run_stage(restored.clone(), input(true)?, 1, &ctx).await?; }
             // Capture multiple later epochs while retaining the recovery point.
             // Staging-buffer reuse must not overwrite saved parameters/moments.
             let newer = restored.save_epoch_checkpoint(1).await?;
@@ -377,8 +375,8 @@ async fn round_trips() -> Result<(), ThoError> {
             assert!(!restored.has_gpu_data(1).await);
             restored.schedule_epoch_restore(saved, 1).await?;
             let train = cycle > 0;
-            let expected = actor.run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
-            let actual = actor.run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss;
+            let expected = GlobalCtx::global().execution(1).run_stage(reference.clone(), input(train)?, 1, &ctx).await?.loss;
+            let actual = GlobalCtx::global().execution(1).run_stage(restored.clone(), input(train)?, 1, &ctx).await?.loss;
             assert!((actual - expected).abs() < 1e-6, "optimizer={optimizer}, cycle={cycle}: {actual} != {expected}");
             restored.purge_gpu(None, 2, "wrong device").await?;
             assert!(restored.has_gpu_data(1).await);
@@ -386,8 +384,7 @@ async fn round_trips() -> Result<(), ThoError> {
             assert!(!restored.has_gpu_data(1).await);
             restored.purge_gpu(None, 1, "repeated purge").await?;
             if global.is_ipc() {
-                let ipc: &dyn std::any::Any = actor.as_ref();
-                let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
+                let ipc = GlobalCtx::global().execution(1).ipc_actor()?;
                 let raw_input = input(false)?.copy_to_device(1).await?;
                 let result = ipc.invoke_stage(ipc.worker_id()?, ENDPOINT.into(), Some(id.clone()), Box::new(WireInput(raw_input)), false).await?;
                 let OpResult::Failed(error) = result.status else { panic!("worker kept training state after purge") };
@@ -395,8 +392,8 @@ async fn round_trips() -> Result<(), ThoError> {
             }
         }
         // Check the final update too: training returns the loss before its update.
-        let expected = actor.run_stage(reference, input(false)?, 1, &ctx).await?.loss;
-        let actual = actor.run_stage(restored, input(false)?, 1, &ctx).await?.loss;
+        let expected = GlobalCtx::global().execution(1).run_stage(reference, input(false)?, 1, &ctx).await?.loss;
+        let actual = GlobalCtx::global().execution(1).run_stage(restored, input(false)?, 1, &ctx).await?.loss;
         assert!((actual - expected).abs() < 1e-6, "optimizer={optimizer}: final loss {actual} != {expected}");
     }
     // Use the real selector/actor/worker path: one selected training invocation must
@@ -406,13 +403,13 @@ async fn round_trips() -> Result<(), ThoError> {
         let split = step(optimizer, format!("split-{optimizer}"), checkpoint.path().to_owned()).await?;
         let full = step(optimizer, format!("full-{optimizer}"), PathBuf::from("/tmp/unused-full")).await?;
         for _ in 0..3 {
-            let expected = actor.run_stage(full.clone(), uneven_input(true)?, 1, &ctx).await?.loss;
+            let expected = GlobalCtx::global().execution(1).run_stage(full.clone(), uneven_input(true)?, 1, &ctx).await?.loss;
             let wrapper = TrainStepInputWrapper::new(uneven_input(true)?);
-            let actual = actor.run_stage_with_select(split.clone(), wrapper, Some(TrainStepInputSelector::from(0..2)), 1, &ctx).await?.loss;
+            let actual = GlobalCtx::global().execution(1).run_stage_with_select(split.clone(), wrapper, Some(TrainStepInputSelector::from(0..2)), 1, &ctx).await?.loss;
             assert!((actual - expected).abs() < 1e-5, "split loss mismatch: {actual} vs {expected}");
         }
-        let expected = actor.run_stage(full, uneven_input(false)?, 1, &ctx).await?.loss;
-        let actual = actor.run_stage(split.clone(), uneven_input(false)?, 1, &ctx).await?.loss;
+        let expected = GlobalCtx::global().execution(1).run_stage(full, uneven_input(false)?, 1, &ctx).await?.loss;
+        let actual = GlobalCtx::global().execution(1).run_stage(split.clone(), uneven_input(false)?, 1, &ctx).await?.loss;
         assert!((actual - expected).abs() < 1e-5, "split updates differ: {actual} vs {expected}");
         // A final validation has no later training call to trigger checkpointing.
         split.checkpoint(RunCtxImpl::new(1, "checkpoint"), 32).await?;

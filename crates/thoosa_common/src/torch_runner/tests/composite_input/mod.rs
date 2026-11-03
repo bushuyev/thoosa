@@ -51,7 +51,7 @@ where
     for<'a> ABClcStage<S>:  thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = Arc<DevicesWrap<ABClcStageOutput>>>,
     // ABClcStage<S>: crate::runner::common::runnable::AsyncStage<In<'static> = Arc<ABClcStageInput>>,
     // ABClcStage<S>: Cached + crate::runner::common::OutId,
-    S:  thoosa_common::runner::sync_stage::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    S:  thoosa_common::runner::execution::StageExecution + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
     S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
     for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
     F: Fn() -> usize,
@@ -115,21 +115,20 @@ async fn test_ab_clc_sync_with_selector() -> Result<(), ThoError> {
 
 pub async fn ab_clc_sync_with_selector<S>(ab_stage: Arc<ABClcStage<S>>) -> Result<(), ThoError>
 where
-    S:  thoosa_common::runner::sync_stage::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    S:  thoosa_common::runner::execution::StageExecution + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
     for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
     let run_ctx = RunCtxImpl::new(1, "root");
-    let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
     let ab_clc_sync = Arc::clone(&ab_stage.ab_clc_sync); //Arc::new(ABClcSyncStage::new());
     let a_out = AStageOutput::new("01".into(), Tensor::from_slice(&[0., 1., 2.]))?;
     let b_out = BStageOutput::new("02".into(), Tensor::from_slice(&[3., 4., 5.]))?;
     let input = Arc::new(ab_clc::ABClcSyncStageInputWrapper::new(a_out, b_out));
 
-    let r = cuda_actor.run_stage(Arc::clone(&ab_clc_sync), Arc::clone(&input), 1, &run_ctx).await?; // ((0+3) + (1+4) + (2+5))/3
+    let r = GlobalCtx::global().execution(1).run_stage(Arc::clone(&ab_clc_sync), Arc::clone(&input), 1, &run_ctx).await?; // ((0+3) + (1+4) + (2+5))/3
     assert_eq!(5.0, r.value);
 
-    let r = cuda_actor.run_stage_with_select(ab_clc_sync, input, Some(ABClcSyncStageInputWrapperSelector::new(2, 2)), 1, &run_ctx).await?; // ((0+3) + (1+4)) / 2
+    let r = GlobalCtx::global().execution(1).run_stage_with_select(ab_clc_sync, input, Some(ABClcSyncStageInputWrapperSelector::new(2, 2)), 1, &run_ctx).await?; // ((0+3) + (1+4)) / 2
     assert_eq!(4.0, r.value);
     Ok(())
 }

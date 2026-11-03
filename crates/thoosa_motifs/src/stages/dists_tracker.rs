@@ -1,3 +1,4 @@
+use thoosa_common::runner::sync_stage::ConsumingStage;
 use thoosa_common::tch_error::tch_result;
 use crate::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use crate::fs_store::FileMotifTrackerStore;
@@ -32,7 +33,6 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{RunCtx, Stage};
-use thoosa_common::runner::sync_stage::{SyncStage};
 
 type DistsMaskTensor = ThoTensor<AnyDims, SynKey>;
 
@@ -1579,11 +1579,10 @@ where
 
 }
 
-impl<C> SyncStage for DistsTracker<C>
+impl<C> ConsumingStage for DistsTracker<C>
 where
     C: RunCtx + 'static,
 {
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsTracker::consume"))]
     fn consume<'a>(
         self: Arc<Self>,
@@ -1716,7 +1715,7 @@ mod tests {
         use std::{marker::PhantomData, sync::Arc};
         use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
         use thoosa_shared::TensorIdSliceIdx;
-        use thoosa_common::runner::sync_stage::{ConsumeResult, SyncStage};
+        use thoosa_common::runner::sync_stage::{ConsumeResult, ConsumingStage};
 
         // More than two chunks, with each chunk crossing channel boundaries and
         // diagonal self-matches removed without dropping any later matches.

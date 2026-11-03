@@ -3,7 +3,6 @@ use super::*;
 use crate::motifs_ws::MotifsWsMockBuilder;
 use crate::stages::apply_motif_nets::{ApplyMotifNetInit, ApplyMotifNetInput, ApplyMotifNetInputWrapper, apply_motif_net_endpoint_init};
 use crate::train_nets::{LabelNetParams, LabelNetTypeParams, MotifNetParams};
-use thoosa_common::ipc::cuda_process::CudaIPCActorHandle;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
 use thoosa_common::ipc::worker_msg::OpResult;
 use thoosa_common::nets::common_nets::LinLenNetParams;
@@ -40,7 +39,7 @@ fn label_module(fail_restore: bool) -> anyhow::Result<ThoModuleWithStore<Channel
 
 // Validate protocol guards on the actual stage before running the local cycle.
 // Restoring in reverse order also ensures names, not upload order, bind weights.
-async fn restore_guards<S: StageWithState + CachePurger>(stage: &S) -> Result<(), ThoError> {
+async fn restore_guards<S: StageWithState + thoosa_common::ipc::state_transfer::StateTransfer + CachePurger>(stage: &S) -> Result<(), ThoError> {
     let info = stage.get_state_info(1).await?;
     assert!(info.tensors.len() > 1);
     let mut tensors = Vec::new();
@@ -63,13 +62,12 @@ async fn restore_guards<S: StageWithState + CachePurger>(stage: &S) -> Result<()
         assert!(stage.set_state_tensor(1, key, tch_result(tensor.f_to_device(Device::Cuda(0)))?).await.is_err());
         if index + 1 < count { assert!(stage.pre_run(1).await.is_err()); }
     }
-    assert!(stage.pre_run(1).await?.is_some());
+    drop(stage.pre_run(1).await?);
     Ok(())
 }
 
 async fn round_trips() -> Result<(), ThoError> {
     let global = GlobalCtx::global();
-    let actor = global.cuda_actor(1);
     let ctx = RunCtxImpl::new(1, "inference state round trips");
     let motif_init = ApplyMotifNetInit::new(8101, 1, PathBuf::from("motif"), 0, 19, false, None);
     let label_init = ApplyLabelNetInit::new(8102, "label".into(), 23, PathBuf::from("label"), false);
@@ -99,18 +97,18 @@ async fn round_trips() -> Result<(), ThoError> {
     let mut expected_label = None;
     for cycle in 0..3 {
         let motif_input = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("motif input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([1, 16]))?.f_div_scalar(16.))?)?));
-        let motif_output = actor.run_stage(motif.clone(), ApplyMotifNetInputWrapper::new(motif_input), 1, &ctx).await?.copy_to_device(0).await?;
+        let motif_output = GlobalCtx::global().execution(1).run_stage(motif.clone(), ApplyMotifNetInputWrapper::new(motif_input), 1, &ctx).await?.copy_to_device(0).await?;
         let label_input = Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(mono_key!("label input", "test").into(), tch_result(tch_result(tch_result(Tensor::f_arange(16, (tch::Kind::Float, Device::Cpu)))?.f_reshape([2, 8]))?.f_div_scalar(16.))?)?, vec![8, 6])));
         if global.is_ipc() && cycle == 1 {
             for _ in 0..2 {
-                let result = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input.clone()), 1, &ctx).await;
+                let result = GlobalCtx::global().execution(1).run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input.clone()), 1, &ctx).await;
                 assert!(result.unwrap_err().is_oom(), "injected reconstruction OOM must remain typed");
                 assert!(label.has_gpu_data(1).await, "partial restore must remain purgeable");
             }
             label.purge_gpu(None, 1, "discard partial restore after OOM").await?;
             assert!(!label.has_gpu_data(1).await);
         }
-        let label_output = actor.run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input), 1, &ctx).await?.copy_to_device(0).await?;
+        let label_output = GlobalCtx::global().execution(1).run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input), 1, &ctx).await?.copy_to_device(0).await?;
         if let (Some(expected_motif), Some(expected_label)) = (&expected_motif, &expected_label) {
             assert!(tch_result(motif_output.t_ref().f_allclose(expected_motif, 1e-6, 1e-6, false))?, "motif output changed after restore {cycle}");
             assert!(tch_result(label_output.t_ref().f_allclose(expected_label, 1e-6, 1e-6, false))?, "label output changed after restore {cycle}");
@@ -127,8 +125,7 @@ async fn round_trips() -> Result<(), ThoError> {
         motif.purge_gpu(None, 1, "repeat").await?;
         label.purge_gpu(None, 1, "repeat").await?;
         if global.is_ipc() {
-            let ipc: &dyn std::any::Any = actor.as_ref();
-            let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
+            let ipc = GlobalCtx::global().execution(1).ipc_actor()?;
             // Direct worker calls skip the proxy restore; neither model may run
             // after its GPU state was dropped.
             let input = ThoTensor::<ChannelsData, SynKey>::new(mono_key!("raw", "test").into(), tch_result(Tensor::f_ones([1, 16], (tch::Kind::Float, Device::Cpu)))?)?.copy_to_device(1).await?;

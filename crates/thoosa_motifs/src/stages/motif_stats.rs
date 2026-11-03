@@ -1,3 +1,4 @@
+use thoosa_common::runner::sync_stage::ConsumingStage;
 use crate::motifs_store::MotifsStore;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -1066,7 +1067,7 @@ pub fn motif_stats_consume_stage_endpoint_init<'a>(_stage_id:Option<String>, _in
     use futures_util::FutureExt;
     async move {
         // The generic wrapper now owns both consume dispatch and successful tensor-key cleanup.
-        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new(Arc::new(MotifStatsConsumeStage::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
+        Ok(Box::new(WorkerWrapper::<JsonIpcCodec, _, _, _>::new_consuming(Arc::new(MotifStatsConsumeStage::<WokerRunCtx>::new_local()), PhantomData)) as Box<dyn SyncStageIpcWrapper>)
     }.boxed()
 }
 
@@ -1091,7 +1092,7 @@ where
 }
 
 
-impl<C> SyncStage for MotifStatsConsumeStage<C>
+impl<C> ConsumingStage for MotifStatsConsumeStage<C>
 where
     C: RunCtx  + 'static,
 {

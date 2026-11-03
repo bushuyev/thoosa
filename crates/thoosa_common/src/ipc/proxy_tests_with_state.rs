@@ -1,3 +1,8 @@
+use thoosa_common::ipc::state_transfer::StateTransfer;
+use thoosa_common::runner::execution::{StageExecution, ExecutionContext, execute_stateful};
+use std::future::Future;
+use std::borrow::Borrow;
+use thoosa_common::runner::sync_stage::PrepareStage;
 use thoosa_common::tch_error::tch_result;
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::proxy::{DynSyncStageWithStateEnum, ProxyStage, StageState};
@@ -25,7 +30,8 @@ use tch::Tensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, WithId};
-use thoosa_common::runner::sync_stage::{ErasedStageWithState, StageStateInfo, StageWithState, SyncStage};
+use thoosa_common::runner::sync_stage::{StageWithState};
+use thoosa_common::ipc::state_transfer::StageStateInfo;
 use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 use tokio::sync::MutexGuard;
 use thoosa_shared::comp_id::SynKey;
@@ -269,41 +275,57 @@ where
     type Out = TestOutputB;
 }
 
-impl <P, C> SyncStage for TestStageB<P, C>
+impl <P, C> StageExecution for TestStageB<P, C>
 where
     P:Debug + Send + Sync,
     C:RunCtx
 {
-    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
-    where
-        Self: Sized
-    {
-        Some(self)
+    fn execute<'a, 'i: 'a, I, IFut>(self: Arc<Self>, input: IFut, execution: &'a ExecutionContext<'_>, ctx: &'a Self::Ctx) -> futures_util::future::BoxFuture<'a, Result<Self::Out, ThoError>>
+    where Self: 'a, Self::In<'i>: Sync, Self::Out: Send, I: Borrow<Self::In<'i>> + Send + 'a, IFut: Future<Output = Result<I, ThoError>> + Send + 'a {
+        Box::pin(execute_stateful(self, input, execution, ctx))
     }
-
 }
 
 const K_0: &'static str = "K_0";
 const K_1: &'static str = "K_1";
+
+impl <P, C> PrepareStage for TestStageB<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx
+{
+    type S = TestStageBState;
+    fn pre_run(&self, _to_device_idx: usize) -> BoxFuture<'_, Result<tokio::sync::MappedMutexGuard<'_, Self::S>, ThoError>> {//ensure state is present on the target device
+        async move {
+            let lock_guard: MutexGuard<StageState<TestStageBState>> = self.state.lock().await;
+
+            debug!("TestStageB::pre_run: lock_guard={lock_guard:?}");
+
+            Ok(MutexGuard::map(lock_guard, |state| state.as_mut()))
+
+        }.boxed()
+    }
+}
 
 impl <P, C> StageWithState for TestStageB<P, C>
 where
     P:Debug + Send + Sync,
     C:RunCtx
 {
-    type S = TestStageBState;//can be a struct containing a tensor, module etc
-
-    fn pre_run(&self, _to_device_idx: usize) -> BoxFuture<'_, Result<Option<tokio::sync::MappedMutexGuard<'_, Self::S>>, ThoError>> {//ensure state is present on the target device
-        async move {
-            let lock_guard: MutexGuard<StageState<TestStageBState>> = self.state.lock().await;
-
-            debug!("TestStageB::pre_run: lock_guard={lock_guard:?}");
-
-            return   Ok(MutexGuard::try_map(lock_guard, |opt| Some(opt.as_mut())).ok())
-
-        }.boxed()
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
+        Ok(TestOutputB {
+            value: tch_result(input.value.as_ref().f_mul(&tch_result(k.k_0.as_ref().f_add(&k.k_1.as_ref()))?))?.into(),
+        })
     }
+}
 
+impl <P, C> StateTransfer for TestStageB<P, C>
+where
+    P:Debug + Send + Sync,
+    C:RunCtx
+{
     fn get_state_info(&self, _tho_device: usize) -> BoxFuture<'_, Result<StageStateInfo, ThoError>> {
         async {
             let guard = self.state.lock().await;
@@ -338,7 +360,6 @@ where
             ))
         }.boxed()
     }
-
     fn get_state_tensor(&self, _tho_device: usize, tensor_id: String) -> BoxFuture<'_, Result<Tensor, ThoError>> {
         async move {
 
@@ -363,7 +384,6 @@ where
 
         }.boxed()
     }
-
     fn set_state_tensor(&self, _tho_device: usize, tensor_id: String, t: Tensor) -> BoxFuture<'_, Result<(), ThoError>> {
         async {
             debug!("TestStageB::set_state_tensor: tensor_id={tensor_id:?}");
@@ -375,15 +395,6 @@ where
 
             Ok(())
         }.boxed()
-    }
-
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
-    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
-        Ok(TestOutputB {
-            value: tch_result(input.value.as_ref().f_mul(&tch_result(k.k_0.as_ref().f_add(&k.k_1.as_ref()))?))?.into(),
-        })
     }
 }
 
@@ -482,14 +493,11 @@ use crate::tch_error::tch_result;
 
     #[test]
     fn test_state_reconstruction_and_stale_cleanup_after_replacement_ipc() -> Result<(), ThoError> {
-        use crate::ipc::cuda_process::CudaIPCActorHandle;
-        use std::any::Any;
         run_ipc_test(module_path!(), async {
             tokio::time::timeout(Duration::from_secs(45), async {
                 let global = GlobalCtx::global();
                 let actor = global.cuda_actor(1);
-                let ipc: &dyn Any = actor.as_ref();
-                let ipc = ipc.downcast_ref::<CudaIPCActorHandle>().unwrap();
+                let ipc = GlobalCtx::global().execution(1).ipc_actor()?;
                 let retired = ipc.worker_id()?;
 
                 let old_stage = TestStageB::<(), TestRunCtx>::new(Some(7.to_string()), 1, TestStageInitB::new(2, 0, 1)).await?;
@@ -504,7 +512,7 @@ use crate::tch_error::tch_result;
                 assert_eq!(fresh_tensor.ref_key(), Some(old_key));
 
                 let fresh_input = || TestInputB { value: fresh_tensor.clone_ref().unwrap() };
-                let error = actor.run_stage(Arc::clone(&old_stage), fresh_input(), 1, &TestRunCtx).await.unwrap_err();
+                let error = GlobalCtx::global().execution(1).run_stage(Arc::clone(&old_stage), fresh_input(), 1, &TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
 
                 let error = actor.copy(old_tensor.clone_ref()?, 0.into()).await.unwrap_err();
@@ -512,7 +520,7 @@ use crate::tch_error::tch_result;
 
                 // Embedded stale tensor references must also be rejected by
                 // the new worker when the endpoint itself belongs to it.
-                let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
+                let error = GlobalCtx::global().execution(1).run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
                 ipc.release_endpoint(Some(7.to_string()), TEST_ENDPOINT.into(), retired);
 
@@ -522,7 +530,7 @@ use crate::tch_error::tch_result;
                 // Reconstructed state and live colliding tensor survive every
                 // old cleanup path, including the deferred Drop implementations.
                 for _ in 0..2 {
-                    let result = actor.run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, &TestRunCtx).await?;
+                    let result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, &TestRunCtx).await?;
                     let cpu = actor.copy(result.value, 0.into()).await?;
                     assert!(tch_result(tch_result(Tensor::f_full([1, 3], 3., FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?);
                 }
@@ -546,7 +554,7 @@ use crate::tch_error::tch_result;
             // The same worker and endpoint must still restore and execute after
             // the cancelled call and its serialized offload finish.
             let value = actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1usize.into()).await?;
-            let output = actor.run_stage(stage, TestInputB { value }, 1, &TestRunCtx).await?;
+            let output = GlobalCtx::global().execution(1).run_stage(stage, TestInputB { value }, 1, &TestRunCtx).await?;
             let cpu = actor.copy(output.value, 0usize.into()).await?;
             assert!(tch_result(tch_result(Tensor::f_full([1, 3], 5., FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?);
             Ok(())
@@ -578,7 +586,7 @@ use crate::tch_error::tch_result;
                         let actor = GlobalCtx::global().cuda_actor(1);
                         for _ in 0..12 {
                             let value = actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1usize.into()).await?;
-                            let output = actor.run_stage(Arc::clone(&stage), TestInputB { value }, 1, &TestRunCtx).await?;
+                            let output = GlobalCtx::global().execution(1).run_stage(Arc::clone(&stage), TestInputB { value }, 1, &TestRunCtx).await?;
                             let cpu = actor.copy(output.value, 0usize.into()).await?;
                             assert!(tch_result(tch_result(Tensor::f_full([1, 3], (id + 4) as f64, FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?, "offload must preserve both tensors of the endpoint state");
                         }
@@ -632,7 +640,7 @@ use crate::tch_error::tch_result;
         let second_stage = TestStageB::<(), TestRunCtx>::new(Some(2.to_string()), 1, TestStageInitB::new(3, 0, 1)).await?;
 
         let first_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1.into()).await? };
-        let first_result = cuda_actor.run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
+        let first_result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
         debug!("do_test_distinct_stateful_endpoints: first_result={first_result:?}");
 
         let first_cpu = cuda_actor.copy(first_result.value.shallow_clone(), 0.into()).await?;//shallow_clone to avoid id being dropped before copy starts
@@ -641,7 +649,7 @@ use crate::tch_error::tch_result;
         assert!(tch_result(tch_result(tch_result(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0]))?.f_view([1, 3]))?.f_allclose(&first_cpu.t_ref(), 0.01, 0.01, false))?);
 
         let second_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1.into()).await? };
-        let second_result = cuda_actor.run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
+        let second_result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
 
         debug!("do_test_distinct_stateful_endpoints: second_cpu=\n{}", second_cpu.t_ref());
@@ -664,7 +672,7 @@ use crate::tch_error::tch_result;
         println!("do_test_distinct_stateful_endpoints: e={e:?}");
 
         // Explicit cleanup uses the same owning control channel as proxy destruction.
-        let ipc = (cuda_actor.as_ref() as &dyn std::any::Any).downcast_ref::<crate::ipc::cuda_process::CudaIPCActorHandle>().unwrap();
+        let ipc = GlobalCtx::global().execution(1).ipc_actor()?;
         ipc.release_endpoint(Some(1.to_string()), TEST_ENDPOINT.to_string(), ipc.worker_id()?);
 
         Ok(())
@@ -687,7 +695,7 @@ use crate::tch_error::tch_result;
             value: cuda_tensor,
         };
         let ctx = TestRunCtx;
-        let result = cuda_actor.run_stage(Arc::clone(&test_stage), input, 1, &ctx).await?;
+        let result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&test_stage), input, 1, &ctx).await?;
 
         debug!("test_with_state_target: result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
@@ -709,7 +717,7 @@ use crate::tch_error::tch_result;
             value: cuda_tensor,
         };
 
-        let result = cuda_actor.run_stage(test_stage, input, 1, &ctx).await?;
+        let result = GlobalCtx::global().execution(1).run_stage(test_stage, input, 1, &ctx).await?;
 
         debug!("result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;

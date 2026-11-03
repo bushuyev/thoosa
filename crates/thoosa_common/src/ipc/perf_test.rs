@@ -149,14 +149,13 @@ fn simp_stage_init<'a>(_tage_id:Option<String>, init: Box<dyn WorkerInput>, _ws:
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_test_simp"))]
 async fn do_test_simp() -> Result<(), ThoError> {
-    let cuda_actor = GlobalCtx::global().cuda_actor(1);
     let stage = Arc::new(SimpStage::<RunCtxImpl>::new().await?);
 
     let ctx = RunCtxImpl::new(1, "test");
 
     for _ in 0..100 {
         let input = SimpInput { value: 42 };
-        let output = cuda_actor.run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
+        let output = GlobalCtx::global().execution(1).run_stage(Arc::clone(&stage), input, 1, &ctx).await?;
         assert_eq!(output, SimpOutput { value: 420 });
     }
 

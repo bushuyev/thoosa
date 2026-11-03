@@ -58,7 +58,7 @@ pub(crate) async fn copy_state_tensor(tensor: Tensor, device: usize) -> Result<T
 
 impl<St> ProxyStage<St>
 where
-    St: SyncStage + Send + Sync + 'static,
+    St: Stage + Send + Sync + 'static,
     for<'a> St::In<'a>: WorkerStageInput + Serialize,
     St::Out: WorkerStageOutput + DeserializeOwned + 'static,
 {

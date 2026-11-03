@@ -11,7 +11,7 @@ use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_shared::traits::{Stage};
 #[cfg(test)]
 use thoosa_shared::traits::OutId;
-use thoosa_common::runner::sync_stage::{SyncStage};
+use thoosa_common::runner::execution::StageExecution;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
@@ -304,7 +304,8 @@ where
 pub trait SyncStageInit<RC, St, W: Workspace + ?Sized = dyn Workspace>: Clone + Debug + Send + Sync + 'static
 where
     RC: RunCtx,
-    St: SyncStage + Send + Sync + 'static,
+    // Construction must also support consuming-only stages; it does not execute a kernel.
+    St: Stage + Send + Sync + 'static,
 {
     async fn init(self, run_context: RC, ws: Arc<RwLock<Box<W>>>) -> Result<Arc<St>, ThoError>;
 }
@@ -693,7 +694,7 @@ impl<I, RC, St, W> Stage for SyncStageInitImpl<I, RC, St, W>
 where
     I: Debug,
     RC: RunCtx,
-    St: SyncStage + Send + Sync + 'static,
+    St: Stage + Send + Sync + 'static,
     W: Workspace + ?Sized,
 {
     type Ctx = RC;
@@ -716,7 +717,7 @@ async fn run_stage_borrowed<R, W>(
     retry_token: Option<RetryToken>,
 ) -> Result<R::Out, ThoError>
 where
-    R: SyncStage + Send + Sync + 'static,
+    R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
@@ -724,24 +725,14 @@ where
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
     if tho_device_idx == 0 {
-        // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
-        let state = if let Some(with_state) = task.as_with_state() {
-            with_state.pre_run(0).await?
-        } else {
-            None
-        };
-        let borrowed = track_await!(BorrowRef::borrow_ref(&input, 0)).await?;
-        return match state {
-            Some(mut state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
-            None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
-        };
+        return crate::runner::execution::ExecutionContext::Cpu.run_stage(task, input, 0, &run_ctx).await;
     }
 
     track_await!(oom_executor(tho_device_idx).submit(
         run_ctx.max_other_parallel().into(),
         async move {
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            cuda_actor.run_stage(task, input, tho_device_idx, &run_ctx).await
+            let execution = GlobalCtx::global().execution(tho_device_idx);
+            execution.run_stage(task, input, tho_device_idx, &run_ctx).await
         },
         retry_token
     )).await
@@ -755,7 +746,7 @@ async fn consume_stage_owned<'z, R, W>(
     retry: Option<RetryToken>,
 ) -> Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>
 where
-    R: SyncStage + Send + Sync + 'static,
+    R: crate::runner::execution::ConsumingExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
     for<'i> <R as Stage>::In<'i>:Send + Sync,
     R::Out: Send + Sync + 'static + Debug,
@@ -765,16 +756,16 @@ where
     debug!("consume_stage_owned: task={task:?} input={input:?} tho_device_idx={tho_device_idx}");
 
     if tho_device_idx == 0 {
-        return Ok(track_await!(input.consume(0, run_ctx, |input, run_ctx| task.consume(input, run_ctx))).await);
+        return crate::runner::execution::ExecutionContext::Cpu.consume_stage(task, input, 0, run_ctx).await;
     }
 
     track_await!(oom_executor(tho_device_idx).submit_consume(
         run_ctx.max_other_parallel().into(),
         async move {
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+            let execution = GlobalCtx::global().execution(tho_device_idx);
             // A sync failure after consumption has no recoverable input; let
             // submit_consume classify both that outer error and owned failures.
-            cuda_actor.consume_stage(task, input, tho_device_idx, run_ctx).await
+            execution.consume_stage(task, input, tho_device_idx, run_ctx).await
         },
         retry,
     )).await
@@ -789,7 +780,7 @@ async fn run_stage_selected<R, W, S>(
     retry: Option<RetryToken>,
 ) -> Result<R::Out, ThoError>
 where
-    R: SyncStage + Send + Sync + 'static,
+    R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
      for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
@@ -797,25 +788,15 @@ where
     W: SelectRef<S> + Debug + Send + Sync + 'static,
     for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
 {
-    if tho_device_idx == 0 {//TODO remove?
-        // CPU execution must prepare state too, otherwise stateful local stages fall through to the unimplemented SyncStage::do_run default.
-        let state = if let Some(with_state) = task.as_with_state() {
-            with_state.pre_run(0).await?
-        } else {
-            None
-        };
-        let borrowed = track_await!(SelectRef::select_ref(&input, 0, selector)).await?;
-        return match state {
-            Some(mut state) => state.do_run_with_state(Arc::clone(&task), borrowed.borrow(), &run_ctx),
-            None => Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx),
-        };
+    if tho_device_idx == 0 {
+        return crate::runner::execution::ExecutionContext::Cpu.run_stage_with_select(task, input, selector, 0, &run_ctx).await;
     }
 
     track_await!(oom_executor(tho_device_idx).submit(
         run_ctx.max_other_parallel().into(),
         async move {
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            cuda_actor.run_stage_with_select(task, input, selector, tho_device_idx, &run_ctx).await
+            let execution = GlobalCtx::global().execution(tho_device_idx);
+            execution.run_stage_with_select(task, input, selector, tho_device_idx, &run_ctx).await
         },
         retry
     )).await
@@ -825,7 +806,7 @@ where
 #[allow(async_fn_in_trait)]
 pub trait InputRun<R, W, S>: Debug
 where
-    R: SyncStage,
+    R: StageExecution,
 {
     async fn run_stage(
         task: Arc<R>,
@@ -839,7 +820,7 @@ where
 
 impl<R, W, S> InputRun<R, W, S> for NoInputAdjuster
 where
-    R: SyncStage + Send + Sync + 'static,
+    R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
      for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
@@ -861,7 +842,7 @@ where
 
 impl<'adjuster, R, W, S, IC> InputRun<R, W, S> for Box<dyn Adjuster<IC, A = S> + 'adjuster>
 where
-    R: SyncStage + Send + Sync + 'static,
+    R: StageExecution + Send + Sync + 'static,
     R::Ctx: MaxParallelCtx + Send + Sync + 'static,
      for<'i> <R as Stage>::In<'i>:  Send + Sync + Debug,
     R::Out: Send + Sync + 'static,
@@ -907,7 +888,7 @@ where
         contexts: C,
     ) -> Result<R::Out, ThoError>
     where
-        R: SyncStage + Send + Sync + 'static + 'a,
+        R: StageExecution + Send + Sync + 'static + 'a,
         R::Ctx: MaxParallelCtx + Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
         IA: InputRun<R, W, S>,
@@ -960,7 +941,7 @@ where
         contexts: C,
     ) -> Result<R::Out, ThoError>
     where
-        R: SyncStage + Send + Sync + 'static + 'a,
+        R: crate::runner::execution::ConsumingExecution + Send + Sync + 'static + 'a,
         R::Ctx: MaxParallelCtx + Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
         TA: StageAdjustment<'a, R, C>,
@@ -1007,7 +988,7 @@ where
     where
         I: SyncStageInit<RC, St, W>,
         RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
-        St: SyncStage + Send + Sync + 'static,
+        St: Stage + Send + Sync + 'static,
         CA: RunContextAdjustment<RC, C>,
         C: Debug,
         W: Workspace + ?Sized + 'static,
@@ -1066,7 +1047,7 @@ impl<'z, I, RC, St, W> RunnerRetryAdapter<'z, SyncStageInitImpl<I, RC, St, W>, (
 where
     I: SyncStageInit<RC, St, W>,
     RC: RunCtx + MaxParallelCtx + Send + Sync + 'static,
-    St: SyncStage + Send + Sync + 'static,
+    St: Stage + Send + Sync + 'static,
     W: Workspace + ?Sized + 'static,
 {
     async fn run(
@@ -1333,7 +1314,7 @@ where
             track_await!(GlobalCtx::global().debug_caches(device_idx, &format!("all_failed for {}", input_id_dbg))).await;
 
             #[cfg(tho_debug)]
-            GlobalCtx::global().cuda_actor(device_idx).debug_worker().await?;
+            GlobalCtx::global().execution(device_idx).debug_worker().await?;
 
             // Exhausted adjustments may exclude this data item, without making it retryable again. TODO : it's not ThoError::Data - make ThoError::OOMHandlingFailed
             Err(ThoError::Data { kind: thoosa_shared::DataErrorKind::OOMHandlingFailed, msg: format!("all_failed: task={:?}", task.as_ref().expect("run_with_runner_impl: missing task")) })
@@ -1586,7 +1567,7 @@ pub mod mock_runnable {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::traits::{Stage, WithId};
-    use thoosa_common::runner::sync_stage::{SyncStage};
+    use thoosa_common::runner::sync_stage::SyncStage;
 
     mock! {
         #[derive(Clone, Debug)]
@@ -1610,6 +1591,10 @@ pub mod mock_runnable {
             MockRunnable::do_run(self.as_ref(), input, ctx)
         }
 
+
+    }
+
+    impl crate::runner::sync_stage::ConsumingStage for MockRunnable {
         fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
             MockRunnable::consume(self.as_ref(), input, ctx)
         }
