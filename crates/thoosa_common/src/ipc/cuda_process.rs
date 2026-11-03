@@ -106,11 +106,6 @@ enum CudaIPCActorMessage {
         dst_key: Option<H2DTensorKey>//TODO it's needed only for IPC d2h
     },
 
-    DropThoTensor {
-        key:u64,
-        worker_id: CudaWorkerId,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
     PurgeStage {
         worker_id: CudaWorkerId,
         endpoint_name: String,
@@ -161,13 +156,6 @@ enum CudaIPCActorMessage {
         endpoint_name: String,
         stage_id: Option<String>,
         info: StageStateInfo,
-        activity: thoosa_shared::CudaActivityScope,
-        respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>,
-    },
-    DropEndpoint {
-        worker_id: CudaWorkerId,
-        endpoint_name: String,
-        stage_id: Option<String>,
         activity: thoosa_shared::CudaActivityScope,
         respond_to: oneshot::Sender<Result<CudaWorkerMsgOut, ThoError>>,
     },
@@ -461,8 +449,8 @@ impl CudaIPCActor {
             Self::reject(msg, ThoError::CudaBeingRecovered);
             return Ok(());
         }
-        let admission = match &msg {
-            CudaIPCActorMessage::Copy { src, activity, .. } => Some((src.ref_worker_id(), activity)),
+        let (worker_id, activity) = match &msg {
+            CudaIPCActorMessage::Copy { src, activity, .. } => (src.ref_worker_id(), activity),
             CudaIPCActorMessage::PurgeStage { worker_id, activity, .. }
             | CudaIPCActorMessage::InvokeStage { worker_id, activity, .. }
             | CudaIPCActorMessage::InstallStage { worker_id, activity, .. }
@@ -470,30 +458,18 @@ impl CudaIPCActor {
             | CudaIPCActorMessage::EnsureStage { worker_id, activity, .. }
             | CudaIPCActorMessage::DiscardStageState { worker_id, activity, .. }
             | CudaIPCActorMessage::ResetStageState { worker_id, activity, .. }
-            | CudaIPCActorMessage::DropEndpoint { worker_id, activity, .. }
-            | CudaIPCActorMessage::DebugWorker { worker_id, activity, .. } => Some((Some(*worker_id), activity)),
-            // Tensor destruction needs no activity lease: the handler below
-            // acknowledges cleanup without IPC once recovery owns the worker.
-            CudaIPCActorMessage::DropThoTensor { .. } => None,
+            | CudaIPCActorMessage::DebugWorker { worker_id, activity, .. } => (Some(*worker_id), activity),
         };
-        if let Some((worker_id, activity)) = admission {
-            // Recheck after queueing: a request or tensor key from a retired
-            // worker must never be interpreted by its replacement. CPU uploads
-            // have no worker reference, so their activity supplies the generation.
-            let identity = worker_id.map_or(Ok(()), |worker_id| worker_id.check(self.worker().worker_id));
-            // The lease must belong to this gate and generation, with valid
-            // recovery authority if applicable. Already admitted work may drain
-            // while paused, so checking is_paused here would reject valid work.
-            if let Err(error) = identity.and_then(|_| activity.check_operation(&self.gate)) {
-                if let CudaIPCActorMessage::DropEndpoint { worker_id, respond_to, .. } = msg {
-                    // Cache invalidation can leave delayed endpoint destructors;
-                    // their old worker resources no longer require a drop request.
-                    let _ = respond_to.send(Ok(CudaWorkerMsgOut { worker_id, request_id: 0, status: OpResult::Ok(None) }));
-                } else {
-                    Self::reject(msg, error);
-                }
-                return Ok(());
-            }
+        // Recheck after queueing: a request or tensor key from a retired
+        // worker must never be interpreted by its replacement. CPU uploads
+        // have no worker reference, so their activity supplies the generation.
+        let identity = worker_id.map_or(Ok(()), |worker_id| worker_id.check(self.worker().worker_id));
+        // The lease must belong to this gate and generation, with valid
+        // recovery authority if applicable. Already admitted work may drain
+        // while paused, so checking is_paused here would reject valid work.
+        if let Err(error) = identity.and_then(|_| activity.check_operation(&self.gate)) {
+            Self::reject(msg, error);
+            return Ok(());
         }
 
         let (worker_id, operation, activity, respond_to) = match msg {
@@ -545,22 +521,6 @@ impl CudaIPCActor {
                     self.handle_h2d_copy(src, dst_device, activity, respond_to, dst_key)
                 }
             }
-            CudaIPCActorMessage::DropThoTensor { key, worker_id, respond_to } => {
-                // Recovery will reclaim all worker tensors at process exit;
-                // queued destructors must also skip IPC and never target a replacement.
-                if self.gate.is_paused() || worker_id != self.worker().worker_id {
-                    let _ = respond_to.send(Ok(()));
-                    return Ok(());
-                }
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let pending = Arc::clone(&self.worker().pending);
-                let tx = self.worker().tx.clone();
-                tokio::spawn(async move {
-                    let result = send_request_and_wait_msg(tx, pending, CudaWorkerMsgIn::new(worker_id, id, Operation::DropThoTensor { tensor_key: key })).await.and_then(unit_reply);
-                    let _ = respond_to.send(result);
-                });
-                return Ok(());
-            }
             CudaIPCActorMessage::PurgeStage { worker_id, endpoint_name, stage_id, activity, respond_to } => {
                 let pending = Arc::clone(&self.worker().pending);
                 let next_id = Arc::clone(&self.next_id);
@@ -579,8 +539,6 @@ impl CudaIPCActor {
                 (worker_id, Operation::PurgeStage { endpoint_name, stage_id }, activity, respond_to),
             CudaIPCActorMessage::ResetStageState { worker_id, endpoint_name, stage_id, info, activity, respond_to } =>
                 (worker_id, Operation::ResetStageState { endpoint_name, stage_id, info }, activity, respond_to),
-            CudaIPCActorMessage::DropEndpoint { worker_id, endpoint_name, stage_id, activity, respond_to } =>
-                (worker_id, Operation::DropStage { endpoint_name, stage_id }, activity, respond_to),
             CudaIPCActorMessage::DebugWorker { worker_id, activity, respond_to } =>
                 (worker_id, Operation::Debug, activity, respond_to),
         };
@@ -818,9 +776,7 @@ impl CudaIPCActor {
             | CudaIPCActorMessage::InstallStage { respond_to, .. }
             | CudaIPCActorMessage::DiscardStageState { respond_to, .. }
             | CudaIPCActorMessage::ResetStageState { respond_to, .. }
-            | CudaIPCActorMessage::DropEndpoint { respond_to, .. }
             | CudaIPCActorMessage::DebugWorker { respond_to, .. } => { let _ = respond_to.send(Err(error)); }
-            CudaIPCActorMessage::DropThoTensor { respond_to, .. } => { let _ = respond_to.send(Ok(())); }
             CudaIPCActorMessage::PurgeStage {respond_to, .. } => { let _ = respond_to.send(Err(error)); }
         }
     }
@@ -1497,26 +1453,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.context("CUDA shutdown response channel closed")?
     }
 
-    async fn drop_tho_tensor(&self, key:u64, worker_id: CudaWorkerId) -> Result<(), ThoError> {
-        // Recovery reclaims all tensor keys when it retires the worker. Cleanup
-        // must neither queue more IPC nor acquire activity while recovery drains.
-        if self.gate.is_paused() || !self.is_current_worker(worker_id) {
-            return Ok(());
-        }
-        debug!("CudaIPCActorHandle::drop_tho_tensor: key={key}");
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::DropThoTensor {
-                key,
-                worker_id,
-                respond_to,
-            }
-        ).await.context("CUDA actor channel closed")?;
-
-        recv.await.context("CUDA actor response channel closed")?
-    }
-
-
     async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
         Ok(Box::new(IPCHanldeCTx{}))
     }
@@ -1543,29 +1479,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         ).instrument(tracing::debug_span!(
             "CudaIPCActorHandle::purge_endpoint_bytes",
             agg_perf="CudaIPCActorHandle::purge_endpoint_bytes",
-        )).await.context("CUDA actor channel closed")?;
-
-        recv.await.context("CUDA actor response channel closed")?
-    }
-
-    async fn drop_endpoint(&self, stage_id: Option<String>, endpoint_name: String, worker_id: CudaWorkerId) -> Result<CudaWorkerMsgOut, ThoError> {
-        // Retired endpoint destructors are expected after cache invalidation.
-        // They must neither wait for recovery nor reach the replacement worker.
-        if !self.is_current_worker(worker_id) || self.gate.is_paused() {
-            return Ok(CudaWorkerMsgOut { worker_id, request_id: 0, status: OpResult::Ok(None) });
-        }
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::DropEndpoint {
-                activity: self.activity_for(worker_id)?,
-                worker_id,
-                endpoint_name,
-                stage_id,
-                respond_to,
-            }
-        ).instrument(tracing::debug_span!(
-            "CudaIPCActorHandle::drop_endpoint",
-            agg_perf="CudaIPCActorHandle::drop_endpoint",
         )).await.context("CUDA actor channel closed")?;
 
         recv.await.context("CUDA actor response channel closed")?
@@ -1876,7 +1789,8 @@ mod tests {
         let handle = CudaIPCActorHandle { release_id: 0, gate: Arc::clone(&gate), tho_device_idx: 1, sender, control };
         let (respond_to, _) = tokio::sync::oneshot::channel();
         let worker_id = handle.worker_id().unwrap();
-        handle.sender.send(CudaIPCActorMessage::DropThoTensor { key: 42, worker_id, respond_to }).await.unwrap();
+        // Fill the ordinary work queue; recovery must still use its control channel.
+        handle.sender.send(CudaIPCActorMessage::DebugWorker { worker_id, activity: handle.activity_for(worker_id).unwrap(), respond_to }).await.unwrap();
         let wrong = thoosa_shared::CudaActivityGate::new(2).request_pause(ThoError::CudaBeingRecovered).unwrap();
         assert!(handle.restart_backend(wrong).await.is_err());
         assert!(handle.retire_backend(wrong).await.is_err());
@@ -1940,14 +1854,16 @@ mod tests {
 
         let gate = Arc::new(thoosa_shared::CudaActivityGate::new(1));
         let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
-        let handle = CudaIPCActorHandle { release_id: 0, gate: Arc::clone(&gate), tho_device_idx: 1, sender, control: mpsc::unbounded_channel().0 };
+        let (control, mut controls) = mpsc::unbounded_channel();
+        let handle = CudaIPCActorHandle { release_id: 0, gate: Arc::clone(&gate), tho_device_idx: 1, sender, control };
         let retired = handle.worker_id()?;
 
         let old_tensor = || ThoTensor::new_ref((), 42, vec![1], Kind::Float, None, retired);
         let ticket = gate.request_pause(ThoError::CudaBeingRecovered)?;
         // Explicit cleanup must also avoid IPC before the old worker is retired.
-        handle.drop_tho_tensor(42, retired).await?;
+        handle.tensor_releaser().release(42, retired);
         assert!(receiver.try_recv().is_err(), "recovering worker cleanup must not be queued");
+        assert!(controls.try_recv().is_err(), "recovering tensor cleanup must not enter the control queue");
         gate.finish_pause(ticket);
 
         assert!(matches!(handle.copy(old_tensor(), 0usize.into()).await.unwrap_err().what(), ThoError::CudaBeingRecovered));
@@ -1955,8 +1871,12 @@ mod tests {
         assert!(handle.install_stage(retired, "stage".into(), Some(42.to_string()), Box::new(())).await.is_err());
 
 
-        handle.drop_tho_tensor(42, retired).await?;
-        handle.drop_endpoint(Some(42.to_string()), "stage".into(), retired).await?;
+        handle.tensor_releaser().release(42, retired);
+        assert!(controls.try_recv().is_err(), "retired tensor cleanup must not enter the control queue");
+        // Endpoint cleanup is queued with its original identity for the actor to check.
+        handle.release_endpoint(Some(42.to_string()), "stage".into(), retired);
+        let BackendControl::ReleaseEndpoint { worker_id, .. } = controls.try_recv().unwrap() else { panic!("expected endpoint release") };
+        assert_eq!(worker_id, retired);
 
         assert!(receiver.try_recv().is_err(), "old IDs must never be rebound to the new worker");
 
@@ -2239,7 +2159,10 @@ mod tests {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }
 
-            cuda_actor.drop_tho_tensor(reff, cuda_ref.ref_worker_id().unwrap()).await?;
+            // Release uses the control queue, which the actor drains before ordinary work.
+            let ipc = (cuda_actor.as_ref() as &dyn std::any::Any).downcast_ref::<CudaIPCActorHandle>().unwrap();
+            ipc.tensor_releaser().release(reff, cuda_ref.ref_worker_id().unwrap());
+            cuda_actor.debug_worker().await?;
 
             debug!("run_main: drop ok");
 

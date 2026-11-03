@@ -1177,7 +1177,6 @@ mod tests {
                            let t_cuda = GlobalCtx::global().cuda_actor(1).copy(t_cpu, 1.into()).await?;
                            let _t_cpu = GlobalCtx::global().cuda_actor(1).copy(t_cuda.shallow_clone(), 0.into()).await?;
                            drop(t_cuda);
-                           // GlobalCtx::global().cuda_actor(1).drop_tho_tensor(t_cuda.ref_key().ok_or_else(||ThoError::new(format!("Not a ref tensor: {t:?}")))?).await?;
 
                            Ok::<(), ThoError>(())
                        }.boxed()

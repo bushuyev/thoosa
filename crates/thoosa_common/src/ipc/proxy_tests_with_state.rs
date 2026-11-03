@@ -514,9 +514,9 @@ use crate::tch_error::tch_result;
                 // the new worker when the endpoint itself belongs to it.
                 let error = actor.run_stage(Arc::clone(&fresh_stage), TestInputB { value: old_tensor.clone_ref()? }, 1, &TestRunCtx).await.unwrap_err();
                 assert!(matches!(error.what(), ThoError::CudaBeingRecovered));
-                actor.drop_endpoint(Some(7.to_string()), TEST_ENDPOINT.into(), retired).await?;
+                ipc.release_endpoint(Some(7.to_string()), TEST_ENDPOINT.into(), retired);
 
-                actor.drop_tho_tensor(old_key, retired).await?;
+                ipc.tensor_releaser().release(old_key, retired);
                 drop(old_stage);
                 drop(old_tensor);
                 // Reconstructed state and live colliding tensor survive every
@@ -663,7 +663,9 @@ use crate::tch_error::tch_result;
 
         println!("do_test_distinct_stateful_endpoints: e={e:?}");
 
-        cuda_actor.drop_endpoint(Some(1.to_string()), TEST_ENDPOINT.to_string(), (cuda_actor.as_ref() as &dyn std::any::Any).downcast_ref::<crate::ipc::cuda_process::CudaIPCActorHandle>().unwrap().worker_id()?).await?;
+        // Explicit cleanup uses the same owning control channel as proxy destruction.
+        let ipc = (cuda_actor.as_ref() as &dyn std::any::Any).downcast_ref::<crate::ipc::cuda_process::CudaIPCActorHandle>().unwrap();
+        ipc.release_endpoint(Some(1.to_string()), TEST_ENDPOINT.to_string(), ipc.worker_id()?);
 
         Ok(())
     }
