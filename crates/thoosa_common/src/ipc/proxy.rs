@@ -1,5 +1,4 @@
 use thoosa_common::tch_error::tch_result;
-use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::endpoints::{EndpointRegistration, StageRecovery};
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
