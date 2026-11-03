@@ -34,6 +34,7 @@ use tokio::sync::oneshot::Sender;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tub::{Guard, Pool};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
 use crate::ipc::proxy::StageStateDump;
 use crate::ipc::worker_msg::{CudaWorkerId, CudaWorkerMsgOut, OpResult};
 
@@ -71,6 +72,7 @@ pub trait HandleCtx:Send {
      }
 
 }
+
 
 
 #[cfg_attr(test, mockall::automock)]

@@ -171,7 +171,8 @@ fn test_endpoint_install_cancellation_and_drop_during_reset_ipc() -> Result<(), 
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(60), async {
             let global = GlobalCtx::global();
-            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = global.cuda_actor(1);
+            let actor: &dyn Any = actor.as_ref();
             let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
             let gate = global.cuda_activity_gate(1).unwrap();
             let dir = tempfile::tempdir()?;
@@ -230,7 +231,8 @@ fn test_stage_failure_is_reported_by_runner_ipc() -> Result<(), ThoError> {
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(60), async {
             let global = GlobalCtx::global();
-            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = global.cuda_actor(1);
+            let actor: &dyn Any = actor.as_ref();
             let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
             let gate = global.cuda_activity_gate(1).unwrap();
             let mut pid = install_and_probe(actor).await?;
@@ -290,7 +292,8 @@ fn test_training_trial_survives_fatal_worker_restart_ipc() -> Result<(), ThoErro
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(60), async {
             let global = GlobalCtx::global();
-            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = global.cuda_actor(1);
+            let actor: &dyn Any = actor.as_ref();
             let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
             let gate = global.cuda_activity_gate(1).unwrap();
             let pid = install_and_probe(actor).await?;
@@ -327,7 +330,8 @@ fn test_fatal_actor_paths_replace_worker_ipc() -> Result<(), ThoError> {
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(120), async {
             let global = GlobalCtx::global();
-            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = global.cuda_actor(1);
+            let actor: &dyn Any = actor.as_ref();
             let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
             let gate = global.cuda_activity_gate(1).unwrap();
             let mut pid = install_and_probe(actor).await?;
@@ -398,7 +402,8 @@ fn test_failed_replacement_readiness_is_terminal_only_for_its_device_ipc() -> Re
     super::tests::run_ipc_test(module_path!(), async {
         tokio::time::timeout(Duration::from_secs(50), async {
             let global = GlobalCtx::global();
-            let actor: &dyn Any = global.cuda_actor(1).as_ref();
+            let actor = global.cuda_actor(1);
+            let actor: &dyn Any = actor.as_ref();
             let actor = actor.downcast_ref::<CudaIPCActorHandle>().unwrap();
             let pid = install_and_probe(actor).await?;
             let worker = actor.worker_id()?;

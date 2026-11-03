@@ -1398,7 +1398,6 @@ impl HandleCtx for IPCHanldeCTx {
 #[async_trait]
 impl CudaActorHandle for CudaIPCActorHandle {
 
-
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
         let activity = self.copy_activity(&src, dst_device)?;
@@ -1970,7 +1969,7 @@ mod tests {
         gate.finish_pause(pause);
     }
 
-    async fn run_ipc_copy_perf(cuda_actor: &'static Arc<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
+    async fn run_ipc_copy_perf(cuda_actor: &Arc<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Float;
         let dim_1 = 4u64;
@@ -1991,7 +1990,7 @@ mod tests {
                 init_type,
                 Arc::clone(&d2h_time),
                 Arc::clone(&h2d_time),
-                cuda_actor,
+                Arc::clone(&cuda_actor),
             ));
         }
 
@@ -2015,7 +2014,7 @@ mod tests {
         init_type: tch::Kind,
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
-        cuda_actor: &'static Arc<dyn CudaActorHandle>,
+        cuda_actor: Arc<dyn CudaActorHandle>,
     ) -> Result<(), ThoError> {
         let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64).max(1.0) as i64;
         let mut src_t = Tensor::rand([dim_0, dim_1], FLOAT_CPU);
@@ -2106,7 +2105,7 @@ mod tests {
             async {
                 let tho_device_idx = 1;
                 let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                let (d2h, h2d)  = run_ipc_copy_perf(cuda_actor, 3, 3).await?;
+                let (d2h, h2d)  = run_ipc_copy_perf(&cuda_actor, 3, 3).await?;
 
                 info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
 

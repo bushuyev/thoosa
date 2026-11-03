@@ -23,7 +23,7 @@ impl DeviceExecutionCtx {
         L: FnOnce() -> LF, LF: Future<Output = Result<Arc<S>, ThoError>>,
         R: FnOnce() -> RF, RF: Future<Output = Result<(Box<dyn WorkerInput>, I), ThoError>>,
     {
-        if let Some(actor) = self.ipc_backend() {
+        if let Some(actor) = self.ipc_actor().ok() {
             // IDs belong to installations, not feature models. Every retry gets
             // a distinct ID; ProxyStage retains cleanup and recreation ownership.
             static NEXT_INSTALLATION: AtomicU64 = AtomicU64::new(1);
