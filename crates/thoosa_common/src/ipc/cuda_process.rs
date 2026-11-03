@@ -1200,6 +1200,15 @@ pub struct CudaIPCActorHandle {
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
+    pub(crate) async fn retire_backend(&self, authority: CudaActivityPauseTicket) -> Result<(), ThoError> {
+        // Retirement needs the current recovery ticket but may precede draining:
+        // killing a failed worker can be necessary to release pending activity.
+        self.gate.check_recovery_authority(authority, false)?;
+        let (respond_to, recv) = oneshot::channel();
+        self.control.send(BackendControl::Retire { authority, respond_to }).context("CUDA actor control channel closed")?;
+        recv.await.context("CUDA retirement response channel closed")?
+    }
+
     pub(crate) fn release_endpoint(&self, stage_id: Option<String>, endpoint: String, worker_id: CudaWorkerId) {
         // Cleanup and shutdown share FIFO submission; Drop needs no Tokio context.
         let _ = self.control.send(BackendControl::ReleaseEndpoint { stage_id, endpoint, worker_id });
@@ -1441,15 +1450,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         debug!("CudaIPCActorHandle::restart_backend: Restart send r={r:?}");
 
         recv.await.context("CUDA restart response channel closed")?
-    }
-
-    async fn retire_backend(&self, authority: CudaActivityPauseTicket) -> Result<(), ThoError> {
-        // Retirement needs the current recovery ticket but may precede draining:
-        // killing a failed worker can be necessary to release pending activity.
-        self.gate.check_recovery_authority(authority, false)?;
-        let (respond_to, recv) = oneshot::channel();
-        self.control.send(BackendControl::Retire { authority, respond_to }).context("CUDA actor control channel closed")?;
-        recv.await.context("CUDA retirement response channel closed")?
     }
 
     async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
