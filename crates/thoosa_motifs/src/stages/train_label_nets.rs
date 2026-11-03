@@ -750,7 +750,7 @@ where
                 futures,
                 labels_train_and_valid_sets_len,
                 FuturesOrdering::Unordered,
-                thoosa_shared::CollectionErrorPolicy::SkipData(&[thoosa_shared::DataErrorKind::InputTooShort, thoosa_shared::DataErrorKind::EmptyTrainingClass]),
+                thoosa_shared::CollectionErrorPolicy::SkipAll,
                 "train labels",
             )).await?;
 

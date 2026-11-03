@@ -220,7 +220,7 @@ where
 
             let motif_net_run_config_ids = track_await!(store.list_input_nets(label_net.id)).await?;
 
-            info!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
+            debug!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
 
             if motif_net_run_config_ids.is_empty() { return Err(ThoError::new(format!("label model run {train_label_net_run_config_id} has no input motif models"))); }
 

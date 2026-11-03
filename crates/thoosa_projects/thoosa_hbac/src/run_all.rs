@@ -390,7 +390,7 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
+                amsgrad: RangeOrValue::Value(true),
             })),
         },
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue { _dummy: 0 }),
@@ -417,7 +417,7 @@ pub fn run_all_config_test(run_all_args: &RunAllArgs, profile:&RunAllSettings) -
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
+                amsgrad: RangeOrValue::Value(true),
             })),
         },
 
@@ -858,7 +858,7 @@ pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMot
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: Some((10, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 101 }, step: Some((10, 0)) },
         // freq_filter: None,
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
@@ -884,7 +884,7 @@ pub fn run_all_find_motifs_config_1() -> FindMotifsRunConfigRangeOrValue<FindMot
         // }),
         finder_kind: FinderKindRangeOrValue::CrossLoader(
             CrossLoaderRunConfigRangeOrValue {
-                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(true) }),
                 slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
                         q: RangeOrValue::Value(0.5),
