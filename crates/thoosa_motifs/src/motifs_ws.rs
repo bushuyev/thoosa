@@ -11,7 +11,7 @@ use tch::nn;
 use tch::{Device, Tensor};
 use thoosa_common::dims::{Batch, Slice};
 use thoosa_common::nets::common_nets::ThoModuleWithStore;
-use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, VarStoreOrPath, Workspace, WsConfigs};
+use thoosa_common::ws::{generation_weights, FsWorkspace, VarStoreOrPath, Workspace, WsConfigs, NET_PARAMS_FILE, NET_WEIGHTS_FILE, publish_net, resolve_net_base_path, net_files_from_base, nested_weights, discover_nets, published_generation};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ToJsonFile;
@@ -69,86 +69,10 @@ pub fn parse_motif_path(net_id: &Path) -> anyhow::Result<(u32, u32)> {
     Ok((channel, motif_id))
 }
 
-// Each manifest names an immutable generation. Readers resolve it once so an
-// overwrite cannot pair weights from one save with metadata from another.
-const NET_MANIFEST: &str = "current.json";
-fn generation_weights(path: &Path) -> bool {
-    path.file_name().and_then(|v| v.to_str()).is_some_and(|v| v.starts_with("weights-") && v.ends_with(".safetensors"))
-}
-fn nested_weights(path: &Path) -> bool {
-    generation_weights(path) || path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE)
-}
-fn published_generation(base: &Path) -> anyhow::Result<Option<(PathBuf, PathBuf)>> {
-    let text = match fs::read_to_string(base.join(NET_MANIFEST)) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let generation: String = serde_json::from_str(&text)?;
-    anyhow::ensure!(!generation.is_empty() && generation.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'), "invalid model generation at {}", base.display());
-    Ok(Some((base.join(format!("weights-{generation}.safetensors")), base.join(format!("weights-{generation}.json")))))
-}
-fn publish_net(base: &Path, params: &str, write_weights: impl FnOnce(&Path) -> anyhow::Result<()>) -> anyhow::Result<()> {
-    fs::create_dir_all(base)?;
-    static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let generation = format!("{}-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos(), NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let weights = base.join(format!("weights-{generation}.safetensors"));
-    let metadata = base.join(format!("weights-{generation}.json"));
-    let manifest = base.join(format!(".current-{generation}.tmp"));
-    let result = (|| {
-        write_weights(&weights)?;
-        fs::write(&metadata, params)?;
-        fs::write(&manifest, serde_json::to_string(&generation)?)?;
-        // Rename is the single publication point. Old generations remain valid
-        // for readers that already resolved their paths before this overwrite.
-        fs::rename(&manifest, base.join(NET_MANIFEST))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        for path in [&weights, &metadata, &manifest] { let _ = fs::remove_file(path); }
-    }
-    result
-}
-fn discover_nets(root: &Path) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
-    let paths = recurse_files(root, &|path| path.file_name().is_some_and(|v| v == NET_MANIFEST) || path.extension().is_some_and(|v| v == "safetensors"))?;
-    let mut models = Vec::new();
-    for path in paths {
-        if path.file_name().is_some_and(|v| v == NET_MANIFEST) {
-            if let Some(pair) = published_generation(path.parent().context("model manifest has no parent")?)? { models.push(pair); }
-        } else if !generation_weights(&path) {
-            // A manifest supersedes a legacy pair in the same model directory.
-            if !path.parent().context("model has no parent")?.join(NET_MANIFEST).exists() { models.push(net_files_from_base(&path)?); }
-        }
-    }
-    Ok(models)
-}
 
-fn net_files_from_base(base_path: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
-    if base_path.is_dir() {
-        if let Some(pair) = published_generation(base_path)? { return Ok(pair); }
-    }
-    Ok(match base_path.file_name().and_then(|v| v.to_str()) {
-        Some(NET_WEIGHTS_FILE) => (base_path.to_path_buf(), base_path.parent().unwrap_or(base_path).join(NET_PARAMS_FILE)),
-        Some(NET_PARAMS_FILE) => (base_path.parent().unwrap_or(base_path).join(NET_WEIGHTS_FILE), base_path.to_path_buf()),
-        _ => match base_path.extension().and_then(|ext| ext.to_str()) {
-            Some("safetensors") => {
-                let base_buf = base_path.to_path_buf();
-                let (_, params_path) = thoosa_shared::replace_extension(&base_buf, "json");
-                (base_buf, params_path)
-            }
-            Some("json") => {
-                let base_buf = base_path.to_path_buf();
-                let (_, weights_path) = thoosa_shared::replace_extension(&base_buf, "safetensors");
-                (weights_path, base_buf)
-            }
-            _ => (base_path.join(NET_WEIGHTS_FILE), base_path.join(NET_PARAMS_FILE)),
-        },
-    })
-}
 
-fn resolve_net_base_path(root: &Path, net_path: &Path) -> PathBuf {
-    if net_path.is_absolute() { net_path.to_path_buf() } else { root.join(net_path) }
-}
+
+
 
 impl MotifsWorkspace for FsWorkspace {
     fn motifs_nets_path(&self) -> anyhow::Result<PathBuf> { self.model_type_path(MOTIFS_MODELS) }

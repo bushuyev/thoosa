@@ -7,6 +7,7 @@ heavy = { max-threads = 1 }
 [profile.default]
 test-threads = 4
 default-filter = 'not (test(/::heavy[^:]*$/) | test(/_ipc$/))'
+slow-timeout = { period = "1m", terminate-after = 1, grace-period = "5s" }
 #retries = 3
 
 
