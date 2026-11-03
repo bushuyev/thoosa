@@ -428,7 +428,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             // Compatibility for explicit reference construction. IPC decoding
             // supplies the original actor without consulting the installed facade.
             if crate::runner::global_ctx::GlobalCtx::is_installed() {
-                crate::runner::global_ctx::GlobalCtx::global().execution(worker_id.device_idx).ipc_backend().map(|actor| actor.tensor_releaser())
+                crate::runner::global_ctx::GlobalCtx::global().execution(worker_id.device_idx).ipc_actor().ok().map(|actor| actor.tensor_releaser())
             } else { None }
         });
         let count = KeyHolder::ownership(key, worker_id, release);
