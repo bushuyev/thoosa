@@ -299,21 +299,27 @@ impl MotifsWsMockBuilder {
     }
 
     #[deprecated]
-    pub fn with_load_motif_nets(mut self, channels_motif_nets: Vec<Vec<(Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send + 'static>)>>) -> Self {
+    pub fn with_load_motif_nets(mut self, channels_motif_nets: Vec<Vec<(Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send + 'static>)>>) -> Self {
         let channels_motif_nets = std::sync::Arc::new(channels_motif_nets);
         self.mock.expect_load_motif_nets().returning(move |channel, motif_id, _device| {
             let entry = &channels_motif_nets[channel as usize][motif_id as usize];
-            Ok(vec![((entry.0)(), (entry.1)())])
+            Ok(vec![((entry.0)(), (entry.1)()?)])
         });
         self
     }
 
-    pub fn with_load_motif_net(mut self, nets: Vec<(PathBuf, Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send + 'static>)>) -> Self {
+    pub fn with_load_motif_net(self, nets: Vec<(PathBuf, Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send + 'static>)>) -> Self {
+        self.with_try_load_motif_net(nets.into_iter().map(|(path, params, module)| (path, params, Box::new(move || Ok(module())) as Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Send + Sync>)).collect())
+    }
+
+    // Tensor-backed fixtures can fail to acquire local storage; pass that failure
+    // through the mocked workspace instead of panicking inside a model factory.
+    pub fn with_try_load_motif_net(mut self, nets: Vec<(PathBuf, Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send + 'static>)>) -> Self {
         let nets = std::sync::Arc::new(nets);
         self.mock.expect_load_motif_net().returning(move |net_path, _device, _quantize, _load_net| {
             let entry = nets.iter().find(|(path, _, _)| path == net_path).ok_or_else(|| anyhow::anyhow!("Not found: {net_path:?}"))?;
             // Preserve the previous WsMockBuilder contract, which always returned configured modules.
-            Ok(((entry.1)(), Some((entry.2)())))
+            Ok(((entry.1)(), Some((entry.2)()?)))
         });
         self
     }

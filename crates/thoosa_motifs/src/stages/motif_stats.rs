@@ -217,8 +217,8 @@ impl<'a> MotifStatsCalcInput<'a> {
     }
 
     fn motifs_size(motifs: &[ThoDataRef<'_, LoadedMotif>]) -> <ThoTensor<ChannelsMotifsSlices, SynKey> as Data>::Metrics {
-        let num_slices = motifs.iter().map(|motif| motif.as_ref().data().t_ref().size()[0]).sum::<i64>();
-        let window = motifs.first().map(|motif| motif.as_ref().data().t_ref().size()[1]).unwrap_or(0);
+        let num_slices = motifs.iter().map(|motif| motif.as_ref().data().size()[0]).sum::<i64>();
+        let window = motifs.first().map(|motif| motif.as_ref().data().size()[1]).unwrap_or(0);
         [1, num_slices, window].into()
     }
 
@@ -464,7 +464,7 @@ fn merged_motifs_tensor(input_id: &SynKey, motifs: &[&LoadedMotif]) -> Result<Th
         return Err(ThoError::new("MotifStatsSyncStage::merged_motifs_tensor: empty motifs"));
     }
 
-    let motifs_refs = motifs.iter().map(|motif| motif.data().t_ref()).collect::<Vec<_>>();
+    let motifs_refs = motifs.iter().map(|motif| motif.data().local()).collect::<Result<Vec<_>, _>>()?;
     ThoTensor::new(input_id.clone(), tch_result(Tensor::f_cat(motifs_refs.as_slice(), 0))?)
 }
 
@@ -484,7 +484,7 @@ fn merged_channels_tensor(
         return Err(ThoError::new(format!("MotifStatsSyncStage::merged_channels_tensor: expected [channels x slices x window], got invalid_shapes={invalid_shapes:?} input_id={input_id:?}")));
     }
 
-    let channels_motifs_slices_refs = channels_motifs_slices.iter().map(|slices| slices.t_ref()).collect::<Vec<_>>();
+    let channels_motifs_slices_refs = channels_motifs_slices.iter().map(|slices| slices.local()).collect::<Result<Vec<_>, _>>()?;
     ThoTensor::new(input_id.clone(), tch_result(Tensor::f_cat(channels_motifs_slices_refs.as_slice(), 1))?)
 }
 
@@ -926,12 +926,12 @@ where
         debug!("MotifStatsSyncStage::do_run: input.id={:?}", input.id);
         let output = (match input.data() {
             MotifStatsCalcInputData::Managed(motif) => {
-                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &motif.as_ref().data().t_ref())
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &*motif.as_ref().data().local()?)
             },
             MotifStatsCalcInputData::Motifs(motifs) => {
                 let motifs = motifs.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
                 let channels_motifs_slices = merged_motifs_tensor(input.id(), motifs.as_slice())?;
-                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &channels_motifs_slices.t_ref())
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &*channels_motifs_slices.local()?)
             }
         })?;
         debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
@@ -1059,7 +1059,7 @@ where
 
     fn run_input(&self, input: &MotifStatsLoadedChannelsInput) -> Result<MotifStatsOutput, ThoError> {
         let channels_motifs_slices = merged_channels_tensor(input.id(), input.channels_motifs_slices())?;
-        calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &channels_motifs_slices.t_ref())
+        calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), &*channels_motifs_slices.local()?)
     }
 }
 
@@ -1542,9 +1542,9 @@ mod tests {
             .await?;
 
         let t = output.channels_motifs_dists(&metric)?;
-        debug!("t=\n{}", t.as_ref());
-        assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(&t.as_ref(), 0.02, 0.02, false));
-        let size = t.t_ref().size();
+        debug!("t=\n{}", t);
+        assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(&*t.local()?, 0.02, 0.02, false));
+        let size = t.size();
 
         assert_eq!(size, vec![3, 1]);
 

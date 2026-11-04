@@ -463,7 +463,7 @@ where
                     let tensor = track_await!(self.tensor.load_from_any_device_(0)).await?;
                     // Keep the synchronous guard in its own scope before copying to another device.
                     let (selected_audio, sample_range) = {
-                        let audio = tensor.t_ref();
+                        let audio = tensor.local()?;
                         let audio_size = audio.size();
                         if audio_size.len() != 2 {
                             return Err(ThoError::new(format!("BucketingTensorInput::borrow_to: expected audio shape [channels, samples], got {audio_size:?}")));
@@ -600,7 +600,7 @@ where
     }
 
     fn save_resource_mel_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
-        let patches = audio_to_log_mel_patches(&input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
+        let patches = audio_to_log_mel_patches(&*input.tensor.local()?, mel_config, self.sample_rate as f64, self.window, self.step)?;
         let patch_ranges = tch_result(patch_sample_ranges_flat(&patches, mel_config, self.window, self.step))?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
 
@@ -639,7 +639,7 @@ where
     }
 
     fn save_resource_plain_buckets(&self, input: &BucketingSyncInput<'_, D, Id>, plain_config: &PlainConfig) -> Result<(), ThoError> {
-        let audio = input.tensor.t_ref();
+        let audio = input.tensor.local()?;
         let audio_size = audio.size();
         debug!("SyncBucketingStage::save_resource_plain_buckets: id={:?} audio_size={audio_size:?}", input.id());
 
@@ -1888,7 +1888,7 @@ mod tests {
                 let motif_ref = SelectRef::select_ref(&motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
-                    let motif_t = motif.data().as_ref().unsqueeze(0);
+                    let motif_t = motif.data().local()?.unsqueeze(0);
                     debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
                     let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
                     best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(tch_result(tch_result(distance.f_min())?.f_double_value(&[]))?);

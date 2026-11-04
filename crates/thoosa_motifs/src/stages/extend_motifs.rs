@@ -233,7 +233,7 @@ where
                 let motif_data = motif_data.as_ref();
                 let channels_motif_ids = motif_data.motifs.extra().0.clone();
                 let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
-                let max_motif_slices = motif_data.motifs.data().t_ref().size()[1] as usize;
+                let max_motif_slices = motif_data.motifs.data().size()[1] as usize;
                 Ok::<_, ThoError>((channels_motif_ids, find_motifs_run_config, max_motif_slices))
         }?;
 
@@ -1283,7 +1283,7 @@ mod tests {
 
         let _ctx_for_data = ctx.branch(false);
         let motifs_stats = SelectRef::select_ref(&motifs_stats, 0, Some(SyncStftSelector)).await?;
-        let motifs_stats_t =  motifs_stats.t_ref().shallow_clone();
+        let motifs_stats_t = motifs_stats.local()?;
 
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);
 

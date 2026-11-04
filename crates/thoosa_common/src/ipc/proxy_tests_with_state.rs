@@ -314,9 +314,9 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TestStage::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, k: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value.as_ref(), k.k_0.as_ref(), k.k_1.as_ref());
+        debug!("TestStageB::do_run_with_state: input.value=\n{} \nk.k_0=\n{} \nk.k_1=\n{}", input.value, k.k_0, k.k_1);
         Ok(TestOutputB {
-            value: tch_result(input.value.as_ref().f_mul(&tch_result(k.k_0.as_ref().f_add(&k.k_1.as_ref()))?))?.into(),
+            value: tch_result(input.value.local()?.f_mul(&tch_result(k.k_0.local()?.f_add(&*k.k_1.local()?))?))?.into(),
         })
     }
 }
@@ -367,10 +367,10 @@ where
                 StageState::Ready(state) =>  {
                     match tensor_id.as_str() {
                         K_0 => {
-                            Ok(state.k_0.as_ref().shallow_clone())
+                            Ok(tch_result(state.k_0.local()?.f_alias())?)
                         }
                         K_1 => {
-                            Ok(state.k_1.as_ref().shallow_clone())
+                            Ok(tch_result(state.k_1.local()?.f_alias())?)
                         }
                         _=> {
                             panic!("unexpected tensor_id={tensor_id}")
@@ -428,6 +428,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use thoosa_shared::CopyToDevice;
 use crate::tch_error::tch_result;
     use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::proxy::DynSyncStageWithStateEnum;
@@ -532,7 +533,7 @@ use crate::tch_error::tch_result;
                 for _ in 0..2 {
                     let result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&fresh_stage), fresh_input(), 1, &TestRunCtx).await?;
                     let cpu = actor.copy(result.value, 0.into()).await?;
-                    assert!(tch_result(tch_result(Tensor::f_full([1, 3], 3., FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?);
+                    assert!(tch_result(tch_result(Tensor::f_full([1, 3], 3., FLOAT_CPU))?.f_allclose(&*cpu.local()?, 0.01, 0.01, false))?);
                 }
                 assert_eq!(ipc.worker_id()?.generation.0, retired.generation.0 + 1);
                 Ok::<_, ThoError>(())
@@ -556,7 +557,7 @@ use crate::tch_error::tch_result;
             let value = actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1usize.into()).await?;
             let output = GlobalCtx::global().execution(1).run_stage(stage, TestInputB { value }, 1, &TestRunCtx).await?;
             let cpu = actor.copy(output.value, 0usize.into()).await?;
-            assert!(tch_result(tch_result(Tensor::f_full([1, 3], 5., FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?);
+            assert!(tch_result(tch_result(Tensor::f_full([1, 3], 5., FLOAT_CPU))?.f_allclose(&*cpu.local()?, 0.01, 0.01, false))?);
             Ok(())
         }, async |sock| {
             let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)?));
@@ -588,7 +589,7 @@ use crate::tch_error::tch_result;
                             let value = actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1usize.into()).await?;
                             let output = GlobalCtx::global().execution(1).run_stage(Arc::clone(&stage), TestInputB { value }, 1, &TestRunCtx).await?;
                             let cpu = actor.copy(output.value, 0usize.into()).await?;
-                            assert!(tch_result(tch_result(Tensor::f_full([1, 3], (id + 4) as f64, FLOAT_CPU))?.f_allclose(&cpu.t_ref(), 0.01, 0.01, false))?, "offload must preserve both tensors of the endpoint state");
+                            assert!(tch_result(tch_result(Tensor::f_full([1, 3], (id + 4) as f64, FLOAT_CPU))?.f_allclose(&*cpu.local()?, 0.01, 0.01, false))?, "offload must preserve both tensors of the endpoint state");
                         }
                         Ok::<_, ThoError>(())
                     });
@@ -643,17 +644,17 @@ use crate::tch_error::tch_result;
         let first_result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&first_stage), first_input, 1, &TestRunCtx).await?;
         debug!("do_test_distinct_stateful_endpoints: first_result={first_result:?}");
 
-        let first_cpu = cuda_actor.copy(first_result.value.shallow_clone(), 0.into()).await?;//shallow_clone to avoid id being dropped before copy starts
+        let first_cpu = first_result.value.copy_to_device(0).await?;//shallow_clone to avoid id being dropped before copy starts
 
-        debug!("do_test_distinct_stateful_endpoints: first_cpu=\n{}", first_cpu.t_ref());
-        assert!(tch_result(tch_result(tch_result(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0]))?.f_view([1, 3]))?.f_allclose(&first_cpu.t_ref(), 0.01, 0.01, false))?);
+        debug!("do_test_distinct_stateful_endpoints: first_cpu=\n{}", first_cpu);
+        assert!(tch_result(tch_result(tch_result(Tensor::f_from_slice(&[2.0f32, 2.0, 2.0]))?.f_view([1, 3]))?.f_allclose(&*first_cpu.local()?, 0.01, 0.01, false))?);
 
         let second_input = TestInputB { value: cuda_actor.copy(ThoTensor::new((), tch_result(Tensor::f_ones([1, 3], FLOAT_CPU))?)?, 1.into()).await? };
         let second_result = GlobalCtx::global().execution(1).run_stage(Arc::clone(&second_stage), second_input, 1, &TestRunCtx).await?;
         let second_cpu = cuda_actor.copy(second_result.value, 0.into()).await?;
 
-        debug!("do_test_distinct_stateful_endpoints: second_cpu=\n{}", second_cpu.t_ref());
-        assert!(tch_result(tch_result(tch_result(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0]))?.f_view([1, 3]))?.f_allclose(&second_cpu.t_ref(), 0.01, 0.01, false))?);
+        debug!("do_test_distinct_stateful_endpoints: second_cpu=\n{}", second_cpu);
+        assert!(tch_result(tch_result(tch_result(Tensor::f_from_slice(&[3.0f32, 3.0, 3.0]))?.f_view([1, 3]))?.f_allclose(&*second_cpu.local()?, 0.01, 0.01, false))?);
 
 
         // Dropping the last proxy reference must asynchronously release its worker key so that the same id can be installed again.
@@ -700,7 +701,7 @@ use crate::tch_error::tch_result;
         debug!("test_with_state_target: result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
 
-        let cpu_t = cpu_tensor.t();
+        let cpu_t = cpu_tensor.into_local()?;
         debug!("test_with_state_target: cpu_tensor={}", cpu_t);
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 
@@ -722,7 +723,7 @@ use crate::tch_error::tch_result;
         debug!("result={result:?}");
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
 
-        let cpu_t = cpu_tensor.t();
+        let cpu_t = cpu_tensor.into_local()?;
         debug!("cpu_tensor={}", cpu_t);
         assert!(Tensor::from_slice(&[4., 4., 4.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));
 

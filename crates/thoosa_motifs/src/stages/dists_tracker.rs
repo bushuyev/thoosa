@@ -1,5 +1,6 @@
 use thoosa_common::runner::sync_stage::ConsumingStage;
 use thoosa_common::tch_error::tch_result;
+use thoosa_shared::CopyToDevice;
 use crate::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use crate::fs_store::FileMotifTrackerStore;
 use crate::motif_tracker_store::{SlicesMatch, SqlMotifTrackerStore};
@@ -18,10 +19,8 @@ use tch::{Kind, Tensor};
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::dims::AnyDims;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageOutput, insert_worker_tensor};
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
-use thoosa_common::utils::tensor_mem_size;
+use thoosa_common::tho_tensor::ThoTensor;
 use crate::stages::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
 use crate::stages::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::ThoError;
@@ -492,19 +491,11 @@ impl DistsMask {
     }
 
     fn tensor_mem_size(tensor: &DistsMaskTensor) -> u64 {
-        match &tensor.inner {
-            ThoTensorInner::Val { t } => tensor_mem_size(&t.lock()) as u64,
-            ThoTensorInner::Ref { .. } => Data::mem_size(tensor),
-        }
+        Data::mem_size(tensor)
     }
 
-    fn into_local_tensor(tensor: DistsMaskTensor, label: &str) -> Result<Tensor, ThoError> {
-        match tensor.inner {
-            ThoTensorInner::Val { t } => Ok(t.into_inner()),
-            ThoTensorInner::Ref { key, .. } => {
-                panic!("DistsMask::{label}: expected local tensor, got IPC ref key={key:?}")
-            },
-        }
+    fn into_local_tensor(tensor: DistsMaskTensor, _label: &str) -> Result<Tensor, ThoError> {
+        tensor.into_local()
     }
 
     fn into_local_part(self) -> Result<DistsMaskLocalPart, ThoError> {
@@ -517,28 +508,12 @@ impl DistsMask {
 
     async fn copy_tensor_to_cpu(tensor: DistsMaskTensor, label: &'static str) -> Result<Tensor, ThoError> {
 
-        match tensor.inner {
-            ThoTensorInner::Val { t } if t.lock().device().eq(&Cpu) => Ok(t.into_inner()),
-            ThoTensorInner::Val { t } => {
-                let t = t.into_inner();
-                let t = if t.is_contiguous() {
-                    t
-                } else {
-                    tch_result(t.f_contiguous())?
-                };
-                let device = ThoDevice::try_from(t.device())?;
-                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying local tensor device={device:?}");
-                Ok(track_await!(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
-            }
-            ThoTensorInner::Ref { key, size, kind, selector } => {
-                let device = ThoDevice::from(key.worker_id.device_idx);
-                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?}");
-                let actor = GlobalCtx::global().cuda_actor(device);
-                let copied = track_await!(actor.copy(ThoTensor::new_ref((), key.key, size, kind, selector, key.worker_id), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
-                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key:?} device={device:?} copied={copied:?}");
-
-                Ok(copied)
-            }
+        // Residency transfer handles both storage modes without rebuilding remote ownership.
+        debug!("DistsMask::copy_tensor_to_cpu: label={label} device={:?}", tensor.tho_device());
+        if tensor.tho_device_idx() == 0 {
+            tensor.into_local()
+        } else {
+            tensor.copy_to_device(0).await?.into_local()
         }
     }
 

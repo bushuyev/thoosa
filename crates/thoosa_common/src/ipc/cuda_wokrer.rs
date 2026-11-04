@@ -866,6 +866,8 @@ where
     Id: Clone + Debug + Named,
 {
 
+    // Materialization produces local storage, whose kernels acquire the same
+    // LocalTensorLease as in-process execution. No proxy can expose a raw Tensor.
     fn ref_to_tensor_(all_cuda_tensors: &AllTensors, input_ref: &ThoTensor<D, Id>, remove: bool) -> Result<ThoTensor<D, Id>, ThoError> {//TODO make input_ref &self
         input_ref.ref_worker_id().ok_or_else(|| ThoError::new("worker input must be a tensor reference"))?.check(all_cuda_tensors.worker_id)?;
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
@@ -936,7 +938,7 @@ where
 {
     pub fn worker_tensor_to_ref(self, all_cuda_tensors: &AllTensors, _tho_device: &ThoDevice) -> Result<ThoTensor<D, Id>, ThoError> {
         let out_id = self.id().clone();
-        let out_tensor = self.t();
+        let out_tensor = self.into_local()?;
         let size = out_tensor.size();
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
@@ -1315,12 +1317,12 @@ mod generation_tests {
     use thoosa_shared::CudaDeviceGeneration;
 
     #[test]
-    fn test_reused_tensor_key_rejects_old_generation_and_other_device() {
+    fn test_reused_tensor_key_rejects_old_generation_and_other_device() -> Result<(), ThoError> {
         let installed = crate::runner::global_ctx::MockGlobalCtx::is_installed_context();
         installed.expect().return_const(false);
         let current = CudaWorkerId { device_idx: 2, generation: CudaDeviceGeneration(3) };
         let tensors = AllTensors::new(current);
-        tensors.tensors.lock().insert(42, Tensor::f_from_slice(&[7f32]).unwrap());
+        tensors.tensors.lock().insert(42, tch_result(Tensor::f_from_slice(&[7f32]))?);
         for worker_id in [
             CudaWorkerId { generation: CudaDeviceGeneration(2), ..current },
             CudaWorkerId { device_idx: 1, ..current },
@@ -1332,8 +1334,9 @@ mod generation_tests {
             }
         }
         let valid: ThoTensor = ThoTensor::new_ref((), 42, vec![1], tch::Kind::Float, None, current);
-        assert_eq!(valid.ref_to_tensor(&tensors, false).unwrap().t_ref().double_value(&[0]), 7.);
-        valid.ref_to_tensor(&tensors, true).unwrap();
+        assert_eq!(tch_result(valid.ref_to_tensor(&tensors, false)?.local()?.f_double_value(&[0]))?, 7.);
+        valid.ref_to_tensor(&tensors, true)?;
         assert!(!tensors.tensors.lock().contains_key(&42));
+        Ok(())
     }
 }

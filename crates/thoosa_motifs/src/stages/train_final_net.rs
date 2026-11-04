@@ -439,15 +439,15 @@ where
         if input.outputs.is_empty() {
             return Err(ThoError::new("SyncLogitsBatch: empty outputs"));
         }
-        let x_values = tch_result(input.outputs.iter()
-            .map(|output| output.as_ref().t_ref().f_flatten(0, 1))
-            .collect::<Result<Vec<_>, _>>())?;
+        let x_values = input.outputs.iter()
+            .map(|output| tch_result(output.as_ref().local()?.f_flatten(0, 1)))
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
         let x = tch_result(tch_result(Tensor::f_stack(x_values.as_slice(), 0))?.f_squeeze_dim(-1))?;
 
         debug!("SyncLogitsBatch::do_run: x={x:?}");
 
-        let device = input.outputs[0].as_ref().t_ref().device();
+        let device = input.outputs[0].as_ref().local()?.device();
 
         let y_values = input.labels.iter().map(|labels| {
             if labels.len() != input.labels_len {
@@ -539,7 +539,7 @@ where
                             let val = BorrowRef::borrow_ref(&label_probability, tho_device_idx).await?;
                             debug!("LogitsResourcesBatch::build_batch_stream: out={val:?} \nlabels={labels:?}");
                             if log_enabled!(Trace) && !GlobalCtx::global().is_ipc() {
-                                trace!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.t_ref());
+                                trace!("LogitsResourcesBatch::build_batch_stream: out=\n{} \nlabels={labels:?}", val.as_ref());
                             }
 
                         }
@@ -856,7 +856,7 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, 1000)
-                .with_load_motif_net(vec![
+                .with_try_load_motif_net(vec![
                     (motif_net_0_path.clone(), motif_0_params, motif_0_net),
                     (motif_net_1_path.clone(), motif_1_params, motif_1_net),
                 ])

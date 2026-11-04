@@ -87,7 +87,7 @@ where
             BuildAs::Append => {
                 debug!("SingleDimTensorOutputBuilder::add_partial_output, BuildAs::Append: self.dim={} self.output.size={:?} self.added_partial_output_len={:?} self.output.size={:?} partial_size={partial_size:?}",self.dim,  self.output.size(),  self.added_partial_output_len, self.output.size());
 
-                let mut t = self.output.to_mut();
+                let mut t = self.output.local_mut()?;
 
                 t.copy_partial_from_(self.dim, self.added_partial_output_len, partial_len, &partial)?;
             }
@@ -96,9 +96,9 @@ where
                 if self.output.tho_device_idx() != partial.tho_device_idx() {
                     // Addition requires both operands on the destination device, including GPU outputs.
                     let partial = partial.copy_to_device(self.output.tho_device_idx()).await?;
-                    self.output.to_mut().add_(&partial)?;
+                    self.output.local_mut()?.add_(&partial)?;
                 } else {
-                    let mut t = self.output.to_mut();
+                    let mut t = self.output.local_mut()?;
                     t.add_(&partial)?;
                 }
     
@@ -150,8 +150,8 @@ mod tests {
                 builder.add_partial_output(ThoTensor::new(debug_id!("partial"), tensor)?).await?;
             }
             let output = builder.build().await?;
-            assert_eq!(output.t_ref().device(), destination);
-            let cpu = tch_result(output.t_ref().f_to_device(Cpu))?;
+            assert_eq!(output.local()?.device(), destination);
+            let cpu = tch_result(output.local()?.f_to_device(Cpu))?;
             assert!(tch_result(cpu.f_equal(&tch_result(Tensor::f_from_slice(&[2f32, 2., 2.]))?))?);
         }
         Ok(())
@@ -172,7 +172,7 @@ mod tests {
             builder.add_partial_output(valid).await?;
             assert_eq!(builder.added_partial_output_len, 2);
             let output = builder.build().await?;
-            assert!(tch_result(output.t_ref().f_equal(&tch_result(Tensor::f_ones([2, 2], FLOAT_CPU))?))?);
+            assert!(tch_result(output.local()?.f_equal(&tch_result(Tensor::f_ones([2, 2], FLOAT_CPU))?))?);
         }
         Ok(())
     }
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(builder.added_partial_output_len, 2);
         builder.add_partial_output(ThoTensor::new(debug_id!("last"), tch_result(Tensor::f_from_slice(&[3.]))?)?).await?;
         let output = builder.build().await?;
-        assert!(tch_result(output.t_ref().f_equal(&tch_result(Tensor::f_from_slice(&[1., 2., 3.]))?))?);
+        assert!(tch_result(output.local()?.f_equal(&tch_result(Tensor::f_from_slice(&[1., 2., 3.]))?))?);
         Ok(())
     }
 
@@ -206,9 +206,9 @@ mod tests {
 
         let out = builder.build().await?;
 
-        debug!("out=\n{}", out.t_ref());
+        debug!("out=\n{}", out);
 
-        assert!(out.t_ref().allclose(
+        assert!(out.local()?.allclose(
             &Tensor::from_slice(&[0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]).totype(Float),
             0.01,
             0.01,
@@ -230,9 +230,9 @@ mod tests {
 
         let out = builder.build().await?;
 
-        debug!("out=\n{}", out.t_ref());
+        debug!("out=\n{}", out);
 
-        assert!(out.t_ref().allclose(
+        assert!(out.local()?.allclose(
             &Tensor::from_slice(&[9., 12., 15.]).totype(Float),
             0.01,
             0.01,

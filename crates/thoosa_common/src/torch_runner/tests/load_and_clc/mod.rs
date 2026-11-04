@@ -255,7 +255,7 @@ async fn do_test_loaded(
 
     let tensor_data_0_0=BorrowRef::borrow_ref(&loaded_tensor_0_0, load_to_device).await?;
 
-    debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
+    debug!("tensor_data={}", (*tensor_data_0_0));
 
     assert!(
         Tensor::from_slice(&[
@@ -265,7 +265,7 @@ async fn do_test_loaded(
             .totype(Float)
             .to_device(Device::Cuda(0))
             .view((10, 3))
-            .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
+            .allclose(&*(*tensor_data_0_0).local()?, 0.01, 0.01, false)
     );
 
 
@@ -281,7 +281,7 @@ async fn do_test_loaded(
 
     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
-    assert!(tch_result(tensor_data_0_0.t_ref().f_equal(&tensor_data_0_1.as_ref().t_ref()))?);
+    assert!(tch_result(tensor_data_0_0.local()?.f_equal(&*tensor_data_0_1.as_ref().local()?))?);
 
     // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
 
@@ -362,17 +362,21 @@ pub fn mul_check_with_exp_f<F>(
 ) where
     F: Fn(f64, &Tensor) -> Result<Tensor, ThoError>,
 {
+    let checked = (|| -> Result<(), ThoError> {
     let self_k = parse_numeric_part(res).unwrap_or(1.0);
 
-    let expected = exp_f(self_k * mul_k, &result.t_ref()).unwrap();
+    let expected = exp_f(self_k * mul_k, &*result.local()?)?;
 
     debug!("mul_check: res={res}  result_t.size()={:?} \n\n",result.size());
 
-    let ok = expected.allclose(&result.t_ref(), rtol, atol, false);
+    let ok = expected.allclose(&*result.local()?, rtol, atol, false);
     // if !ok {
-    debug!("mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n",result.t_ref());
+    debug!("mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n",result);
     // }
     assert!(ok);
+        Ok(())
+    })();
+    assert!(checked.is_ok(), "tensor comparison failed: {checked:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]

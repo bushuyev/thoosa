@@ -84,7 +84,7 @@ pub(crate) async fn run_model_test_pipeline(
 
     let acc_t = BorrowRef::borrow_ref(&acc, check_device_idx).await?;
 
-    let v = ClsOut::accuracy(acc_t.as_ref());
+    let v = ClsOut::accuracy(acc_t.as_ref())?;
     assert!(v >= min_accuracy, "training accuracy too low: {v}");
 
 

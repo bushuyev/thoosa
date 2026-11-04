@@ -1133,6 +1133,7 @@ impl MockGlobalCtx {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_shared::CopyToDevice;
     use crate::tch_error::tch_result;
     use crate as thoosa_common;
     use crate::dims::AnyDims;
@@ -1429,7 +1430,7 @@ mod tests {
         for (index, output) in outputs.iter().enumerate() {
             assert!(!output.is_on_device(1));
             let cpu = output.load_from_any_device_(0).await?;
-            assert_eq!(tch_result(cpu.t_ref().f_double_value(&[0]))?, index as f64);
+            assert_eq!(tch_result(cpu.local()?.f_double_value(&[0]))?, index as f64);
         }
         runtime.remove_cache(named_handle.key());
         // A pass-through stage can cache the same wrapper under another owner.
@@ -1519,8 +1520,8 @@ mod tests {
 
         let sum_0 = {
             let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
-            let t_0_cpu = cuda_actor.copy(t_0.shallow_clone::<AnyDims>().strip_types(), 0.into()).await?;
-            Ok::<_, ThoError>(t_0_cpu.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+            let t_0_cpu = t_0.copy_to_device(0).await?;
+            Ok::<_, ThoError>(t_0_cpu.local()?.sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
         debug!("test_device_reset: sum_0={sum_0}");
 
@@ -1535,8 +1536,8 @@ mod tests {
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = {
             let t_0 = t_0.select_ref(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
-            let t_0_cpu = cuda_actor.copy(t_0.shallow_clone::<AnyDims>().strip_types(), 0.into()).await?;
-            Ok::<_, ThoError>(t_0_cpu.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+            let t_0_cpu = t_0.copy_to_device(0).await?;
+            Ok::<_, ThoError>(t_0_cpu.local()?.sum_dim_intlist(0, false, None).double_value(&[]))
         }?;
 
         debug!("test_device_reset: sum_1={sum_1}");
