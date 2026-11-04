@@ -240,7 +240,7 @@ impl ThoCosineConv2d {
                 }
 
                 Some(patches) => {
-                    let patches = patches.tensor_ref();
+                    let patches = patches.local()?;
                     let patches = Self::ensure_patches_4d(&patches)?; // [N,1,KH,KW]
                     let psz = patches.size();
 
@@ -420,7 +420,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for ThoCosineConv2d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, DebugId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> anyhow::Result<ThoTensor<DO, DebugId>> {
         debug!("MyCosineConv2d::tho_forward: x_in={x_in:?}");
 
-        let y = self.forward_anywhere(&x_in.as_ref())?; // [B,1,1,1] if full match
+        let y = self.forward_anywhere(&*x_in.local()?)?; // [B,1,1,1] if full match
         debug!("MyCosineConv2d::tho_forward: y={y:?}");
 
         Ok(y.into()) //.f_squeeze_dim(3)?.f_squeeze_dim(2)?.into())

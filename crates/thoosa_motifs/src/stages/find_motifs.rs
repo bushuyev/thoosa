@@ -292,7 +292,7 @@ where
                     ]
                 }
                 MasksCtx::PrecalculatedDist { dists } => {
-                    precalculated = dists.t_ref();
+                    precalculated = dists.local()?;
                     vec![
                         LocalMin { dim: 1, radius },
                         Le {
@@ -440,8 +440,8 @@ where
 
                                     let metric_val = motif_stats_output.channels_motifs_dists(&comparison_metric)?;
                                     let metric_val_id = metric_val.id().clone();
-                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
-                                    FindMotifsMasksCtxInit::Precalculated { dists_id: metric_val_id, dists: tensor_to_ipc_bytes(&tch_result(metric_val.t().f_view((-1, 1, 1)))?)? }
+                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val);
+                                    FindMotifsMasksCtxInit::Precalculated { dists_id: metric_val_id, dists: tensor_to_ipc_bytes(&tch_result(metric_val.into_local()?.f_view((-1, 1, 1)))?)? }
                                 }
                                 SlicesFilter::ExactS(v) => {
                                     FindMotifsMasksCtxInit::ExactS { euc_dist: v.euc_dist, channels }

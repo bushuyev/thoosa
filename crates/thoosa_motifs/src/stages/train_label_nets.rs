@@ -346,8 +346,8 @@ where
 
         // Borrow one handle at a time: collecting guards could lock shared inputs in opposite orders.
         // These aliases stay in this synchronous call and are copied into the padded batches.
-        let x_1_tensors = tch_result(x_1.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>())?;
-        let x_0_tensors = tch_result(x_0.iter().map(|value| value.data().t_ref().f_alias()).collect::<Result<Vec<_>, _>>())?;
+        let x_1_tensors = x_1.iter().map(|value| tch_result(value.data().local()?.f_alias())).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_0_tensors = x_0.iter().map(|value| tch_result(value.data().local()?.f_alias())).collect::<Result<Vec<_>, ThoError>>()?;
         let x_1_refs = x_1_tensors.iter().collect::<Vec<_>>();
         let x_0_refs = x_0_tensors.iter().collect::<Vec<_>>();
 
@@ -1466,8 +1466,8 @@ mod tests {
                     let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
                     {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
-                        let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
-                        let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
+                        let x_1 = tch_result(Tensor::f_stack(&x_1.into_iter().map(|v| tch_result(v.local()?.f_detach_copy())).collect::<Result<Vec<_>, ThoError>>()?, 0))?;
+                        let x_0 = tch_result(Tensor::f_stack(&x_0.into_iter().map(|v| tch_result(v.local()?.f_detach_copy())).collect::<Result<Vec<_>, ThoError>>()?, 0))?;
 
                         let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
@@ -1539,8 +1539,8 @@ mod tests {
                     let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
                     {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
-                        let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
-                        let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
+                        let x_1 = tch_result(Tensor::f_stack(&x_1.into_iter().map(|v| tch_result(v.local()?.f_detach_copy())).collect::<Result<Vec<_>, ThoError>>()?, 0))?;
+                        let x_0 = tch_result(Tensor::f_stack(&x_0.into_iter().map(|v| tch_result(v.local()?.f_detach_copy())).collect::<Result<Vec<_>, ThoError>>()?, 0))?;
 
                         let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 

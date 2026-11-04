@@ -711,12 +711,12 @@ async fn clone_owned_adam_like_snapshot_to(src: AdamOptimizerSnapshot, tho_devic
                     let AdamParamStateSnapshot { step, exp_avg, exp_avg_sq, max_exp_avg_sq } = src_state;
                     dst_states.push(Some(AdamParamStateSnapshot{
                         step,
-                        exp_avg: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg.into(), tho_device.into()).await?.into(),
-                        exp_avg_sq: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg_sq.into(), tho_device.into()).await?.into(),
+                        exp_avg: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg.into(), tho_device.into()).await?.into_local()?,
+                        exp_avg_sq: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg_sq.into(), tho_device.into()).await?.into_local()?,
                         max_exp_avg_sq: match max_exp_avg_sq {
                             None => None,
                             Some(v) => {
-                                Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.into(), tho_device.into()).await?.into())
+                                Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.into(), tho_device.into()).await?.into_local()?)
                             }
                         },
                     }))
@@ -749,7 +749,7 @@ async fn clone_owned_sgd_snapshot_to(src: SgdOptimizerSnapshot, tho_device: ThoD
             dst_states.push(match state {
                 None => None,
                 Some(src_state) => Some(SgdParamStateSnapshot {
-                    momentum_buffer: GlobalCtx::global().cuda_actor(actor_device_idx).copy(src_state.momentum_buffer.into(), tho_device.into()).await?.into(),
+                    momentum_buffer: GlobalCtx::global().cuda_actor(actor_device_idx).copy(src_state.momentum_buffer.into(), tho_device.into()).await?.into_local()?,
                 }),
             });
         }
@@ -896,7 +896,7 @@ pub async fn clone_var_store_to(
         let dst_tensor = add_named_tensor(
             &dst,
             &spec.name,
-            copied.into(),
+            copied.into_local()?,
             trainable,
             group,
         );
@@ -1076,7 +1076,7 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
                  */
                 let batch_images: ThoTensor<Batch<AnyDims>, _> = batch_images.into();
                 let logits = tho_train_mod.module().tho_forward(&batch_images, None, true)?;
-                let loss = logits.as_ref().f_cross_entropy_loss::<&Tensor>(&batch_labels, None, tch::Reduction::Mean, -100, 0.0)?;
+                let loss = logits.local()?.f_cross_entropy_loss::<&Tensor>(&batch_labels, None, tch::Reduction::Mean, -100, 0.0)?;
 
                 tho_train_mod.opt().backward_step(&loss);
 
@@ -1085,11 +1085,11 @@ async fn do_test_reset_optimizer(opt_config: ThoOptimizers, optimizer_name: &'st
 
             let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.shallow_clone().into();
             let train_logits = tho_train_mod.module().tho_forward(&train_images, None, false)?;
-            let train_loss = train_logits.as_ref().f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
+            let train_loss = train_logits.local()?.f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
 
             let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.shallow_clone().into();
             let test_logits = tho_train_mod.module().tho_forward(&test_images, None, false)?;
-            let test_accuracy = test_logits.as_ref().f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
+            let test_accuracy = test_logits.local()?.f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
 
             losses.push(train_loss);
 

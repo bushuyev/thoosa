@@ -223,7 +223,10 @@ impl CudaLocalActor {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
                     // Move the allocation into the low-level transfer; retaining it
                     // only in this async task is insufficient during shutdown.
-                    let result = copy_ctx.read().await.copy(src.t(), dst_device.tho_device_idx()).await;
+                    let result = match src.into_local() {
+                        Ok(src) => copy_ctx.read().await.copy(src, dst_device.tho_device_idx()).await,
+                        Err(error) => Err(error),
+                    };
 
                     let result = report_cuda_copy_result(result, &gate, generation);
                     let _ = respond_to.send(result);

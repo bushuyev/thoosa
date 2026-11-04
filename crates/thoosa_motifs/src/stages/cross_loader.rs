@@ -1526,10 +1526,10 @@ mod tests {
 
         assert_eq!(data.tensors().len(), 4);
 
-        assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t_ref().to_device(Cpu), 0.02, 0.02, false));
-        assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].t_ref().to_device(Cpu), 0.02, 0.02, false));
-        assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].t_ref().to_device(Cpu), 0.02, 0.02, false));
-        assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t_ref().to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].local()?.to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].local()?.to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].local()?.to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].local()?.to_device(Cpu), 0.02, 0.02, false));
 
         debug!("data={data:?}");
 
@@ -1584,7 +1584,7 @@ mod tests {
         let _run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
 
-        assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
+        assert_eq!(data.tensors()[1].size()[1], 4);
 
 
         let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
@@ -1598,7 +1598,7 @@ mod tests {
 
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
 
-        assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
+        assert_eq!(data.tensors()[1].size()[1], 4);
 
 
         Ok(())
@@ -1641,7 +1641,7 @@ mod tests {
             ca.clone(),
         );
 
-        let batch_1_lengths = batch_1_tensors.iter().map(|t| t.size()[1]).collect::<Vec<_>>();
+        let batch_1_lengths = batch_1_tensors.iter().map(|t| t.as_ref().size()[1]).collect::<Vec<_>>();
         let mut context = CrossSplitterContext::<AdjusterStage, TestBatchOutput>::new(2, batch_1_lengths);
         let cross_loader_adjuster = CrossLoaderAdjuster::new();
         let mut selector = CrossInputSelector::default();
@@ -1659,7 +1659,7 @@ mod tests {
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-        assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
+        assert_eq!(data.tensors()[1].size()[1], 3);
 
         let dummy_output_0 = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_0).await?;
@@ -1673,7 +1673,7 @@ mod tests {
         let data = SelectRef::select_ref(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-        assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
+        assert_eq!(data.tensors()[1].size()[1], 3);
 
 
         let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
@@ -1688,7 +1688,7 @@ mod tests {
         let data = SelectRef::select_ref(&input, 1, Some(selector)).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
-        assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
+        assert_eq!(data.tensors()[1].size()[1], 3);
 
 
         Ok(())
@@ -2233,7 +2233,7 @@ mod tests {
                     let tensor_lens = input
                         .tensors()
                         .iter()
-                        .map(|t| t.t_ref().size()[1])
+                        .map(|t| ThoTensor::size(*t)[1])
                         .collect::<Vec<_>>();
                     let batch_1_len = *tensor_lens.last().unwrap_or(&0);
                     if batch_1_len > max_len {

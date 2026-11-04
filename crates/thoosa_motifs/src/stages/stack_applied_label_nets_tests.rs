@@ -39,7 +39,7 @@ async fn run_request(stage: Arc<DynSyncStageEnum<StackAppliedLabelNets<RunCtxImp
     let output = handler.consume(&stage, input, RunCtxImpl::new(1, "reusable label stack"), NoContexts).await?.into_inner();
     assert_eq!(output.id(), &expected_id);
     let output = output.copy_to_device(0).await?;
-    let actual = tch_result(Vec::<f32>::try_from(&tch_result(output.t_ref().f_view([-1]))?))?;
+    let actual = tch_result(Vec::<f32>::try_from(&tch_result(output.local()?.f_view([-1]))?))?;
     let expected = models.iter().map(|model| resource as f32 * 10. + *model as f32).collect::<Vec<_>>();
     assert_eq!(actual, expected, "resource-specific membership and order must survive IPC and retries");
     Ok(())

@@ -895,8 +895,8 @@ mod tests {
             panic!("no result");
         };
 
-        assert_eq!(rr.t_ref().size()[0], size[0]);
-        assert_eq!(rr.t_ref().size()[1] as u32, adjuster(size[1] as u32));
+        assert_eq!(rr.size()[0], size[0]);
+        assert_eq!(rr.size()[1] as u32, adjuster(size[1] as u32));
 
 
         Ok(())

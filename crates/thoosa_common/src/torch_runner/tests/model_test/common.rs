@@ -237,7 +237,7 @@ impl Dims for ClsOut {
 }
 
 impl ClsOut {
-    pub fn accuracy(t: &ThoTensor<ClsOut, ModelTestId>) -> f64 {
-        t.double_value(&[0])
+    pub fn accuracy(t: &ThoTensor<ClsOut, ModelTestId>) -> Result<f64, ThoError> {
+        thoosa_common::tch_error::tch_result(t.local()?.f_double_value(&[0]))
     }
 }

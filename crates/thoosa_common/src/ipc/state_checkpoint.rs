@@ -21,14 +21,13 @@ impl CpuStateCheckpoint {
 
     fn from_dump(mut dump: StageStateDump) -> Result<Self, ThoError> {
         let tensors = dump.tensors.iter().map(|(key, tensor)| {
-            let tensor = tensor.as_ref();
             WorkerTensorInfoPayload::new(TensorKey::stage_state("", "", key), tensor.kind().into(), tensor.size(), tensor_mem_size(tensor.kind(), &tensor.size()))
         }).collect();
         Self::new(StageStateInfo::new(tensors, dump.scalars.take()), dump.tensors)
     }
 
     fn restore_dump(&self) -> Result<StageStateDump, ThoError> {
-        let tensors = self.tensors.iter().map(|(key, tensor)| Ok((key.clone(), ThoTensor::new((), tch_result(tensor.as_ref().f_alias())?)?))).collect::<Result<_, ThoError>>()?;
+        let tensors = self.tensors.iter().map(|(key, tensor)| Ok((key.clone(), ThoTensor::new((), tch_result(tensor.local()?.f_alias())?)?))).collect::<Result<_, ThoError>>()?;
         // Deferred/offloaded checkpoints must retain optimizer and VarStore metadata.
         Ok(StageStateDump::new(self.info()?.scalars, tensors))
     }
@@ -53,7 +52,7 @@ pub(crate) async fn copy_state_tensor(tensor: Tensor, device: usize) -> Result<T
         return Ok(tch_result(tensor.f_to_device_(tensor.device(), tensor.kind(), false, true))?);
     }
     let actor = GlobalCtx::global().cuda_actor(source.max(device));
-    Ok(actor.copy(ThoTensor::new((), tensor)?, device.into()).await?.into())
+    Ok(actor.copy(ThoTensor::new((), tensor)?, device.into()).await?.into_local()?)
 }
 
 impl<St> ProxyStage<St>
@@ -72,7 +71,7 @@ where
                 // Snapshot CPU-offloaded state directly; saving must not allocate GPU memory.
                 let scalars = serde_json::from_slice(&serde_json::to_vec(&state.scalars)?)?;
                 let tensors = state.tensors.iter().map(|(key, tensor)| {
-                    let source = tensor.as_ref();
+                    let source = tensor.local()?;
                     Ok((key.clone(), ThoTensor::new((), tch_result(source.f_to_device_(tch::Device::Cpu, source.kind(), false, true))?)?))
                 }).collect::<Result<_, ThoError>>()?;
                 return CpuStateCheckpoint::from_dump(StageStateDump::new(scalars, tensors));

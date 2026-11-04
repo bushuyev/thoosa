@@ -44,7 +44,7 @@ impl StateTensors {
         let slot = self.0.get(key).ok_or_else(|| ThoError::NotFound(Some(key.to_owned())))?;
         let tensor = slot.tensor.as_ref().ok_or_else(|| ThoError::new("model state is offloaded or incompletely restored"))?;
         // The transfer request owns this alias until the device copy completes.
-        Ok(tch_result(tensor.as_ref().f_alias())?)
+        Ok(tch_result(tensor.local()?.f_alias())?)
     }
 
     pub(crate) fn set(&mut self, key: &str, tensor: Tensor, device: usize) -> Result<(), ThoError> {

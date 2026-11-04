@@ -110,11 +110,11 @@ async fn round_trips() -> Result<(), ThoError> {
         }
         let label_output = GlobalCtx::global().execution(1).run_stage(label.clone(), ApplyLabelNetInputWrapper::new(label_input), 1, &ctx).await?.copy_to_device(0).await?;
         if let (Some(expected_motif), Some(expected_label)) = (&expected_motif, &expected_label) {
-            assert!(tch_result(motif_output.t_ref().f_allclose(expected_motif, 1e-6, 1e-6, false))?, "motif output changed after restore {cycle}");
-            assert!(tch_result(label_output.t_ref().f_allclose(expected_label, 1e-6, 1e-6, false))?, "label output changed after restore {cycle}");
+            assert!(tch_result(motif_output.local()?.f_allclose(expected_motif, 1e-6, 1e-6, false))?, "motif output changed after restore {cycle}");
+            assert!(tch_result(label_output.local()?.f_allclose(expected_label, 1e-6, 1e-6, false))?, "label output changed after restore {cycle}");
         } else {
-            expected_motif = Some(motif_output.t());
-            expected_label = Some(label_output.t());
+            expected_motif = Some(motif_output.into_local()?);
+            expected_label = Some(label_output.into_local()?);
         }
         motif.purge_gpu(None, 2, "wrong device").await?;
         label.purge_gpu(None, 2, "wrong device").await?;

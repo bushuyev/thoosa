@@ -147,7 +147,7 @@ fn train_motif_step_endpoint_init<'a>(_stage_id:Option<String>, init: Box<dyn Wo
             MotifNetTypeParams::CosineNet2DParams(_) => {
                 let stft_config = init.stft_config.clone().ok_or_else(|| ThoError::new("TrainMotifStepIpcInit missing STFT config for Cosine2DNet"))?;
                 let stft = SyncStft::<RunCtxImpl, MotifSlices, MotifSlices>::new(SynKey::new([mono_key!("TrainMotifStepIpc", "stft")]), stft_config)?;
-                let motif_specs = stft.build_spectrogram(&motif.t_ref())?;
+                let motif_specs = stft.build_spectrogram(&*motif.local()?)?;
                 let mut copied = tch_result(motif_specs.f_zeros_like())?;
                 tch_result(copied.f_copy_(&motif_specs))?;
                 Some(Arc::new(ThoTensor::new(motif.id().clone(), copied)?))
@@ -221,14 +221,7 @@ where
         if GlobalCtx::global().is_ipc() {
             let motif = track_await!(motif.select_ref(ctx.tho_device_idx(), None::<SyncStftSelector>)).await?;
             let motif = motif.as_ref().data();
-            let motif = ThoTensor::new_ref(
-                motif.id().clone(),
-                motif.ref_key().ok_or_else(|| ThoError::new(format!("TrainMotifStepFactory expected motif worker reference, got {motif:?}")))?,
-                motif.size(),
-                motif.kind(),
-                motif.selector(),
-                motif.ref_worker_id().expect("motif tensor reference identity"),
-            );
+            let motif = motif.clone_ref()?;
 
             let init = TrainMotifStepIpcInit { params: node_params.clone(), motif, run_config, stft_config, tho_device_idx: ctx.tho_device_idx(), vs_path };
             let input_cloner = Arc::new(|input: &TrainStepInput<Slice, MotifProbability>| -> Result<Box<dyn WorkerInput>, ThoError> { Ok(Box::new(TrainMotifStepInput(input.clone_refs_for_worker()?))) });
@@ -251,7 +244,7 @@ where
                     }?;
                     let motif_specs = track_await!(run_stft_as_motif_slices(&stft, motif_input, ctx.branch(false), "train_motif_nets_motif_stft")).await?;
                     let motif_id = motif_specs.id().clone();
-                    let cosine_motif = motif_specs.as_ref();
+                    let cosine_motif = motif_specs.local()?;
                     let mut copied = tch_result(cosine_motif.f_zeros_like())?;
                     tch_result(copied.f_copy_(&cosine_motif))?;
                     Some(Arc::new(ThoTensor::new(motif_id, copied)?))
@@ -409,8 +402,8 @@ impl TrainMotifNetInput {
 }
 
 fn copy_motif(input: &ThoTensor<MotifSlices, SynKey>) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
-    let mut copied = tch_result(input.t_ref().f_zeros_like())?;
-    tch_result(copied.f_copy_(&input.t_ref()))?;
+    let mut copied = tch_result(input.local()?.f_zeros_like())?;
+    tch_result(copied.f_copy_(&*input.local()?))?;
     ThoTensor::new(input.id().clone(), copied)
 }
 
@@ -433,7 +426,7 @@ where
     let specs = Arc::into_inner(specs)
         .ok_or_else(|| ThoError::new("run_stft_as_motif_slices: stft output should not be shared"))?
         .take_data(device_idx)?;
-    ThoTensor::new(out_id, specs.t())
+    ThoTensor::new(out_id, specs.into_local()?)
 }
 
 impl <L, C> Stage for TrainMotifNets<L, C>
@@ -987,8 +980,8 @@ where
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("SyncMotifBatch::do_run: descr={} num_slices={}", input.descr, input.num_slices);
 
-        let motifs = tch_result(make_batch_with(&input.motifs.t_ref(), input.num_slices, None))?;
-        let random = tch_result(make_batch_with(&input.random_slices.t_ref(), input.num_slices, None))?;
+        let motifs = tch_result(make_batch_with(&*input.motifs.local()?, input.num_slices, None))?;
+        let random = tch_result(make_batch_with(&*input.random_slices.local()?, input.num_slices, None))?;
 
         #[cfg(tho_debug_plots)]
         plot_spectrogram(&motifs.i((0, .., ..)), format!("/tmp/plots/spectrogram_motif_{}.png", input.id), 1200, 600)?;
@@ -1249,7 +1242,7 @@ where
         let split = num_motif_slices - num_validation_slices;
         debug!("SplitMotifIntoTrainValid::do_run: id={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", input.id);
 
-        let motifs_t = motif.t_ref();
+        let motifs_t = motif.local()?;
         debug_plot!(&motifs_t, "motifs_t{}", input.id)?;
         let train_motifs = tch_result(motifs_t.f_narrow(0, 0, split))?;
         let valid_motifs = tch_result(motifs_t.f_narrow(0, split, num_validation_slices))?;
@@ -1665,9 +1658,9 @@ mod tests {
 
             let output = net.tho_forward(&input, None, false)?;
 
-            debug!("test_train_motif_nets: output.t=\n{}", output.t_ref().view((1,-1)));
+            debug!("test_train_motif_nets: output.t=\n{}", output.local()?.view((1,-1)));
 
-            debug_plot!(&output.t_ref().view((1,-1)), "applied 0")?;
+            debug_plot!(&output.local()?.view((1,-1)), "applied 0")?;
 
             Ok(())
         }
