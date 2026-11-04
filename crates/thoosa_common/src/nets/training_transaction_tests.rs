@@ -40,7 +40,7 @@ fn variable(module: &ThoTrainModule<AnyDims, AnyDims>, name: &str) -> Result<Ten
 fn accumulate(module: &mut ThoTrainModule<AnyDims, AnyDims>) -> Result<(), ThoError> {
     let input = ThoTensor::new(thoosa_shared::debug_id!("training phases"), tch_result(Tensor::f_ones([2, 1], (Kind::Float, Cpu)))?)?;
     let output = module.module().tho_forward(&input, None, true)?;
-    tch_result(tch_result(tch_result(output.as_ref().f_square())?.f_mean(Kind::Float))?.f_backward())?;
+    tch_result(tch_result(tch_result(output.local()?.f_square())?.f_mean(Kind::Float))?.f_backward())?;
     let _ = tch_result(variable(module, "running_stat")?.f_fill_(42.0))?;
     Ok(())
 }

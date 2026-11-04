@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Kind;
 use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use crate::tho_tensor::ThoTensor;
 
 
 
@@ -145,23 +145,16 @@ where
         S: Serializer
     {
         debug!("Serialize for ThoTensor::serialize: self={self:?}");
-        match &self.inner {
-            ThoTensorInner::Ref { key, size, kind, selector } => {
-
-                // Postcard encodes struct fields positionally, so every field, including a None selector, must keep its slot.
-                let mut state = serializer.serialize_struct("ThoTensor", 6)?;
-
-                state.serialize_field("id", &self.id)?;
-                state.serialize_field("ref_key", &key.key)?;
-                state.serialize_field("size", size)?;
-
-                state.serialize_field("kind", kind_to_str(kind).map_err(S::Error::custom)?)?;
-                state.serialize_field("selector", selector)?;
-                state.serialize_field("worker_id", &key.worker_id)?;
-                state.end()
-            }
-            ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
-        }
+        let remote = self.remote_ref().ok_or_else(|| S::Error::custom("only out-of-process ThoTensor refs can be serialized"))?;
+        // Postcard encodes fields positionally; retain every slot in the wire format.
+        let mut state = serializer.serialize_struct("ThoTensor", 6)?;
+        state.serialize_field("id", self.id())?;
+        state.serialize_field("ref_key", &remote.key)?;
+        state.serialize_field("size", remote.size)?;
+        state.serialize_field("kind", kind_to_str(&remote.kind).map_err(S::Error::custom)?)?;
+        state.serialize_field("selector", remote.selector)?;
+        state.serialize_field("worker_id", &remote.worker_id)?;
+        state.end()
     }
 }
 
@@ -178,7 +171,7 @@ mod tests {
     use crate::dims::AnyDims;
     use crate::ipc::worker_msg::{CudaWorkerMsgIn, Operation, WorkerInput};
     use crate::runner::global_ctx::MockGlobalCtx;
-    use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+    use crate::tho_tensor::ThoTensor;
 
     #[test]
     fn test_postcard_tho_tensor_ref_test(){
@@ -194,30 +187,26 @@ mod tests {
 
         debug!("cuda_tensor={cuda_tensor:?}");
 
-        let ThoTensorInner::Ref { key, size, kind, selector: _selector } = cuda_tensor.inner else {
-            panic!("should be ref");
-        };
+        let remote = cuda_tensor.remote_ref().expect("wire tensor must be remote");
 
-        assert_eq!(key.key, 10);
-        assert_eq!(kind, Kind::Float);
-        assert_eq!(size, vec![3,10]);
-        assert_eq!(key.worker_id.device_idx, 2);
-        assert_eq!(key.worker_id.generation, thoosa_shared::CudaDeviceGeneration(7));
+        assert_eq!(remote.key, 10);
+        assert_eq!(remote.kind, Kind::Float);
+        assert_eq!(remote.size, vec![3,10]);
+        assert_eq!(remote.worker_id.device_idx, 2);
+        assert_eq!(remote.worker_id.generation, thoosa_shared::CudaDeviceGeneration(7));
 
         let cuda_tensor_bytes = postcard::to_allocvec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> =  postcard::from_bytes::<ThoTensor<AnyDims, SynKey>>(&cuda_tensor_bytes).unwrap();
         // let cuda_tensor:ThoTensor<AnyDims, ()> =  postcard::from_bytes::<ThoTensor<AnyDims, ()>>(&cuda_tensor_bytes).unwrap();
 
 
-        let ThoTensorInner::Ref { key, size, kind, selector: _selector } = cuda_tensor.inner else {
-            panic!("should be ref");
-        };
+        let remote = cuda_tensor.remote_ref().expect("wire tensor must be remote");
 
-        assert_eq!(key.key, 10);
-        assert_eq!(kind, Kind::Float);
-        assert_eq!(size, vec![3,10]);
-        assert_eq!(key.worker_id.device_idx, 2);
-        assert_eq!(key.worker_id.generation, thoosa_shared::CudaDeviceGeneration(7));
+        assert_eq!(remote.key, 10);
+        assert_eq!(remote.kind, Kind::Float);
+        assert_eq!(remote.size, vec![3,10]);
+        assert_eq!(remote.worker_id.device_idx, 2);
+        assert_eq!(remote.worker_id.generation, thoosa_shared::CudaDeviceGeneration(7));
 
     }
 

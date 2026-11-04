@@ -109,7 +109,7 @@ where
         let batch = input.batch.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
         let (batch_1_t, batch_1_sizes) = unfold_and_cat(batch.as_slice(), &unfold_params)?;
 
-        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} motifs_stats.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.as_ref().motifs.data().t_ref().size(), input.motifs_stats.t_ref().size(), input.resource_ids);
+        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} motifs_stats.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.as_ref().motifs.data().size(), input.motifs_stats.size(), input.resource_ids);
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < batch_1_t.size()[1] as usize).unwrap_or(false) {
@@ -129,7 +129,7 @@ where
 
         let tensor = tch_result(tch_result(input
             .motifs_stats
-            .t_ref()
+            .local()?
             .f_unsqueeze(-1))?
             .f_expand(
                 [-1, -1, batch_1_t.data().size()[1]],
@@ -150,11 +150,11 @@ where
             let cross_loader_run_config = find_motifs_run_config.cross_loader_run_config().ok_or_else(|| ThoError::new(format!("ClcResourcesMotifsDist::run: find_motifs_run_config_id={:?} is not a CrossLoader config", find_motifs_run_config.id)))?;
 
             let (mask, dists)  = crate::distance::clc_d2_similarity_and_mask(
-                &input
+                &*input
                         .stacked_motifs_output.as_ref()
                         .motifs
                         .data()
-                        .t_ref(),
+                        .local()?,
                 &batch_1_t,
                 cross_loader_run_config.similarity_metric,
                 true,

@@ -231,7 +231,7 @@ where
         }
         debug("TestStage::do_run: input={input:?}");
         Ok(TestOutputA {
-            value: tch_result(input.value.as_ref().f_mul_scalar(self.k))?.into(),
+            value: tch_result(input.value.local()?.f_mul_scalar(self.k))?.into(),
         })
     }
 }
@@ -366,7 +366,7 @@ mod tests {
 
         let cpu_tensor = cuda_actor.copy(result.value, 0.into()).await?;
 
-        let cpu_t = cpu_tensor.t();
+        let cpu_t = cpu_tensor.into_local()?;
         debug!("do_test_simp: cpu_tensor={}", cpu_t);
 
         assert!(Tensor::from_slice(&[2., 2., 2.]).totype(Float).allclose(&cpu_t, 0.01, 0.01, false));

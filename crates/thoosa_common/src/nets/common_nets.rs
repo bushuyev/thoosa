@@ -94,7 +94,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for
 
         //TODO move to ThoVarStore?
         let store_float_precision = var_store_float_precision(&self.var_store);
-        debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.as_ref().kind());
+        debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.kind());
 
         let float_precision = match store_float_precision {
             VarStoreFloatPrecision::NoFloatVars => {
@@ -109,14 +109,14 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for
             }
         };
 
-        let t = if !float_precision.eq(&t.as_ref().kind()) {
+        let t = if !float_precision.eq(&t.kind()) {
             debug!("ThoModuleWithStore::tho_forward: t.id={:?}, converting to {:?}", t.id(), float_precision);
 
-            &t.to_kind(float_precision)?
+            &ThoTensor::new(t.id().clone(), tch_result(t.local()?.f_to_kind(float_precision))?)?
         } else {
             t
         };
-        debug!("ThoModuleWithStore::tho_forward: t.id={:?}, t.as_ref().kind={:?}", t.id(), t.as_ref().kind());
+        debug!("ThoModuleWithStore::tho_forward: t.id={:?}, t.as_ref().kind={:?}", t.id(), t.kind());
 
         self.ensure_ready()?;
         self.module().tho_forward(t, lengths, train)

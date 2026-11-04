@@ -155,7 +155,7 @@ impl LoadedTensor {
     ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
 
         debug!("LoadedTensor::clc_hadamard: loaded={loaded:?} k={k:?}");
-        ThoTensor::new( id,loaded.t_ref().multiply(&k.as_ref()))
+        ThoTensor::new( id,loaded.local()?.multiply(&*k.local()?))
 
     }
 
@@ -164,14 +164,14 @@ impl LoadedTensor {
         loaded: &ThoTensor<LoadedTensor, SynKey>,
         k: &ThoTensor<MulK, DebugId>,
     ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
-        debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t_ref(),k.t_ref());
+        debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded,k);
 
-        let multed = loaded.t_ref().f_multiply(&k.as_ref());
+        let multed = loaded.local()?.f_multiply(&*k.local()?);
 
         debug!("LoadedTensor::clc_sum: multed={multed:?}");
 
         let sum = tch_result(multed)?
-            .f_sum_dim_intlist(1, false, loaded.t_ref().kind());
+            .f_sum_dim_intlist(1, false, loaded.kind());
 
         debug!("LoadedTensor::clc_sum: sum={sum:?}");
 

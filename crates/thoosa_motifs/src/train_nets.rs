@@ -413,7 +413,7 @@ impl MotifNetParams {
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
             MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(
                 v,
-                motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t()).unwrap()))
+                motif.map(|tt| -> anyhow::Result<_> { Ok(Arc::new(ThoTensor::new(tt.id().clone(), tt.local()?.f_alias()?)?)) }).transpose()?
             )}
         }
     }
@@ -543,8 +543,8 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
 
 
     let params =  MotifCosine2dNetParams{
-        kh_freq: motif.as_ref().map(|v|v.as_ref().as_ref().size()[1] as u32).unwrap_or(params.kh_freq),//freq
-        kw_time: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
+        kh_freq: motif.as_ref().map(|v|v.as_ref().size()[1] as u32).unwrap_or(params.kh_freq),//freq
+        kw_time: motif.as_ref().map(|v|v.as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
 
         ..params.clone()
     };
@@ -1400,12 +1400,12 @@ mod train_tests {
             utils::test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, None, true)?;
         debug!("r_0.size={:?}", r_0.size());
 
-        assert_eq!(Tensor::from_slice(&[4950.]), r_0.as_ref().i((0, 0, ..)));
+        assert_eq!(Tensor::from_slice(&[4950.]), r_0.local()?.i((0, 0, ..)));
         assert_eq!(
             Tensor::from_slice(&[9900.]),
             utils::test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?
                 .tho_forward(&t, None, true)?
-                .as_ref()
+                .local()?
                 .i((0, 0, ..))
         );
 
@@ -1591,14 +1591,14 @@ mod train_tests {
 
         let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
         let logits_eval_before = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut eval_lengths_before), false)?;
-        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss_before = logits_eval_before.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         let mut first_loss = None;
         let mut last_loss = 0.0;
         for _ in 0..50 {
             let mut batch_lengths = BatchLengths::new(lengths_train.clone());
             let logits = net.tho_forward(&x_train.shallow_clone().into(), Some(&mut batch_lengths), true)?;
-            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            let loss = logits.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
             if first_loss.is_none() {
                 first_loss = Some(loss.double_value(&[]));
             }
@@ -1608,7 +1608,7 @@ mod train_tests {
 
         let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
         let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut lengths_eval), false)?;
-        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
 
@@ -1658,14 +1658,14 @@ mod train_tests {
 
         let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
         let logits_eval_before = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut eval_lengths_before), false)?;
-        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss_before = logits_eval_before.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         let mut first_loss = None;
         let mut last_loss = 0.0;
         for _ in 0..50 {
             let mut batch_lengths = BatchLengths::new(lengths_train.clone());
             let logits = net.tho_forward(&x_train.shallow_clone().into(), Some(&mut batch_lengths), true)?;
-            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            let loss = logits.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
             if first_loss.is_none() {
                 first_loss = Some(loss.double_value(&[]));
             }
@@ -1675,7 +1675,7 @@ mod train_tests {
 
         let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
         let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut lengths_eval), false)?;
-        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
 
@@ -1731,27 +1731,27 @@ mod train_tests {
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
 
         let logits_eval_before = net.tho_forward(&x_eval.shallow_clone().into(), None, false)?;
-        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss_before = logits_eval_before.local()?.binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
         assert!(eval_loss_before > 0.5);
         let mut first_loss = None;
         let mut last_loss = 0.0;
         for i in 0..50u32 {
             let logits = net.tho_forward(&x_train.shallow_clone().into(), None, true)?;
 
-            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&y_train, None, None, Reduction::Mean);
+            let loss = logits.local()?.binary_cross_entropy_with_logits::<Tensor>(&y_train, None, None, Reduction::Mean);
             if first_loss.is_none() {
                 first_loss = Some(loss.double_value(&[]));
             }
             last_loss = loss.double_value(&[]);
 
             let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), None, false)?;
-            let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
+            let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&y_eval, None, None, Reduction::Mean).double_value(&[]);
             if eval_loss < 0.1 {
                 debug!("heavy_test_train_cosine_motif_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
                 return Ok(i);
             }
 
-            debug!("heavy_test_train_cosine_motif_node: x_train={x_train:?} y_train={y_train:?} logits={logits:?} logits.isnan={} last_loss={last_loss}", logits.as_ref().isnan().any());
+            debug!("heavy_test_train_cosine_motif_node: x_train={x_train:?} y_train={y_train:?} logits={logits:?} logits.isnan={} last_loss={last_loss}", logits.local()?.isnan().any());
             trace!("heavy_test_train_cosine_motif_node: x_train={x_train} y_train={y_train}");
 
             opt.backward_step(&loss);
@@ -1909,7 +1909,7 @@ mod train_tests {
 
         let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
         let logits_eval_before = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut eval_lengths_before), false)?;
-        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss_before = logits_eval_before.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
 
         let mut first_loss = None;
         let mut last_loss = 0.0;
@@ -1918,7 +1918,7 @@ mod train_tests {
             let target_train = y_train.unsqueeze(1);
             let mut batch_lengths = BatchLengths::new(lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>());
             let logits = net.tho_forward(&x_train.shallow_clone().into(), Some(&mut batch_lengths), true)?;
-            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            let loss = logits.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
             if first_loss.is_none() {
                 first_loss = Some(loss.double_value(&[]));
             }
@@ -1928,7 +1928,7 @@ mod train_tests {
 
         let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
         let logits_eval = net.tho_forward(&x_eval.shallow_clone().into(), Some(&mut lengths_eval), false)?;
-        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+        let eval_loss = logits_eval.local()?.binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
         Ok((eval_loss_before, first_loss, last_loss, eval_loss))
     }
 

@@ -155,6 +155,7 @@ fn get_test_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    use thoosa_shared::CopyToDevice;
     use crate::tch_error::tch_result;
     use anyhow::Context as _;
     use super::run_ipc_test;
@@ -207,11 +208,11 @@ mod tests {
 
     fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) ->Result<(), ThoError>{
         let self_k = parse_numeric_part(resource).unwrap_or(1.0);
-        let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())?
-            .sum_dim_intlist(1, false, out.t_ref().kind())
+        let expected = lin_for_size(self_k * mul_k, size, out.kind(), &out.local()?.device())?
+            .sum_dim_intlist(1, false, out.kind())
             .view((-1, 1));
-        let ok = expected.allclose(&out.t_ref(), 0.1, 0.1, false);
-        debug!("check_sum_result: resource={resource} expected=\n{expected} actual=\n{}", out.t_ref());
+        let ok = expected.allclose(&*out.local()?, 0.1, 0.1, false);
+        debug!("check_sum_result: resource={resource} expected=\n{expected} actual=\n{}", out);
         assert!(ok);
 
         Ok(())
@@ -243,7 +244,7 @@ mod tests {
         }
 
         fn consume_input(&self, input: &ThoTensor<LoadedTensor, SynKey>) -> Result<ThoTensor<LoadedTensor, SynKey>, ThoError> {
-            let value = tch_result(input.t_ref().f_double_value(&[0, 0]))?;
+            let value = tch_result(input.local()?.f_double_value(&[0, 0]))?;
             // Exercise a fatal worker reply without poisoning the test GPU.
             if value == -2.0 {
                 // Use the constructor so injected CUDA errors capture their backtrace.
@@ -252,7 +253,7 @@ mod tests {
             if value < 0.0 {
                 return Err(ThoError::new("consume test failure"));
             }
-            ThoTensor::new(self.out_id(input.id()), tch_result(input.t_ref().f_mul_scalar(2.0))?)
+            ThoTensor::new(self.out_id(input.id()), tch_result(input.local()?.f_mul_scalar(2.0))?)
         }
     }
 
@@ -411,8 +412,8 @@ mod tests {
                         }
                     })).await?;
                     for output in outputs {
-                        assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 6.0);
-                        assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 1]))?, 8.0);
+                        assert_eq!(tch_result(output.local()?.f_double_value(&[0, 0]))?, 6.0);
+                        assert_eq!(tch_result(output.local()?.f_double_value(&[0, 1]))?, 8.0);
                     }
                 }
                 Ok(())
@@ -452,8 +453,8 @@ mod tests {
                         GlobalCtx::global().execution(1).run_stage(stage, Arc::new(DevicesWrap::wrap(input)), 1, &RunCtxImpl::new(1, "restarted worker")).await
                     }, None).await?;
                     let output = actor.copy(output.strip_types(), 0usize.into()).await?;
-                    assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 6.0);
-                    assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 1]))?, 8.0);
+                    assert_eq!(tch_result(output.local()?.f_double_value(&[0, 0]))?, 6.0);
+                    assert_eq!(tch_result(output.local()?.f_double_value(&[0, 1]))?, 8.0);
                 }
                 Ok(())
             },
@@ -506,8 +507,8 @@ mod tests {
                                 }
                             }, None).await?;
                             let output = actor.copy(output.strip_types(), 0usize.into()).await?;
-                            assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 0]))?, 2.0);
-                            assert_eq!(tch_result(output.t_ref().f_double_value(&[0, 1]))?, 4.0);
+                            assert_eq!(tch_result(output.local()?.f_double_value(&[0, 0]))?, 2.0);
+                            assert_eq!(tch_result(output.local()?.f_double_value(&[0, 1]))?, 4.0);
                             Ok::<_, ThoError>(())
                         });
                     }
@@ -538,7 +539,7 @@ mod tests {
                 let oom_handler = OOMHandler::<NoInputAdjuster, NoStageAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
 
                 let input_tensor:ThoTensor = tch_result(tch_result(Tensor::f_from_slice(&[1.0f32, 2.0]))?.f_view([1, 2]))?.into();
-                let input_ref = cuda_actor.copy(input_tensor.shallow_clone(), ThoDevice::from(1)).await?;
+                let input_ref = input_tensor.copy_to_device(1).await?;
                 let input_worker_id = input_ref.ref_worker_id().unwrap();
                 let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected worker input ref"))?;
                 let input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-success", "input").into(), input_key, input_ref.size(), input_ref.kind(), None, input_worker_id);
@@ -549,7 +550,7 @@ mod tests {
                 let new_ref = ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, output_worker_id);
                 let output_cpu = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
 
-                assert!(tch_result(output_cpu.t_ref().f_allclose(&tch_result(tch_result(Tensor::f_from_slice(&[2.0f32, 4.0]))?.f_view([1, 2]))?, 0.0, 0.0, false))?);
+                assert!(tch_result(output_cpu.local()?.f_allclose(&tch_result(tch_result(Tensor::f_from_slice(&[2.0f32, 4.0]))?.f_view([1, 2]))?, 0.0, 0.0, false))?);
 
                 let consumed_input = cuda_actor.copy(ThoTensor::new_ref((), input_key, vec![1, 2], Float, None, input_worker_id), ThoDevice::from(0)).await;
                 assert!(consumed_input.is_err(), "successful consume must remove the worker input tensor");
@@ -559,12 +560,12 @@ mod tests {
                 let failed_worker_id = failed_ref.ref_worker_id().unwrap();
                 let failed_key = failed_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected failed worker input ref"))?;
                 let failed_input:ThoTensor<LoadedTensor, SynKey> = ThoTensor::new_ref(mono_key!("consume-failure", "input").into(), failed_key, failed_ref.size(), failed_ref.kind(), None, failed_worker_id);
-                let failed_result = oom_handler.consume(&stage, ConsumeTestInput::new(failed_input.shallow_clone()), RunCtxImpl::new(1, "consume-failure"), NoContexts).await;
+                let failed_result = oom_handler.consume(&stage, ConsumeTestInput::new(failed_input.clone_ref()?), RunCtxImpl::new(1, "consume-failure"), NoContexts).await;
                 assert!(failed_result.is_err());
                 let new_ref = ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, failed_worker_id);
                 let preserved_input = cuda_actor.copy(new_ref, ThoDevice::from(0)).await?;
-                debug!("preserved_input=\n{}", preserved_input.t_ref());
-                assert!(tch_result(preserved_input.t_ref().f_allclose(&tch_result(tch_result(Tensor::f_from_slice(&[-1.0f32, 2.0]))?.f_view([1, 2]))?, 0.0, 0.0, false))?);
+                debug!("preserved_input=\n{}", preserved_input);
+                assert!(tch_result(preserved_input.local()?.f_allclose(&tch_result(tch_result(Tensor::f_from_slice(&[-1.0f32, 2.0]))?.f_view([1, 2]))?, 0.0, 0.0, false))?);
 
                 Ok(())
             },
@@ -628,7 +629,7 @@ mod tests {
 
                 let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
                     .copy(ThoTensor::new_ref((), out_key, output_ref.size(), output_ref.kind(), None, output_ref.ref_worker_id().unwrap()), 0.into()).await?;
-                let cpu_out: ThoTensor<ClcStageOutput, SynKey> = ThoTensor::new(output_ref.id().clone(), tensor.t())?;
+                let cpu_out: ThoTensor<ClcStageOutput, SynKey> = ThoTensor::new(output_ref.id().clone(), tensor.into_local()?)?;
 
 
                 assert_eq!(cpu_out.id(), &clc_task.out_id(loaded.id()));
@@ -728,7 +729,7 @@ mod tests {
                 assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
 
                 let cpu_copy = track_await!(cuda_actor.copy(worker_ref, 0.into())).await?;
-                assert!(expected_smoke.allclose(&cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
+                assert!(expected_smoke.allclose(&*cpu_copy.local()?, 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
 
                 Ok(())
             },
@@ -1180,7 +1181,7 @@ mod tests {
                        async move {
                            let t_cpu = ThoTensor::new((), Tensor::rand(&[n, DIM_1], FLOAT_CPU))?;
                            let t_cuda = GlobalCtx::global().cuda_actor(1).copy(t_cpu, 1.into()).await?;
-                           let _t_cpu = GlobalCtx::global().cuda_actor(1).copy(t_cuda.shallow_clone(), 0.into()).await?;
+                           let _t_cpu = t_cuda.copy_to_device(0).await?;
                            drop(t_cuda);
 
                            Ok::<(), ThoError>(())

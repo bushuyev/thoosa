@@ -266,7 +266,7 @@ impl Node {
                 // copied tensors must retain their existing values.
                 if !had_weight && let Some(init) = init {
                     no_grad(|| -> anyhow::Result<()> {
-                        conv.ws.f_copy_(&init.t_ref().f_view((1, 1, kernel as i64))?)?;
+                        conv.ws.f_copy_(&init.local()?.f_view((1, 1, kernel as i64))?)?;
                         Ok(())
                     })?;
 

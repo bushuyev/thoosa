@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tch::Tensor;
-use thoosa_common::dims::{Batch, Dims, ThoBatch};
+use thoosa_common::dims::{Dims, ThoBatch};
 use thoosa_common::ipc::proxy::{DynSyncStageWithStateEnum, CpuStateCheckpoint, checkpoint_operation, copy_state_tensor};
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::worker_msg::{WorkerInput};
@@ -35,7 +35,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, NoInputAdjuster, NoStageAdju
 use thoosa_common::runner::purge::CachePurger;
 use thoosa_common::runner::tmp_cache::{TmpCached, TmpCachedEntry};
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
@@ -330,7 +330,7 @@ where
                 // Restart partial imports from immutable CPU storage on every attempt.
                 guard.module.reset_state(checkpoint.info()?)?;
                 for (key, tensor) in &checkpoint.tensors {
-                    let source = tch_result(tensor.as_ref().f_alias())?;
+                    let source = tch_result(tensor.local()?.f_alias())?;
                     let restored = copy_state_tensor(source, to_device_idx).await?;
                     guard.module.set_state_tensor(key, restored, to_device_idx)?;
                 }
@@ -380,7 +380,7 @@ where
                     e
                 })?;
 
-                let loss = (self.loss_fn)(&predicted.as_ref(), &chunk.expected_y_ref()?.as_ref())?;
+                let loss = (self.loss_fn)(&*predicted.local()?, &*chunk.expected_y_ref()?.local()?)?;
                 let weight = (end - start) as f64 / batch_len as f64;
                 weighted_loss += tch_result(loss.f_double_value(&[]))? * weight;
                 if train {
@@ -498,7 +498,8 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
 
     fn x(&self) -> Result<ThoBatch<DI>, ThoError> {
         // The alias stays within the synchronous forward/backward transaction.
-        Ok(self.x_ref()?.shallow_clone::<Batch<DI>>())
+        let x = self.x_ref()?;
+        ThoTensor::new(x.id().clone(), tch_result(x.local()?.f_alias())?)
     }
 
     pub fn x_ref(&self) -> Result<&ThoBatch<DI>, ThoError> {
@@ -561,23 +562,8 @@ fn select_batch_tensor<D: Dims>(tensor: &ThoBatch<D>, batch_range: &Range<i64>) 
     let size = tensor.size();
     let batch_len = *size.first().ok_or_else(|| ThoError::new("TrainStep batch tensor has no batch dimension"))?;
     let range = checked_batch_range(batch_len, batch_range)?;
-    let selected_len = (range.end - range.start) as i64;
-
-    match &tensor.inner {
-        ThoTensorInner::Val { t } => ThoTensor::new(tensor.id().clone(), tch_result(t.lock().f_narrow(0, range.start as i64, selected_len))?),
-        ThoTensorInner::Ref { key, size, kind, selector } => {
-            let mut ranges = match selector {
-                Some(selector) => selector.tensor_ranges()?,
-                None => vec![0..batch_len],
-            };
-            let current_batch_range = ranges.first_mut().ok_or_else(|| ThoError::new("TrainStep tensor selector has no batch range"))?;
-            let current_start = current_batch_range.start;
-            *current_batch_range = current_start + batch_range.start..current_start + batch_range.end;
-            let mut selected_size = size.clone();
-            selected_size[0] = selected_len;
-            Ok(ThoTensor::new_ref(tensor.id().clone(), key.key, selected_size, *kind, Some(Box::new(TrainStepTensorSelector(ranges))), key.worker_id))
-        }
-    }
+    // The handle owns local/remote selection and preserves remote release ownership.
+    tensor.select_ranges(&[range.start as i64..range.end as i64])
 }
 
 /// Selects the same batch range from every tensor carried by a training step.
@@ -600,21 +586,6 @@ impl ThoSelector for TrainStepInputSelector {
 
     fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
         Ok(vec![self.0.clone()])
-    }
-}
-
-/// Preserves any pre-existing tensor ranges while narrowing the batch dimension.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct TrainStepTensorSelector(Vec<Range<i64>>);
-
-#[typetag::serde(name = "TrainStepTensorSelector")]
-impl ThoSelector for TrainStepTensorSelector {
-    fn clone_box(&self) -> Box<dyn ThoSelector> {
-        Box::new(self.clone())
-    }
-
-    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
-        Ok(self.0.clone())
     }
 }
 

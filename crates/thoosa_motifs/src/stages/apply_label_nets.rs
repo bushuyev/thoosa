@@ -45,7 +45,7 @@ use thoosa_common::runner::oom_handler::NoRunCtxAdjuster;
 use thoosa_common::runner::sync_stage::ConsumeResult;
 use thoosa_common::runner::sync_stage::{StageWithState};
 use thoosa_common::runner::tmp_cache::TmpCached;
-use thoosa_common::tch_error::tch_error;
+use thoosa_common::tch_error::{tch_error, tch_result};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
@@ -318,7 +318,7 @@ where
                     #[cfg(test)]{
                         {
                             let input = SelectRef::select_ref(&input, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                            trace!("ApplyLabelNets::run: input=\n{}", input.as_ref().as_ref());
+                            trace!("ApplyLabelNets::run: input=\n{}", input.as_ref());
                             Ok::<(), ThoError>(())
                         }?;
                     }
@@ -333,7 +333,7 @@ where
                     #[cfg(test)]{
                         {
                             let probs = SelectRef::select_ref(&motif_probs, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                            trace!("ApplyLabelNets::run: probs=\n{}", probs.as_ref().data().as_ref());
+                            trace!("ApplyLabelNets::run: probs=\n{}", probs.as_ref().data());
                             Ok::<(), ThoError>(())
                         }?;
                     }
@@ -360,7 +360,7 @@ where
 
                     #[cfg(test)]{
                         {
-                            trace!("ApplyLabelNets::run: result=\n{}", result.as_ref());
+                            trace!("ApplyLabelNets::run: result=\n{}", result);
                             Ok::<(), ThoError>(())
                         }?;
                     }
@@ -643,16 +643,16 @@ where
             }
         } else {
             let stacked = label_outputs.iter().map(|label_output| {
-                trace!("StackAppliedLabelNets::consume: label_output.size=\n{}", label_output.t_ref());
+                trace!("StackAppliedLabelNets::consume: label_output.size=\n{}", label_output);
                 // Ok(label_output.t_ref().f_sigmoid()?)
-                Ok(label_output.t_ref())
-            }).collect::<Result<Vec<_>, _>>();
+                Ok(label_output.local()?)
+            }).collect::<Result<Vec<_>, ThoError>>();
 
-            match stacked.and_then(|stacked| Tensor::f_stack(stacked.as_slice(), 0)) {
+            match stacked.and_then(|stacked| tch_result(Tensor::f_stack(stacked.as_slice(), 0))) {
                 Ok(tensor) => tensor,
                 Err(error) => {
                     input.label_outputs = label_outputs;
-                    return ConsumeResult::Failed { input, error: tch_error(error) };
+                    return ConsumeResult::Failed { input, error };
                 }
             }
         };
@@ -987,12 +987,12 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
     fn do_run_with_state<'a>(self: Arc<Self>, input: &Self::In<'a>, net: &mut Self::S, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data().t_ref());
+        trace!("ApplyLabelNet::do_run_with_state: id={:?} input=\n{}", self.id, input.input.as_ref().data());
         debug!("ApplyLabelNet::do_run_with_state: id={:?} input={:?}", self.id, input);
         let out_id = self.out_id(input.id());
         let input = input.input.as_ref();
         let _num_motifs = input.data().size()[0] as usize;
-        let batch_input: ThoTensor<ChannelsMotifsData, DebugId> = input.data().t_ref().unsqueeze(0).into();//TODO unsqueeze is for dummy batch dimension, batching should be done in ApplyLabelNets
+        let batch_input: ThoTensor<ChannelsMotifsData, DebugId> = tch_result(input.data().local()?.f_unsqueeze(0))?.into();//TODO unsqueeze is for dummy batch dimension, batching should be done in ApplyLabelNets
 
         // Label nets receive one length per chunk, so use the longest motif row to keep every real score while shorter rows remain zero-padded.
         let mut lengths = BatchLengths::new(vec![*input.extra.as_ref().iter().max().unwrap_or(&0)]);//there is always single element until batching is implemented
@@ -1001,9 +1001,9 @@ where
 
         let out = net.tho_forward(&batch_input, Some(&mut lengths), false)?;
 
-        debug!("ApplyLabelNet::do_run_with_state: id={:?} out={}", self.id, out.t_ref());
+        debug!("ApplyLabelNet::do_run_with_state: id={:?} out={}", self.id, out);
 
-        ThoTensor::new(out_id, out.t()).map(Into::into)
+        ThoTensor::new(out_id, out.into_local()?).map(Into::into)
     }
 }
 
@@ -1437,9 +1437,9 @@ mod tests {
         let out = SelectRef::select_ref(&out, 0, None::<SyncStftSelector>).await?;
         for other in [&other, &later] {
             let other = SelectRef::select_ref(other, 0, None::<SyncStftSelector>).await?;
-            assert!(tch_result(out.as_ref().t_ref().f_allclose(&other.as_ref().t_ref(), 1e-6, 1e-6, false))?, "per-resource output ids must not change label order");
+            assert!(tch_result(out.as_ref().local()?.f_allclose(&*other.as_ref().local()?, 1e-6, 1e-6, false))?, "per-resource output ids must not change label order");
         }
-        let out = tch_result(out.as_ref().t_ref().f_squeeze_dim(-1))?;
+        let out = tch_result(out.as_ref().local()?.f_squeeze_dim(-1))?;
         Ok((out.size(), to_vec_f32(&out)?))
     }
 

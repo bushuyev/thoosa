@@ -1195,9 +1195,9 @@ where
             }
         }
 
-        let dst = tch_result(Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.t_ref().kind(), input.raw_tensor.t_ref().device())))?;
+        let dst = tch_result(Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.kind(), input.raw_tensor.local()?.device())))?;
         for (slice_i, slice) in valid_slices.into_iter().enumerate() {
-            let src = tch_result(input.raw_tensor.t_ref().f_i((input.channel, slice as i64..(slice + input.window) as i64)))?;
+            let src = tch_result(input.raw_tensor.local()?.f_i((input.channel, slice as i64..(slice + input.window) as i64)))?;
             tch_result(tch_result(dst.f_get(slice_i as i64))?.f_copy_(&src))?;
         }
 
@@ -1469,10 +1469,10 @@ where
 
         let output = tch_result(Tensor::f_zeros(
             [input.channels, valid_slices.len() as i64, input.window as i64],
-            (Float, input.raw_tensor.t_ref().device()),
+            (Float, input.raw_tensor.local()?.device()),
         ))?;
         for (slice_i, (slice, slice_end)) in valid_slices.into_iter().enumerate() {
-            let src = tch_result(input.raw_tensor.t_ref().f_i((0..input.channels, slice as i64..slice_end as i64)))?;
+            let src = tch_result(input.raw_tensor.local()?.f_i((0..input.channels, slice as i64..slice_end as i64)))?;
             tch_result(tch_result(output.f_i((0..input.channels, slice_i as i64, ..)))?.f_copy_(&src))?;
         }
 
@@ -1556,7 +1556,7 @@ fn build_motif_from_loaded_resources(
     device_idx: usize,
     descr: &str,
 ) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
-    let total_slices = loaded_resources.iter().map(|resource| resource.raw_tensor.t_ref().size()[0]).sum::<i64>();
+    let total_slices = loaded_resources.iter().map(|resource| resource.raw_tensor.size()[0]).sum::<i64>();
     debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} select_motifs_run_config_id={select_motifs_run_config_id:?} find_motifs_run_config_id={find_motifs_run_config_id} channel={channel} window={window} total_slices={total_slices} loaded_resources={} device_idx={device_idx} descr={descr}", loaded_resources.len());
     /*
        select_motifs_run_config_id should not be used if SelectMotifsRunConfig doesn't contain extend_config
@@ -1570,9 +1570,9 @@ fn build_motif_from_loaded_resources(
     // TODO motif can contain either only slices found during initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
     let motif_refs = loaded_resources
         .iter()
-        .filter(|resource| resource.raw_tensor.t_ref().size()[0] > 0)
-        .map(|resource| resource.raw_tensor.t_ref())
-        .collect::<Vec<_>>();
+        .filter(|resource| resource.raw_tensor.size()[0] > 0)
+        .map(|resource| resource.raw_tensor.local())
+        .collect::<Result<Vec<_>, _>>()?;
 
     let tensor = if motif_refs.is_empty() {
         tch_result(Tensor::f_zeros([0, window as i64], (Float, ThoDevice::from(device_idx).into())))?
@@ -1848,9 +1848,9 @@ mod tests {
 
         let t = motif.select_ref(0, Some(SyncStftSelector)).await?;
 
-        let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
+        let dist = 0.; //average_euclidean_distance(t.local()?).unwrap();
 
-        trace!("motif.t={} dist={dist}", t.as_ref().data().t_ref());
+        trace!("motif.t={} dist={dist}", t.as_ref().data());
 
 
         //TODO check data
@@ -1926,9 +1926,9 @@ mod tests {
         .branch(false);
         let t = slices.select_ref(0, Some(SyncStftSelector)).await?;
 
-        let dist = average_euclidean_distance(&t.t_ref())?;
+        let dist = average_euclidean_distance(&*t.local()?)?;
 
-        trace!("random slices: \t{} dist={dist}", t.t_ref());
+        trace!("random slices: \t{} dist={dist}", t.as_ref());
 
         // assert_eq!(r, true);
         //TODO check data

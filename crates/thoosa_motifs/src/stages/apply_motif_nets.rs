@@ -216,7 +216,7 @@ where
             // Transfer and assemble before committing either cursor, preserving typed CUDA failures.
             // Same-device copies are rejected by CopyToDevice; CPU partials are already ready to assemble.
             let partial = if partial.tho_device_idx() == 0 { partial.into_inner() } else { partial.copy_to_device(0).await? };
-            let source = tch_result(partial.as_ref().f_narrow(0, 0, valid_len))?;
+            let source = tch_result(partial.local()?.f_narrow(0, 0, valid_len))?;
             // if fails in IPC mode  where partial is a ref. It's assumed that if it's being split it makes sense to keep partial results on CPU to save GPU mem which might not always be the case if partials are small.
             tch_result(tch_result(self.output.f_narrow(0, self.added_partial_output_len, valid_len))?.f_copy_(&source))?;
             self.added_partial_output_len += valid_len;
@@ -668,11 +668,11 @@ where
         let lengths = tensors.iter().map(|tensor| tensor.as_ref().size()[0]).collect::<Vec<_>>();
         debug!("StackAppliedMotifNets::do_run: lengths={lengths:?}");
         let max_len = lengths.iter().copied().max().unwrap_or(0);
-        let options = tensors.first().map(|tensor| (tensor.as_ref().kind(), tensor.as_ref().t_ref().device())).unwrap_or((Float, ThoDevice::from(input.device_idx).into()));
+        let options = tensors.first().map(|tensor| (tensor.as_ref().kind(), tensor.as_ref().tho_device().into())).unwrap_or((Float, ThoDevice::from(input.device_idx).into()));
         let output = tch_result(Tensor::f_zeros([tensors.len() as i64, max_len], options))?;
         for (row, tensor) in tensors.iter().enumerate() {
             // Only the new aggregate is written; cached per-net probabilities remain reusable.
-            let source = tensor.as_ref().t_ref();
+            let source = tensor.as_ref().local()?;
             let stretched;
             let source = if source.size()[0] == max_len {
                 &*source
@@ -1224,7 +1224,7 @@ where
         let motif_id = motif_net.extra().motif_id();
 
         debug!("SyncApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input={:?}", self.id, input);
-        trace!("SyncApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t_ref());
+        trace!("SyncApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.as_ref());
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < input.batch.size()[1] as usize).unwrap_or(false) {
@@ -1236,7 +1236,7 @@ where
 
         let out = apply_motif_net_forward(out_id, &input.batch, &motif_net, self.slice_step, input.id())?;
 
-        trace!("SyncApplyMotifNet::do_run, self.id={:?} input={input:?} \nout=\n{}", self.id, out.t_ref());
+        trace!("SyncApplyMotifNet::do_run, self.id={:?} input={input:?} \nout=\n{}", self.id, out);
         debug!("SyncApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
 
         Ok(out.into())
@@ -1270,9 +1270,9 @@ pub fn apply_motif_net_forward(
     let c = motif_net.extra().channel() as i64;
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
 
-    debug!("SyncApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.t_ref().size());
-    trace!("SyncApplyMotifNet::do_run: batch.t=\n{}", input.t_ref());
-    let t = tch_result(input.t_ref().f_i((c, ..)))?;
+    debug!("SyncApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.size());
+    trace!("SyncApplyMotifNet::do_run: batch.t=\n{}", input);
+    let t = tch_result(input.local()?.f_i((c, ..)))?;
     let t = if t.size()[0] >= motif_width {
         t
     } else {
@@ -1292,7 +1292,7 @@ pub fn apply_motif_net_forward(
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("SyncApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
-    let out_t = tch_result(out.as_ref().f_view([-1]))?; //.f_sigmoid()?;
+    let out_t = tch_result(out.local()?.f_view([-1]))?; //.f_sigmoid()?;
 
     debug!("SyncApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
     trace!("SyncApplyMotifNet::do_run: out_t=\n{out_t}");
@@ -1311,14 +1311,14 @@ pub fn motif_test_net_(
     step: u32, kernel: u32,
 ) -> (
     Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
+    Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>,
 ) {
     let id = motif_t.id().clone();
-    let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
+    let motif_width = motif_t.as_ref().size()[1] as u32;
     (
         Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, kernel)),
         Box::new(move || {
-            *dummy_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
+            Ok(*dummy_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().local()?.f_i((0, ..))?, step as i64)?)//first slice
         }),
     )
 }
@@ -1330,14 +1330,14 @@ pub fn motif_sum_net_(
     step: u32, kernel: u32,
 ) -> (
     Box<dyn Fn() -> MotifNetParams + Sync + Send>,
-    Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
+    Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>,
 ) {
     let id = motif_t.id().clone();
-    let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
+    let motif_width = motif_t.as_ref().size()[1] as u32;
     (
         Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, kernel)),
         Box::new(move || {
-            *sum_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
+            Ok(*sum_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().local()?.f_i((0, ..))?, step as i64)?)//first slice
         }),
     )
 }
@@ -1595,12 +1595,12 @@ pub mod tests {
             if !motif.id().to_string().contains("motif_0_1") { return (params, module); }
             let id = motif.id().clone();
             (params, Box::new(move || {
-                ThoModuleWithStore::with_factory(
+                Ok(ThoModuleWithStore::with_factory(
                     id.clone(),
                     Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure")))),
                     VarStore::new(device),
                     Some(Arc::new(|_| Ok(Box::new(ThoFuncModule::new(|_| Err(anyhow::anyhow!("injected motif forward failure"))))))),
-                )
+                ))
             }))
         }, Default::default(), 100, 100).await.unwrap_err();
         assert!(format!("{error:#}").contains("injected motif forward failure"), "must propagate the failed net rather than stack partial outputs: {error:#}");
@@ -1638,7 +1638,7 @@ pub mod tests {
     where
         for <'a> A:AsyncStage<In<'a>=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=MockRunCtx, Out=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, //+ thoosa_common::runner::common::runnable::WrappedRunInputStage,
         F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, &mut Arc<dyn MotifsStore>) -> Result<Arc<A>, ThoError>,
-        MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
+        MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> anyhow::Result<ThoModuleWithStore<Batch<Slice>, MotifProbability>> + Sync + Send>)
     {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         // log::set_max_level(Debug);
@@ -1667,7 +1667,7 @@ pub mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 3, sample_rate, input_n_0 as u32)
-                .with_load_motif_net(vec![
+                .with_try_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                     (net_id_0_1.clone(), params_0_1, module_0_1),
                     (net_id_1_0.clone(), params_1_0, module_1_0),
@@ -1728,8 +1728,8 @@ pub mod tests {
         let apply_motif_nets = apply_motif_net_fn(trigger_oom_len, apply_motif_net_step, select_motifs_run_config_id, &ws, &mut store).await?;
 
         let channels_patterns = vec![
-            vec![motif_0_0.t_ref().i((0, ..)), motif_0_1.t_ref().i((0, ..))],
-            vec![motif_1_0.t_ref().i((0, ..))],
+            vec![motif_0_0.local()?.i((0, ..)), motif_0_1.local()?.i((0, ..))],
+            vec![motif_1_0.local()?.i((0, ..))],
             Vec::new(),
         ];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 300, apply_motif_net_step as usize)?;
@@ -1755,7 +1755,7 @@ pub mod tests {
 
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
 
-        let motif_width = motif_0_0.t_ref().size()[1] as i64;
+        let motif_width = motif_0_0.size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / apply_motif_net_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
         {
@@ -1763,11 +1763,11 @@ pub mod tests {
             let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices, slices, slices]);
-            assert_eq!(r.data().t_ref().size(), vec![3, slices]);
+            assert_eq!(r.data().size(), vec![3, slices]);
 
-            let (_pulse_matches_vals, pulse_matches_idx) = &r.data().t_ref().i((0, 0..slices)).topk(1i64, 0, true, true);
-            let (_triangle_matches_vals, triangle_matches_idx) = &r.data().t_ref().i((1, 0..slices)).topk(1i64, 0, true, true);
-            let (_sin_matches_vals, sin_matches_idx) = &r.data().t_ref().i((2, 0..slices)).topk(1i64, 0, true, true);
+            let (_pulse_matches_vals, pulse_matches_idx) = &r.data().local()?.i((0, 0..slices)).topk(1i64, 0, true, true);
+            let (_triangle_matches_vals, triangle_matches_idx) = &r.data().local()?.i((1, 0..slices)).topk(1i64, 0, true, true);
+            let (_sin_matches_vals, sin_matches_idx) = &r.data().local()?.i((2, 0..slices)).topk(1i64, 0, true, true);
 
             assert_close(pulse_interval_starts_in_resources_a as f64, apply_motif_net_step as f64 * pulse_matches_idx.double_value(&[0]), apply_motif_net_step as f64 * 3.);
             assert_close(triangle_interval_starts_in_resources_a as f64, apply_motif_net_step as f64 * triangle_matches_idx.double_value(&[0]), apply_motif_net_step as f64 * 3.);
@@ -1835,7 +1835,7 @@ pub mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_len as u32)
-                .with_load_motif_net(vec![
+                .with_try_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                     (net_id_0_1.clone(), params_0_1, module_0_1),
                 ])
@@ -1905,8 +1905,8 @@ pub mod tests {
         ).await?;
 
         let expected_lengths = vec![
-            ((input_len as i64 - motif_0_0.t_ref().size()[1]) / step as i64) + 1,
-            ((input_len as i64 - motif_0_1.t_ref().size()[1]) / step as i64) + 1,
+            ((input_len as i64 - motif_0_0.size()[1]) / step as i64) + 1,
+            ((input_len as i64 - motif_0_1.size()[1]) / step as i64) + 1,
         ];
         let max_len = *expected_lengths.iter().max().expect("no max len");
 
@@ -1914,7 +1914,7 @@ pub mod tests {
             let out = SelectRef::select_ref(&out, 1, None::<SyncStftSelector>).await?;
             let out = out.as_ref();
             assert_eq!(out.extra().as_slice(), expected_lengths.as_slice());
-            assert_eq!(out.data().t_ref().size(), vec![2, max_len]);
+            assert_eq!(out.data().size(), vec![2, max_len]);
             Ok::<_, ThoError>(())
         }?;
 
@@ -1942,7 +1942,7 @@ pub mod tests {
 
         let ws = Arc::new(RwLock::new(
             crate::motifs_ws::MotifsWsMockBuilder::new(None, 1, 100, input_n_0 as u32)
-                .with_load_motif_net(vec![
+                .with_try_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                 ])
                 .build(),
@@ -1998,9 +1998,9 @@ pub mod tests {
             false
         ).await?);
 
-        debug_plot!(&motif_0_0.t_ref(), "motif_test")?;
+        debug_plot!(&*motif_0_0.local()?, "motif_test")?;
 
-        let channels_patterns = vec![vec![motif_0_0.t_ref().i((0, ..))]];
+        let channels_patterns = vec![vec![motif_0_0.local()?.i((0, ..))]];
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;
 
 
@@ -2023,7 +2023,7 @@ pub mod tests {
         let pulse_interval_starts_in_resources_a = resource_a_intervals[0][0][0].start;
 
 
-        let motif_width = motif_0_0.t_ref().size()[1] as i64;
+        let motif_width = motif_0_0.size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
 
         let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
@@ -2033,9 +2033,9 @@ pub mod tests {
             let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices]);
-            assert_eq!(r.data().t_ref().size(), vec![1, slices]);
+            assert_eq!(r.data().size(), vec![1, slices]);
 
-            let (_pulse_matches_vals, pulse_matches_idx) = &r.data().t_ref().i((0, 0..slices)).topk(1i64, 0, true, true);
+            let (_pulse_matches_vals, pulse_matches_idx) = &r.data().local()?.i((0, 0..slices)).topk(1i64, 0, true, true);
 
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
 
@@ -2059,7 +2059,7 @@ pub mod tests {
         let test_net = dummy_motif_net::<AnyDims, AnyDims, &str>("test", 100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let resource: ThoTensor<AnyDims, DebugId> = resource_a_t.shallow_clone().into();
-        let out = test_net.tho_forward(&resource, None, false)?.t();//.i((0, .., 0));//channel[1], slices, vals[1]
+        let out = test_net.tho_forward(&resource, None, false)?.into_local()?;//.i((0, .., 0));//channel[1], slices, vals[1]
 
         plot_series_with_lanes(
             vec![

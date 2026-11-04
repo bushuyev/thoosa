@@ -178,7 +178,7 @@ impl SyncStage for SyncClassifierStage {
         let feat = self.in_dim;
         let fails = &self.fail_until;
         let out_id = self.out_id(input.id());
-        let t = input.as_ref();
+        let t = input.local()?;
 
         debug!("Classifier::do_run: t.size()={:?}", t.size());
         for fail_until in fails {

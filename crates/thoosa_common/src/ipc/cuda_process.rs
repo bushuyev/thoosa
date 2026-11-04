@@ -715,7 +715,7 @@ impl CudaIPCActor {
         let src_kind = src.kind();
         let src_shape = src.size();
         let tensor_byte_len = tensor_mem_size(src_kind, &src_shape);
-        let src_tensor = src.t();
+        let src_tensor = src.into_local()?;
 
         debug!("CudaIPCActor::handle_h2d_copy: src_shape={src_shape:?} tensor_byte_len={tensor_byte_len}");
 
@@ -2002,7 +2002,7 @@ mod tests {
             let cpu_tensor = track_await!(cuda_actor.copy(cuda_ref, 0.into())).await?;
             d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
-            let tensor = cpu_tensor.t();
+            let tensor = cpu_tensor.into_local()?;
             if tensor.kind() != init_type {
                 return Err(ThoError::new(format!("IPC copy perf expected kind {init_type:?}, got {:?}", tensor.kind())));
             }
@@ -2121,13 +2121,13 @@ mod tests {
             let reff = cuda_ref.ref_key().unwrap();
 
             let cpu_tensor = track_await!(cuda_actor.copy(
-                cuda_ref.shallow_clone(),//otherwise cuda_ref gets dropped and deleted from worker
+                cuda_ref.clone_ref()?,//otherwise cuda_ref gets dropped and deleted from worker
                 0.into(),//Cpu
             )).await?;
 
             debug!("run_main: cpu_tensor={cpu_tensor:?}");
 
-            let actual_digest = tch_result(tensor_digest(&cpu_tensor.t_ref()))?;
+            let actual_digest = tch_result(tensor_digest(&*cpu_tensor.local()?))?;
             if actual_digest.hex != expected_digest.hex {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }

@@ -201,7 +201,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPsdPerResource::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let t = input.t_ref();
+        let t = input.local()?;
         let size = t.size();
         if size.len() != 2 {
             return Err(ThoError::new(format!("WelchPsdPerResource expected [C, T], got {:?}", size)));
@@ -341,7 +341,7 @@ where
 
             let loaded = BorrowRef::borrow_ref(&loaded, 0).await?;
             // The async stage owns independent CPU storage, not an alias of a cache borrow.
-            let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), tch_result(loaded.t_ref().f_detach_copy())?)?;
+            let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), tch_result(loaded.local()?.f_detach_copy())?)?;
 
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 
@@ -376,7 +376,7 @@ where
             )).await?;
 
             // The result is owned here, so transfer its storage into the accumulator.
-            let resource_psd_t = resource_psd.t();
+            let resource_psd_t = resource_psd.into_local()?;
 
             psd_sum = Some(match psd_sum {
                 None => resource_psd_t,

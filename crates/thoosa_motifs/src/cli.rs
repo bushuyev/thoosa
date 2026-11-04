@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::process;
 use tch::Device::Cpu;
 use tch::{Device, IndexOp, Tensor};
-use thoosa_common::dims::{AnyDims, ChannelsData};
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::resources::{Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::runner::run_ctx::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
@@ -941,7 +941,7 @@ fn apply_import_freq_filter(
                 // .to_device(freq_filter.input_device())?,
             )?
             // .to_device(Cpu)?
-            .t()),
+            .into_local()?),
         None => Ok(tensor),
     }
 }
@@ -1349,7 +1349,7 @@ where
     let plot_data = channels_to_plot
         .into_iter()
         .map(|channel| {
-            let channel_t = tensor.t_ref().f_i((channel as i64, ..))?;
+            let channel_t = tensor.local()?.f_i((channel as i64, ..))?;
             Ok::<_, anyhow::Error>((
                 format!("channel_{channel}"),
                 color_iter.next().unwrap_or(BLACK),
@@ -1522,7 +1522,7 @@ where
                     ws,
                     &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
                     &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_config_id={find_motifs_run_config_id} net={net_path:?}"),
-                    &out.t_ref(),
+                    &*out.local()?,
                     resolution,
                     print_to_stdout,
                 )?;
@@ -1573,7 +1573,7 @@ where
     let run_config_id = motif.extra().find_motifs_run_config_id;
     let channel = motif.extra().channel;
 
-    let all_slices = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(1usize).copy(motif.data().shallow_clone::<AnyDims>().strip_types(), 0.into()).await?.t();
+    let all_slices = thoosa_shared::CopyToDevice::copy_to_device(motif.data(), 0).await?.into_local()?;
 
     let _result = (move || {
 
@@ -2177,8 +2177,8 @@ mod cli_tests {
                 let pulse_triangle_t = SelectRef::select_ref(&pulse_triangle_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let pulse_sin_t = SelectRef::select_ref(&pulse_sin_filtered_t, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
 
-                debug_plot!(&pulse_triangle_t.as_ref().as_ref(), "pulse_triangle_{freq}_filtered_t")?;
-                debug_plot!(&pulse_sin_t.as_ref().as_ref(), "pulse_sin_{freq}_filtered_t")?;
+                debug_plot!(&*pulse_triangle_t.as_ref().local()?, "pulse_triangle_{freq}_filtered_t")?;
+                debug_plot!(&*pulse_sin_t.as_ref().local()?, "pulse_sin_{freq}_filtered_t")?;
 
                 Ok::<_, anyhow::Error>(())
             }?;

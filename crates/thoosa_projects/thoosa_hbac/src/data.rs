@@ -1178,7 +1178,7 @@ mod tests {
 
         let filtered_cpu = {
             let filtered_guard = filtered.load_from_any_device_(1).await?;
-            filtered_guard.t_ref().f_to_device(Device::Cpu)?
+            filtered_guard.local()?.f_to_device(Device::Cpu)?
         };*/
 
         let input_len = raw_tensor.size()[1];
@@ -1251,7 +1251,8 @@ mod tests {
             move |input_resource: &Resource, _device| {
                 let t = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(loader_tensors))
                     .get(input_resource)
-                    .map(|v| v.as_ref().shallow_clone())
+                    .map(|v| v.local().and_then(|tensor| thoosa_common::tch_error::tch_result(tensor.f_alias())))
+                    .transpose()?
                     .ok_or_else(|| anyhow::anyhow!("missing resource tensor for resource_id={}", input_resource.id()))?;
 
                 debug!("input_resource={input_resource:?} t.device={:?}", t.device());
@@ -1315,7 +1316,7 @@ mod tests {
             mock_run_ctx::default(1),
         ).await?;
         let out = out.load_from_any_device_(1).await?;
-        let (top_vals, top_idx) = out.data().t_ref().f_i((0, ..))?.f_topk(2, 0, true, true)?;
+        let (top_vals, top_idx) = out.data().local()?.f_i((0, ..))?.f_topk(2, 0, true, true)?;
 
         debug!("test_train_motif_nets_cosine_with_filtered_real_eeg: apply top_vals={} top_idx={}", top_vals, top_idx);
 

@@ -350,7 +350,7 @@ async fn round_trips() -> Result<(), ThoError> {
             let newer = restored.save_epoch_checkpoint(1).await?;
             let newest = restored.save_epoch_checkpoint(1).await?;
             assert_eq!(newer.tensors.len(), newest.tensors.len());
-            for (key, tensor) in &newer.tensors { assert!(tch_result(tensor.as_ref().f_equal(newest.tensors[key].as_ref().as_ref()))?); }
+            for (key, tensor) in &newer.tensors { assert!(tch_result(tensor.local()?.f_equal(newest.tensors[key].local()?.as_ref()))?); }
             let mut failed = input(true)?;
             failed.expected_y = Some(ThoTensor::new(debug_id!("failed epoch target"), tch_result(Tensor::f_full([2, 1], -999.0, (Kind::Float, Device::Cpu)))?)?);
             let cache = Arc::new(TmpCached::new("failed_epoch_batch").await);
@@ -365,7 +365,7 @@ async fn round_trips() -> Result<(), ThoError> {
                 // Model a copy failure after the first restored tensor. Purging
                 // must release partial imports without requiring a live optimizer.
                 let (key, tensor) = saved.tensors.iter().next().unwrap();
-                let source = tch_result(tensor.as_ref().f_alias())?;
+                let source = tch_result(tensor.local()?.f_alias())?;
                 let partial = copy_state_tensor(source, 1).await?;
                 stage.train_module.lock().await.module.set_state_tensor(key, partial, 1)?;
                 assert!(restored.has_gpu_data(1).await);
@@ -507,8 +507,8 @@ fn checkpoint_loss(path: &std::path::Path) -> Result<f32, ThoError> {
     let weight = variables.iter().find(|(name, _)| name.ends_with("weight")).ok_or_else(|| ThoError::new("missing checkpoint weight"))?;
     let bias = variables.iter().find(|(name, _)| name.ends_with("bias")).ok_or_else(|| ThoError::new("missing checkpoint bias"))?;
     let input = uneven_input(false)?;
-    let predicted = tch_result(input.x_ref()?.as_ref().f_linear(&weight.1, Some(&bias.1)))?;
-    Ok(tch_result(tch_result(predicted.f_mse_loss(&input.expected_y_ref()?.as_ref(), Reduction::Mean))?.f_double_value(&[]))? as f32)
+    let predicted = tch_result(input.x_ref()?.local()?.f_linear(&weight.1, Some(&bias.1)))?;
+    Ok(tch_result(tch_result(predicted.f_mse_loss(&*input.expected_y_ref()?.local()?, Reduction::Mean))?.f_double_value(&[]))? as f32)
 }
 
 #[tokio::test]

@@ -290,8 +290,8 @@ where
                         channels_motif_ids[c as usize].push(motif.id().clone());
                     }
 
-                    motif.t_ref().copy()
-                }).collect::<Vec<_>>();
+                    tch_result(motif.local()?.f_detach_copy())
+                }).collect::<Result<Vec<_>, _>>()?;
 
                 debug!("StackedMotifsLoader::run: c={c}, channel_motifs_tensors={:?}", channel_motifs_tensors);
 

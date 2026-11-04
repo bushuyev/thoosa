@@ -88,10 +88,10 @@ async fn cached_sets() -> Result<(), ThoError> {
         let raw = cached.borrow_ref(0).await?;
         let filtered = filtered.borrow_ref(0).await?;
         let expected_raw = tch_result(tch_result(tch_result(tch_result(Tensor::f_arange(96, (Float, Cpu)))?.f_unfold(0, 4, 2))?.f_mean_dim(1, false, Float))?.f_add_scalar(10.))?;
-        let expected_filtered = tch_result(tch_result(tch_result(tch_result(filtered.as_ref().t_ref().f_get(0))?.f_unfold(0, 6, 2))?.f_mean_dim(1, false, Float))?.f_add_scalar(20.))?;
-        assert!(tch_result(raw.as_ref().t_ref().f_allclose(&expected_raw, 1e-6, 1e-6, false))?);
-        assert!(tch_result(tch_result(stack.as_ref().data().t_ref().f_get(0))?.f_allclose(&expected_raw, 1e-6, 1e-6, false))?, "row order must follow motif ids, not trained-net ids");
-        assert!(tch_result(tch_result(stack.as_ref().data().t_ref().f_get(1))?.f_allclose(&stretch(&expected_filtered, 47, 0)?, 1e-6, 1e-6, false))?, "the second motif must use its filtered input");
+        let expected_filtered = tch_result(tch_result(tch_result(tch_result(filtered.as_ref().local()?.f_get(0))?.f_unfold(0, 6, 2))?.f_mean_dim(1, false, Float))?.f_add_scalar(20.))?;
+        assert!(tch_result(raw.as_ref().local()?.f_allclose(&expected_raw, 1e-6, 1e-6, false))?);
+        assert!(tch_result(tch_result(stack.as_ref().data().local()?.f_get(0))?.f_allclose(&expected_raw, 1e-6, 1e-6, false))?, "row order must follow motif ids, not trained-net ids");
+        assert!(tch_result(tch_result(stack.as_ref().data().local()?.f_get(1))?.f_allclose(&stretch(&expected_filtered, 47, 0)?, 1e-6, 1e-6, false))?, "the second motif must use its filtered input");
     }
     // Stacking and GPU offload must leave cached probabilities usable in both backends.
     GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "cached motif regression").await?;
@@ -132,7 +132,7 @@ async fn filtered_oom() -> Result<(), ThoError> {
     {
         let expected = expected.borrow_ref(0).await?;
         let actual = actual.borrow_ref(0).await?;
-        assert!(tch_result(actual.as_ref().data().t_ref().f_allclose(&expected.as_ref().data().t_ref(), 1e-6, 1e-6, false))?, "filtered and unfiltered split outputs must match unsplit inference");
+        assert!(tch_result(actual.as_ref().data().local()?.f_allclose(&*expected.as_ref().data().local()?, 1e-6, 1e-6, false))?, "filtered and unfiltered split outputs must match unsplit inference");
     }
     for (_, filter, stage) in &split.apply_motif_nets {
         let filtered = if let Some((_, filter)) = filter { filter.clone().run_cached(input.clone(), ctx.branch(true)).await? } else { input.clone() };
