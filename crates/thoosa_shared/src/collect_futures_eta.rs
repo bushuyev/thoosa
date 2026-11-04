@@ -201,20 +201,9 @@ impl CollectEtaTracker {
     }
 
     fn record_completion_at(&self, id: u64, now: Instant) {
-        let progress_state = {
-            let mut state = self.state_guard();
-            if let Some(invocation) = state.invocations.get_mut(&id) {
-                invocation.record_completion(now);
-                // TODO(perf): this rebuilds/sends the full ETA snapshot on every completion; throttle snapshot construction for very hot loops such as TrainStep.
-                Some(self.build_snapshot(&state, now).progress_state)
-            } else {
-                None
-            }
-        };
-        if let Some(progress_state) = progress_state {
-            let _ = self.progress_tx.send_replace(progress_state);
-        } else {
-            warn!("No invocation for id={id}");
+        let mut state = self.state_guard();
+        if let Some(invocation) = state.invocations.get_mut(&id) {
+            invocation.record_completion(now);
         }
     }
 
@@ -590,7 +579,7 @@ mod tests {
         tracker.record_completion_at(first, now + Duration::from_secs(1));
         tracker.record_completion_at(second, now + Duration::from_secs(2));
         tracker.record_completion_at(second, now + Duration::from_secs(3));
-
+        tracker.maybe_log(true);
         assert_eq!(
             rx.borrow().clone().invocations,
             vec![

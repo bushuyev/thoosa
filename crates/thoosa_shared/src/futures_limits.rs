@@ -247,6 +247,7 @@ impl Drop for FuturesLimitRegistration<'_> {
 }
 
 impl FuturesLimits {
+
     pub fn new() -> Self {
         let initial_limit = std::thread::available_parallelism().map(usize::from).unwrap_or(MIN_SYNC_PARALLELISM);
         let max_limit = initial_limit.saturating_mul(MAX_SYNC_PARALLELISM_MULTIPLIER).max(initial_limit);
