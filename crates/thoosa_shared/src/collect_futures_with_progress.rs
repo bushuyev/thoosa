@@ -182,7 +182,9 @@ where
     I: Iterator<Item = (usize, F)>,
 {
     while tasks.len() + completed_len < limit {
-        let Some((idx, future)) = futures.next() else { return true; };
+        let Some((idx, future)) = futures.next() else {
+            return true;
+        };
         // Child tasks inherit admission, including nested copy collectors. They
         // must drain during recovery rather than wait on their own parent lease.
         let activity = CudaActivityScope::current();
