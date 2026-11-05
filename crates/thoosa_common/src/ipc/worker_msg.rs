@@ -1,4 +1,4 @@
-use log::warn;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
@@ -196,7 +196,7 @@ impl WorkerError {
 
 impl From<WorkerError> for ThoError {
     fn from(error: WorkerError) -> Self {
-        warn!("ThoError::from: WorkerError error={error:?}");
+        debug!("ThoError::from: WorkerError error={error:?}");
 
         let WorkerError { kind, message } = error;
         match kind {
