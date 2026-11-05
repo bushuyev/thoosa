@@ -329,6 +329,7 @@ where
             if let Some(checkpoint) = guard.pending_checkpoint.clone() {
                 // Restart partial imports from immutable CPU storage on every attempt.
                 guard.module.reset_state(checkpoint.info()?)?;
+
                 for (key, tensor) in &checkpoint.tensors {
                     let source = tch_result(tensor.local()?.f_alias())?;
                     let restored = copy_state_tensor(source, to_device_idx).await?;

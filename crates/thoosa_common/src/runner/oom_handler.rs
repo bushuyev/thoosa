@@ -17,7 +17,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use mockall::automock;
 use std::fmt::Debug;
 use std::future::Future;
@@ -1265,8 +1265,8 @@ where
 
                         match run_result {
                             Ok(v) => {
-                                info!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-                                debug!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?}");
+                                debug!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                                trace!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?}");
 
                                 match track_await!(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
                                     InputAdjustedRun::Done(out) => {
@@ -1295,7 +1295,7 @@ where
                                         break;
                                     }
                                 } else {
-                                    warn!("OOMHandler::run, inner error: task={:?} os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                                    warn!("OOMHandler::run, inner error: task={:?} os_thread_id={} \nunexpected error: {te:?}", task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
                                     return Err(te);
                                 }
                             }
