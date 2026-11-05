@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use log::debug;
+use log::{debug, error, info, warn};
 use parking_lot::Mutex;
 use thoosa_shared::{CudaActivityGate, CudaActivityPauseTicket, CudaActivityScope, CudaDeviceGeneration, ThoError};
 use tokio::sync::oneshot;
@@ -103,6 +103,7 @@ impl CudaRecoveryCoordinator {
         let drained = match drain() {
             Ok(drained) => drained,
             Err(error) => {
+                error!("CudaRecoveryCoordinator::request: drain failed: e={error:?}");
                 gate.fail_pause(ticket, Some(error));
                 cycle.take();
                 return Err(gate.failure().expect("failed recovery"));
@@ -125,6 +126,7 @@ impl CudaRecoveryCoordinator {
         let task = runtime.spawn(async move {
             let _guard = guard;
             if let Err(error) = _guard.coordinator.run(ticket, drained, generation, cause).await {//<-- calls thoosa_common::runner::global_ctx::GlobalCtx::cuda_restart
+                error!("CudaRecoveryCoordinator::request: run failed, error={error:?}");
                 _guard.coordinator.fail(ticket, error);
             }
         });
@@ -143,6 +145,7 @@ impl CudaRecoveryCoordinator {
         let device = self.gate.device_idx();
         let drain = async {
             drained.await.map_err(|_| ThoError::new("CUDA recovery reporting executor stopped before draining"))?;
+            info!("CudaRecoveryCoordinator::run: drained ready");
             self.gate.wait_until_idle().await;
             Ok::<_, ThoError>(())
         };
@@ -152,7 +155,7 @@ impl CudaRecoveryCoordinator {
         match tokio::time::timeout(self.drain_timeout, &mut drain).await {
             Ok(result) => result?,
             Err(e) => {
-                debug!("CudaRecoveryCoordinator::run: drain_timeout e={e:?}");
+                warn!("CudaRecoveryCoordinator::run: drain_timeout e={e:?}");
                 // A wedged IPC operation holds its lease and shared buffers until
                 // the worker is dead. Retirement uses a separate control channel.
                 // Only a drain timeout retires early; after a normal drain the
@@ -162,7 +165,7 @@ impl CudaRecoveryCoordinator {
                 tokio::time::timeout(self.drain_timeout, &mut drain).await.map_err(|_| ThoError::new("CUDA activity did not drain after worker retirement"))??;
             }
         }
-        debug!("CudaRecoveryCoordinator::run: calling restart_fn");
+        info!("CudaRecoveryCoordinator::run: calling restart_fn");
 
         tokio::time::timeout(RECOVERY_BACKEND_TIMEOUT, CudaActivityScope::run_recovery(&self.gate, ticket, async {
             (self.restart_fn)(device).await

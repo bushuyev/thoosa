@@ -695,6 +695,7 @@ pub fn register_error_adapter(adapter: fn(anyhow::Error) -> anyhow::Error) {
 
 impl From<anyhow::Error> for ThoError {
     fn from(error: anyhow::Error) -> Self {
+
         let error = if Self::typed_error(&error).is_none() {
             match EXTERNAL_ERROR_ADAPTER.get() {
                 Some(adapter) => adapter(error),

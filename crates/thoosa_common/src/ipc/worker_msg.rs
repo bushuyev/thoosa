@@ -134,7 +134,7 @@ pub struct WorkerError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum WorkerErrorKind {//TODO remove?
+enum WorkerErrorKind {//TODO remove and use ThoError
     Cuda(CudaAction),
     AdjusterFailed,//TODO it can't happen in Worker
     NotFound,//TODO add what
@@ -188,7 +188,9 @@ impl From<ThoError> for WorkerError {
 impl WorkerError {
     pub(crate) fn requires_worker_exit(&self) -> bool {
         match &self.kind {
-            WorkerErrorKind::TrainingSessionFailed { original, recovery } => original.requires_worker_exit() || recovery.as_ref().is_some_and(|error| error.requires_worker_exit()),
+            WorkerErrorKind::TrainingSessionFailed { original, recovery } => {
+                original.requires_worker_exit() || recovery.as_ref().is_some_and(|error| error.requires_worker_exit())
+            },
             _ => matches!(self.kind, WorkerErrorKind::Cuda(CudaAction::NeedsRestart) | WorkerErrorKind::CudaRecoveryFailed { .. }),
         }
     }

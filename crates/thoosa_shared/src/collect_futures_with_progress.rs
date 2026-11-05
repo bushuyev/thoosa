@@ -81,10 +81,10 @@ where
         match result {
             Ok(value) => values.push(value),
             Err(error) if error_policy.skips(&error) => {
-                warn!("collect_futures_with_progress_with_limit: skipping error={error:?}  descr={descr} index={idx}");
+                warn!("collect_futures_with_progress_with_limit: skipping error={error:?} descr={descr} index={idx}");
             }
             Err(error) => {
-                warn!("collect_futures_with_progress_with_limit: error={error:?}");
+                warn!("collect_futures_with_progress_with_limit: failing  error={error:?} descr={descr} index={idx}");
                 // A later fatal completion must not be hidden by an earlier OOM
                 // or ordinary error. Context retains the original typed cause.
                 let replace = failure.as_ref().is_none_or(|original| {
