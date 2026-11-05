@@ -316,7 +316,7 @@ where
                         }
                     }
                     OpResult::Failed(error) => {
-                        warn!("handle_rs: error={error:?}");
+                        debug!("handle_rs: error={error:?}");
                         Err(error.into())
                     }
                 }

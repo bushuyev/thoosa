@@ -754,7 +754,8 @@ impl CudaWorker {
                         }
                     };
                     if let Err(e) = &result {
-                        warn!("run_worker: e={e:?}");
+                        warn!("run_worker: e={e}");
+                        debug!("run_worker: e={e:?}");
                     }
                     let result= result?;
                     debug!("run_worker: invoke endpoint endpoint_key={endpoint_key:?} result={result:?}");

@@ -501,7 +501,7 @@ impl From<SyncStageRunnerError> for ThoError {
 impl Display for ThoError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Cuda { action, msg, backtrace } => write!(f, "CUDA {action:?}: {msg}\n{backtrace}"),
+            Self::Cuda { action, msg, backtrace } => write!(f, "CUDA {action:?}: {msg}"),//run_worker: e=
             Self::CudaRecoveryFailed(failure) => {
                 write!(f, "CUDA recovery failed; original error: {:#}", failure.original)?;
                 if let Some(error) = &failure.recovery {
@@ -579,7 +579,7 @@ impl ThoError {
             Self::Anyhow(anyhow) => {
                 let is_oom = cuda_cause_from_msg(&anyhow.to_string()).is_retryable_oom();
                 if is_oom{
-                    warn!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
+                    debug!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
                 is_oom
             }
@@ -597,7 +597,7 @@ impl ThoError {
             Self::Anyhow(anyhow) => {
                 let is_oom = cuda_cause_from_msg(&anyhow.to_string()).is_retryable_oom();
                 if is_oom{
-                    warn!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
+                    debug!("thoosa_shared::ThoError::is_retryable_oom: anyhow contains oom: {anyhow:?} type={}", anyhow.type_name());
                 }
                 is_oom
             }
