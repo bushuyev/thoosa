@@ -608,7 +608,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         },
         net: FinalNetArgsRangeOrValue {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            mid_features: RangeOrValue::Range { range: Range { start: 8, end: 1000 }, step: None },
+            mid_features: RangeOrValue::Range { range: Range { start: 8, end: 8000 }, step: None },
         },
     };
     AllConfigs{
