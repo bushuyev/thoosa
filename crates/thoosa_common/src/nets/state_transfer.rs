@@ -133,11 +133,14 @@ mod tests {
         let mut tensors = StateTensors::default();
         let metadata = VarStoreState::capture(&original, &mut tensors)?;
         let cpu_copy = tensors.0.keys().map(|key| Ok((key.clone(), tensors.get(key)?))).collect::<Result<Vec<_>, ThoError>>()?;
+
         tensors.clear();
         assert!(!tensors.complete());
         for (key, tensor) in cpu_copy.into_iter().rev() { tensors.set(&key, tensor, 0)?; }
+
         let restored = metadata.restore(&tensors, 0)?;
         assert_eq!(restored.kind(), Kind::Double);
+
         let vars = restored.variables_.lock().unwrap();
         assert_eq!(vars.trainable_variables.len(), 2);
         assert_eq!(vars.trainable_variables[0].group, 2);
