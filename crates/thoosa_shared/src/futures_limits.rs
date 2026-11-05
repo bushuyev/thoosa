@@ -17,7 +17,7 @@ const ENTRY_FUTURE_WEIGHT: usize = 3;
 const DEFAULT_FUTURE_WEIGHT: usize = 1;
 // Increase only after a clean success streak; one OOM per 16 completed sync jobs is excessive.
 const SUCCESSFUL_EXECUTIONS_PER_INCREASE: usize = 4;
-const OOM_RATE_MIN_EXECUTIONS: usize = 16;
+const OOM_RATE_MIN_EXECUTIONS: usize = 8;
 const OOM_RATE_DENOMINATOR: usize = 16;
 const FEEDBACK_WINDOW_CAPACITY: usize = 64;
 

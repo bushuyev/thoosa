@@ -1020,13 +1020,14 @@ pub fn final_net(params: &FinalNetParams) -> anyhow::Result<Node> {
 
     let mut builder = SeqBuilder::new(params.in_features, None)?;
     let mut net = builder
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                trace!("final_net: input=\n{t}");
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )?
+        //TODO enabled for tho_debug
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         trace!("final_net: input=\n{t}");
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )?
         .linear_s(
             params.mid_features * params.in_features,
             "final_net_first_layer".to_string(),
