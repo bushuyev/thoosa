@@ -9,7 +9,7 @@ use thoosa_common::nets::nodes::{BinaryHeadPool, InitMode, ThoModule};
 use thoosa_common::resources::{Empty, Logits, NetResources};
 use thoosa_common::utils::{mask_from_lengths, masked_max, masked_mean};
 
-use log::{debug, trace};
+use log::{debug};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;

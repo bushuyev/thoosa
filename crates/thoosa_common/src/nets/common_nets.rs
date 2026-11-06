@@ -32,7 +32,7 @@ use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Data, DebugId, WithId};
 use thoosa_shared::val::{NamedVal, Val};
 use thoosa_shared::{CopyToDevice, ThoError, panic_to_err_async};
@@ -870,7 +870,7 @@ where
         );
         opt.enqueue_configs(reusable_configs);
         debug!("opt_train: wait on optimize ");
-        let best_config = track_await!(opt.optimize()).await;
+        let best_config = t!(opt.optimize()).await;
         if let Some(error) = recovery_error.write().take() {
             warn!("opt_train: recovery_error={recovery_error:?} ");
 

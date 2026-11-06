@@ -25,7 +25,7 @@ use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mo
 
 pub use crate::stages::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::stages::stage_ids::SELECT_MOTIFS;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 //The overall logic in Find and Select Motifs Stages is as following:
 // Find Motifs - either
 //  * accumulate distance statistics into threshold distance while iterating through slices
@@ -222,7 +222,7 @@ where
         let mut find_motif_run_config_ids_motif_ids = HashMap::new();
         let mut has_motifs = false;
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            let motif_ids = track_await!(store.list_motifs(*find_motifs_run_config_id)).await?;
+            let motif_ids = t!(store.list_motifs(*find_motifs_run_config_id)).await?;
             if !has_motifs && !motif_ids.is_empty() {
                 has_motifs = true;
             }
@@ -283,7 +283,7 @@ where
             let mut ctx = ctx.branch(false);
 
             async move {
-                let motif_stats_output = track_await!(Arc::clone(&motif_stats)
+                let motif_stats_output = t!(Arc::clone(&motif_stats)
                     .run_cached(
                         Arc::new(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::new((motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
@@ -327,7 +327,7 @@ where
             }
         });
 
-        let run_results = track_await!(collect_futures_with_progress(
+        let run_results = t!(collect_futures_with_progress(
             futures,
             motifs_len,
             FuturesOrdering::Unordered,
@@ -369,7 +369,7 @@ where
         debug!("SelectMotifsStage::run: input={input:?}");
 
         let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
-        let resources = track_await!(resources_config.to_resources(&self.store)).await?;
+        let resources = t!(resources_config.to_resources(&self.store)).await?;
 
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
@@ -391,7 +391,7 @@ where
             let self_for_futs = Arc::clone(&self);
 
             async move {
-                let selected_motifs = track_await!(self_for_futs
+                let selected_motifs = t!(self_for_futs
                     .filter_motifs_by_criteria(&select_motifs_run_config, ctx_for_futs.branch(false))).await?;
 
                 if selected_motifs.is_empty() {
@@ -413,7 +413,7 @@ where
             }
         });
 
-        let run_results = track_await!(collect_futures_with_progress(
+        let run_results = t!(collect_futures_with_progress(
             futures,
             run_configs_len,
             FuturesOrdering::Unordered,

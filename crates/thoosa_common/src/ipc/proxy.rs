@@ -10,7 +10,7 @@ use crate::runner::purge::CachePurger;
 use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
 use anyhow::Context as _;
-use log::{debug, warn};
+use log::{debug};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::Any;

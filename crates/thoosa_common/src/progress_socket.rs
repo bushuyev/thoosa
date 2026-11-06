@@ -13,7 +13,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::Instrument;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -149,10 +149,10 @@ impl CollectEtaProgressSocketServer {
     pub async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.as_mut() {
-            let _ = track_await!(task).await;
+            let _ = t!(task).await;
         }
         if let Some(stats_task) = self.stats_task.as_mut() {
-            let _ = track_await!(stats_task).await;
+            let _ = t!(stats_task).await;
         }
     }
 }
@@ -214,15 +214,15 @@ async fn serve_one_client(
 ) -> SocketResult<()> {
     let mut writer = &stream;
     let first = rx.borrow_and_update().clone();
-    track_await!(send_snapshot(&mut writer, &first)).await?;
+    t!(send_snapshot(&mut writer, &first)).await?;
 
     loop {
-        if track_await!(rx.changed()).await.is_err() {
+        if t!(rx.changed()).await.is_err() {
             break;
         }
 
         let snapshot = rx.borrow_and_update().clone();
-        track_await!(send_snapshot(&mut writer, &snapshot)).await?;
+        t!(send_snapshot(&mut writer, &snapshot)).await?;
     }
 
     Ok(())
@@ -234,8 +234,8 @@ where
 {
     let mut bytes = serde_json::to_vec(snapshot)?;
     bytes.push(b'\n');
-    track_await!(writer.write_all(&bytes)).await?;
-    track_await!(writer.flush()).await?;
+    t!(writer.write_all(&bytes)).await?;
+    t!(writer.flush()).await?;
     Ok(())
 }
 

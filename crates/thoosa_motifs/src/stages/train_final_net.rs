@@ -59,7 +59,7 @@ use thoosa_shared::ipc_types::WorkerOutput;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tmp_file::TmpFile;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng};
@@ -104,14 +104,14 @@ where
     // Final training consumes the complete ordered label-feature schema; limiting
     // motif models belongs to label training rather than this constructor.
     //Build a final-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(track_await!(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step)).await?);
+    let apply_label_nets = Arc::new(t!(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step)).await?);
 
     let label_loader = Arc::new(PairStage::new(
         Arc::clone(&loader),
         Arc::clone(&apply_label_nets),
     ));
 
-    track_await!(TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config)).await
+    t!(TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config)).await
 }
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
@@ -168,7 +168,7 @@ impl SavableResult for TrainFinalNetOutput {
 
     async fn save(&mut self, store: &Arc<dyn MotifsStore>, ws: &Arc<RwLock<Box<dyn crate::motifs_ws::MotifsWorkspace>>>, _p: Self::P<'_>) -> anyhow::Result<Vec<u32>> {
         // Report success only after persistence completes, using the actual saved run ID.
-        Ok(vec![track_await!(self.result.save(store, ws, ())).await?])
+        Ok(vec![t!(self.result.save(store, ws, ())).await?])
     }
 }
 
@@ -203,7 +203,7 @@ where
             //Load train/valid logits resources and validate label vector sizes.
             let resources_config = input.resources_config().clone();
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
-                track_await!(resources_config.to_resources(&store)).await?;
+                t!(resources_config.to_resources(&store)).await?;
 
             let labels_len = train_resources.first().ok_or_else(|| ThoError::new("TrainFinalNet::run: no train resources"))?.1.len();
             if labels_len == 0 {
@@ -234,7 +234,7 @@ where
                 "final".to_string(),
             ));
 
-            let result = track_await!(train_net.run(
+            let result = t!(train_net.run(
                 Arc::new(TrainNetInput::new()),
                 ctx.branch(false))).await?;
 
@@ -533,7 +533,7 @@ where
                     async move {
                         debug!("LogitsResourcesBatch::build_batch_stream: resource={resource:?} labels={labels:?}");
                         let tho_device_idx = ctx_for_loader.tho_device_idx();
-                        let label_probability: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = track_await!(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
+                        let label_probability: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = t!(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
 
                         if log_enabled!(DebugLevel) {
 
@@ -549,7 +549,7 @@ where
                     }
                 });
 
-                let (label_probabilities, labels) = track_await!(collect_futures_with_progress(
+                let (label_probabilities, labels) = t!(collect_futures_with_progress(
                     futures,
                     batch_len,
                     FuturesOrdering::Ordered,
@@ -575,7 +575,7 @@ where
                     Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                     Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("sync_label_batch"))),
                 ], None);
-                let output = track_await!(oom_handler.run(
+                let output = t!(oom_handler.run(
                     &stage,
                     input,
                     ctx_for_batch.branch(false),
@@ -1071,7 +1071,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         // The constructor uses this exact order for feature positions; persist it with the weights.
         self.final_node_params.set_label_feature_schema(self.train_label_nets_run_config_ids.clone())?;
 
-        let run_config_id = track_await!(store.save_run_config(
+        let run_config_id = t!(store.save_run_config(
             Some(&self.train_label_nets_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
@@ -1081,7 +1081,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         let path = ws.read()
             .save_final_net(run_config_id, (&self.var_store_path).into(), &self.final_node_params)?;
 
-        track_await!(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
+        t!(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
         Ok(run_config_id)
     }

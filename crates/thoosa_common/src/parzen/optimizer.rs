@@ -13,7 +13,7 @@ use std::marker::PhantomData;
 use tch::Tensor;
 use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::val::{NamedVal, Val};
 
 #[derive(Debug, Clone)]
@@ -675,7 +675,7 @@ where
                 .collect::<Vec<_>>();
 
             debug!("AsyncTPEOptimizerImpl::optimize:sample about to call obj_func  i={i} ");
-            let results = track_await!(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
+            let results = t!(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
             debug!("AsyncTPEOptimizerImpl::optimize:sample got results from obj_func results={results:?} i={i} ");
 
             let loss = results.loss();
@@ -789,7 +789,7 @@ where
     }
 
     pub async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
-        track_await!(self.inner.optimize()).await
+        t!(self.inner.optimize()).await
     }
 
     pub fn enqueue_configs<I>(&mut self, configs: I)
@@ -834,7 +834,7 @@ where
     }
 
     pub async fn optimize(&mut self) -> anyhow::Result<Vec<Val>> {
-        track_await!(self.inner.optimize()).await
+        t!(self.inner.optimize()).await
     }
 
     pub fn enqueue_configs<I>(&mut self, configs: I)

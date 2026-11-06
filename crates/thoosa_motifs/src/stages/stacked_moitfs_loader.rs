@@ -23,7 +23,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RunCtx, Select, Stage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 
@@ -89,7 +89,7 @@ impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(StackedMotifsOutput {
             id:self.id.clone(),
-            motifs: track_await!(self.motifs.copy_to_device(dst_device)).await?,
+            motifs: t!(self.motifs.copy_to_device(dst_device)).await?,
         })
 
     }
@@ -205,7 +205,7 @@ where
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let find_motifs_run_config_id = find_motifs_run_config_id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
-        let motif_ids = track_await!(self
+        let motif_ids = t!(self
             .store
             .list_motifs(find_motifs_run_config_id)).await?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
@@ -227,13 +227,13 @@ where
                     let motif_id_wrap = Arc::new(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone());//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
 
                     // Each requested motif contributes to the stack; a failed load is not an absent motif.
-                    let motif = track_await!(motif_loader_clone.run_cached(motif_id_wrap, ctx.branch(false))).await?;
+                    let motif = t!(motif_loader_clone.run_cached(motif_id_wrap, ctx.branch(false))).await?;
                     debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
                     Ok::<_, ThoError>(motif)
                 }
             });
 
-        let loaded_motifs = track_await!(collect_futures_with_progress(
+        let loaded_motifs = t!(collect_futures_with_progress(
             futures,
             motif_ids_len,
             FuturesOrdering::Ordered,

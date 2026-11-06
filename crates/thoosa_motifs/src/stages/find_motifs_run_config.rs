@@ -25,7 +25,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Named};
 use thoosa_shared::val::Val;
 use thoosa_shared::F64BitsKey;
@@ -1606,7 +1606,7 @@ impl SavableResult for SelectMotifsSavableResult {
     ) -> anyhow::Result<u32> {
 
         for run_result in &self.run_results {
-            track_await!(store.save_selected_motifs(
+            t!(store.save_selected_motifs(
                 run_result.run_config.id.expect("should be pre saved in run_grid"),
                 run_result.selected_motif_ids_scores.clone()
             )).await?;

@@ -179,11 +179,9 @@ mod tests {
         is_installed_ctx.expect().return_const(false);
 
         let t_ref:ThoTensor<AnyDims, SynKey> = ThoTensor::new_ref(mono_key!(0u32, "test").into(), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
-        // let t_ref:ThoTensor<AnyDims, ()> = ThoTensor::new_ref((), 10, vec![3,10], Kind::Float,  None, crate::ipc::worker_msg::CudaWorkerId { device_idx: 2, generation: thoosa_shared::CudaDeviceGeneration(7) });
 
         let cuda_tensor_bytes = serde_json::to_vec(&t_ref).unwrap();
         let cuda_tensor:ThoTensor<AnyDims, SynKey> = serde_json::from_slice(&cuda_tensor_bytes).unwrap();
-        // let cuda_tensor:ThoTensor<AnyDims, ()> = serde_json::from_slice(&cuda_tensor_bytes).unwrap();
 
         debug!("cuda_tensor={cuda_tensor:?}");
 

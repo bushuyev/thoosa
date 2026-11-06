@@ -12,7 +12,7 @@ use thoosa_cpu_data_derive::CpuData;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::Data;
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_store::{SqlStore, Store, TrainedNetsBy};
@@ -177,20 +177,20 @@ where
         let target_store_path = { target_ws.read().store_path().clone() };
         {
             // Opening the target store initializes the common schema before application records are copied.
-            let target_store = track_await!(SqlStore::from_path(&target_store_path)).await?;
+            let target_store = t!(SqlStore::from_path(&target_store_path)).await?;
             drop(target_store);
         }
 
-        let exported_model_run_config_ids = track_await!(self.exported_model_run_config_ids()).await?;
+        let exported_model_run_config_ids = t!(self.exported_model_run_config_ids()).await?;
         if exported_model_run_config_ids.is_empty() {
             warn!("Export::run: no model run configs found for export");
         }
 
-        let (dependency_model_run_config_ids, copied_models) = track_await!(self.copy_required_models(&target_ws, exported_model_run_config_ids.as_slice())).await?;
-        track_await!(self.store.export_model_records(target_store_path, exported_model_run_config_ids.clone())).await?;
+        let (dependency_model_run_config_ids, copied_models) = t!(self.copy_required_models(&target_ws, exported_model_run_config_ids.as_slice())).await?;
+        t!(self.store.export_model_records(target_store_path, exported_model_run_config_ids.clone())).await?;
 
         let converted = if let Some(target_precision) = self.args.target_precision {
-            let output = track_await!(Arc::new(ConvertPrecisionStage::<C, W, W::ModelType>::new(
+            let output = t!(Arc::new(ConvertPrecisionStage::<C, W, W::ModelType>::new(
                 &target_ws,
                 ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(W::all_model_type()), target_precision),
             ))
@@ -220,10 +220,10 @@ where
     }
 
     async fn exported_model_run_config_ids(&self) -> anyhow::Result<Vec<RunConfigId>> {
-        let groups = track_await!(self.store.list_export_groups()).await?;
+        let groups = t!(self.store.list_export_groups()).await?;
         let mut ids = Vec::new();
         for group in groups {
-            ids.extend(track_await!(self.store.list_exported_model_run_config_ids(&group)).await?);
+            ids.extend(t!(self.store.list_exported_model_run_config_ids(&group)).await?);
         }
         ids.sort_unstable();
         ids.dedup();
@@ -231,15 +231,15 @@ where
     }
 
     async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<W>>>, exported_model_run_config_ids: &[RunConfigId]) -> anyhow::Result<(Vec<RunConfigId>, Vec<PathBuf>)> {
-        let exported_models = track_await!(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(exported_model_run_config_ids.to_vec()), None, None)).await?;
+        let exported_models = t!(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(exported_model_run_config_ids.to_vec()), None, None)).await?;
         let mut dependency_model_run_config_ids = Vec::new();
         for model in &exported_models {
-            dependency_model_run_config_ids.extend(track_await!(self.store.list_input_nets(model.id)).await?);
+            dependency_model_run_config_ids.extend(t!(self.store.list_input_nets(model.id)).await?);
         }
         dependency_model_run_config_ids.sort_unstable();
         dependency_model_run_config_ids.dedup();
 
-        let dependency_models = track_await!(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(dependency_model_run_config_ids.clone()), None, None)).await?;
+        let dependency_models = t!(self.store.list_trained_nets(TrainedNetsBy::RunConfigIds(dependency_model_run_config_ids.clone()), None, None)).await?;
         let mut copied = Vec::new();
         let mut copied_targets = HashSet::new();
         {

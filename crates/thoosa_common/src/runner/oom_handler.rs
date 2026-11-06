@@ -17,13 +17,13 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use mockall::automock;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::tracked_await::t;
 use thoosa_shared::traits::{Adjustable, Data, RunCtx, ThoSelector, WithId};
 use thoosa_shared::ThoError;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
@@ -355,7 +355,7 @@ where
     async fn adjust_input(&self, input_select_adjusted: &mut Option<S>, contexts: &mut C) -> Result<(), ThoError> {
         let base_selector = input_select_adjusted.clone().unwrap_or_default();
 
-        match track_await!(self.adjust(base_selector, contexts.input_context())).await {
+        match t!(self.adjust(base_selector, contexts.input_context())).await {
             Ok(v) => {
                 debug!("InputAdjustment::adjust_input: input adjuster ok: {v:?}");
                 *input_select_adjusted = Some(v);
@@ -382,12 +382,12 @@ where
 
     async fn handle_success(out: R::Out, mut contexts: C) -> Result<InputAdjustedRun<C, R::Out>, ThoError> {
         // Assembly failures retain their recovery category and must stop this split.
-        track_await!(contexts.input_context().add_partial_output(out)).await?;
+        t!(contexts.input_context().add_partial_output(out)).await?;
 
         let all_done = contexts.input_context().all_done();
 
         if all_done {
-            Ok(InputAdjustedRun::Done(track_await!(contexts.into_input_context().build_final_output()).await?))
+            Ok(InputAdjustedRun::Done(t!(contexts.into_input_context().build_final_output()).await?))
         } else {
             Ok(InputAdjustedRun::Continue(contexts))
         }
@@ -424,7 +424,7 @@ where
     C: HasRunnableContext<RC>,
 {
     async fn adjust_task(&self, task: &mut Option<Arc<R>>, contexts: &mut C) -> Result<(), ThoError> {
-        match track_await!(self.adjust(task.take().expect("adjust_task: missing task"), contexts.runnable_context())).await {
+        match t!(self.adjust(task.take().expect("adjust_task: missing task"), contexts.runnable_context())).await {
             Ok(v) => {
                 debug!("OOMHandler::run, error, task adjuster ok: {v:?}");
                 *task = Some(v);
@@ -474,7 +474,7 @@ where
     C: HasRunCtxContext<RCC>,
 {
     async fn adjust_run_ctx(&self, run_context: &mut Option<Ctx>, contexts: &mut C) -> Result<(), ThoError> {
-        match track_await!(self.adjust(run_context.take().expect("adjust_run_ctx: missing run context"), contexts.run_ctx_context())).await {
+        match t!(self.adjust(run_context.take().expect("adjust_run_ctx: missing run context"), contexts.run_ctx_context())).await {
             Ok(v) => {
                 debug!("OOMHandler::run, error, run context adjuster ok: {v:?}");
                 *run_context = Some(v);
@@ -509,9 +509,9 @@ impl<IA, TA, CA> Adjusters<IA, TA, CA> {
         CA: RunContextAdjustment<R::Ctx, C>,
     {
         match self {
-            Adjusters::Input(v) => track_await!(v.adjust_input(input_select_adjusted, contexts)).await,
-            Adjusters::Stage(v) => track_await!(v.adjust_task(task, contexts)).await,
-            Adjusters::RunContext(v) => track_await!(v.adjust_run_ctx(run_context, contexts)).await,
+            Adjusters::Input(v) => t!(v.adjust_input(input_select_adjusted, contexts)).await,
+            Adjusters::Stage(v) => t!(v.adjust_task(task, contexts)).await,
+            Adjusters::RunContext(v) => t!(v.adjust_run_ctx(run_context, contexts)).await,
         }
     }
 
@@ -728,7 +728,7 @@ where
         return crate::runner::execution::ExecutionContext::Cpu.run_stage(task, input, 0, &run_ctx).await;
     }
 
-    track_await!(oom_executor(tho_device_idx).submit(
+    t!(oom_executor(tho_device_idx).submit(
         run_ctx.max_other_parallel().into(),
         async move {
             let execution = GlobalCtx::global().execution(tho_device_idx);
@@ -759,7 +759,7 @@ where
         return crate::runner::execution::ExecutionContext::Cpu.consume_stage(task, input, 0, run_ctx).await;
     }
 
-    track_await!(oom_executor(tho_device_idx).submit_consume(
+    t!(oom_executor(tho_device_idx).submit_consume(
         run_ctx.max_other_parallel().into(),
         async move {
             let execution = GlobalCtx::global().execution(tho_device_idx);
@@ -792,7 +792,7 @@ where
         return crate::runner::execution::ExecutionContext::Cpu.run_stage_with_select(task, input, selector, 0, &run_ctx).await;
     }
 
-    track_await!(oom_executor(tho_device_idx).submit(
+    t!(oom_executor(tho_device_idx).submit(
         run_ctx.max_other_parallel().into(),
         async move {
             let execution = GlobalCtx::global().execution(tho_device_idx);
@@ -836,7 +836,7 @@ where
         retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError> {
         let _ = selector;
-        track_await!(run_stage_borrowed(task, input, tho_device_idx, run_ctx, retry)).await
+        t!(run_stage_borrowed(task, input, tho_device_idx, run_ctx, retry)).await
     }
 }
 
@@ -858,7 +858,7 @@ where
         run_ctx: R::Ctx,
         retry: Option<RetryToken>,
     ) -> Result<R::Out, ThoError> {
-        track_await!(run_stage_selected(task, input, selector, tho_device_idx, run_ctx, retry)).await
+        t!(run_stage_selected(task, input, selector, tho_device_idx, run_ctx, retry)).await
     }
 }
 
@@ -905,12 +905,12 @@ where
         // Cache aliases, removed cache entries, and temporary inputs behave alike.
         let _inputs = input.protect(run_context.tho_device_idx());
         if run_context.tho_device_idx() == 0 {
-            return track_await!(<IA as InputRun<R, W, S>>::run_stage(Arc::clone(task), input, None, 0, run_context, None)).await;
+            return t!(<IA as InputRun<R, W, S>>::run_stage(Arc::clone(task), input, None, 0, run_context, None)).await;
         }
 
         let _tho_device_idx = run_context.tho_device_idx();
 
-        track_await!(run_with_runner(
+        t!(run_with_runner(
             &self.adjusters,
             Arc::clone(task),
             input,
@@ -930,7 +930,7 @@ where
                             ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
 
                  */
-                track_await!(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, retry)).await
+                t!(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, retry)).await
             },
         )).await
     }
@@ -959,7 +959,7 @@ where
     {
 
 
-        track_await!(run_with_runner_consume(
+        t!(run_with_runner_consume(
             &self.adjusters,
             Arc::clone(task),
             input,
@@ -967,7 +967,7 @@ where
             contexts,
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, retry| async move {
                 debug!("OOMHandler::consume: task={task:?} run_ctx={run_ctx:?} max_other_parallel={}", run_ctx.max_other_parallel());
-                track_await!(consume_stage_owned(task, input, tho_device_idx, run_ctx, retry)).await
+                t!(consume_stage_owned(task, input, tho_device_idx, run_ctx, retry)).await
             },
         )).await
     }
@@ -1009,7 +1009,7 @@ where
             pd: PhantomData,
         });
 
-        let output = track_await!(run_with_runner_impl(
+        let output = t!(run_with_runner_impl(
             &self.adjusters,
             stage,
             #[cfg(tho_debug)]
@@ -1066,7 +1066,7 @@ where
         let max_other_parallel = run_ctx.max_other_parallel();
 
         // Constructor work enters the same executor as do_run/consume so OOM retries retain job identity and can become exclusive.
-        track_await!(oom_executor(device_idx).submit(
+        t!(oom_executor(device_idx).submit(
             max_other_parallel.into(),
             async move {
                 let stage = panic_to_err_async!(init.init(run_ctx, ws))?;
@@ -1133,7 +1133,7 @@ where
         let input = self.input.take().expect("ConsumeRunnerRetryAdapter::run: missing input");
         let runner = &self.runner;
 
-        let run_result = match track_await!(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO use panic_to_err_async?
+        let run_result = match t!(futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({//TODO use panic_to_err_async?
             runner(task, input, selector, device_idx, run_ctx, retry)
         }))).await
         {
@@ -1144,7 +1144,7 @@ where
         match run_result {
             ConsumeResult::Ok(output) => Ok(output),
             ConsumeResult::Failed { input, error } => {
-                let restored = track_await!(W::burp(input)).await;
+                let restored = t!(W::burp(input)).await;
                 // Consumption rebuilds registrations. Reacquire from the new
                 // handles before the next OOM adjustment can offload anything.
                 self.leases = restored.protect(device_idx);
@@ -1192,7 +1192,7 @@ where
     let mut input_select_adjusted: Option<S> = None;
 
 
-    match track_await!(runner
+    match t!(runner
         .run(
             Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
             None,
@@ -1227,7 +1227,7 @@ where
 
                         debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
-                        let adjust_result = track_await!(adjuster.apply(
+                        let adjust_result = t!(adjuster.apply(
                             &mut task,
                             &mut run_context,
                             &mut input_select_adjusted,
@@ -1257,7 +1257,7 @@ where
 
                         debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} max_other_parallel={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
-                        let run_result = track_await!(runner
+                        let run_result = t!(runner
                             .run(
                                 Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
                                 input_select_adjusted.clone(),
@@ -1276,7 +1276,7 @@ where
                                 debug!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} task={:?} os_thread_id={} adjuster={adjuster:?} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
                                 trace!("OOMHandler::run, error: got ok ctx_id={ctx_id:?} v={v:?}");
 
-                                match track_await!(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
+                                match t!(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
                                     InputAdjustedRun::Done(out) => {
                                         collect_eta_record_oom_success();
 
@@ -1319,7 +1319,7 @@ where
 
             warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
             #[cfg(tho_debug)]
-            track_await!(GlobalCtx::global().debug_caches(device_idx, &format!("all_failed for {}", input_id_dbg))).await;
+            t!(GlobalCtx::global().debug_caches(device_idx, &format!("all_failed for {}", input_id_dbg))).await;
 
             #[cfg(tho_debug)]
             GlobalCtx::global().execution(device_idx).debug_worker().await?;
@@ -1361,7 +1361,7 @@ where
     #[cfg(tho_debug)]
     let input_id_dbg = format!("input={:?}", input);
 
-    track_await!(run_with_runner_impl(
+    t!(run_with_runner_impl(
         adjusters,
         stage,
         #[cfg(tho_debug)]
@@ -1400,7 +1400,7 @@ where
 
 
     let leases = input.protect(run_context.tho_device_idx());
-    track_await!(run_with_runner_impl(
+    t!(run_with_runner_impl(
         adjusters,
         stage,
         #[cfg(tho_debug)]
