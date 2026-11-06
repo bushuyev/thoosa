@@ -39,7 +39,7 @@ IPC tensor data travels through a shared CPU memory arena, while requests travel
 
 [`Runtime`](../crates/thoosa_common/src/runner/global_ctx.rs) owns device services, runners, caches, residency management, and recovery coordination. `RunSession` binds a run identity to that runtime; `GlobalCtx` provides compatibility access to the installed runtime and session.
 
-[`OOMHandler`](../crates/thoosa_common/src/runner/oom_handler.rs) retries recoverable out-of-memory failures using caller-supplied adjusters. Depending on the operation, these can reduce concurrency, free GPU memory, split input into chunks, or reduce a stage's memory requirements. The handler collects partial results when processing chunks. See [OOM handling](oom.md) for the retry flow.
+[`OOMHandler`](../crates/thoosa_common/src/runner/oom_handler.rs) retries recoverable out-of-memory failures using caller-supplied adjusters. Depending on the operation, these can reduce concurrency, free GPU memory, split input into chunks, or reduce a stage's memory requirements. The handler collects partial results when processing chunks. See [OOM handling](sync_oom.md) for the retry flow.
 
 Fatal CUDA errors follow a separate recovery path: IPC mode can retire the worker, invalidate its GPU data, and start a replacement. Local mode requests application shutdown because the process's CUDA state may be unusable.
 
