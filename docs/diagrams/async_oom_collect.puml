@@ -1,0 +1,32 @@
+@startuml
+title Adaptive concurrency: collector flow
+skinparam shadowing false
+start
+:Register description with FuturesLimits;\nretain registration guard;
+:Clone watch receiver; read allowance;
+:Fill JoinSet while\ntasks + ordered buffer < allowance;
+while (JoinSet contains tasks?) is (yes)
+  :Wait for watch change OR task completion;
+  if (Task completed?) then (yes)
+    :Record indexed result and progress;
+    if (Ordered collection?) then (yes)
+      :Buffer result; move consecutive\ncompleted indices to outcomes;
+    else (no)
+      :Append result to outcomes;
+    endif
+  else (watch change)
+    :Keep existing tasks running;
+  endif
+  :Read latest allowance;
+  :If iterator not exhausted, fill JoinSet\nwhile tasks + ordered buffer < allowance;
+  note right
+    A larger allowance admits more work immediately.
+    A smaller allowance lets existing work drain.
+    No tasks are cancelled to enforce a decrease.
+  end note
+endwhile (no)
+:Apply CollectionErrorPolicy\nto collected outcomes;
+:Drop registration; rebalance\nremaining collectors;
+:Return values or error;
+stop
+@enduml

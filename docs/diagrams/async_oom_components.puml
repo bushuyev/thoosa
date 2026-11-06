@@ -1,0 +1,50 @@
+@startuml
+title Adaptive concurrency: main components
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+hide empty members
+class "collect_futures_with_progress" as Collector {
+  collect_outcomes()
+  fill_joinset()
+}
+class FuturesLimitRegistration {
+  receiver()
+  drop(): unregister
+}
+class FuturesLimits {
+  register(descr)
+  forget(descr)
+  on_oom()
+  on_ok()
+  rebalance_future_limits()
+}
+class DynamicFutureLimit {
+  watch sender / receiver
+}
+class SyncExecutionLimiter {
+  shared budget and permits
+}
+class SyncStageRunner {
+  execute attempt
+  classify JobFeedback
+}
+class "Tokio JoinSet" as Tasks
+Collector --> FuturesLimitRegistration : retains for invocation
+FuturesLimitRegistration --> FuturesLimits : unregisters on drop
+FuturesLimits *-- "per description" DynamicFutureLimit
+FuturesLimits *-- SyncExecutionLimiter
+Collector ..> DynamicFutureLimit : watches allowance
+Collector --> Tasks : spawns within allowance
+Tasks ..> SyncStageRunner : futures may submit stages
+SyncStageRunner --> FuturesLimits : Oom / Success feedback
+SyncStageRunner --> SyncExecutionLimiter : acquires shared permits
+note bottom of Collector
+  Ordered buffered completions also
+  occupy the collector allowance.
+end note
+note bottom of FuturesLimits
+  Rebalances on registration changes
+  and budget adjustments.
+  All device runners share the budget.
+end note
+@enduml
