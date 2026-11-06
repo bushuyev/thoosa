@@ -1,0 +1,38 @@
+@startuml
+title Adaptive concurrency: execution feedback
+skinparam shadowing false
+start
+:SyncStageRunner finishes an attempt;
+if (JobFeedback?) then (OOM)
+  :on_oom(): reset success streak;
+  :Block increases for 4 successes;
+  :Append OOM; retain last 64 samples;
+  if (At least 4 samples AND\nOOM count * 16 >= sample count?) then (yes)
+    :Budget = max(2, budget - 1);
+    :Clear feedback window and streak;
+  else (no)
+    stop
+  endif
+elseif (JobFeedback?) then (Success)
+  :on_ok(): append success;\nretain last 64 samples;
+  :Increment success streak;
+  if (Increase block > 0?) then (yes)
+    :Decrement block counter;
+    stop
+  else (no)
+    if (Success streak >= 4?) then (yes)
+      :Budget = min(maximum, budget + 1);
+      :Reset success streak;
+    else (no)
+      stop
+    endif
+  endif
+else (Neutral)
+  :Leave feedback state unchanged;
+  stop
+endif
+:Notify synchronous capacity watchers;
+:Rebalance weighted collector allowances;\nkeep forced allowances;
+:Publish collector watch values\nand progress snapshot;
+stop
+@enduml
