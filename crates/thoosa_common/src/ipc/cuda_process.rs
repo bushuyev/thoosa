@@ -1,7 +1,7 @@
 use thoosa_common::tch_error::tch_result;
 use super::pending::{KeepAlive, PendingRequests};
 use super::endpoints::{EndpointEvent, EndpointKey, EndpointRegistration, EndpointRegistry};
-use crate::copy_ctx::{CudaActorHandle};
+use crate::cuda_copier::{CudaActorHandle};
 use crate::cuda_utils::tensor_mem_size;
 use crate::ipc::ipc_cuda_utils::send_fd;
 use crate::ipc::serialization::{PostcardToFromBytes, ToFromBytes};
@@ -593,7 +593,7 @@ impl CudaIPCActor {
 
                 Self::do_ref_d2h_copy(worker_id, transfer_id, pending, tx, info, None).await.map(IpcCopyResult::Tensor)
             }.await;
-            let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
+            let _ = respond_to.send(crate::cuda_copier::report_cuda_copy_result(result, &gate, generation));
         }));
         Ok(())
     }
@@ -646,12 +646,12 @@ impl CudaIPCActor {
                     // Request errors do not break transport. The worker releases
                     // its transaction lease even when finishing fails.
                     if let Err(cleanup_error) = cleanup {
-                        let error = crate::copy_ctx::finish_cuda_error(error, Err(cleanup_error));
-                        let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
+                        let error = crate::cuda_copier::finish_cuda_error(error, Err(cleanup_error));
+                        let _ = respond_to.send(crate::cuda_copier::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
                         return;
                     }
                 }
-                let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
+                let _ = respond_to.send(crate::cuda_copier::report_cuda_copy_result(Err(error), &gate, worker_id.generation));
             }
             Ok(mut dump) => {
                 let (decision, decided) = oneshot::channel();
@@ -667,7 +667,7 @@ impl CudaIPCActor {
                     }
                 };
                 let result = finish(commit).await.and_then(unit_reply);
-                let result = crate::copy_ctx::report_cuda_copy_result(result, &gate, worker_id.generation);
+                let result = crate::cuda_copier::report_cuda_copy_result(result, &gate, worker_id.generation);
                 let _ = completed.send(result);
             }
         }
@@ -759,7 +759,7 @@ impl CudaIPCActor {
                     (expected, actual) => Err(ThoError::new(format!("worker H2D returned {actual:?} for destination {expected:?}"))),
                 }
             }.await;
-            let _ = respond_to.send(crate::copy_ctx::report_cuda_copy_result(result, &gate, generation));
+            let _ = respond_to.send(crate::cuda_copier::report_cuda_copy_result(result, &gate, generation));
         }));
 
         Ok(())
@@ -1569,7 +1569,7 @@ pub(crate) struct DeviceInfo {
 mod tests {
     use crate::tch_error::tch_result;
     use super::{BackendControl, PendingRequests};
-    use crate::copy_ctx::CudaActorHandle;
+    use crate::cuda_copier::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, speed_gb_per_s};
     use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle, CudaIPCActorMessage};
     use crate::ipc::cuda_wokrer::CudaWorker;

@@ -1,6 +1,6 @@
 use crate::ipc::state_transfer::{StateTransfer, CheckpointRestore};
 use crate::runner::sync_stage::{ConsumingStage, PrepareStage};
-use crate::copy_ctx::{HandleCtx, run_cuda_stage};
+use crate::cuda_copier::{HandleCtx, run_cuda_stage};
 use crate::ipc::cuda_wokrer::{AllTensors, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::serialization::json::IpcCodec;
 use crate::ipc::worker_msg::WorkerInput;
@@ -520,7 +520,7 @@ pub(crate) mod mock_stateful_worker {
 mod tests {
     use super::*;
     use super::mock_stateful_worker::MockStatefulWorkerBuilder;
-    use crate::copy_ctx::MockHandleCtx;
+    use crate::cuda_copier::MockHandleCtx;
     use crate::ipc::worker_msg::CudaWorkerId;
 
     #[test]

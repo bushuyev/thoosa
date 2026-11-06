@@ -13,7 +13,7 @@ pub mod run_config_loader;
 pub mod tho_device;
 
 pub mod bool_iter;
-pub mod copy_ctx;
+pub mod cuda_copier;
 pub mod cuda_utils;
 pub mod dims;
 pub mod parzen;

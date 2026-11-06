@@ -173,7 +173,7 @@ struct CudaLocalActor {
     gate: Arc<CudaActivityGate>,
     tho_device_idx:usize,
     receiver: mpsc::Receiver<CudaLocalActorMessage>,
-    copy_ctx:Arc<RwLock<CopyCtx>>,
+    cuda_copier:Arc<RwLock<CudaCopier>>,
 }
 
 impl CudaLocalActor {
@@ -185,7 +185,7 @@ impl CudaLocalActor {
         Ok(Self {
             tho_device_idx,
             receiver,
-            copy_ctx: Arc::new(RwLock::new(CopyCtx::with_gate(Arc::clone(&gate), 0.2, 32)?)),
+            cuda_copier: Arc::new(RwLock::new(CudaCopier::with_gate(Arc::clone(&gate), 0.2, 32)?)),
             gate,
         })
     }
@@ -198,13 +198,13 @@ impl CudaLocalActor {
                     let _ = respond_to.send(Err(error));
                     return;
                 }
-                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let cuda_copier = Arc::clone(&self.cuda_copier);
                 let gate = Arc::clone(&self.gate);
                 let generation = activity.generation(&gate).expect("batch copy device lease");
                 // Accepted copies keep their owners and activity even if the
                 // checkpoint caller disappears before receiving the batch.
                 tokio::spawn(activity.run(async move {
-                    let result = copy_ctx.read().await.copy_batch_to_cpu(sources.into_inner()).await;
+                    let result = cuda_copier.read().await.copy_batch_to_cpu(sources.into_inner()).await;
                     let _ = respond_to.send(report_cuda_copy_result(result, &gate, generation));
                 }));
             }
@@ -216,7 +216,7 @@ impl CudaLocalActor {
                     return;
                 }
 
-                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let cuda_copier = Arc::clone(&self.cuda_copier);
                 let gate = Arc::clone(&self.gate);
                 let generation = activity.generation(&gate).expect("copy device lease");
                 tokio::spawn(activity.run(async move {
@@ -224,7 +224,7 @@ impl CudaLocalActor {
                     // Move the allocation into the low-level transfer; retaining it
                     // only in this async task is insufficient during shutdown.
                     let result = match src.into_local() {
-                        Ok(src) => copy_ctx.read().await.copy(src, dst_device.tho_device_idx()).await,
+                        Ok(src) => cuda_copier.read().await.copy(src, dst_device.tho_device_idx()).await,
                         Err(error) => Err(error),
                     };
 
@@ -238,10 +238,10 @@ impl CudaLocalActor {
                     let _ = respond_to.send(Err(error));
                     return;
                 }
-                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let cuda_copier = Arc::clone(&self.cuda_copier);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
-                    let result = Self::do_restart(copy_ctx, tho_device_idx).await;
+                    let result = Self::do_restart(cuda_copier, tho_device_idx).await;
                     let _ = respond_to.send(result);
                 });
             }
@@ -252,11 +252,11 @@ impl CudaLocalActor {
                     );
                     return;
                 }
-                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let cuda_copier = Arc::clone(&self.cuda_copier);
                 tokio::spawn(async move {
                     // The response owns the lease too: caller cancellation must
                     // not let recovery replace a stream still being acquired.
-                    let result = match copy_ctx.read().await.acquire_exec_stream().await {
+                    let result = match cuda_copier.read().await.acquire_exec_stream().await {
                         Ok(stream) => Ok(LocalHandleCtx { stream, _activity: activity }),
                         Err(error) => Err(error),
                     };
@@ -266,15 +266,15 @@ impl CudaLocalActor {
         }
     }
 
-    async fn do_restart(copy_ctx: Arc<RwLock<CopyCtx>>, tho_device_idx: usize) -> Result<(), ThoError> {
+    async fn do_restart(cuda_copier: Arc<RwLock<CudaCopier>>, tho_device_idx: usize) -> Result<(), ThoError> {
         // Cache cleanup and admission transitions belong to the coordinator.
         let device: ThoDevice = tho_device_idx.into();
-        let mut copy_ctx = timeout(Duration::from_secs(30), copy_ctx.write_owned()).await?;
+        let mut cuda_copier = timeout(Duration::from_secs(30), cuda_copier.write_owned()).await?;
         tokio::task::spawn_blocking(move || {
             // CUDA context binding is thread-local; do not hold it across await.
             let mut cu_ctx = ThoCudaContext::new(i32::try_from(device.gpu_ordinal()?)?)?;
             cu_ctx.restart()?;
-            copy_ctx.restart()
+            cuda_copier.restart()
         }).await?
     }
 
@@ -485,8 +485,7 @@ impl CudaActorHandle for CudaLocalActorHandle {
     }
 }
 
-
-pub struct CopyCtx {
+pub struct CudaCopier {
     gate: Arc<CudaActivityGate>,
     cuda_device: usize,
 
@@ -497,9 +496,9 @@ pub struct CopyCtx {
     bufs_pool_h2d: Arc<CopyBufferPool>,
 }
 
-impl Debug for CopyCtx {
+impl Debug for CudaCopier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CopyCtx")
+        f.debug_struct("CudaCopier")
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
             .field("bufs_pool.remaining_capacity", &self.bufs_pool_h2d.remaining_capacity())
@@ -507,15 +506,15 @@ impl Debug for CopyCtx {
     }
 }
 
-impl CopyCtx {
+impl CudaCopier {
 
-    pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> Result<CopyCtx, ThoError> {
+    pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> Result<CudaCopier, ThoError> {
         // Standalone contexts (including IPC workers) own their admission state.
         // Local actors instead inject the gate shared with their stage runner.
         Self::with_gate(Arc::new(CudaActivityGate::new(cuda_device + 1)), mem_k, buffs)
     }
 
-    fn with_gate(gate: Arc<CudaActivityGate>, mem_k: f64, buffs: usize) -> Result<CopyCtx, ThoError> {
+    fn with_gate(gate: Arc<CudaActivityGate>, mem_k: f64, buffs: usize) -> Result<CudaCopier, ThoError> {
         let cuda_device = gate.device_idx() - 1;
 
         debug!("make_instance_for_cuda_device: cuda_device={cuda_device} mem_k={mem_k} buffs={buffs}");
@@ -605,11 +604,11 @@ impl CopyCtx {
         let max_elt_size = init_type.elt_size_in_bytes();
         let elts_in_mem = (total_mem as f64 * mem_k) as usize / max_elt_size; //123456; //25000; //123456; //
 
-        debug!("CopyCtx::clc_buff_size: elts_in_mem={elts_in_mem} total_mem={total_mem} max_elt_size={max_elt_size}");
+        debug!("CudaCopier::clc_buff_size: elts_in_mem={elts_in_mem} total_mem={total_mem} max_elt_size={max_elt_size}");
 
         let elts_in_buff = elts_in_mem / buffs;
 
-        debug!("CopyCtx::clc_buff_size: elts_in_buff={elts_in_buff} buffs={buffs}");
+        debug!("CudaCopier::clc_buff_size: elts_in_buff={elts_in_buff} buffs={buffs}");
 
         let buf_size = elts_in_buff * max_elt_size;
         buf_size

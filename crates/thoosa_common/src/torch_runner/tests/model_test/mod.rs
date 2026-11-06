@@ -31,18 +31,6 @@ fn init() {
     thoosa_shared::test_utils::init_test_logging();
 }
 
-fn init_devices_once() -> Result<(), ThoError> {
-    // Cache initialization failures too so concurrent tests observe the same fallible outcome.
-    static INIT: std::sync::OnceLock<Result<(), ThoError>> = std::sync::OnceLock::new();
-    match INIT.get_or_init(|| match RealGlobalCtx::init_devices(2) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(error.into()),
-    }) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(error.clone().context("failed to initialize devices once")),
-    }
-}
-
 pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([(
         SYNC_CLASSIFIER_ENDPOINT.to_string(),

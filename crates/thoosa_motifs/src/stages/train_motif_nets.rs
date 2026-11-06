@@ -1458,7 +1458,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::{AdamW, VarStore};
     use tch::{IndexOp, Reduction, Tensor};
-    use thoosa_common::copy_ctx::CudaActorHandle;
+    use thoosa_common::cuda_copier::CudaActorHandle;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::{Batch, Dims};
     use thoosa_common::ipc::cuda_wokrer::{AllTensors, WorkerStageInput};
@@ -1518,7 +1518,7 @@ mod tests {
         let loader = Arc::new(mock_tensor_loader::build().with_out_id().finish());
         let stage = Arc::new(TrainMotifNets::new(loader, &ws, &store, cosine_net_run_configs(), 10, None).await?);
         let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![2] }, Arc::new(OptConfig::new(3, 2)), None);
-        let error = stage.run(input, mock_run_ctx::default(1)).await.is_ok();
+        let _error = stage.run(input, mock_run_ctx::default(1)).await.is_ok();
 
         Ok(())
     }

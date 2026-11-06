@@ -1,5 +1,5 @@
 use thoosa_common::tch_error::tch_result;
-use crate::copy_ctx::{CopyCtx, ExecutionStreamPool};
+use crate::cuda_copier::{CudaCopier, ExecutionStreamPool};
 use crate::cuda_utils::{cuda_mem_for_device, tensor_mem_size};
 use crate::data_with_extra::DataWithExtra;
 use crate::dims::Dims;
@@ -262,7 +262,7 @@ impl InstalledEndpoint {
         result
     }
 
-    async fn run_with_state(&self, stage: &dyn ErasedWithState, input: &Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, stream: &mut dyn crate::copy_ctx::HandleCtx, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
+    async fn run_with_state(&self, stage: &dyn ErasedWithState, input: &Box<dyn WorkerInput>, tensors: &AllTensors, device: &ThoDevice, stream: &mut dyn crate::cuda_copier::HandleCtx, ctx: &WokerRunCtx) -> Result<Box<dyn WorkerOutput>, ThoError> {
         // The caller holds the endpoint's write lease. The wrapper synchronizes
         // before unwinding; invalidate partial state before another caller enters.
         match std::panic::AssertUnwindSafe(async { stage.do_run_with_state(input, tensors, device, stream, ctx).await }).catch_unwind().await {
@@ -333,7 +333,7 @@ struct WorkerRequestContext<W: ?Sized> {
     // Retaining the mapping in every request context keeps all arena-derived pointers valid until in-flight copies finish.
     shared_arena: Arc<WorkerSharedArena>,
     // CUDA copies still use the worker's pinned-buffer implementation; only the old per-transfer IPC memfds are replaced by arena offsets.
-    copy_ctx: Arc<tokio::sync::RwLock<CopyCtx>>,
+    cuda_copier: Arc<tokio::sync::RwLock<CudaCopier>>,
     installed_stages: InstalledStages,
     tho_device: ThoDevice,
 }
@@ -346,7 +346,7 @@ impl<W: ?Sized> Clone for WorkerRequestContext<W> {
             exec_stream_pool: Arc::clone(&self.exec_stream_pool),
             all_cuda_tensors: Arc::clone(&self.all_cuda_tensors),
             shared_arena: Arc::clone(&self.shared_arena),
-            copy_ctx: Arc::clone(&self.copy_ctx),
+            cuda_copier: Arc::clone(&self.cuda_copier),
             installed_stages: Arc::clone(&self.installed_stages),
             tho_device: self.tho_device,
         }
@@ -382,7 +382,7 @@ fn prepare_d2h_source(all_cuda_tensors: &AllTensors, tensor_key: u64, kind: IpcT
     if source_cuda_device != cuda_device {
         return Err(ThoError::new(format!("worker tensor key={tensor_key} device={source_cuda_device} does not match worker CUDA device={cuda_device}")));
     }
-    // A fallible alias keeps the CUDA storage alive after releasing the tensor map while CopyCtx awaits its chunk stages.
+    // A fallible alias keeps the CUDA storage alive after releasing the tensor map while CudaCopier awaits its chunk stages.
     Ok(tch_result(source.f_alias())?)
 }
 
@@ -521,7 +521,7 @@ impl CudaWorker {
         let shared_arena = Arc::new(WorkerSharedArena::new(arena));
         debug!("run_worker: mapped shared arena len={arena_size}");
 
-        let copy_ctx = Arc::new(tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(cuda_device, 0.2, WORKER_COPY_STREAMS)?));
+        let cuda_copier = Arc::new(tokio::sync::RwLock::new(CudaCopier::make_instance_for_cuda_device(cuda_device, 0.2, WORKER_COPY_STREAMS)?));
         // Readiness follows all fallible device and arena initialization.
         cuda_process::write_frame(
             &mut writer,
@@ -540,7 +540,7 @@ impl CudaWorker {
             exec_stream_pool,
             all_cuda_tensors,
             shared_arena,
-            copy_ctx,
+            cuda_copier,
             installed_stages: Arc::new(DashMap::new()),
             tho_device,
         };
@@ -582,7 +582,7 @@ impl CudaWorker {
                     // SAFETY: the checked arena range is retained by every chunk.
                     // PendingRequests retains the parent's source allocation until
                     // this reply or confirmed worker exit, including cancellation.
-                    let cuda_t = unsafe { context.copy_ctx.read().await.copy_from_ptr(source_address, &shape, context.tho_device.tho_device_idx(), kind.into(), Arc::clone(&context.shared_arena)).await? };
+                    let cuda_t = unsafe { context.cuda_copier.read().await.copy_from_ptr(source_address, &shape, context.tho_device.tho_device_idx(), kind.into(), Arc::clone(&context.shared_arena)).await? };
 
                     let tensor_ref = if let Some(H2DTensorKey::StageState { endpoint_name, stage_id, tensor_id }) = dst_key {
                         let endpoint_key = cuda_process::endpoint_stage_key(endpoint_name.clone(), Some(&stage_id));
@@ -651,7 +651,7 @@ impl CudaWorker {
                     // parent retains exclusive destination storage in PendingRequests
                     // until reply or worker exit; chunks retain this worker's mapping
                     // and the source tensor even if the request task is cancelled.
-                    unsafe { context.copy_ctx.read().await.copy_to_cpu_ptr(source, destination_address, Arc::clone(&context.shared_arena)).await?; }
+                    unsafe { context.cuda_copier.read().await.copy_to_cpu_ptr(source, destination_address, Arc::clone(&context.shared_arena)).await?; }
                     Ok(OpResult::Ok(Some(Box::new(WorkerCopyDonePayload { transfer_id: request_id, tensor_ref: tensor_key }) as Box<dyn WorkerOutput>)))
                 }
                 Operation::ExportStageTensors { endpoint_name, stage_id, export_id, destinations } => {
@@ -691,7 +691,7 @@ impl CudaWorker {
                     }
                     // SAFETY: ranges/metadata were validated above; the parent
                     // request retains all allocations until reply or worker exit.
-                    unsafe { context.copy_ctx.read().await.copy_batch_to_cpu_ptrs(sources, Arc::clone(&context.shared_arena)).await?; }
+                    unsafe { context.cuda_copier.read().await.copy_batch_to_cpu_ptrs(sources, Arc::clone(&context.shared_arena)).await?; }
                     Ok(OpResult::Ok(None))
                 }
                 Operation::DropThoTensor { tensor_key } => {
@@ -1047,7 +1047,7 @@ mod mock_request_handler {
     }
 
     impl crate::ipc::wraps::ErasedWithState for MockExportEndpoint {
-        fn do_run_with_state<'a>(&'a self, _: &'a Box<dyn WorkerInput>, _: &'a AllTensors, _: &'a ThoDevice, _: &'a mut dyn crate::copy_ctx::HandleCtx, _: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> { unreachable!("export metadata test") }
+        fn do_run_with_state<'a>(&'a self, _: &'a Box<dyn WorkerInput>, _: &'a AllTensors, _: &'a ThoDevice, _: &'a mut dyn crate::cuda_copier::HandleCtx, _: &'a WokerRunCtx) -> BoxFuture<'a, Result<Box<dyn WorkerOutput>, ThoError>> { unreachable!("export metadata test") }
     }
 
     impl crate::ipc::state_transfer::StateTransfer for MockExportEndpoint {
@@ -1188,7 +1188,7 @@ mod request_tests {
             let stage = crate::ipc::wraps::mock_stateful_worker::MockStatefulWorkerBuilder { state: Arc::clone(&state), panics: true, fails: false }.build();
             let endpoint = InstalledEndpoint::new(Arc::new(stage));
             let _lease = endpoint.lease.write().await;
-            let mut stream = crate::copy_ctx::MockHandleCtx::new();
+            let mut stream = crate::cuda_copier::MockHandleCtx::new();
             stream.expect_sync_ctx().times(1).return_once(|| Ok(Box::new(())));
             let during_sync = Arc::clone(&state);
             stream.expect_on_after_run().times(1).return_once(move || {

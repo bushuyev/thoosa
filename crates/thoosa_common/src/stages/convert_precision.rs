@@ -19,7 +19,7 @@ use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, recurse_files};
 
 use crate::utils::parse_run_config_ids_vec;
-use crate::ws::{discover_nets, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
+use crate::ws::{discover_nets, Workspace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ConvertPrecisionTarget {
@@ -346,7 +346,7 @@ where
         entries.extend(
             recurse_files(&root, &|path| path.extension().and_then(|ext| ext.to_str()) == Some("safetensors"))?
                 .into_iter()
-                .filter_map(|weights_path| net_entry_from_base(ws, *net_type, &weights_path)),
+                .filter_map(|weights_path| net_entry_from_base(*net_type, &weights_path)),
         );
     }
     entries.dedup_entries()
@@ -373,7 +373,7 @@ where
         entries.extend(
             vec
                 .into_iter()
-                .filter_map(|weights_path| net_entry_from_base(ws, *concrete_type, &weights_path.parent().unwrap())),
+                .filter_map(|weights_path| net_entry_from_base(*concrete_type, &weights_path.parent().unwrap())),
         );
     }
     entries.dedup_entries()
@@ -392,13 +392,10 @@ where
     if !candidate.starts_with(net_type_root) {
         return Ok(None);
     }
-    Ok(net_entry_from_base(ws, net_type, candidate))
+    Ok(net_entry_from_base(net_type, candidate))
 }
 
-fn net_entry_from_base<N, W>(ws: &W, net_type: N, base_path: &Path) -> Option<NetEntry<N>>
-where
-    W: Workspace + ?Sized
-{
+fn net_entry_from_base<N>(net_type: N, base_path: &Path) -> Option<NetEntry<N>>{
     debug!("net_entry_from_base: base_path={base_path:?}");
 
     let nets = discover_nets(base_path).ok()?;
