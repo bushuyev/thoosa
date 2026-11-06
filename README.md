@@ -61,6 +61,12 @@ cargo build --release
 For a faster compile check, use `cargo check --workspace --all-targets` from `crates/`. Build one package with `cargo build --release -p thoosa_hbac` (or another package name from the tables above).
 
 
+## Overview
+
+Asynchronous stages coordinate tensor work, while synchronous stages perform the computations on CPU or GPU. The runner controls GPU concurrency and retries work under memory pressure; managed tensor storage allows cached data to move between GPU and CPU. GPU execution can run locally or in a separate IPC worker process.
+
+See the [architecture overview](docs/overview.md) for the main entities and how they fit together.
+
 - [OOM Handling](docs/oom.md)
 - [IPC subsystem](docs/ipc.md) 
 
