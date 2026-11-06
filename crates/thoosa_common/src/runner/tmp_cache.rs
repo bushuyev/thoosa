@@ -1,33 +1,23 @@
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
-use async_trait::async_trait;
 use dashmap::DashMap;
-use futures_util::{stream, TryStreamExt, StreamExt};
 use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error, warn};
-use mockall_double::double;
+use log::{debug, error};
 use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{CachableIdTr, Data, WithId};
+use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::runner::common::cachable::{BorrowRef, CachedPurgeOutput, DevicesWrap, ThoDataRef};
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::global_ctx::{CacheKey, RegisteredCacheHandle};
-use crate::runner::purge::{CachePurger, WeakMapPurger, PURGE_GPU_CONCURRENCY_LIMIT};
+use crate::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
 use thoosa_shared::tracked_await::track_await;
 
 
 
-///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.
+/// A temporary collection of automatically registered async data handles.
 #[derive(Debug)]
 pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static>
 {
     pub name: String,
-    registered_cache: Option<RegisteredCacheHandle>,
     map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>,
 
 }
@@ -38,22 +28,17 @@ pub struct TmpCacheTakeAllError<D> {
     pub error: ThoError,
 }
 
-// Keep an individual queued value registered until its consumer finishes, even
-// if the producer is cancelled. Dropping the entry also bounds the cache size.
+// Queued entries own managed handles through producer cancellation. Keeping the
+// collection here also removes the consumed entry and bounds queue storage.
 #[derive(Debug)]
 pub struct TmpCachedEntry<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> {
     value: Arc<DevicesWrap<D>>,
     cache: Arc<TmpCached<D>>,
 }
 
-impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCachedEntry<D> {
-    // A queued input must retain its temporary cache entry during OOM retries.
-    pub fn add_required_ids<'a>(&'a self, required_ids: &mut HashMap<CacheKey, HashSet<&'a dyn CachableIdTr>>) {
-        self.value.add_required_ids(required_ids);
-    }
-}
-
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> BorrowRef for TmpCachedEntry<D> {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.value.protect(device) }
+
     type Out<'a> = ThoDataRef<'a, D> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, device: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -72,36 +57,21 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> D
 
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
 {
-    pub fn cache_key(&self) -> &CacheKey {
-        self.registered_cache.as_ref().expect("TmpCached::cache_key: cache already unregistered").key()
-    }
+    pub fn ids(&self) -> Vec<D::ID> { self.map.iter().map(|entry| entry.key().clone()).collect() }
 
-    // Consuming stages move this cache into their input. Snapshot its IDs first
-    // so the OOM exclusion set can outlive that move without holding map guards.
-    pub fn ids(&self) -> Vec<D::ID> {
-        self.map.iter().map(|entry| entry.key().clone()).collect()
-    }
-
-    async fn unregister_cache(&mut self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
-        if let Some(cache) = self.registered_cache.take() {
-            GlobalCtx::global().remove_cache(cache.key());
-            Some(track_await!(cache.lock_exclusive()).await)
-        } else {
-            None
-        }
+    pub fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease {
+        thoosa_common::runner::residency::ResidencyLease::combine(self.map.iter().map(|entry| entry.value().protect(device)))
     }
 
     pub fn insert(&self, value: D) {
         let value = Arc::new(DevicesWrap::wrap(value));
-        value.register_cache_key(self.cache_key().clone());
         self.map.insert(value.id().clone(), value);
     }
 
-    // Entries need distinct IDs while alive; replacing a queued entry would
-    // leave its old tensors invisible to OOM offload.
+    // Queued entries need distinct IDs so dropping an old entry cannot remove
+    // a newer queue member. Their residency registrations are independent.
     pub fn insert_guarded(self: &Arc<Self>, value: D) -> TmpCachedEntry<D> {
         let value = Arc::new(DevicesWrap::wrap(value));
-        value.register_cache_key(self.cache_key().clone());
         assert!(self.map.insert(value.id().clone(), Arc::clone(&value)).is_none(), "duplicate guarded temporary cache entry");
         TmpCachedEntry { value, cache: Arc::clone(self) }
     }
@@ -123,21 +93,21 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
         }
     }
 
-    fn recover_owned_value(res: &mut Vec<D>, key: &<D as WithId>::ID, val: DevicesWrap<D>, device: usize) {
-        match val.take_data_prefer_device_or_any(device) {
+    async fn recover_owned_value(res: &mut Vec<D>, key: &<D as WithId>::ID, val: DevicesWrap<D>, device: usize) {
+        match val.take_data_prefer_device_or_any(device).await {
             Ok(value) => res.push(value),
             Err(err) => error!("TmpCached::recover_owned_value: can't recover {key:?}: err={err:?}"),
         }
     }
 
-    fn recover_remaining_values(
+    async fn recover_remaining_values(
         res: &mut Vec<D>,
         entries: impl Iterator<Item = (<D as WithId>::ID, Arc<DevicesWrap<D>>)>,
         device: usize,
     ) {
         for (key, val) in entries {
             if let Some(val) = Self::take_owned_wrap(&key, val) {
-                Self::recover_owned_value(res, &key, val, device);
+                Self::recover_owned_value(res, &key, val, device).await;
             }
         }
     }
@@ -158,10 +128,9 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all_recovering"))]
     pub async fn take_all_recovering(mut self, tho_device_idx:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all_recovering: name={} map.len={}", self.name, self.map.len());
-        let _cache_guard = track_await!(self.unregister_cache()).await;
 
         let mut res = vec![];
-        let map = Arc::into_inner(mem::take(&mut self.map)).expect("TmpCached::take_all: map still in use after unregister_cache");
+        let map = Arc::into_inner(mem::take(&mut self.map)).expect("TmpCached::take_all: map still shared while consuming");
         let mut entries = map.into_iter();
 
         while let Some((key, val)) = entries.next() {
@@ -170,7 +139,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
             };
 
             match track_await!(devices_wrap.load_from_any_device_(tho_device_idx)).await.map(|guard| drop(guard)) {
-                Ok(()) => match devices_wrap.take_data(tho_device_idx) {
+                Ok(()) => match devices_wrap.take_data(tho_device_idx).await {
 
                     Ok(value) => {
                         debug!("TmpCached::take_all: adding value={value:?}");
@@ -181,7 +150,7 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
                         debug!("TmpCached::take_all_recovering: take_data: err={err:?}");
 
                         let error = Self::contextualize_take_error(&key, err);
-                        Self::recover_remaining_values(&mut res, entries, tho_device_idx);
+                        Self::recover_remaining_values(&mut res, entries, tho_device_idx).await;
                         return Err(TmpCacheTakeAllError { data: res, error });
                     }
                 }
@@ -189,8 +158,8 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
                     debug!("TmpCached::take_all_recovering: load_from_any_device_: err={err:?}");
 
                     let error = Self::contextualize_take_error(&key, err);
-                    Self::recover_owned_value(&mut res, &key, devices_wrap, tho_device_idx);
-                    Self::recover_remaining_values(&mut res, entries, tho_device_idx);
+                    Self::recover_owned_value(&mut res, &key, devices_wrap, tho_device_idx).await;
+                    Self::recover_remaining_values(&mut res, entries, tho_device_idx).await;
                     debug!("TmpCached::take_all_recovering: res={res:?}");
 
                     return Err(TmpCacheTakeAllError { data: res, error });
@@ -209,8 +178,8 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
         Self::register(format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)))
     }
 
-    // Restore only after consuming the old cache. Keeping its unique name makes
-    // the caller's OOM exclusions valid when failed inputs are cached again.
+    // Restored values construct new managed handles; the runner reacquires their
+    // leases. The collection name is diagnostic and no longer controls eviction.
     pub fn restore(name: String, values: impl IntoIterator<Item = D>) -> Self {
         let cache = Self::register(name);
         for value in values { cache.insert(value); }
@@ -219,12 +188,9 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
     fn register(name: String) -> Self {
         let map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Arc::new(Default::default());
-        let registered_cache = GlobalCtx::global()
-            .register_cache((name.clone(), Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn CachePurger>));
 
         Self {
             name,
-            registered_cache: Some(registered_cache),
 
             map,
         }
@@ -235,109 +201,19 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
 
 
-///for TmpCache
-#[async_trait]
-impl <D> CachePurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
-where
-    D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
-{
-    async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.iter().any(|entry| entry.value().is_on_device(device_idx))
-    }
-
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
-
-
-        let items: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
-            .iter()
-            .filter(|entry| {
-                crate::runner::purge::check_ids_to_keep(ids_to_keep, entry)
-            })
-            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-            .collect();
-
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("TmpCached::purge_gpu_{:?}", name), self.len(), 1);
-        let dump_eta_guard_id = dump_eta_guard.id();
-        track_await!(stream::iter(items)
-
-            .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, val)| async move {
-                debug!("TmpCached::purge_gpu: key={key:?}");
-
-                if let Err(err) = track_await!(val.dump_to_cpu(device_idx)).await {
-                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
-                } else {
-                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
-                }
-                collect_eta_record_completion(dump_eta_guard_id);
-        })).await;
-
-        Ok(())
-    }
-
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("TmpCached::drop_gpu: device_idx={device_idx}");
-        let items: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
-            .iter()
-            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-            .collect();
-
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu{:?}", name), self.len(), 1);
-        let dump_eta_guard_id = dump_eta_guard.id();
-
-        track_await!(stream::iter(items.into_iter().map(Ok::<_, ThoError>)).try_for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, |(key, data)| async move {
-            if data.is_on_device(device_idx) {
-                data.drop_device(device_idx).await?;
-                if !data.has_any_data() {
-                    self.remove(&key);
-                }
-            }
-            collect_eta_record_completion(dump_eta_guard_id);
-            Ok(())
-        })).await?;
-
-
-        Ok(())
-    }
-
-    //it's just dropped
-    async fn purge_cpu(&self, _purge_until: u64) -> usize {
-        0
-    }
-}
-
-impl<D> Drop for TmpCached<D>
-where
-    D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
-{
-    fn drop(&mut self) {
-
-        if let Some(cache) = self.registered_cache.take() {
-            // Guarded entries remove themselves as consumers finish, so an
-            // empty cache is also a normal completion path without take_all.
-            if !self.map.is_empty() {
-                warn!("TmpCached::drop: {}", self.name);//i.e. take_all was not called
-            }
-
-            GlobalCtx::global().remove_cache(cache.key());
-        }
-
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use async_trait::async_trait;
+    use crate::runner::common::cachable::BorrowRef;
     use std::future::Future;
     use std::pin::Pin;
-    use async_trait::async_trait;
-    use log::debug;
+        use log::debug;
     use thoosa_cpu_data_derive::CpuData;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::{debug_id, CopyToDevice, ThoError, CudaAction};
     // use crate::common::Data;
-    use thoosa_shared::traits::{CachableIdTr, Data, DebugId, WithId};
+    use thoosa_shared::traits::{Data, DebugId, WithId};
     // use crate::common::Data;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::tmp_cache::TmpCached;
@@ -434,26 +310,25 @@ mod tests {
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));
 
-        let input_ids = tmp_cache.ids();
-        assert_eq!(input_ids, vec![foo_id.clone()]);
-        let required_tmp_cache_ids = input_ids.iter().map(|id| id as &dyn CachableIdTr).collect();
-        let required_ids = HashMap::from([(tmp_cache.cache_key().clone(), &required_tmp_cache_ids)]);
+        let lease = tmp_cache.get(&foo_id).unwrap().protect(1);
         let other_id = debug_id!("other");
         tmp_cache.insert(TestData::new(other_id.clone(), 1));
-        GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "test").await?;
+        GlobalCtx::global().dump_all_to_cpu(1, "test").await?;
 
         let cached = tmp_cache.get(&foo_id).expect("tmp cache entry missing");
         assert!(!cached.is_all_on_cpu().await);
         assert!(tmp_cache.get(&other_id).unwrap().is_all_on_cpu().await);
         drop(cached);
 
+        drop(lease);
         let cache_name = tmp_cache.name.clone();
         let all = tmp_cache.take_all(1).await?;
         assert!(all.iter().all(|data| data.device == 1));
 
-        // Consumption recovery must keep the original exclusion map effective.
+        // Rebuilt inputs get a new lease, independently of their old registration.
         let restored = TmpCached::restore(cache_name, all);
-        GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "restored inputs").await?;
+        let _restored_lease = restored.get(&foo_id).unwrap().protect(1);
+        GlobalCtx::global().dump_all_to_cpu(1, "restored inputs").await?;
         assert!(!restored.get(&foo_id).unwrap().is_all_on_cpu().await);
         assert!(restored.get(&other_id).unwrap().is_all_on_cpu().await);
 
@@ -461,10 +336,8 @@ mod tests {
         let queued = Arc::new(TmpCached::new("queued inputs").await);
         let entry = queued.insert_guarded(TestData::new(foo_id.clone(), 1));
         queued.insert(TestData::new(other_id.clone(), 1));
-        let mut required_inputs = HashMap::new();
-        entry.add_required_ids(&mut required_inputs);
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
-        GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "queued input").await?;
+        let _entry_lease = entry.protect(1);
+        GlobalCtx::global().dump_all_to_cpu(1, "queued input").await?;
         assert!(!entry.value.is_all_on_cpu().await);
         assert!(queued.get(&other_id).unwrap().is_all_on_cpu().await);
 
@@ -539,7 +412,7 @@ mod tests {
             device: 1,
         });
 
-        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
+        GlobalCtx::global().dump_all_to_cpu(1, "test").await?;
 
         let result = tmp_cache
             .take_all_recovering(1)

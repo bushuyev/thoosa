@@ -431,6 +431,8 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.tensor.protect(device) }
+
     type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -960,9 +962,7 @@ where
                     )).await?;
 
                 // Bucketing retries still need this loaded resource on the device.
-                let mut required_inputs = HashMap::new();
-                loaded.add_required_ids(&mut required_inputs);
-                let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
                 let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
                 let oom_handler: OOMHandler<'_, '_, _, NoStageAdjuster, _, SelectBucketsInputSelector> = OOMHandler::new(
                     vec![
@@ -983,7 +983,7 @@ where
                             NoopRunnableContext {},
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
-                                DumpToCpuContextImpl::new(&required_ids),
+                                DumpToCpuContextImpl::new(),
                             ),
                         ),
                     )).await

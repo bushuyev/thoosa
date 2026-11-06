@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::collections::HashMap;
 use thoosa_common::runner::execution::StageExecution;
 use thoosa_common::runner::sync_stage::ConsumingStage;
 #[cfg(test)]
@@ -13,7 +15,6 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{debug, warn};
 use mockall_double::double;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -263,10 +264,7 @@ where
 
         // Both batches and any prepared outer batch are reused after an OOM.
         let input = Arc::new(input);
-        let mut required_inputs = HashMap::new();
-        for tensor in input.batch_0.iter().chain(&input.batch_1) { tensor.add_required_ids(&mut required_inputs); }
-        if let Some(prepared) = &input.prepared_outer { prepared.add_required_ids(&mut required_inputs); }
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
         match track_await!(OOMHandler::<'_, '_, _, NoStageAdjuster, _, CrossInputSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
@@ -285,7 +283,7 @@ where
                 NoopRunnableContext {},
                 MaxParallelAndDumpToCpuAdjustableContex::new(
                     MaxParallelAdjustContextImpl::new(),
-                    DumpToCpuContextImpl::new(&required_ids),
+                    DumpToCpuContextImpl::new(),
                 ),
             ),
         )).await {
@@ -347,14 +345,12 @@ where
             ));
 
             // Preparing the outer batch reads each of its cached resource tensors.
-            let mut required_inputs = HashMap::new();
-            for tensor in &t_0_batch { tensor.add_required_ids(&mut required_inputs); }
-            let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
             let result = OOMHandler::<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()>::new(vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("prepare_outer_batch"))),
             ], None).run(stage, input, ctx.branch(false), thoosa_common::runner::oom_handler::WithRunCtxContext::new(
-                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
             )).await;
 
             match result {
@@ -1029,6 +1025,8 @@ impl Adjustable for CrossInputSelector {}
 
 
 impl BorrowRef for CrossInputSelectorWrap {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.batch_0.iter().chain(&self.batch_1).map(|value| value.protect(device)).chain(self.prepared_outer.iter().map(|value| value.protect(device)))) }
+
     type Out<'a> = CrossInput<'a, Arc<Resource>>;
 
     fn borrow_ref<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
@@ -1332,8 +1330,7 @@ mod tests {
     use futures_util::FutureExt;
     use log::debug;
     use parking_lot::RwLock;
-    use std::collections::HashMap;
-    use std::fs;
+        use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};

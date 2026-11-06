@@ -1,16 +1,15 @@
 #![allow(dead_code)]
 
-use crate::runner::global_ctx::CacheKey;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, ThoSelector, WithId};
 use thoosa_shared::ThoError;
 use tokio::task::JoinSet;
 
@@ -92,7 +91,6 @@ where
         runnable: &Arc<R>,
         input: Arc<W>,
         mut ctx: <R as Stage>::Ctx,
-        required_ids: &'z HashMap<CacheKey, &HashSet<&dyn CachableIdTr>>,
         size: <R::In<'z> as Data>::Metrics,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
@@ -203,7 +201,7 @@ where
                     WithRunCtxContext::with_rest(
                         MaxParallelAndDumpToCpuAdjustableContex::new(
                             MaxParallelAdjustContextImpl::new(),
-                            DumpToCpuContextImpl::new(required_ids),
+                            DumpToCpuContextImpl::new(),
                         ),
                         WithInputContext::new(SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id))),
                     ),
@@ -227,7 +225,7 @@ where
                         input,
                         run_ctx,
                         WithRunCtxContext::with_rest(
-                            DumpToCpuContextImpl::new(required_ids),
+                            DumpToCpuContextImpl::new(),
                             WithInputContext::new(SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id))),
                         ),
                     )
@@ -596,7 +594,7 @@ mod tests {
     use cached_derive::Cached;
     use log::debug;
     use mockall_double::double;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
@@ -923,7 +921,6 @@ mod tests {
                             &self.mul,
                             loaded,
                             ctx.branch(false),
-                            &HashMap::new(),
                             size,
                         )
                         .await?

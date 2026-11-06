@@ -263,6 +263,8 @@ impl ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 impl BorrowRef for ClcResourcesMotifsDistInputDeviceWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.batch.iter().map(|value| value.protect(device)).chain([self.stacked_motifs.protect(device), self.motifs_stats.protect(device)])) }
+
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

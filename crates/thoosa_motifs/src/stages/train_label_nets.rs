@@ -18,7 +18,6 @@ use thoosa_common::data_with_extra::DataWithExtra;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::cuda_wokrer::{AllTensors, InitFn, WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_common::ipc::serialization::json::JsonIpcCodec;
-use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::tch_error::tch_result;
 
 type MotifsInitFn = InitFn<dyn crate::motifs_ws::MotifsWorkspace>;
@@ -128,6 +127,8 @@ impl SyncLabelBatchInputWrapper {
 }
 
 impl BorrowRef for SyncLabelBatchInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.x_1.iter().chain(&self.x_0).map(|value| value.protect(device))) }
+
     type Out<'a> = SyncLabelBatchInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -669,7 +670,7 @@ where
                         move |_ctx_for_batch:C,rc:&TrainLabelNetRunConfig| {
 
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
-                            let input_cache_key = applied_motif_loader.output_cache_key();
+
                             let label = label_for_batch.clone();
                             let sync_label_batch = Arc::clone(&sync_label_batch);
                             ready(Ok(ResourcesBatch::new(
@@ -682,14 +683,12 @@ where
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        let label = label.clone();
                                        let sync_label_batch = Arc::clone(&sync_label_batch);
-                                       let input_cache_key = input_cache_key.clone();
+
                                        async move {
                                            //TODO
-                                           let hash_set = x_1_wrapped.iter().chain(x_0_wrapped.iter()).map(|wrap| wrap.id().clone()).collect::<std::collections::HashSet<_>>();
-                                           let dyn_refs_set = hash_set.iter().map(|id|id as &dyn thoosa_shared::traits::CachableIdTr).collect::<std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>>();
-                                           let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
-                                               (input_cache_key, &dyn_refs_set)
-                                           ]);
+
+
+
 
                                            let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
                                            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
@@ -703,7 +702,7 @@ where
                                                WithRunCtxContext::new(
                                                    MaxParallelAndDumpToCpuAdjustableContex::new(
                                                        MaxParallelAdjustContextImpl::new(),
-                                                       DumpToCpuContextImpl::new(&required_ids),
+                                                       DumpToCpuContextImpl::new(),
                                                    ),
                                                ),
                                            )).await?;

@@ -1,11 +1,10 @@
 #![allow(non_camel_case_types)]
-use thoosa_common::runner::global_ctx::CacheKey;
 use crate::motifs_store::MotifsStore;
 
 use log::{debug, info};
 use parking_lot::RwLock;
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -31,7 +30,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, OutId, RunCtx, Stage};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Stage};
 use thoosa_common::runner::sync_stage::{SyncStage};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 
@@ -372,6 +371,8 @@ impl SelectBucketsSyncInputWrapper {
 
 
 impl BorrowRef for SelectBucketsSyncInputWrapper {
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
     type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -514,7 +515,7 @@ where
             let select_config = select_config.clone();
             async move {
                 // Selection reads configuration and stored scores, with no cached tensor inputs.
-                let required_ids: HashMap<CacheKey, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
@@ -531,7 +532,7 @@ where
                         WithRunCtxContext::new(
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
-                                DumpToCpuContextImpl::new(&required_ids),
+                                DumpToCpuContextImpl::new(),
                             ),
                         ),
                     )).await

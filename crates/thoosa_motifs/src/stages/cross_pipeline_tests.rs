@@ -136,7 +136,7 @@ async fn check_prepared_outer() -> Result<(), ThoError> {
         // Force the actual cache-purge path before the second use, then reload
         // the same prepared windows through either local or IPC tensor copying.
         if inner == 4 {
-            GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "prepared outer regression").await?;
+            GlobalCtx::global().dump_all_to_cpu(1, "prepared outer regression").await?;
             assert_eq!(BorrowRef::borrow_ref(&prepared, 0).await?.as_ref().tho_device_idx(), 0);
         }
         let make_input = || CrossInputSelectorWrap::new("cross".into(), tensors[..3].to_vec(), vec![tensors[inner].clone()], resources[..3].to_vec(), vec![resources[inner].clone()], CacheArea::default());

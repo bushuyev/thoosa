@@ -94,7 +94,7 @@ async fn cached_sets() -> Result<(), ThoError> {
         assert!(tch_result(tch_result(stack.as_ref().data().local()?.f_get(1))?.f_allclose(&stretch(&expected_filtered, 47, 0)?, 1e-6, 1e-6, false))?, "the second motif must use its filtered input");
     }
     // Stacking and GPU offload must leave cached probabilities usable in both backends.
-    GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "cached motif regression").await?;
+    GlobalCtx::global().dump_all_to_cpu(1, "cached motif regression").await?;
     let again = all.clone().run(input.clone(), ctx.branch(true)).await?;
     let after = raw_stage.clone().run_cached(input.clone(), ctx.branch(true)).await?;
     assert!(Arc::ptr_eq(&cached, &after));

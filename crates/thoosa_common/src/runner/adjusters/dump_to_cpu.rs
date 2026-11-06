@@ -1,13 +1,11 @@
-use crate::runner::global_ctx::CacheKey;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use log::{debug, warn};
 use mockall_double::double;
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
-use thoosa_shared::traits::{Adjustable, CachableIdTr};
+use thoosa_shared::traits::{Adjustable};
 
 use crate as thoosa_common;
 #[double]
@@ -36,50 +34,46 @@ where
 }
 
 #[delegatable_trait]
-pub trait DumpToCpuContext<'a>: Debug + RunCtxContext {
-    fn ids_to_exclude(&self) -> &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>;
+pub trait DumpToCpuContext: Debug + RunCtxContext {
+
     fn dump_to_cpu_retry_count_mut(&mut self) -> &mut usize;
 }
 
 #[derive(Debug)]
-pub struct DumpToCpuContextImpl<'a> {
-    ids_to_exclude: &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>,
+pub struct DumpToCpuContextImpl {
+
     dump_to_cpu_retry_count: usize,
 }
 
-impl<'a> DumpToCpuContextImpl<'a> {
-    pub fn new(ids_to_exclude: &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>>) -> Self {
+impl DumpToCpuContextImpl {
+    pub fn new() -> Self {
         Self {
-            ids_to_exclude,
             dump_to_cpu_retry_count: 0
         }
     }
 }
 
-impl<'a> DumpToCpuContext<'a> for DumpToCpuContextImpl<'a> {
-    fn ids_to_exclude(&self) -> &'a HashMap<CacheKey, &'a HashSet<&'a dyn CachableIdTr>> {
-        self.ids_to_exclude
-    }
+impl DumpToCpuContext for DumpToCpuContextImpl {
 
     fn dump_to_cpu_retry_count_mut(&mut self) -> &mut usize {
         &mut self.dump_to_cpu_retry_count
     }
 }
 
-impl<'a> RunCtxContext for DumpToCpuContextImpl<'a> {}
+impl RunCtxContext for DumpToCpuContextImpl {}
 
 #[async_trait]
 impl<'a, A, C> Adjuster<C> for DumpToCpu<A>
 where
     A: Adjustable + RunCtx + MaxParallelCtx + Send,
-    C: DumpToCpuContext<'a> + Send,
+    C: DumpToCpuContext + Send,
 {
     type A = A;
 
     async fn adjust(
         &self,
         mut adjustable: <Self as Adjuster<C>>::A,
-        adjust_context: &mut C,
+        _adjust_context: &mut C,
     ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
 
 
@@ -89,7 +83,6 @@ where
 
         adjustable.set_max_other_parallel(0);
 
-        let ids_to_exclude = adjust_context.ids_to_exclude();
         debug!("DumpToCpu::adjust: acquired 100 max_parallel, dumping");
 
         #[cfg(tho_debug)]
@@ -97,7 +90,7 @@ where
 
 
         if let Err(error) = track_await!(GlobalCtx::global()
-            .dump_all_to_cpu(ids_to_exclude, device_idx, &self.descr)).await {
+            .dump_all_to_cpu(device_idx, &self.descr)).await {
             warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {error:?}");
             return Err(AdjusterError::SomethingElse(error));
         }

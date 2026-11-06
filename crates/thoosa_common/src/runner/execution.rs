@@ -26,6 +26,8 @@ pub enum ExecutionContext<'a> {
 struct CpuHandleCtx;
 impl HandleCtx for CpuHandleCtx {}
 
+// An admitted operation can outlive cancellation of its outer retry future.
+// Its own input lease must survive until tensor execution and synchronization end.
 impl ExecutionContext<'_> {
     async fn local_context(&self) -> Result<Box<dyn HandleCtx>, ThoError> {
         match self {
@@ -42,6 +44,7 @@ impl ExecutionContext<'_> {
     {
         // The input future is lazy: a stateful implementation prepares state
         // before materializing inputs, under the same admitted operation.
+        let _inputs = input.protect(device);
         stage.execute(BorrowRef::borrow_ref(&input, device), self, ctx).await
     }
 
@@ -51,6 +54,7 @@ impl ExecutionContext<'_> {
         W: SelectRef<SL> + Debug + Sync,
         for<'a> W::Out<'a>: Borrow<S::In<'a>> + Send,
     {
+        let _inputs = input.protect(device);
         stage.execute(SelectRef::select_ref(&input, device, selector), self, ctx).await
     }
 
@@ -58,6 +62,7 @@ impl ExecutionContext<'_> {
     where S: ConsumingExecution, S::Out: Send,
         W: ConsumeData<O = S::In<'i>> + Debug, S::In<'i>: Send + 'static,
     {
+        let _inputs = input.protect(device);
         let (input, ctx) = match input.consume(device, ctx, |input, ctx| ConsumeResult::Ok((input, ctx))).await {
             ConsumeResult::Ok(prepared) => prepared,
             ConsumeResult::Failed { input, error } => return Ok(ConsumeResult::Failed { input, error }),

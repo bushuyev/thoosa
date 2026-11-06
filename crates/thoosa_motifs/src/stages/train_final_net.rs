@@ -19,7 +19,6 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::global_ctx::CacheKey;
 use thoosa_common::stages::stages_seq::PairStage;
 use thoosa_common::stages::train_net::{TrainNet, TrainNetInput, TrainStepFactory};
 use thoosa_common::tch_error::tch_result;
@@ -313,6 +312,8 @@ impl SyncLogitsBatchInputWrapper {
 }
 
 impl BorrowRef for SyncLogitsBatchInputWrapper {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.outputs.iter().map(|value| value.protect(device))) }
+
     type Out<'a> = SyncLogitsBatchInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -565,11 +566,9 @@ where
                 });
 
                 debug!("LogitsResourcesBatch::build_batch_stream: label_probabilities={label_probabilities:?} labels={labels:?}");
-                let hash_set = label_probabilities.iter().map(|wrap| wrap.id().clone()).collect::<std::collections::HashSet<_>>();
-                let dyn_refs_set = hash_set.iter().map(|id|id as &dyn thoosa_shared::traits::CachableIdTr).collect::<std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>>();
-                let required_ids: HashMap<CacheKey, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::from([
-                    (loader.output_cache_key(), &dyn_refs_set)
-                ]);
+
+
+
                 let stage = SyncLogitsBatch::<C>::new(ctx_for_batch.tho_device_idx().into()).await?;
                 let input = Arc::new(SyncLogitsBatchInputWrapper::new(label_probabilities, labels, labels_len));
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoStageAdjuster, _, ()> = OOMHandler::new(vec![
@@ -583,7 +582,7 @@ where
                     WithRunCtxContext::new(
                        MaxParallelAndDumpToCpuAdjustableContex::new(
                            MaxParallelAdjustContextImpl::new(),
-                           DumpToCpuContextImpl::new(&required_ids),
+                           DumpToCpuContextImpl::new(),
                        ),
                ))).await?;
 

@@ -459,11 +459,7 @@ where
             debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
             debug!("SelectMotifsStage::run: 1. find_motifs_run_config={find_motifs_run_config:?}");
             // Distance calculation reuses the resource batch, motifs, and motif statistics.
-            let mut required_inputs = HashMap::new();
-            for tensor in &clc_resources_input.batch { tensor.add_required_ids(&mut required_inputs); }
-            motif_data.add_required_ids(&mut required_inputs);
-            motifs_stats.add_required_ids(&mut required_inputs);
-            let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
             let channels = perf_log!(sync_read_lock!(ws))
                 .channels();
 
@@ -495,7 +491,7 @@ where
                             )).await,
                         ),
                         NoopRunnableContext {},
-                        MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                        MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new()),
                     ),
                 )).await?;
             let max_slices = extend_motifs_run_config.extend_max_slices.as_ref().map(|max_slices| {
@@ -722,6 +718,8 @@ impl Data for SelectMotifsInputSelectorWrap {
 
 
 impl BorrowRef for SelectMotifsInputSelectorWrap {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::combine(self.batch.iter().map(|value| value.protect(device)).chain([self.stacked_motifs.protect(device), self.motifs_stats.protect(device)])) }
+
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

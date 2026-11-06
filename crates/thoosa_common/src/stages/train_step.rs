@@ -12,7 +12,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -195,9 +195,7 @@ where
     pub(crate) async fn run_once(self: &Arc<Self>, input: TmpCachedEntry<TrainStepInput<DI, DO>>, mut ctx: C, max_other_parallel: usize) -> Result<TrainStepOutput, ThoError>
     where C: MaxParallelCtx + Adjustable {
         let input = Arc::new(input);
-        let mut required_inputs = HashMap::new();
-        input.add_required_ids(&mut required_inputs);
-        let required_ids = required_inputs.iter().map(|(key, ids)| (key.clone(), ids)).collect();
+
         let mut parallel = MaxParallelAdjustContextImpl::new();
         *parallel.max_other_parallel_mut() = max_other_parallel.try_into().map_err(|_| ThoError::new("training parallelism exceeds u8"))?;
         ctx.set_max_other_parallel(parallel.max_other_parallel());
@@ -207,7 +205,7 @@ where
             Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(*MaxParallelStep::FAST))),
             Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("train_step"))),
         ], None).run(self, Arc::clone(&input), ctx, WithRunCtxContext::new(
-            MaxParallelAndDumpToCpuAdjustableContex::new(parallel, DumpToCpuContextImpl::new(&required_ids)),
+            MaxParallelAndDumpToCpuAdjustableContex::new(parallel, DumpToCpuContextImpl::new()),
         )).await
     }
 
@@ -648,6 +646,8 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
+    fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -689,6 +689,8 @@ impl<DI: Dims, DO: Dims> WithId for TrainStepInputWrapper<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
+    fn protect(&self, device: usize) -> thoosa_common::runner::residency::ResidencyLease { self.input.protect(device) }
+
     type Out<'a> = ThoDataRef<'a, TrainStepInput<DI, DO>> where Self: 'a;
 
     fn borrow_ref<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

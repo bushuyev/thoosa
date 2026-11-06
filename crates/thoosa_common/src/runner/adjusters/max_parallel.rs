@@ -1,18 +1,15 @@
-use crate::runner::global_ctx::CacheKey;
 use crate::runner::adjusters::dump_to_cpu::*;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use ambassador::{Delegate, delegatable_trait};
 use async_trait::async_trait;
 use log::debug;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use thoosa_shared::traits::{MaxParallelCtx, RunCtx};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
-use thoosa_shared::traits::{Adjustable, CachableIdTr};
+use thoosa_shared::traits::{Adjustable};
 
 
 #[derive(Debug)]
@@ -139,14 +136,14 @@ where
 
 #[derive(Debug, Delegate)]
 #[delegate(MaxParallelAdjustContext, target = "max_parallel")]
-#[delegate(DumpToCpuContext<'a>, target = "dump_to_cpu")]
-pub struct MaxParallelAndDumpToCpuAdjustableContex<'a> {
+#[delegate(DumpToCpuContext, target = "dump_to_cpu")]
+pub struct MaxParallelAndDumpToCpuAdjustableContex {
     max_parallel: MaxParallelAdjustContextImpl,
-    dump_to_cpu: DumpToCpuContextImpl<'a>,
+    dump_to_cpu: DumpToCpuContextImpl,
 }
 
-impl<'a> MaxParallelAndDumpToCpuAdjustableContex<'a> {
-    pub fn new(max_parallel: MaxParallelAdjustContextImpl, cpu: DumpToCpuContextImpl<'a>) -> Self {
+impl MaxParallelAndDumpToCpuAdjustableContex {
+    pub fn new(max_parallel: MaxParallelAdjustContextImpl, cpu: DumpToCpuContextImpl) -> Self {
         Self {
             max_parallel,
             dump_to_cpu: cpu,
@@ -154,7 +151,7 @@ impl<'a> MaxParallelAndDumpToCpuAdjustableContex<'a> {
     }
 }
 
-impl<'a> RunCtxContext for MaxParallelAndDumpToCpuAdjustableContex<'a> {}
+impl RunCtxContext for MaxParallelAndDumpToCpuAdjustableContex {}
 
 #[cfg(test)]
 mod tests {

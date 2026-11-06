@@ -819,6 +819,8 @@ mod tests {
     // Adapt the existing owned test data through the actual ConsumeData callback
     // contract, including a suspension during materialization.
     impl ConsumeData for TestInput {
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
         type O = Self;
 
         fn consume<R: Send, F, P>(self, _to_device_idx: usize, run_ctx: P, do_run: F) -> impl Future<Output=ConsumeResult<Self::O, R>> + Send

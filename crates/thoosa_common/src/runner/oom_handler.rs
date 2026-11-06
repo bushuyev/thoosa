@@ -901,6 +901,9 @@ where
         W: BorrowRef + Debug + Send + Sync + 'static,
         for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send + Debug,
     {
+        // Retain the input's owned exclusions through every retry and adjustment.
+        // Cache aliases, removed cache entries, and temporary inputs behave alike.
+        let _inputs = input.protect(run_context.tho_device_idx());
         if run_context.tho_device_idx() == 0 {
             return track_await!(<IA as InputRun<R, W, S>>::run_stage(Arc::clone(task), input, None, 0, run_context, None)).await;
         }
@@ -1103,6 +1106,7 @@ where
 
 struct ConsumeRunnerRetryAdapter<W, Run> {
     input: Option<W>,
+    leases: crate::runner::residency::ResidencyLease,
     runner: Run,
 }
 
@@ -1140,7 +1144,11 @@ where
         match run_result {
             ConsumeResult::Ok(output) => Ok(output),
             ConsumeResult::Failed { input, error } => {
-                self.input = Some(track_await!(W::burp(input)).await);
+                let restored = track_await!(W::burp(input)).await;
+                // Consumption rebuilds registrations. Reacquire from the new
+                // handles before the next OOM adjustment can offload anything.
+                self.leases = restored.protect(device_idx);
+                self.input = Some(restored);
                 Err(error)
             }
         }
@@ -1391,6 +1399,7 @@ where
     let input_id_dbg = format!("input={:?}", input);
 
 
+    let leases = input.protect(run_context.tho_device_idx());
     track_await!(run_with_runner_impl(
         adjusters,
         stage,
@@ -1399,6 +1408,7 @@ where
         run_context,
         contexts,
         ConsumeRunnerRetryAdapter {
+            leases,
             input: Some(input),
             runner,
         },
@@ -1783,6 +1793,8 @@ mod tests {
     }
 
     impl BorrowRef for BorrowOnlyInput {
+        fn protect(&self, _device: usize) -> thoosa_common::runner::residency::ResidencyLease { thoosa_common::runner::residency::ResidencyLease::default() }
+
         type Out<'a> = &'a TestInput where Self: 'a;
 
         fn borrow_ref<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
@@ -1832,6 +1844,7 @@ mod tests {
         let input = TestInput::new(3);
         let original_allocation = input.data.0.as_ptr();
         let mut adapter = super::ConsumeRunnerRetryAdapter {
+            leases: Default::default(),
             input: Some(input),
             runner: |_: Arc<super::mock_runnable::MockRunnable>, input, _: Option<()>, _, _, _| async move {
                 Ok(ConsumeResult::Failed { input, error: ThoError::oom() })
